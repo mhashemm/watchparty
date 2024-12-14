@@ -12,18 +12,18 @@ import (
 const SocketPrefix = "\\\\.\\pipe\\"
 
 type connection struct {
-	pipe    string
+	file    *os.File
 	scanner *bufio.Scanner
 	mu      sync.Mutex
 }
 
 func newConnection(_ context.Context, socket string) (*connection, error) {
-	file, err := os.OpenFile(socket, os.O_RDONLY, os.ModeNamedPipe)
+	file, err := os.OpenFile(socket, os.O_RDWR, os.ModeNamedPipe)
 	if err != nil {
 		return nil, err
 	}
 	return &connection{
-		pipe:    socket,
+		file:    file,
 		scanner: bufio.NewScanner(file),
 	}, nil
 }
@@ -32,11 +32,6 @@ func (c *connection) request(req []byte) error {
 	req = append(req, '\n')
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	file, err := os.OpenFile(c.pipe, os.O_WRONLY, os.ModeNamedPipe)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	_, err = file.Write(req)
+	_, err := c.file.Write(req)
 	return err
 }
