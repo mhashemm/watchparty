@@ -24,7 +24,7 @@ func main() {
 	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	filePath := flag.String("file", "", "file path to play")
-	cooldown := flag.Int("cooldown", 5, "cooldown for mpv to open")
+	cooldown := flag.Int("cooldown", 5, "cooldown in seconds for mpv to init the server")
 	socket := flag.String("socket", "mpv", "name of the socket")
 	port := flag.Int("port", 6969, "running port")
 	publicPort := flag.Int("pport", 6969, "public port")
