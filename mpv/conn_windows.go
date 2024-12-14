@@ -5,35 +5,19 @@ package mpv
 import (
 	"bufio"
 	"context"
-	"log"
-	"os"
-	"sync"
+
+	win "github.com/Microsoft/go-winio"
 )
 
 const SocketPrefix = "\\\\.\\pipe\\"
 
-type connection struct {
-	file    *os.File
-	scanner *bufio.Scanner
-	mu      sync.Mutex
-}
-
-func newConnection(_ context.Context, socket string) (*connection, error) {
-	file, err := os.OpenFile(socket, os.O_RDWR, os.ModeNamedPipe)
+func newConnection(c context.Context, socket string) (*connection, error) {
+	conn, err := win.DialPipeContext(c, socket)
 	if err != nil {
 		return nil, err
 	}
 	return &connection{
-		file:    file,
-		scanner: bufio.NewScanner(file),
+		conn:    conn,
+		scanner: bufio.NewScanner(conn),
 	}, nil
-}
-
-func (c *connection) request(req []byte) error {
-	req = append(req, '\n')
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	log.Printf("%s", req)
-	_, err := c.file.Write(req)
-	return err
 }

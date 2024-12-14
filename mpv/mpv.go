@@ -1,10 +1,12 @@
 package mpv
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"log"
 	"math/rand"
+	"net"
 	"sync"
 )
 
@@ -13,6 +15,21 @@ const (
 	eventPlaybackTime    = "playback-time"
 	eventPlaybackRestart = "playback-restart"
 )
+
+type connection struct {
+	conn    net.Conn
+	scanner *bufio.Scanner
+	mu      sync.Mutex
+}
+
+func (c *connection) request(req []byte) error {
+	req = append(req, '\n')
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	log.Printf("%s", req)
+	_, err := c.conn.Write(req)
+	return err
+}
 
 type Event struct {
 	EventType string `json:"event"`
