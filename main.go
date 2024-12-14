@@ -100,7 +100,12 @@ func main() {
 		panic(err)
 	}
 
-	time.Sleep(time.Duration(*cooldown) * time.Second)
+	select {
+	case <-c.Done():
+		log.Println(c.Err())
+		return
+	case <-time.After(time.Duration(*cooldown) * time.Second):
+	}
 
 	_, err = os.Stat(mpvSocket)
 	if os.IsNotExist(err) {
