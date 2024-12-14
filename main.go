@@ -14,10 +14,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"watchparty/mpv"
-	"watchparty/server"
 
 	"github.com/mhashemm/upnp"
+	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/server"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-module watchparty
+module github.com/mhashemm/watchparty
 
 go 1.23.3
 
