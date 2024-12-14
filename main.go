@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,13 +25,13 @@ func main() {
 	defer cancel()
 	filePath := flag.String("file", "", "file path to play")
 	cooldown := flag.Int("cooldown", 5, "cooldown for mpv to open")
-	socket := flag.String("socket", "mpvsocket", "name of the socket")
+	socket := flag.String("socket", "mpv", "name of the socket")
 	port := flag.Int("port", 6969, "running port")
 	publicPort := flag.Int("pport", 6969, "public port")
 	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
 	flag.Parse()
-	mpvSocket := mpv.SocketPrefix + *socket
+	mpvSocket := mpv.SocketPrefix + *socket + strconv.FormatInt(time.Now().Unix(), 10)
 
 	_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
 		NewProtocol:               "TCP",
