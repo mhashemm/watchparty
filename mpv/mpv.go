@@ -1,12 +1,10 @@
 package mpv
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"sync"
 )
 
@@ -19,49 +17,9 @@ type Event struct {
 	Data      string `json:"data"`
 }
 
-// { "command": ["set_property", "pause", true] }
-// req := `{ "command": ["observe_property_string", 1, "pause"] }` + "\n"
-// req := `{ "command": ["observe_property_string", 1, "playback-time"] }` + "\n"
-// req := `{ "command": ["get_property", "filename"] }` + "\n"
-
-type conn struct {
-	cunt    net.Conn
-	scanner *bufio.Scanner
-	mu      sync.Mutex
-}
-
-func newConn(c context.Context, socket string) (*conn, error) {
-	dialer := &net.Dialer{}
-	cunt, err := dialer.DialContext(c, "unix", socket)
-	if err != nil {
-		return nil, err
-	}
-
-	return &conn{
-		cunt:    cunt,
-		scanner: bufio.NewScanner(cunt),
-	}, nil
-}
-
-func (c *conn) request(req []byte) ([]byte, error) {
-	req = append(req, '\n')
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	_, err := c.cunt.Write(req)
-	if err != nil {
-		return nil, err
-	}
-	c.scanner.Scan()
-	if c.scanner.Err() != nil {
-		return nil, c.scanner.Err()
-	}
-	return c.scanner.Bytes(), nil
-}
-
 type Client struct {
-	eventsConn        *conn
-	conn              *conn
+	eventsConn        *connection
+	conn              *connection
 	mu                sync.Mutex
 	paused            bool
 	playbackRestarted bool
@@ -74,7 +32,6 @@ func (s *Client) Watch(outgoing chan []byte) error {
 	scanner := s.eventsConn.scanner
 	for scanner.Scan() {
 		outgoing <- scanner.Bytes()
-		fmt.Println(scanner.Text())
 	}
 
 	return scanner.Err()
@@ -134,12 +91,12 @@ func (s *Client) sync(event Event) error {
 }
 
 func New(c context.Context, socket string) (*Client, error) {
-	eventsConn, err := newConn(c, socket)
+	eventsConn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := newConn(c, socket)
+	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}

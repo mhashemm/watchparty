@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -31,11 +30,7 @@ func main() {
 	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
 	flag.Parse()
-	mpvSocket := "/tmp/"
-	if strings.Contains(runtime.GOOS, "windows") {
-		mpvSocket = "\\\\.\\pipe\\"
-	}
-	mpvSocket += *socket
+	mpvSocket := mpv.SocketPrefix + *socket
 
 	_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
 		NewProtocol:               "TCP",
@@ -61,7 +56,7 @@ func main() {
 	}
 	publicIp := externalIp.NewExternalIPAddress
 	publicAddress := fmt.Sprintf("%s:%d", publicIp, *publicPort)
-	fmt.Printf("your public address to share is %s\n", publicAddress)
+	log.Printf("your public address to share is %s\n", publicAddress)
 
 	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
 	defer close(incoming)
@@ -130,8 +125,10 @@ func main() {
 
 	go client.ProccessIncomingEvents(incoming)
 
-	fmt.Println("init done. now you can start watching")
+	log.Println("init done. now you can start watching")
 
 	err = cmd.Wait()
-	fmt.Println(err)
+	if err != nil {
+		log.Println(err)
+	}
 }
