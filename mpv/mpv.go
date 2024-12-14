@@ -30,7 +30,6 @@ func (s *Client) Watch(outgoing chan []byte) error {
 		event := Event{}
 		json.Unmarshal(scanner.Bytes(), &event)
 		if event.EventType == "" {
-			log.Println(scanner.Text())
 			continue
 		}
 		outgoing <- scanner.Bytes()
@@ -91,25 +90,20 @@ func (s *Client) sync(event Event) error {
 }
 
 func New(c context.Context, socket string) (*Client, error) {
-	eventsConn, err := newConnection(c, socket)
-	if err != nil {
-		return nil, err
-	}
-
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}
 
-	err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
+	err = conn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
 	if err != nil {
 		return nil, err
 	}
-	err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 2, "playback-time"] }`))
+	err = conn.request([]byte(`{ "command": ["observe_property_string", 2, "playback-time"] }`))
 	if err != nil {
 		return nil, err
 	}
-	err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 3, "playback-restart"] }`))
+	err = conn.request([]byte(`{ "command": ["observe_property_string", 3, "playback-restart"] }`))
 	if err != nil {
 		return nil, err
 	}
