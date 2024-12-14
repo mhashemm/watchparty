@@ -28,6 +28,6 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 	}, nil
 }
 
-func (c *connection) request(req []byte) ([]byte, error) {
-	return nil, nil
+func (c *connection) request(req []byte) error {
+	return nil
 }

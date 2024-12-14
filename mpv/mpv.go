@@ -70,8 +70,7 @@ func (s *Client) pause(event Event) error {
 		return nil
 	}
 	req := fmt.Sprintf(`{ "command": ["set_property", "pause", %t] }`, paused)
-	_, err := s.conn.request([]byte(req))
-	return err
+	return s.conn.request([]byte(req))
 }
 
 func (s *Client) sync(event Event) error {
@@ -88,8 +87,7 @@ func (s *Client) sync(event Event) error {
 	}
 	s.playbackRestarted = false
 	req := fmt.Sprintf(`{ "command": ["set_property", "playback-time", %s] }`, event.Data)
-	_, err := s.conn.request([]byte(req))
-	return err
+	return s.conn.request([]byte(req))
 }
 
 func New(c context.Context, socket string) (*Client, error) {
@@ -103,15 +101,15 @@ func New(c context.Context, socket string) (*Client, error) {
 		return nil, err
 	}
 
-	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
+	err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
 	if err != nil {
 		return nil, err
 	}
-	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 2, "playback-time"] }`))
+	err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 2, "playback-time"] }`))
 	if err != nil {
 		return nil, err
 	}
-	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 3, "playback-restart"] }`))
+	err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 3, "playback-restart"] }`))
 	if err != nil {
 		return nil, err
 	}

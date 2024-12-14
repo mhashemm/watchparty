@@ -30,18 +30,11 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 	}, nil
 }
 
-func (c *connection) request(req []byte) ([]byte, error) {
+func (c *connection) request(req []byte) error {
 	req = append(req, '\n')
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	_, err := c.conn.Write(req)
-	if err != nil {
-		return nil, err
-	}
-	c.scanner.Scan()
-	if c.scanner.Err() != nil {
-		return nil, c.scanner.Err()
-	}
-	return c.scanner.Bytes(), nil
+	return err
 }
