@@ -61,7 +61,7 @@ func main() {
 	}
 	publicIp := externalIp.NewExternalIPAddress
 	publicAddress := fmt.Sprintf("%s:%d", publicIp, *publicPort)
-	fmt.Printf("your public address to share is %s", publicAddress)
+	fmt.Printf("your public address to share is %s\n", publicAddress)
 
 	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
 	defer close(incoming)
