@@ -100,7 +100,7 @@ func main() {
 		}
 	}
 
-	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
+	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
 	defer cmd.Cancel()
 
 	err = cmd.Start()
@@ -129,6 +129,8 @@ func main() {
 	}()
 
 	go client.ProccessIncomingEvents(incoming)
+
+	fmt.Println("init done. now you can start watching")
 
 	err = cmd.Wait()
 	fmt.Println(err)
