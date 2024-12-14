@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"sync"
+	"time"
 )
 
 const addressHeaderKey = "hit-me-up"
@@ -92,9 +93,11 @@ func (s *Server) request(addr string, endpoint string, data []byte) error {
 
 func New(c context.Context, incoming chan []byte, myAddress string) *Server {
 	return &Server{
-		c:         c,
-		incoming:  incoming,
-		client:    &http.Client{},
+		c:        c,
+		incoming: incoming,
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 		addresses: make(map[string]struct{}),
 		myAddress: myAddress,
 	}
