@@ -82,7 +82,7 @@ func (s *Client) Watch(outgoing chan []byte) error {
 
 func (s *Client) ProccessIncomingEvents(incoming chan []byte) {
 	for e := range incoming {
-	event := Event{}
+		event := Event{}
 		err := json.Unmarshal(e, &event)
 		if err != nil {
 			log.Println(err)
@@ -144,7 +144,7 @@ func New(c context.Context, socket string) (*Client, error) {
 		return nil, err
 	}
 
-_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
+	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
 	if err != nil {
 		return nil, err
 	}
