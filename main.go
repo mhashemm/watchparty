@@ -45,12 +45,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		_, err = upnp.DeletePortMapping(upnp.DeletePortMappingRequest{
-			NewExternalPort: *publicPort,
-			NewProtocol:     "TCP",
-		})
-	}()
+	defer upnp.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
+
 	externalIp, err := upnp.GetExternalIPAddress()
 	if err != nil {
 		panic(err)
