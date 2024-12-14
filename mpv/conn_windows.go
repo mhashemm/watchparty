@@ -5,6 +5,7 @@ package mpv
 import (
 	"bufio"
 	"context"
+	"log"
 	"os"
 	"sync"
 )
@@ -32,6 +33,7 @@ func (c *connection) request(req []byte) error {
 	req = append(req, '\n')
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	log.Printf("%s", req)
 	_, err := c.file.Write(req)
 	return err
 }

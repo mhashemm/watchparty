@@ -3,12 +3,16 @@ package mpv
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
+	"math/rand"
 	"sync"
 )
 
-const syncMargin = 30 //seconds
+const (
+	eventPause           = "pause"
+	eventPlaybackTime    = "playback-time"
+	eventPlaybackRestart = "playback-restart"
+)
 
 type Event struct {
 	EventType string `json:"event"`
@@ -17,33 +21,40 @@ type Event struct {
 	Data      string `json:"data"`
 }
 
+type Request struct {
+	Command   []any `json:"command"`
+	RequestId int64 `json:"request_id"`
+}
+
 type Client struct {
+	outgoing          chan<- []byte
 	conn              *connection
 	mu                sync.Mutex
 	paused            bool
 	playbackRestarted bool
 }
 
-func (s *Client) Watch(outgoing chan []byte) error {
+func (s *Client) Watch() error {
 	scanner := s.conn.scanner
 	for scanner.Scan() {
 		event := Event{}
 		json.Unmarshal(scanner.Bytes(), &event)
 		if event.EventType == "" {
+			log.Println(scanner.Text())
 			continue
 		}
-		outgoing <- scanner.Bytes()
+		s.outgoing <- scanner.Bytes()
 	}
 
 	return scanner.Err()
 }
 
-func (s *Client) ProccessIncomingEvents(incoming chan []byte) {
+func (s *Client) ProccessIncomingEvents(incoming <-chan []byte) {
 	for e := range incoming {
 		event := Event{}
 		err := json.Unmarshal(e, &event)
 		if err != nil {
-			log.Println(err)
+			log.Printf("%s | %s\n", e, err)
 			continue
 		}
 
@@ -55,7 +66,7 @@ func (s *Client) ProccessIncomingEvents(incoming chan []byte) {
 		}
 
 		if err != nil {
-			log.Printf("%+v %s", event, err)
+			log.Printf("%s | %s\n", e, err)
 			continue
 		}
 	}
@@ -68,8 +79,16 @@ func (s *Client) pause(event Event) error {
 	if s.paused == paused {
 		return nil
 	}
-	req := fmt.Sprintf(`{ "command": ["set_property", "pause", %t] }`, paused)
-	return s.conn.request([]byte(req))
+
+	req := Request{
+		Command:   []any{"set_property", "pause", paused},
+		RequestId: rand.Int63(),
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	return s.conn.request(body)
 }
 
 func (s *Client) sync(event Event) error {
@@ -85,30 +104,45 @@ func (s *Client) sync(event Event) error {
 		}
 	}
 	s.playbackRestarted = false
-	req := fmt.Sprintf(`{ "command": ["set_property", "playback-time", %s] }`, event.Data)
-	return s.conn.request([]byte(req))
+	req := Request{
+		Command:   []any{"set_property", "playback-time", event.Data},
+		RequestId: rand.Int63(),
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	return s.conn.request(body)
 }
 
-func New(c context.Context, socket string) (*Client, error) {
+func (s *Client) Observe() error {
+	events := []string{eventPause, eventPlaybackTime, eventPlaybackRestart}
+	for i, event := range events {
+		req := Request{
+			Command:   []any{"observe_property_string", i + 1, event},
+			RequestId: rand.Int63(),
+		}
+		body, err := json.Marshal(req)
+		if err != nil {
+			return err
+		}
+		err = s.conn.request(body)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, error) {
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}
 
-	err = conn.request([]byte(`{ "command": ["observe_property_string", 1, "pause"] }`))
-	if err != nil {
-		return nil, err
-	}
-	err = conn.request([]byte(`{ "command": ["observe_property_string", 2, "playback-time"] }`))
-	if err != nil {
-		return nil, err
-	}
-	err = conn.request([]byte(`{ "command": ["observe_property_string", 3, "playback-restart"] }`))
-	if err != nil {
-		return nil, err
-	}
-
 	return &Client{
-		conn: conn,
+		conn:     conn,
+		outgoing: outgoing,
 	}, nil
+
 }

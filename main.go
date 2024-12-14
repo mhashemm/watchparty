@@ -110,18 +110,23 @@ func main() {
 		panic(err)
 	}
 
-	client, err := mpv.New(c, mpvSocket)
+	client, err := mpv.New(c, mpvSocket, outgoing)
 	if err != nil {
 		panic(err)
 	}
 
 	go func() {
-		err := client.Watch(outgoing)
+		err := client.Watch()
 		if err != nil {
 			cancel()
 			log.Println(err)
 		}
 	}()
+
+	err = client.Observe()
+	if err != nil {
+		panic(err)
+	}
 
 	go client.ProccessIncomingEvents(incoming)
 

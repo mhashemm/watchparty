@@ -17,7 +17,7 @@ type Server struct {
 	c         context.Context
 	addresses map[string]struct{}
 	mu        sync.RWMutex
-	incoming  chan []byte
+	incoming  chan<- []byte
 	client    *http.Client
 	myAddress string
 }
