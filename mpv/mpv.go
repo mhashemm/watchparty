@@ -34,6 +34,15 @@ type Client struct {
 	playbackRestarted bool
 }
 
+func (s *Client) handleState(event Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch event.Name {
+	case eventPause:
+		s.paused = event.Data == "yes"
+	}
+}
+
 func (s *Client) Watch() error {
 	scanner := s.conn.scanner
 	for scanner.Scan() {
@@ -42,6 +51,10 @@ func (s *Client) Watch() error {
 		if event.EventType == "" {
 			log.Println(scanner.Text())
 			continue
+		}
+		switch event.Name {
+		case eventPause:
+			s.handleState(event)
 		}
 		s.outgoing <- scanner.Bytes()
 	}
@@ -79,7 +92,6 @@ func (s *Client) pause(event Event) error {
 	if s.paused == paused {
 		return nil
 	}
-
 	req := Request{
 		Command:   []any{"set_property", "pause", paused},
 		RequestId: rand.Int63(),
@@ -88,7 +100,12 @@ func (s *Client) pause(event Event) error {
 	if err != nil {
 		return err
 	}
-	return s.conn.request(body)
+	err = s.conn.request(body)
+	if err != nil {
+		return err
+	}
+	s.paused = paused
+	return nil
 }
 
 func (s *Client) sync(event Event) error {
@@ -103,7 +120,6 @@ func (s *Client) sync(event Event) error {
 			return nil
 		}
 	}
-	s.playbackRestarted = false
 	req := Request{
 		Command:   []any{"set_property", "playback-time", event.Data},
 		RequestId: rand.Int63(),
@@ -112,7 +128,12 @@ func (s *Client) sync(event Event) error {
 	if err != nil {
 		return err
 	}
-	return s.conn.request(body)
+	err = s.conn.request(body)
+	if err != nil {
+		return err
+	}
+	s.playbackRestarted = false
+	return nil
 }
 
 func (s *Client) Observe() error {
@@ -143,6 +164,6 @@ func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, err
 	return &Client{
 		conn:     conn,
 		outgoing: outgoing,
+		paused:   true,
 	}, nil
-
 }
