@@ -5,29 +5,38 @@ package mpv
 import (
 	"bufio"
 	"context"
-	"net"
+	"os"
 	"sync"
 )
 
 const SocketPrefix = "\\\\.\\pipe\\"
 
 type connection struct {
+	pipe    string
 	scanner *bufio.Scanner
 	mu      sync.Mutex
 }
 
-func newConnection(c context.Context, socket string) (*connection, error) {
-	dialer := &net.Dialer{}
-	cunt, err := dialer.DialContext(c, "unix", socket)
+func newConnection(_ context.Context, socket string) (*connection, error) {
+	file, err := os.OpenFile(socket, os.O_RDONLY, os.ModeNamedPipe)
 	if err != nil {
 		return nil, err
 	}
-
 	return &connection{
-		scanner: bufio.NewScanner(cunt),
+		pipe:    socket,
+		scanner: bufio.NewScanner(file),
 	}, nil
 }
 
 func (c *connection) request(req []byte) error {
-	return nil
+	req = append(req, '\n')
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	file, err := os.OpenFile(c.pipe, os.O_WRONLY, os.ModeNamedPipe)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.Write(req)
+	return err
 }
