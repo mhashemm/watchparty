@@ -18,7 +18,6 @@ type Event struct {
 }
 
 type Client struct {
-	eventsConn        *connection
 	conn              *connection
 	mu                sync.Mutex
 	paused            bool
@@ -26,11 +25,14 @@ type Client struct {
 }
 
 func (s *Client) Watch(outgoing chan []byte) error {
-	s.eventsConn.mu.Lock()
-	defer s.eventsConn.mu.Unlock()
-
-	scanner := s.eventsConn.scanner
+	scanner := s.conn.scanner
 	for scanner.Scan() {
+		event := Event{}
+		json.Unmarshal(scanner.Bytes(), &event)
+		if event.EventType == "" {
+			log.Println(scanner.Text())
+			continue
+		}
 		outgoing <- scanner.Bytes()
 	}
 
@@ -105,17 +107,16 @@ func New(c context.Context, socket string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "playback-time"] }`))
+	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 2, "playback-time"] }`))
 	if err != nil {
 		return nil, err
 	}
-	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 1, "playback-restart"] }`))
+	_, err = eventsConn.request([]byte(`{ "command": ["observe_property_string", 3, "playback-restart"] }`))
 	if err != nil {
 		return nil, err
 	}
 
 	return &Client{
-		eventsConn: eventsConn,
-		conn:       conn,
+		conn: conn,
 	}, nil
 }
