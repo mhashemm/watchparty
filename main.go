@@ -29,6 +29,7 @@ func main() {
 	publicPort := flag.Int("pport", 6969, "public port")
 	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
+	mpvFlags := flag.String("mpvFlags", "", "any extra flags to pass to mpv")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
@@ -91,7 +92,7 @@ func main() {
 		}
 	}
 
-	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
+	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
 	defer cmd.Cancel()
 
 	err = cmd.Start()
