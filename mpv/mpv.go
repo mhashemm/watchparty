@@ -74,6 +74,7 @@ func (s *Client) handleState(event Event) error {
 		if s.playbackTime == playbackTime {
 			return errNoChange
 		}
+		s.playbackTime = playbackTime
 	}
 	return nil
 }
