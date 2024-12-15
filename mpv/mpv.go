@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
+	"math"
 	"math/rand"
 	"net"
+	"strconv"
 	"sync"
 )
 
@@ -14,6 +17,10 @@ const (
 	eventPause           = "pause"
 	eventPlaybackTime    = "playback-time"
 	eventPlaybackRestart = "playback-restart"
+)
+
+var (
+	errNoChange = errors.New("no change")
 )
 
 type connection struct {
@@ -44,20 +51,31 @@ type Request struct {
 }
 
 type Client struct {
-	outgoing          chan<- []byte
-	conn              *connection
-	mu                sync.Mutex
-	paused            bool
-	playbackRestarted bool
+	outgoing     chan<- []byte
+	conn         *connection
+	mu           sync.Mutex
+	paused       bool
+	playbackTime float64
+	syncMargin   float64
 }
 
-func (s *Client) handleState(event Event) {
+func (s *Client) handleState(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch event.Name {
 	case eventPause:
 		s.paused = event.Data == "yes"
+	case eventPlaybackTime:
+		playbackTime, err := strconv.ParseFloat(event.Data, 64)
+		if err != nil {
+			return err
+		}
+		playbackTime = math.Floor(playbackTime)
+		if s.playbackTime == playbackTime {
+			return errNoChange
+		}
 	}
+	return nil
 }
 
 func (s *Client) Watch() error {
@@ -69,9 +87,13 @@ func (s *Client) Watch() error {
 			log.Println(scanner.Text())
 			continue
 		}
-		switch event.Name {
-		case eventPause:
-			s.handleState(event)
+		err := s.handleState(event)
+		if err == errNoChange {
+			continue
+		}
+		if err != nil {
+			log.Printf("%s %s", scanner.Bytes(), err)
+			continue
 		}
 		s.outgoing <- scanner.Bytes()
 	}
@@ -128,17 +150,22 @@ func (s *Client) pause(event Event) error {
 func (s *Client) sync(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch event.Name {
-	case "playback-restart":
-		s.playbackRestarted = true
+	if !s.paused {
 		return nil
-	case "playback-time":
-		if !s.playbackRestarted {
-			return nil
-		}
 	}
+
+	playbackTime, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return err
+	}
+	playbackTime = math.Floor(playbackTime)
+
+	if math.Abs(s.playbackTime-playbackTime) < s.syncMargin {
+		return nil
+	}
+
 	req := Request{
-		Command:   []any{"set_property", "playback-time", event.Data},
+		Command:   []any{"set_property", "playback-time", strconv.FormatFloat(playbackTime, 'f', -1, 64)},
 		RequestId: rand.Int63(),
 	}
 	body, err := json.Marshal(req)
@@ -149,12 +176,12 @@ func (s *Client) sync(event Event) error {
 	if err != nil {
 		return err
 	}
-	s.playbackRestarted = false
+	s.playbackTime = playbackTime
 	return nil
 }
 
 func (s *Client) Observe() error {
-	events := []string{eventPause, eventPlaybackTime, eventPlaybackRestart}
+	events := []string{eventPause, eventPlaybackTime}
 	for i, event := range events {
 		req := Request{
 			Command:   []any{"observe_property_string", i + 1, event},
@@ -172,15 +199,16 @@ func (s *Client) Observe() error {
 	return nil
 }
 
-func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, error) {
+func New(c context.Context, socket string, outgoing chan<- []byte, syncMargin float64) (*Client, error) {
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Client{
-		conn:     conn,
-		outgoing: outgoing,
-		paused:   true,
+		conn:       conn,
+		outgoing:   outgoing,
+		paused:     true,
+		syncMargin: syncMargin,
 	}, nil
 }
