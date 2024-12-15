@@ -71,6 +71,10 @@ func (s *Client) handleEvent(event Event) error {
 		if !s.paused {
 			s.role = ""
 		}
+	case timePos:
+		if !s.paused {
+			return errDonotSend
+		}
 	}
 	if s.role == slave {
 		return errSlave
