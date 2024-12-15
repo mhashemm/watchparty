@@ -14,14 +14,17 @@ import (
 
 const (
 	pause               = "pause"
-	percentPos          = "percent-pos"
+	timePos             = "time-pos"
 	eventPropertyChange = "property-change"
+	slave               = "slave"
 )
 
 var (
 	errNoChange  = errors.New("no change")
 	errDonotSend = errors.New("do not send")
-	skippedErrs  = []error{errNoChange, errDonotSend}
+	errSlave     = errors.New("slave")
+
+	skippedErrs = []error{errNoChange, errDonotSend, errSlave}
 )
 
 type connection struct {
@@ -52,11 +55,11 @@ type Request struct {
 }
 
 type Client struct {
-	outgoing   chan<- []byte
-	conn       *connection
-	mu         sync.Mutex
-	paused     bool
-	percentPos string
+	outgoing chan<- []byte
+	conn     *connection
+	mu       sync.Mutex
+	paused   bool
+	role     string
 }
 
 func (s *Client) handleEvent(event Event) error {
@@ -65,14 +68,12 @@ func (s *Client) handleEvent(event Event) error {
 	switch event.Name {
 	case pause:
 		s.paused = event.Data == "yes"
-	case percentPos:
 		if !s.paused {
-			return errDonotSend
+			s.role = ""
 		}
-		if event.Data == "" || s.percentPos == event.Data {
-			return errNoChange
-		}
-		s.percentPos = event.Data
+	}
+	if s.role == slave {
+		return errSlave
 	}
 	return nil
 }
@@ -115,7 +116,7 @@ func (s *Client) ProccessIncomingEvents(incoming <-chan []byte) {
 		switch event.Name {
 		case pause:
 			err = s.pause(event)
-		case percentPos:
+		case timePos:
 			err = s.sync(event)
 		}
 
@@ -130,6 +131,11 @@ func (s *Client) pause(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	paused := event.Data == "yes"
+	if paused {
+		s.role = slave
+	} else {
+		s.role = ""
+	}
 	if s.paused == paused {
 		return nil
 	}
@@ -156,12 +162,12 @@ func (s *Client) sync(event Event) error {
 		return nil
 	}
 
-	if event.Data == "" || s.percentPos == event.Data {
+	if event.Data == "" {
 		return nil
 	}
 
 	req := Request{
-		Command:   []any{"set_property", percentPos, event.Data},
+		Command:   []any{"set_property", timePos, event.Data},
 		RequestId: rand.Int63(),
 	}
 	body, err := json.Marshal(req)
@@ -176,7 +182,7 @@ func (s *Client) sync(event Event) error {
 }
 
 func (s *Client) Observe() error {
-	events := []string{pause, percentPos}
+	events := []string{pause, timePos}
 	for i, event := range events {
 		req := Request{
 			Command:   []any{"observe_property_string", i + 1, event},
@@ -201,9 +207,8 @@ func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, err
 	}
 
 	return &Client{
-		conn:       conn,
-		outgoing:   outgoing,
-		paused:     true,
-		percentPos: "0",
+		conn:     conn,
+		outgoing: outgoing,
+		paused:   true,
 	}, nil
 }
