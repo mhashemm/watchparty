@@ -50,6 +50,7 @@ func (s *Server) Init(res http.ResponseWriter, req *http.Request) {
 	s.mu.Unlock()
 
 	res.Header().Add(counterHeaderKey, strconv.FormatUint(myCounter, 10))
+	res.Header().Add(hostnameHeaderKey, s.hostname)
 	res.WriteHeader(http.StatusNoContent)
 }
 
@@ -92,9 +93,11 @@ func (s *Server) AddAddress(addr string) error {
 		return err
 	}
 	peerCounter, _ := strconv.ParseUint(res.Header.Get(counterHeaderKey), 10, 64)
+	hostname := res.Header.Get(hostnameHeaderKey)
 	s.mu.Lock()
 	s.addresses[addr] = &peer{
-		counter: peerCounter,
+		counter:  peerCounter,
+		hostname: hostname,
 	}
 	s.mu.Unlock()
 	return nil
