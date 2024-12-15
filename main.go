@@ -35,12 +35,11 @@ func main() {
 
 	_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
 		NewProtocol:               "TCP",
-		NewRemoteHost:             struct{}{},
 		NewExternalPort:           *publicPort,
 		NewInternalPort:           *port,
 		NewEnabled:                1,
 		NewPortMappingDescription: "watchparty",
-		NewLeaseDuration:          0,
+		NewLeaseDuration:          86400,
 	})
 	if err != nil {
 		panic(err)
