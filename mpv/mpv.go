@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	pause      = "pause"
-	percentPos = "percent-pos"
+	pause               = "pause"
+	percentPos          = "percent-pos"
+	eventPropertyChange = "property-change"
 )
 
 var (
@@ -83,6 +84,9 @@ func (s *Client) Watch() error {
 		json.Unmarshal(scanner.Bytes(), &event)
 		if event.EventType == "" {
 			log.Println(scanner.Text())
+			continue
+		}
+		if event.EventType != eventPropertyChange {
 			continue
 		}
 		err := s.handleEvent(event)
