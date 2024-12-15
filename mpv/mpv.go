@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"strconv"
@@ -15,6 +17,10 @@ const (
 	eventPause           = "pause"
 	eventPlaybackTime    = "playback-time"
 	eventPlaybackRestart = "playback-restart"
+)
+
+var (
+	errNoChange = errors.New("no change")
 )
 
 type connection struct {
@@ -64,7 +70,10 @@ func (s *Client) handleState(event Event) error {
 		if err != nil {
 			return err
 		}
-		s.playbackTime = playbackTime
+		playbackTime = math.Floor(playbackTime)
+		if s.playbackTime == playbackTime {
+			return errNoChange
+		}
 	}
 	return nil
 }
@@ -79,6 +88,9 @@ func (s *Client) Watch() error {
 			continue
 		}
 		err := s.handleState(event)
+		if err == errNoChange {
+			continue
+		}
 		if err != nil {
 			log.Printf("%s %s", scanner.Bytes(), err)
 			continue
@@ -146,8 +158,14 @@ func (s *Client) sync(event Event) error {
 	if err != nil {
 		return err
 	}
+	playbackTime = math.Floor(playbackTime)
+
+	if math.Abs(s.playbackTime-playbackTime) < s.syncMargin {
+		return nil
+	}
+
 	req := Request{
-		Command:   []any{"set_property", "playback-time", event.Data},
+		Command:   []any{"set_property", "playback-time", strconv.FormatFloat(playbackTime, 'f', -1, 64)},
 		RequestId: rand.Int63(),
 	}
 	body, err := json.Marshal(req)
@@ -181,15 +199,16 @@ func (s *Client) Observe() error {
 	return nil
 }
 
-func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, error) {
+func New(c context.Context, socket string, outgoing chan<- []byte, syncMargin float64) (*Client, error) {
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Client{
-		conn:     conn,
-		outgoing: outgoing,
-		paused:   true,
+		conn:       conn,
+		outgoing:   outgoing,
+		paused:     true,
+		syncMargin: syncMargin,
 	}, nil
 }
