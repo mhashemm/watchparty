@@ -15,43 +15,41 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/server"
 )
 
 func main() {
+	var err error
 	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	filePath := flag.String("file", "", "file path to play")
 	cooldown := flag.Int("cooldown", 5, "cooldown in seconds for mpv to init the server")
 	port := flag.Int("port", 6969, "local port")
-	publicPort := flag.Int("pport", 6969, "public port")
 	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
-	_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
-		NewProtocol:               "TCP",
-		NewRemoteHost:             struct{}{},
-		NewExternalPort:           *publicPort,
-		NewInternalPort:           *port,
-		NewEnabled:                1,
-		NewPortMappingDescription: "watchparty",
-		NewLeaseDuration:          0,
-	})
-	if err != nil {
-		panic(err)
-	}
-	defer upnp.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
+	// _, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
+	// 	NewProtocol:               "TCP",
+	// 	NewRemoteHost:             struct{}{},
+	// 	NewExternalPort:           *publicPort,
+	// 	NewInternalPort:           *port,
+	// 	NewEnabled:                1,
+	// 	NewPortMappingDescription: "watchparty",
+	// 	NewLeaseDuration:          0,
+	// })
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer upnp.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
 
-	externalIp, err := upnp.GetExternalIPAddress()
-	if err != nil {
-		panic(err)
-	}
-	publicIp := externalIp.NewExternalIPAddress
-	publicAddress := fmt.Sprintf("%s:%d", publicIp, *publicPort)
+	// externalIp, err := upnp.GetExternalIPAddress()
+	// if err != nil {
+	// 	panic(err)
+	// }
+	publicAddress := fmt.Sprintf("%s:%d", "0.0.0.0", *port)
 	log.Printf("your public address to share is %s\n", publicAddress)
 
 	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
