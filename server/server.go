@@ -8,19 +8,22 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 )
 
 const (
-	addressHeaderKey = "hit-me-up"
-	counterHeaderKey = "counter"
+	addressHeaderKey  = "hit-me-up"
+	counterHeaderKey  = "counter"
+	hostnameHeaderKey = "hostname"
 )
 
 type peer struct {
-	counter uint64
-	mu      sync.Mutex
+	counter  uint64
+	mu       sync.Mutex
+	hostname string
 }
 
 type Server struct {
@@ -31,15 +34,18 @@ type Server struct {
 	client    *http.Client
 	myAddress string
 	counter   uint64
+	hostname  string
 }
 
 func (s *Server) Init(res http.ResponseWriter, req *http.Request) {
 	addr := req.Header.Get(addressHeaderKey)
 	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
+	hostname := req.Header.Get(hostnameHeaderKey)
 	s.mu.Lock()
 	myCounter := s.counter
 	s.addresses[addr] = &peer{
-		counter: counter,
+		counter:  counter,
+		hostname: hostname,
 	}
 	s.mu.Unlock()
 
@@ -68,7 +74,7 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
 	if counter <= peer.counter {
-		log.Printf("skipped event from %s\n", addr)
+		log.Printf("skipped event from %s %s\n", addr, peer.hostname)
 		res.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -123,6 +129,7 @@ func (s *Server) request(addr string, endpoint string, data []byte, counter uint
 	}
 	req.Header.Add(addressHeaderKey, s.myAddress)
 	req.Header.Add(counterHeaderKey, strconv.FormatUint(counter, 10))
+	req.Header.Add(hostnameHeaderKey, s.hostname)
 	res, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -134,6 +141,7 @@ func (s *Server) request(addr string, endpoint string, data []byte, counter uint
 }
 
 func New(c context.Context, incoming chan []byte, myAddress string) *Server {
+	hostname, _ := os.Hostname()
 	return &Server{
 		c:        c,
 		incoming: incoming,
@@ -142,5 +150,6 @@ func New(c context.Context, incoming chan []byte, myAddress string) *Server {
 		},
 		addresses: make(map[string]*peer),
 		myAddress: myAddress,
+		hostname:  hostname,
 	}
 }
