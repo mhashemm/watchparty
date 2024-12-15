@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strconv"
 	"sync"
 )
 
@@ -44,20 +45,28 @@ type Request struct {
 }
 
 type Client struct {
-	outgoing          chan<- []byte
-	conn              *connection
-	mu                sync.Mutex
-	paused            bool
-	playbackRestarted bool
+	outgoing     chan<- []byte
+	conn         *connection
+	mu           sync.Mutex
+	paused       bool
+	playbackTime float64
+	syncMargin   float64
 }
 
-func (s *Client) handleState(event Event) {
+func (s *Client) handleState(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch event.Name {
 	case eventPause:
 		s.paused = event.Data == "yes"
+	case eventPlaybackTime:
+		playbackTime, err := strconv.ParseFloat(event.Data, 64)
+		if err != nil {
+			return err
+		}
+		s.playbackTime = playbackTime
 	}
+	return nil
 }
 
 func (s *Client) Watch() error {
@@ -69,9 +78,10 @@ func (s *Client) Watch() error {
 			log.Println(scanner.Text())
 			continue
 		}
-		switch event.Name {
-		case eventPause:
-			s.handleState(event)
+		err := s.handleState(event)
+		if err != nil {
+			log.Printf("%s %s", scanner.Bytes(), err)
+			continue
 		}
 		s.outgoing <- scanner.Bytes()
 	}
@@ -128,14 +138,13 @@ func (s *Client) pause(event Event) error {
 func (s *Client) sync(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch event.Name {
-	case "playback-restart":
-		s.playbackRestarted = true
+	if !s.paused {
 		return nil
-	case "playback-time":
-		if !s.playbackRestarted {
-			return nil
-		}
+	}
+
+	playbackTime, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return err
 	}
 	req := Request{
 		Command:   []any{"set_property", "playback-time", event.Data},
@@ -149,12 +158,12 @@ func (s *Client) sync(event Event) error {
 	if err != nil {
 		return err
 	}
-	s.playbackRestarted = false
+	s.playbackTime = playbackTime
 	return nil
 }
 
 func (s *Client) Observe() error {
-	events := []string{eventPause, eventPlaybackTime, eventPlaybackRestart}
+	events := []string{eventPause, eventPlaybackTime}
 	for i, event := range events {
 		req := Request{
 			Command:   []any{"observe_property_string", i + 1, event},
