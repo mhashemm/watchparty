@@ -29,7 +29,6 @@ func main() {
 	publicPort := flag.Int("pport", 6969, "public port")
 	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
-	syncMargin := flag.Float64("syncMargin", 1, "sync margin")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
@@ -112,7 +111,7 @@ func main() {
 		panic(err)
 	}
 
-	client, err := mpv.New(c, mpvSocket, outgoing, *syncMargin)
+	client, err := mpv.New(c, mpvSocket, outgoing)
 	if err != nil {
 		panic(err)
 	}

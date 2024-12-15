@@ -6,21 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"math"
 	"math/rand"
 	"net"
-	"strconv"
+	"slices"
 	"sync"
 )
 
 const (
-	eventPause           = "pause"
-	eventPlaybackTime    = "playback-time"
-	eventPlaybackRestart = "playback-restart"
+	pause      = "pause"
+	percentPos = "percent-pos"
 )
 
 var (
-	errNoChange = errors.New("no change")
+	errNoChange  = errors.New("no change")
+	errDonotSend = errors.New("do not send")
+	skippedErrs  = []error{errNoChange, errDonotSend}
 )
 
 type connection struct {
@@ -51,30 +51,27 @@ type Request struct {
 }
 
 type Client struct {
-	outgoing     chan<- []byte
-	conn         *connection
-	mu           sync.Mutex
-	paused       bool
-	playbackTime float64
-	syncMargin   float64
+	outgoing   chan<- []byte
+	conn       *connection
+	mu         sync.Mutex
+	paused     bool
+	percentPos string
 }
 
-func (s *Client) handleState(event Event) error {
+func (s *Client) handleEvent(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch event.Name {
-	case eventPause:
+	case pause:
 		s.paused = event.Data == "yes"
-	case eventPlaybackTime:
-		playbackTime, err := strconv.ParseFloat(event.Data, 64)
-		if err != nil {
-			return err
+	case percentPos:
+		if !s.paused {
+			return errDonotSend
 		}
-		playbackTime = math.Floor(playbackTime)
-		if s.playbackTime == playbackTime {
+		if event.Data == "" || s.percentPos == event.Data {
 			return errNoChange
 		}
-		s.playbackTime = playbackTime
+		s.percentPos = event.Data
 	}
 	return nil
 }
@@ -88,8 +85,8 @@ func (s *Client) Watch() error {
 			log.Println(scanner.Text())
 			continue
 		}
-		err := s.handleState(event)
-		if err == errNoChange {
+		err := s.handleEvent(event)
+		if slices.Contains(skippedErrs, err) {
 			continue
 		}
 		if err != nil {
@@ -112,9 +109,9 @@ func (s *Client) ProccessIncomingEvents(incoming <-chan []byte) {
 		}
 
 		switch event.Name {
-		case "pause":
+		case pause:
 			err = s.pause(event)
-		case "playback-time", "playback-restart":
+		case percentPos:
 			err = s.sync(event)
 		}
 
@@ -133,7 +130,7 @@ func (s *Client) pause(event Event) error {
 		return nil
 	}
 	req := Request{
-		Command:   []any{"set_property", "pause", paused},
+		Command:   []any{"set_property", pause, paused},
 		RequestId: rand.Int63(),
 	}
 	body, err := json.Marshal(req)
@@ -155,18 +152,12 @@ func (s *Client) sync(event Event) error {
 		return nil
 	}
 
-	playbackTime, err := strconv.ParseFloat(event.Data, 64)
-	if err != nil {
-		return err
-	}
-	playbackTime = math.Floor(playbackTime)
-
-	if math.Abs(s.playbackTime-playbackTime) < s.syncMargin {
+	if event.Data == "" || s.percentPos == event.Data {
 		return nil
 	}
 
 	req := Request{
-		Command:   []any{"set_property", "playback-time", strconv.FormatFloat(playbackTime, 'f', -1, 64)},
+		Command:   []any{"set_property", percentPos, event.Data},
 		RequestId: rand.Int63(),
 	}
 	body, err := json.Marshal(req)
@@ -177,12 +168,11 @@ func (s *Client) sync(event Event) error {
 	if err != nil {
 		return err
 	}
-	s.playbackTime = playbackTime
 	return nil
 }
 
 func (s *Client) Observe() error {
-	events := []string{eventPause, eventPlaybackTime}
+	events := []string{pause, percentPos}
 	for i, event := range events {
 		req := Request{
 			Command:   []any{"observe_property_string", i + 1, event},
@@ -200,7 +190,7 @@ func (s *Client) Observe() error {
 	return nil
 }
 
-func New(c context.Context, socket string, outgoing chan<- []byte, syncMargin float64) (*Client, error) {
+func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, error) {
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
@@ -210,6 +200,6 @@ func New(c context.Context, socket string, outgoing chan<- []byte, syncMargin fl
 		conn:       conn,
 		outgoing:   outgoing,
 		paused:     true,
-		syncMargin: syncMargin,
+		percentPos: "0",
 	}, nil
 }
