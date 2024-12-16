@@ -98,7 +98,7 @@ func main() {
 		}
 	}
 
-	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
+	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
 	defer cmd.Cancel()
 
 	err := cmd.Start()
