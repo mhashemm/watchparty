@@ -30,34 +30,41 @@ func main() {
 	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
 	mpvFlags := flag.String("mpvFlags", "", "any extra flags to pass to mpv")
+	local := flag.Bool("local", false, "run on local network")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
-	_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
-		NewProtocol:               "TCP",
-		NewExternalPort:           *publicPort,
-		NewInternalPort:           *port,
-		NewEnabled:                1,
-		NewPortMappingDescription: "watchparty",
-		NewLeaseDuration:          86400,
-	})
-	if err != nil {
-		panic(err)
-	}
-	defer upnp.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
+	address := ""
+	if *local {
+		address = fmt.Sprintf("%s:%d", upnp.GetLocalIPAddr(), *port)
+	} else {
+		_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
+			NewProtocol:               "TCP",
+			NewExternalPort:           *publicPort,
+			NewInternalPort:           *port,
+			NewEnabled:                1,
+			NewPortMappingDescription: "watchparty",
+			NewLeaseDuration:          86400,
+		})
+		if err != nil {
+			panic(err)
+		}
+		defer upnp.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
 
-	externalIp, err := upnp.GetExternalIPAddress()
-	if err != nil {
-		panic(err)
+		externalIp, err := upnp.GetExternalIPAddress()
+		if err != nil {
+			panic(err)
+		}
+		publicIp := externalIp.NewExternalIPAddress
+		address = fmt.Sprintf("%s:%d", publicIp, *publicPort)
 	}
-	publicIp := externalIp.NewExternalIPAddress
-	publicAddress := fmt.Sprintf("%s:%d", publicIp, *publicPort)
-	log.Printf("your public address to share is %s\n", publicAddress)
+
+	log.Printf("your address to share is %s\n", address)
 
 	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
 	defer close(incoming)
 	defer close(outgoing)
-	ser := server.New(c, incoming, publicAddress)
+	ser := server.New(c, incoming, address)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/init", ser.Init)
 	mux.HandleFunc("/event", ser.Event)
@@ -94,7 +101,7 @@ func main() {
 	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
 	defer cmd.Cancel()
 
-	err = cmd.Start()
+	err := cmd.Start()
 	if err != nil {
 		panic(err)
 	}
