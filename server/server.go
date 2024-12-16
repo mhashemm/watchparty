@@ -56,14 +56,14 @@ func (s *Server) Init(res http.ResponseWriter, req *http.Request) {
 
 func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
+	addr := req.Header.Get(addressHeaderKey)
+	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
-		log.Printf("%s: %s\n", req.RemoteAddr, err)
+		log.Printf("%s: %s\n", addr, err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	addr := req.Header.Get(addressHeaderKey)
-	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	peer, exists := s.addresses[addr]
