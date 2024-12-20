@@ -26,10 +26,10 @@ jobs:
         run: go mod tidy
 
       - name: Build Linux
-        run: GOOS=linux go build -v -o watchparty main.go
+        run: GOOS=linux GOARCH=amd64 go build -v -o watchparty main.go
 
       - name: Build Windows
-        run: GOOS=windows go build -v -o watchparty.exe main.go
+        run: GOOS=windows GOARCH=amd64 go build -v -o watchparty.exe main.go
 
       - name: Publish
         run: gh release create "$GITHUB_REF_NAME" watchparty watchparty.exe --generate-notes
