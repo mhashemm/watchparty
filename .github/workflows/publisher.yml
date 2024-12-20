@@ -25,5 +25,7 @@ jobs:
       run: go mod tidy
 
     - name: Build
-      steps:
-        - run: go build -v main.go
+      run: go build -v main.go
+
+    - name: Publish
+      run: gh release list
