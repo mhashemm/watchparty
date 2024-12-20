@@ -26,3 +26,4 @@ jobs:
 
     - name: Build
       run: go build -v main.go
+      run: gh release list
