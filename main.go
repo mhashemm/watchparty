@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -59,23 +58,24 @@ func main() {
 		address = fmt.Sprintf("%s:%d", publicIp, *publicPort)
 	}
 
-	log.Printf("your address to share is %s\n", address)
-
 	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
 	defer close(incoming)
 	defer close(outgoing)
 	ser := server.New(c, incoming, address)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/init", ser.Init)
+	mux.HandleFunc("/hi", ser.Hi)
+	mux.HandleFunc("/bye", ser.Bye)
 	mux.HandleFunc("/event", ser.Event)
 	s := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", *port),
 		Handler: mux,
-		BaseContext: func(l net.Listener) context.Context {
-			return c
-		},
 	}
-	defer s.Shutdown(c)
+	defer func() {
+		shutdownc, shutdowncancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdowncancel()
+		s.Shutdown(shutdownc)
+	}()
+	defer ser.Shutdown()
 
 	go func() {
 		err := s.ListenAndServe()
@@ -84,7 +84,7 @@ func main() {
 			log.Println(err)
 		}
 	}()
-	go ser.Broadcast(outgoing)
+	go ser.BroadcastEvents(outgoing)
 
 	addresses := strings.Split(*addrs, ",")
 	for _, addr := range addresses {
@@ -97,6 +97,8 @@ func main() {
 			log.Printf("%s: %s\n", addr, err)
 		}
 	}
+
+	log.Printf("your address to share is %s\n", address)
 
 	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
 	defer cmd.Cancel()
