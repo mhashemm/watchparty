@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	pause               = "pause"
-	timePos             = "time-pos"
-	eventPropertyChange = "property-change"
-	slave               = "slave"
+	pause          = "pause"
+	timePos        = "time-pos"
+	propertyChange = "property-change"
+	slave          = "slave"
+	seek           = "seek"
+	setProperty    = "set_property"
 )
 
 var (
@@ -49,9 +51,20 @@ type Event struct {
 	Data      string `json:"data"`
 }
 
+func (e Event) paused() bool {
+	return e.Data == "yes"
+}
+
 type Request struct {
 	Command   []any `json:"command"`
 	RequestId int64 `json:"request_id"`
+}
+
+func NewRequest(args ...any) Request {
+	return Request{
+		Command:   args,
+		RequestId: rand.Int63(),
+	}
 }
 
 type Client struct {
@@ -65,17 +78,36 @@ type Client struct {
 func (s *Client) handleEvent(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch event.Name {
-	case pause:
-		s.paused = event.Data == "yes"
-		if !s.paused {
-			s.role = ""
-		}
-	case timePos:
-		if !s.paused {
+	switch event.EventType {
+	case seek:
+		if s.paused {
 			return errDonotSend
 		}
+		err := s.pauseReq(true)
+		if err != nil {
+			return err
+		}
+		s.paused = true
+		return errDonotSend
+
+	case propertyChange:
+		switch event.Name {
+		case pause:
+			s.paused = event.paused()
+			if !s.paused {
+				s.role = ""
+			}
+		case timePos:
+			if !s.paused {
+				return errDonotSend
+			}
+		default:
+			return errDonotSend
+		}
+	default:
+		return errDonotSend
 	}
+
 	if s.role == slave {
 		return errSlave
 	}
@@ -89,9 +121,6 @@ func (s *Client) Watch() error {
 		json.Unmarshal(scanner.Bytes(), &event)
 		if event.EventType == "" {
 			log.Println(scanner.Text())
-			continue
-		}
-		if event.EventType != eventPropertyChange {
 			continue
 		}
 		err := s.handleEvent(event)
@@ -131,10 +160,23 @@ func (s *Client) ProccessIncomingEvents(incoming <-chan []byte) {
 	}
 }
 
+func (s *Client) pauseReq(paused bool) error {
+	req := NewRequest(setProperty, pause, paused)
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	err = s.conn.request(body)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Client) pause(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	paused := event.Data == "yes"
+	paused := event.paused()
 	if paused {
 		s.role = slave
 	} else {
@@ -143,15 +185,7 @@ func (s *Client) pause(event Event) error {
 	if s.paused == paused {
 		return nil
 	}
-	req := Request{
-		Command:   []any{"set_property", pause, paused},
-		RequestId: rand.Int63(),
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	err = s.conn.request(body)
+	err := s.pauseReq(paused)
 	if err != nil {
 		return err
 	}
@@ -170,10 +204,7 @@ func (s *Client) sync(event Event) error {
 		return nil
 	}
 
-	req := Request{
-		Command:   []any{"set_property", timePos, event.Data},
-		RequestId: rand.Int63(),
-	}
+	req := NewRequest(setProperty, timePos, event.Data)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -188,10 +219,7 @@ func (s *Client) sync(event Event) error {
 func (s *Client) Observe() error {
 	events := []string{pause, timePos}
 	for i, event := range events {
-		req := Request{
-			Command:   []any{"observe_property_string", i + 1, event},
-			RequestId: rand.Int63(),
-		}
+		req := NewRequest("observe_property_string", i+1, event)
 		body, err := json.Marshal(req)
 		if err != nil {
 			return err
