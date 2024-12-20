@@ -29,3 +29,5 @@ jobs:
 
       - name: Publish
         run: gh release list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
