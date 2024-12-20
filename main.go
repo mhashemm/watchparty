@@ -37,7 +37,12 @@ func main() {
 	if *local {
 		address = fmt.Sprintf("%s:%d", upnp.GetLocalIPAddr(), *port)
 	} else {
-		_, err := upnp.AddPortMapping(upnp.AddPortMappingRequest{
+		upnpClient, err := upnp.New()
+		if err != nil {
+			panic(err)
+		}
+
+		_, err = upnpClient.AddPortMapping(upnp.AddPortMappingRequest{
 			NewProtocol:               "TCP",
 			NewExternalPort:           *publicPort,
 			NewInternalPort:           *port,
@@ -48,9 +53,9 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		defer upnp.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
+		defer upnpClient.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: *publicPort, NewProtocol: "TCP"})
 
-		externalIp, err := upnp.GetExternalIPAddress()
+		externalIp, err := upnpClient.GetExternalIPAddress()
 		if err != nil {
 			panic(err)
 		}
