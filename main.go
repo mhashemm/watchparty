@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,7 +32,17 @@ func main() {
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
 	mpvFlags := flag.String("mpvFlags", "", "any extra flags to pass to mpv")
 	local := flag.Bool("local", false, "run on local network")
+	update := flag.Bool("update", false, "update to latest version")
 	flag.Parse()
+
+	if *update {
+		err := _update(c)
+		if err != nil {
+			panic(err)
+		}
+		return
+	}
+
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
 	address := ""
@@ -151,4 +163,43 @@ func main() {
 	if err != nil {
 		log.Println(err)
 	}
+}
+
+func _update(c context.Context) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return err
+	}
+	tmpPath := exePath + ".tmp"
+
+	req, err := http.NewRequestWithContext(c, http.MethodGet, ExecutableUrl, nil)
+	if err != nil {
+		return err
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE, 0700)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, res.Body)
+	if err != nil {
+		file.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+
+	return os.Rename(tmpPath, exePath)
 }
