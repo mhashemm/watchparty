@@ -153,7 +153,7 @@ func (s *Server) Shutdown() {
 
 func (s *Server) BroadcastEvents(outgoing chan []byte) {
 	for event := range outgoing {
-		s.broadcast(func(p *peer, counter uint64) error {
+		go s.broadcast(func(p *peer, counter uint64) error {
 			_, err := s.request(p.address, "/event", event, counter)
 			return err
 		})
