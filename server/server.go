@@ -59,11 +59,12 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 
 	res.Header().Add(counterHeaderKey, strconv.FormatUint(myCounter, 10))
 	res.Header().Add(hostnameHeaderKey, s.hostname)
+	res.WriteHeader(http.StatusOK)
 	_, err := res.Write(resBody)
 	if err != nil {
 		log.Printf("%s %s: %s\n", addr, hostname, err)
 	}
-	res.WriteHeader(http.StatusOK)
+	log.Printf("connected to %s with ip %s", hostname, addr)
 }
 
 func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
