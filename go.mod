@@ -1,6 +1,6 @@
 module github.com/mhashemm/watchparty
 
-go 1.24.3
+go 1.26.2
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
