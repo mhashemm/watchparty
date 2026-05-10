@@ -17,6 +17,7 @@ import (
 	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/server"
+	"github.com/mhashemm/watchparty/types"
 )
 
 func main() {
@@ -63,7 +64,7 @@ func main() {
 		address = fmt.Sprintf("%s:%d", publicIp, *publicPort)
 	}
 
-	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
+	incoming, outgoing := make(chan types.IncomingMessage, 1024), make(chan []byte, 1024)
 	defer close(incoming)
 	defer close(outgoing)
 	ser := server.New(c, incoming, address)

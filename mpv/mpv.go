@@ -10,6 +10,8 @@ import (
 	"net"
 	"slices"
 	"sync"
+
+	"github.com/mhashemm/watchparty/types"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 	slave          = "slave"
 	seek           = "seek"
 	setProperty    = "set_property"
+	showText       = "show-text"
 )
 
 var (
@@ -137,10 +140,10 @@ func (s *Client) Watch() error {
 	return scanner.Err()
 }
 
-func (s *Client) ProccessIncomingEvents(incoming <-chan []byte) {
+func (s *Client) ProccessIncomingEvents(incoming <-chan types.IncomingMessage) {
 	for e := range incoming {
 		event := Event{}
-		err := json.Unmarshal(e, &event)
+		err := json.Unmarshal(e.Event, &event)
 		if err != nil {
 			log.Printf("%s | %s\n", e, err)
 			continue

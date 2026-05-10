@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/mhashemm/watchparty/types"
 )
 
 const (
@@ -36,7 +38,7 @@ type Server struct {
 	c         context.Context
 	addresses map[string]*peer
 	mu        sync.RWMutex
-	incoming  chan<- []byte
+	incoming  chan<- types.IncomingMessage
 	client    *http.Client
 	myAddress string
 	counter   uint64
@@ -92,7 +94,11 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	peer.Counter = counter
-	s.incoming <- body
+	msg := types.IncomingMessage{
+		HostName: peer.Hostname,
+		Event:    body,
+	}
+	s.incoming <- msg
 	res.WriteHeader(http.StatusNoContent)
 }
 
@@ -201,7 +207,7 @@ func (s *Server) request(addr string, endpoint string, data []byte, counter uint
 	return res, nil
 }
 
-func New(c context.Context, incoming chan []byte, myAddress string) *Server {
+func New(c context.Context, incoming chan types.IncomingMessage, myAddress string) *Server {
 	hostname, _ := os.Hostname()
 	return &Server{
 		c:        c,
