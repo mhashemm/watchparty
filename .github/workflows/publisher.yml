@@ -31,7 +31,13 @@ jobs:
       - name: Build Windows
         run: GOOS=windows GOARCH=amd64 go build -v -o watchparty.exe main.go
 
+      - name: Build Mac amd64
+        run: GOOS=darwin GOARCH=amd64 go build -v -o watchparty_amd64 main.go
+
+      - name: Build Mac arm64
+        run: GOOS=darwin GOARCH=arm64 go build -v -o watchparty_arm64 main.go
+
       - name: Publish
-        run: gh release create "$GITHUB_REF_NAME" watchparty watchparty.exe --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" watchparty watchparty.exe watchparty_amd64 watchparty_arm64 --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
