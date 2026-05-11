@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,10 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 		log.Printf("%s %s: %s\n", addr, hostname, err)
 	}
 	log.Printf("connected to %s with ip %s", hostname, addr)
+	s.incoming <- types.IncomingMessage{
+		HostName: hostname,
+		Event:    fmt.Appendf(nil, `{"name":"show-text",data:"%s has joined"}`, hostname),
+	}
 }
 
 func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
@@ -105,16 +110,31 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	addr := req.Header.Get(addressHeaderKey)
 	s.mu.Lock()
+	peer, exists := s.addresses[addr]
+	if !exists {
+		s.mu.Unlock()
+		log.Printf("%s: does not exists\n", addr)
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	delete(s.addresses, addr)
 	s.mu.Unlock()
 	res.WriteHeader(http.StatusNoContent)
+	s.incoming <- types.IncomingMessage{
+		HostName: peer.Hostname,
+		Event:    fmt.Appendf(nil, `{"name":"show-text",data:"%s has left"}`, peer.Hostname),
+	}
 }
 
 func (s *Server) AddAddress(addr string) error {
+	c, cancel := context.WithTimeout(s.c, 30*time.Second)
+	defer cancel()
+
+	addr, hostname, _ := strings.Cut(addr, "|")
 	s.mu.RLock()
 	counter := s.counter
 	s.mu.RUnlock()
-	res, err := s.request(addr, "/hi", nil, counter)
+	res, err := s.request(c, addr, "/hi", nil, counter)
 	if err != nil {
 		return err
 	}
@@ -128,69 +148,86 @@ func (s *Server) AddAddress(addr string) error {
 		return err
 	}
 	peerCounter, _ := strconv.ParseUint(res.Header.Get(counterHeaderKey), 10, 64)
-	hostname := res.Header.Get(hostnameHeaderKey)
+	if hostname == "" {
+		hostname = res.Header.Get(hostnameHeaderKey)
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for addr, peer := range addresses {
 		_, exists := s.addresses[addr]
 		if exists {
 			continue
 		}
-		_, err := s.request(addr, "/hi", nil, counter)
+		c, cancel := context.WithTimeout(s.c, 30*time.Second)
+		defer cancel()
+		_, err := s.request(c, addr, "/hi", nil, counter)
 		if err != nil {
 			log.Println(err)
 			continue
 		}
 		s.addresses[addr] = peer
+		s.incoming <- types.IncomingMessage{
+			HostName: hostname,
+			Event:    fmt.Appendf(nil, `{"name":"show-text",data:"connected to %s"}`, peer.Hostname),
+		}
 	}
 	s.addresses[addr] = &peer{
 		Counter:  peerCounter,
 		Hostname: hostname,
 		address:  addr,
 	}
-	s.mu.Unlock()
+	s.incoming <- types.IncomingMessage{
+		HostName: hostname,
+		Event:    fmt.Appendf(nil, `{"name":"show-text",data:"connected to %s"}`, hostname),
+	}
 	return nil
 }
 
 func (s *Server) Shutdown() {
-	s.broadcast(func(p *peer, _ uint64) error {
-		_, err := s.request(p.address, "/bye", nil, math.MaxUint64)
+	s.broadcast(func(c context.Context, p *peer, _ uint64) error {
+		_, err := s.request(c, p.address, "/bye", nil, math.MaxUint64)
 		return err
 	})
 }
 
 func (s *Server) BroadcastEvents(outgoing chan []byte) {
 	for event := range outgoing {
-		go s.broadcast(func(p *peer, counter uint64) error {
-			_, err := s.request(p.address, "/event", event, counter)
+		go s.broadcast(func(c context.Context, p *peer, counter uint64) error {
+			_, err := s.request(c, p.address, "/event", event, counter)
 			return err
 		})
 	}
 }
 
-func (s *Server) broadcast(f func(*peer, uint64) error) {
+func (s *Server) broadcast(f func(context.Context, *peer, uint64) error) {
 	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
 	s.mu.Lock()
 	s.counter += 1
 	counter := s.counter
 	s.mu.Unlock()
 
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	wg.Add(len(s.addresses))
+	c, cancel := context.WithTimeout(s.c, 10*time.Second)
+	defer cancel()
 	for _, peer := range s.addresses {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := f(peer, counter)
+			err := f(c, peer, counter)
 			if err != nil {
 				log.Printf("%s: %s\n", peer.String(), err)
 			}
 		}()
 	}
-	wg.Wait()
-	s.mu.RUnlock()
 }
 
-func (s *Server) request(addr string, endpoint string, data []byte, counter uint64) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(s.c, http.MethodPost, "http://"+addr+endpoint, bytes.NewBuffer(data))
+func (s *Server) request(c context.Context, addr string, endpoint string, data []byte, counter uint64) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(c, http.MethodPost, "http://"+addr+endpoint, bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err
 	}
@@ -207,8 +244,10 @@ func (s *Server) request(addr string, endpoint string, data []byte, counter uint
 	return res, nil
 }
 
-func New(c context.Context, incoming chan types.IncomingMessage, myAddress string) *Server {
-	hostname, _ := os.Hostname()
+func New(c context.Context, incoming chan types.IncomingMessage, myAddress string, hostname string) *Server {
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
 	return &Server{
 		c:        c,
 		incoming: incoming,

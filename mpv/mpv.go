@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -22,14 +23,16 @@ const (
 	seek           = "seek"
 	setProperty    = "set_property"
 	showText       = "show-text"
+
+	showTextDurationSeconds = 5
 )
 
 var (
 	errNoChange  = errors.New("no change")
-	errDonotSend = errors.New("do not send")
+	errDoNotSend = errors.New("do not send")
 	errSlave     = errors.New("slave")
 
-	skippedErrs = []error{errNoChange, errDonotSend, errSlave}
+	skippedErrs = []error{errNoChange, errDoNotSend, errSlave}
 )
 
 type connection struct {
@@ -84,14 +87,14 @@ func (s *Client) handleEvent(event Event) error {
 	switch event.EventType {
 	case seek:
 		if s.paused {
-			return errDonotSend
+			return errDoNotSend
 		}
 		err := s.pauseReq(true)
 		if err != nil {
 			return err
 		}
 		s.paused = true
-		return errDonotSend
+		return errDoNotSend
 
 	case propertyChange:
 		switch event.Name {
@@ -102,13 +105,13 @@ func (s *Client) handleEvent(event Event) error {
 			}
 		case timePos:
 			if !s.paused {
-				return errDonotSend
+				return errDoNotSend
 			}
 		default:
-			return errDonotSend
+			return errDoNotSend
 		}
 	default:
-		return errDonotSend
+		return errDoNotSend
 	}
 
 	if s.role == slave {
@@ -140,7 +143,7 @@ func (s *Client) Watch() error {
 	return scanner.Err()
 }
 
-func (s *Client) ProccessIncomingEvents(incoming <-chan types.IncomingMessage) {
+func (s *Client) ProcessIncomingEvents(incoming <-chan types.IncomingMessage) {
 	for e := range incoming {
 		event := Event{}
 		err := json.Unmarshal(e.Event, &event)
@@ -151,9 +154,11 @@ func (s *Client) ProccessIncomingEvents(incoming <-chan types.IncomingMessage) {
 
 		switch event.Name {
 		case pause:
-			err = s.pause(event)
+			err = s.pause(event, e.HostName)
 		case timePos:
-			err = s.sync(event)
+			err = s.sync(event, e.HostName)
+		case showText:
+			err = s.showText(event.Data)
 		}
 
 		if err != nil {
@@ -176,7 +181,7 @@ func (s *Client) pauseReq(paused bool) error {
 	return nil
 }
 
-func (s *Client) pause(event Event) error {
+func (s *Client) pause(event Event, hostname string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	paused := event.paused()
@@ -193,10 +198,16 @@ func (s *Client) pause(event Event) error {
 		return err
 	}
 	s.paused = paused
+
+	actionText := "resumed"
+	if paused {
+		actionText = "paused"
+	}
+	s.showText(fmt.Sprintf("%s by %s", actionText, hostname))
 	return nil
 }
 
-func (s *Client) sync(event Event) error {
+func (s *Client) sync(event Event, hostname string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.paused {
@@ -216,7 +227,18 @@ func (s *Client) sync(event Event) error {
 	if err != nil {
 		return err
 	}
+
+	s.showText(fmt.Sprintf("synced by %s", hostname))
 	return nil
+}
+
+func (s *Client) showText(text string) error {
+	req := NewRequest(showText, text, showTextDurationSeconds*1000)
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	return s.conn.request(body)
 }
 
 func (s *Client) Observe() error {
