@@ -11,6 +11,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/mhashemm/watchparty/types"
 )
@@ -233,6 +234,7 @@ func (s *Client) sync(event Event, hostname string) error {
 }
 
 func (s *Client) showText(text string) error {
+	<-time.After(100 * time.Millisecond)
 	req := NewRequest(showText, text, showTextDurationSeconds*1000)
 	body, err := json.Marshal(req)
 	if err != nil {
