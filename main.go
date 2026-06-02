@@ -17,6 +17,7 @@ import (
 	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/server"
+	"github.com/mhashemm/watchparty/types"
 )
 
 func main() {
@@ -26,15 +27,17 @@ func main() {
 	cooldown := flag.Int("cooldown", 5, "cooldown in seconds for mpv to init the server")
 	port := flag.Int("port", 6969, "local port")
 	publicPort := flag.Int("pport", 6969, "public port")
-	addrs := flag.String("addrs", "", "comma seprated list of addresses to connect to")
+	addrs := flag.String("addrs", "", "comma separated list of addresses to connect to")
 	mpvPath := flag.String("mpv", "mpv", "mpv path")
 	mpvFlags := flag.String("mpvFlags", "", "any extra flags to pass to mpv")
 	local := flag.Bool("local", false, "run on local network")
+	hostname := flag.String("hostname", "", "set your hostname")
+	oblivious := flag.Bool("oblivious", false, "intended for people who don't know nothing about nothing and just copy past the command")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
 	address := ""
-	if *local {
+	if *local || *oblivious {
 		address = fmt.Sprintf("%s:%d", upnp.GetLocalIPAddr(), *port)
 	} else {
 		upnpClient, err := upnp.New()
@@ -63,10 +66,10 @@ func main() {
 		address = fmt.Sprintf("%s:%d", publicIp, *publicPort)
 	}
 
-	incoming, outgoing := make(chan []byte, 1024), make(chan []byte, 1024)
+	incoming, outgoing := make(chan types.IncomingMessage, 1024), make(chan []byte, 1024)
 	defer close(incoming)
 	defer close(outgoing)
-	ser := server.New(c, incoming, address)
+	ser := server.New(c, incoming, address, *hostname)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)
@@ -76,9 +79,9 @@ func main() {
 		Handler: mux,
 	}
 	defer func() {
-		shutdownc, shutdowncancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdowncancel()
-		s.Shutdown(shutdownc)
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		s.Shutdown(shutdownContext)
 	}()
 	defer ser.Shutdown()
 
@@ -143,7 +146,7 @@ func main() {
 		panic(err)
 	}
 
-	go client.ProccessIncomingEvents(incoming)
+	go client.ProcessIncomingEvents(incoming)
 
 	log.Println("init done. now you can start watching")
 
