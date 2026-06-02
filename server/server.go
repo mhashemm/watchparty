@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/types"
 )
 
@@ -68,9 +69,10 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 		log.Printf("%s %s: %s\n", addr, hostname, err)
 	}
 	log.Printf("connected to %s with ip %s", hostname, addr)
+	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("%s has joined", hostname)})
 	s.incoming <- types.IncomingMessage{
 		HostName: hostname,
-		Event:    fmt.Appendf(nil, `{"name":"show-text",data:"%s has joined"}`, hostname),
+		Event:    event,
 	}
 }
 
@@ -120,9 +122,10 @@ func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	delete(s.addresses, addr)
 	s.mu.Unlock()
 	res.WriteHeader(http.StatusNoContent)
+	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("%s has left", peer.Hostname)})
 	s.incoming <- types.IncomingMessage{
 		HostName: peer.Hostname,
-		Event:    fmt.Appendf(nil, `{"name":"show-text",data:"%s has left"}`, peer.Hostname),
+		Event:    event,
 	}
 }
 
@@ -166,10 +169,11 @@ func (s *Server) AddAddress(addr string) error {
 			log.Println(err)
 			continue
 		}
+		event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("connected to %s", peer.Hostname)})
 		s.addresses[addr] = peer
 		s.incoming <- types.IncomingMessage{
 			HostName: hostname,
-			Event:    fmt.Appendf(nil, `{"name":"show-text",data:"connected to %s"}`, peer.Hostname),
+			Event:    event,
 		}
 	}
 	s.addresses[addr] = &peer{
@@ -177,9 +181,10 @@ func (s *Server) AddAddress(addr string) error {
 		Hostname: hostname,
 		address:  addr,
 	}
+	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("connected to %s", hostname)})
 	s.incoming <- types.IncomingMessage{
 		HostName: hostname,
-		Event:    fmt.Appendf(nil, `{"name":"show-text",data:"connected to %s"}`, hostname),
+		Event:    event,
 	}
 	return nil
 }
@@ -201,9 +206,6 @@ func (s *Server) BroadcastEvents(outgoing chan []byte) {
 }
 
 func (s *Server) broadcast(f func(context.Context, *peer, uint64) error) {
-	wg := sync.WaitGroup{}
-	defer wg.Wait()
-
 	s.mu.Lock()
 	s.counter += 1
 	counter := s.counter
@@ -212,9 +214,11 @@ func (s *Server) broadcast(f func(context.Context, *peer, uint64) error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	wg.Add(len(s.addresses))
 	c, cancel := context.WithTimeout(s.c, 10*time.Second)
 	defer cancel()
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+	wg.Add(len(s.addresses))
 	for _, peer := range s.addresses {
 		go func() {
 			defer wg.Done()

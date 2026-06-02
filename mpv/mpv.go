@@ -51,8 +51,8 @@ func (c *connection) request(req []byte) error {
 }
 
 type Event struct {
-	EventType string `json:"event"`
-	Id        int    `json:"id"`
+	EventType string `json:"event,omitempty"`
+	Id        int    `json:"id,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
 }
