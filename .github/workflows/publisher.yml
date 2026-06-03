@@ -25,19 +25,22 @@ jobs:
       - name: Tidy
         run: go mod tidy
 
-      - name: Build Linux
-        run: GOOS=linux GOARCH=amd64 go build -v -o watchparty main.go
+      - name: Build Linux amd64
+        run: GOOS=linux GOARCH=amd64 go build -v -o watchparty_amd64 main.go
+
+      - name: Build Linux arm64
+        run: GOOS=linux GOARCH=arm64 go build -v -o watchparty_arm64 main.go
 
       - name: Build Windows
         run: GOOS=windows GOARCH=amd64 go build -v -o watchparty.exe main.go
 
       - name: Build Mac amd64
-        run: GOOS=darwin GOARCH=amd64 go build -v -o watchparty_amd64 main.go
+        run: GOOS=darwin GOARCH=amd64 go build -v -o watchparty_mac_amd64 main.go
 
       - name: Build Mac arm64
-        run: GOOS=darwin GOARCH=arm64 go build -v -o watchparty_arm64 main.go
+        run: GOOS=darwin GOARCH=arm64 go build -v -o watchparty_mac_arm64 main.go
 
       - name: Publish
-        run: gh release create "$GITHUB_REF_NAME" watchparty watchparty.exe watchparty_amd64 watchparty_arm64 --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" watchparty_amd64 watchparty_arm64 watchparty.exe watchparty_mac_amd64 watchparty_mac_arm64 --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
