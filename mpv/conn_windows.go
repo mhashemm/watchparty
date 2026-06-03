@@ -3,7 +3,6 @@
 package mpv
 
 import (
-	"bufio"
 	"context"
 
 	win "github.com/Microsoft/go-winio"
@@ -18,6 +17,5 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 	}
 	return &connection{
 		conn:    conn,
-		scanner: bufio.NewScanner(conn),
 	}, nil
 }
