@@ -37,18 +37,55 @@ var (
 )
 
 type connection struct {
+	mu      sync.Mutex
 	conn    net.Conn
 	scanner *bufio.Scanner
-	mu      sync.Mutex
+	ctx     context.Context
+	reqCh   chan Request
+	resCh   chan Response
 }
 
-func (c *connection) request(req []byte) error {
-	req = append(req, '\n')
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	log.Printf("%s", req)
-	_, err := c.conn.Write(req)
-	return err
+func (c *connection) doRequests() {
+	for req := range c.reqCh {
+		body, err := json.Marshal(req)
+		if err != nil {
+			log.Println("DoRequests:", err)
+			continue
+		}
+		body = append(body, '\n')
+		_, err = c.conn.Write(body)
+		log.Printf("DoRequests: %s", body)
+		if err != nil {
+			log.Println("DoRequests:", err)
+			continue
+		}
+	}
+}
+
+func (c *connection) do(args ...any) error {
+	req := Request{
+		Command:   args,
+		RequestId: rand.Int63(),
+	}
+
+	c.reqCh <- req
+	for {
+		select {
+		case res := <-c.resCh:
+			if res.RequestId != req.RequestId {
+				log.Printf("do: received wrong response: [requestId=%d] [expectedRequestId=%d]\n", res.RequestId, req.RequestId)
+				continue
+			}
+			log.Printf("do: received response: [requestId=%d] [error=%s]\n", res.RequestId, res.Error)
+			if res.Error != "success" {
+				return errors.New(res.Error)
+			}
+			return nil
+		case <-time.After(5 * time.Second):
+			log.Printf("do: response timeout: [requestId=%d]\n", req.RequestId)
+			return context.Canceled
+		}
+	}
 }
 
 type Event struct {
@@ -56,6 +93,7 @@ type Event struct {
 	Id        int    `json:"id,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
+	Response
 }
 
 func (e Event) paused() bool {
@@ -66,12 +104,9 @@ type Request struct {
 	Command   []any `json:"command"`
 	RequestId int64 `json:"request_id"`
 }
-
-func NewRequest(args ...any) Request {
-	return Request{
-		Command:   args,
-		RequestId: rand.Int63(),
-	}
+type Response struct {
+	RequestId int64  `json:"request_id"`
+	Error     string `json:"error"`
 }
 
 type Client struct {
@@ -82,30 +117,33 @@ type Client struct {
 	role     string
 }
 
-func (s *Client) handleEvent(event Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (c *Client) handleEvent(event Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	switch event.EventType {
-	case seek:
-		if s.paused {
-			return errDoNotSend
-		}
-		err := s.pauseReq(true)
-		if err != nil {
-			return err
-		}
-		s.paused = true
-		return errDoNotSend
+	// case seek:
+	// 	if s.paused && s.role == slave {
+	// 		return errDoNotSend
+	// 	}
+	// 	err := s.pauseReq(true)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	s.paused = true
+	// 	return errDoNotSend
 
 	case propertyChange:
 		switch event.Name {
 		case pause:
-			s.paused = event.paused()
-			if !s.paused {
-				s.role = ""
+			if c.paused == event.paused() {
+				return errNoChange
+			}
+			c.paused = event.paused()
+			if !c.paused {
+				c.role = ""
 			}
 		case timePos:
-			if !s.paused {
+			if !c.paused {
 				return errDoNotSend
 			}
 		default:
@@ -115,103 +153,107 @@ func (s *Client) handleEvent(event Event) error {
 		return errDoNotSend
 	}
 
-	if s.role == slave {
+	if c.role == slave {
 		return errSlave
 	}
 	return nil
 }
 
-func (s *Client) Watch() error {
-	scanner := s.conn.scanner
+func (c *Client) watch() error {
+	scanner := c.conn.scanner
 	for scanner.Scan() {
 		event := Event{}
-		json.Unmarshal(scanner.Bytes(), &event)
-		if event.EventType == "" {
-			log.Println(scanner.Text())
+		err := json.Unmarshal(scanner.Bytes(), &event)
+		if err != nil {
+			log.Println("Watch: unmarshal:", err, scanner.Text())
 			continue
 		}
-		err := s.handleEvent(event)
+		if event.RequestId > 0 && event.Error != "" {
+			select {
+			case c.conn.resCh <- event.Response:
+				log.Println("Watch: queued response:", scanner.Text())
+			default:
+				log.Println("Watch: dropped response:", scanner.Text())
+			}
+		}
+		if event.EventType == "" {
+			continue
+		}
+		err = c.handleEvent(event)
 		if slices.Contains(skippedErrs, err) {
 			continue
 		}
 		if err != nil {
-			log.Printf("%s %s", scanner.Bytes(), err)
+			log.Println("Watch:", err)
 			continue
 		}
-		s.outgoing <- scanner.Bytes()
+		c.outgoing <- scanner.Bytes()
+		log.Println("Watch: broadcasted event:", scanner.Text())
 	}
 
 	return scanner.Err()
 }
 
-func (s *Client) ProcessIncomingEvents(incoming <-chan types.IncomingMessage) {
+func (c *Client) ProcessIncomingEvents(incoming <-chan types.IncomingMessage) {
 	for e := range incoming {
 		event := Event{}
 		err := json.Unmarshal(e.Event, &event)
 		if err != nil {
-			log.Printf("%s | %s\n", e, err)
+			log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 			continue
 		}
 
 		switch event.Name {
 		case pause:
-			err = s.pause(event, e.HostName)
+			err = c.pause(event, e.HostName)
 		case timePos:
-			err = s.sync(event, e.HostName)
+			err = c.sync(event, e.HostName)
 		case showText:
-			err = s.showText(event.Data)
+			err = c.showText(event.Data)
 		}
 
 		if err != nil {
-			log.Printf("%s | %s\n", e, err)
+			log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 			continue
 		}
 	}
 }
 
-func (s *Client) pauseReq(paused bool) error {
-	req := NewRequest(setProperty, pause, paused)
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	err = s.conn.request(body)
-	if err != nil {
-		return err
-	}
-	return nil
+func (c *Client) pauseReq(paused bool) error {
+	return c.conn.do(setProperty, pause, paused)
 }
 
-func (s *Client) pause(event Event, hostname string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (c *Client) pause(event Event, hostname string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	paused := event.paused()
-	if paused {
-		s.role = slave
-	} else {
-		s.role = ""
-	}
-	if s.paused == paused {
+	if c.paused == paused {
 		return nil
 	}
-	err := s.pauseReq(paused)
+	if paused {
+		c.role = slave
+	} else {
+		c.role = ""
+	}
+	err := c.pauseReq(paused)
 	if err != nil {
 		return err
 	}
-	s.paused = paused
+	c.paused = paused
 
 	actionText := "resumed"
 	if paused {
 		actionText = "paused"
 	}
-	s.showText(fmt.Sprintf("%s by %s", actionText, hostname))
+	c.showText(fmt.Sprintf("%s by %s", actionText, hostname))
 	return nil
 }
 
-func (s *Client) sync(event Event, hostname string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.paused {
+func (c *Client) sync(event Event, hostname string) error {
+	c.mu.Lock()
+	paused := c.paused
+	c.mu.Unlock()
+	if !paused {
 		return nil
 	}
 
@@ -219,55 +261,53 @@ func (s *Client) sync(event Event, hostname string) error {
 		return nil
 	}
 
-	req := NewRequest(setProperty, timePos, event.Data)
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	err = s.conn.request(body)
+	err := c.conn.do(setProperty, timePos, event.Data)
 	if err != nil {
 		return err
 	}
 
-	s.showText(fmt.Sprintf("synced by %s", hostname))
+	c.showText(fmt.Sprintf("synced by %s", hostname))
 	return nil
 }
 
-func (s *Client) showText(text string) error {
-	<-time.After(100 * time.Millisecond)
-	req := NewRequest(showText, text, showTextDurationSeconds*1000)
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	return s.conn.request(body)
+func (c *Client) showText(text string) error {
+	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-func (s *Client) Observe() error {
-	events := []string{pause, timePos}
-	for i, event := range events {
-		req := NewRequest("observe_property_string", i+1, event)
-		body, err := json.Marshal(req)
-		if err != nil {
-			return err
-		}
-		err = s.conn.request(body)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func New(c context.Context, socket string, outgoing chan<- []byte) (*Client, error) {
+func New(c context.Context, socket string, outgoing chan<- []byte, startAsSlave bool) (*Client, error) {
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
 	}
-
-	return &Client{
+	conn.scanner = bufio.NewScanner(conn.conn)
+	conn.ctx = c
+	conn.reqCh = make(chan Request, 10)
+	conn.resCh = make(chan Response, 10)
+	client := &Client{
 		conn:     conn,
 		outgoing: outgoing,
 		paused:   true,
-	}, nil
+	}
+	if startAsSlave {
+		client.role = slave
+	}
+
+	go conn.doRequests()
+
+	go func() {
+		err := client.watch()
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}()
+
+	events := []string{pause, timePos}
+	for i, event := range events {
+		err := conn.do("observe_property_string", i+1, event)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return client, nil
 }

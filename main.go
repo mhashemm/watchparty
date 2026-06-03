@@ -94,7 +94,10 @@ func main() {
 	}()
 	go ser.BroadcastEvents(outgoing)
 
-	addresses := strings.Split(*addrs, ",")
+	addresses := []string{}
+	if strings.TrimSpace(*addrs) != "" {
+		addresses = strings.Split(*addrs, ",")
+	}
 	for _, addr := range addresses {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
@@ -127,21 +130,9 @@ func main() {
 	if os.IsNotExist(err) {
 		panic(err)
 	}
+	defer os.Remove(mpvSocket)
 
-	client, err := mpv.New(c, mpvSocket, outgoing)
-	if err != nil {
-		panic(err)
-	}
-
-	go func() {
-		err := client.Watch()
-		if err != nil {
-			cancel()
-			log.Println(err)
-		}
-	}()
-
-	err = client.Observe()
+	client, err := mpv.New(c, mpvSocket, outgoing, len(addresses) > 0)
 	if err != nil {
 		panic(err)
 	}

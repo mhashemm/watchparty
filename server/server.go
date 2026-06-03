@@ -255,9 +255,7 @@ func New(c context.Context, incoming chan types.IncomingMessage, myAddress strin
 	return &Server{
 		c:        c,
 		incoming: incoming,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client: &http.Client{},
 		addresses: map[string]*peer{},
 		myAddress: myAddress,
 		hostname:  hostname,

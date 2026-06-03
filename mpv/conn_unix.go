@@ -3,7 +3,6 @@
 package mpv
 
 import (
-	"bufio"
 	"context"
 	"net"
 )
@@ -18,7 +17,6 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 	}
 
 	return &connection{
-		conn:    conn,
-		scanner: bufio.NewScanner(conn),
+		conn: conn,
 	}, nil
 }
