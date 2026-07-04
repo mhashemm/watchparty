@@ -5,6 +5,7 @@ package mpv
 import (
 	"context"
 	"net"
+	"os/exec"
 )
 
 const SocketPrefix = "/tmp/"
@@ -20,3 +21,5 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 		conn: conn,
 	}, nil
 }
+
+func Init(_ *exec.Cmd) {}

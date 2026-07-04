@@ -114,6 +114,8 @@ func main() {
 	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
 	defer cmd.Cancel()
 
+	mpv.Init(cmd)
+
 	err := cmd.Start()
 	if err != nil {
 		panic(err)

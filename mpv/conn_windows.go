@@ -4,6 +4,8 @@ package mpv
 
 import (
 	"context"
+	"os/exec"
+	"syscall"
 
 	win "github.com/Microsoft/go-winio"
 )
@@ -16,6 +18,12 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 		return nil, err
 	}
 	return &connection{
-		conn:    conn,
+		conn: conn,
 	}, nil
+}
+
+func Init(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
 }
