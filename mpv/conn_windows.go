@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	win "github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 const SocketPrefix = "\\\\.\\pipe\\"
@@ -24,6 +25,7 @@ func newConnection(c context.Context, socket string) (*connection, error) {
 
 func Init(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		HideWindow:    true,
+		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NEW_CONSOLE,
 	}
 }

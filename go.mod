@@ -7,4 +7,4 @@ require (
 	github.com/mhashemm/upnp v0.3.1
 )
 
-require golang.org/x/sys v0.10.0 // indirect
+require golang.org/x/sys v0.10.0
