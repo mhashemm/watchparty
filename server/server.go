@@ -170,6 +170,7 @@ func (s *Server) AddAddress(addr string) error {
 			continue
 		}
 		event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("connected to %s", peer.Hostname)})
+		peer.address = addr
 		s.addresses[addr] = peer
 		s.incoming <- types.IncomingMessage{
 			HostName: hostname,
@@ -225,6 +226,11 @@ func (s *Server) broadcast(f func(context.Context, *peer, uint64) error) {
 			err := f(c, peer, counter)
 			if err != nil {
 				log.Printf("%s: %s\n", peer.String(), err)
+				event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("error: %s", err)})
+				select {
+				case s.incoming <- types.IncomingMessage{HostName: peer.Hostname, Event: event}:
+				default:
+				}
 			}
 		}()
 	}
@@ -253,9 +259,9 @@ func New(c context.Context, incoming chan types.IncomingMessage, myAddress strin
 		hostname, _ = os.Hostname()
 	}
 	return &Server{
-		c:        c,
-		incoming: incoming,
-		client: &http.Client{},
+		c:         c,
+		incoming:  incoming,
+		client:    &http.Client{},
 		addresses: map[string]*peer{},
 		myAddress: myAddress,
 		hostname:  hostname,

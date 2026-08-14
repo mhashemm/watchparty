@@ -2,6 +2,7 @@ package mpv
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -187,7 +188,7 @@ func (c *Client) watch() error {
 			log.Println("Watch:", err)
 			continue
 		}
-		c.outgoing <- scanner.Bytes()
+		c.outgoing <- bytes.Clone(scanner.Bytes())
 		log.Println("Watch: broadcasted event:", scanner.Text())
 	}
 
@@ -224,10 +225,10 @@ func (c *Client) pauseReq(paused bool) error {
 }
 
 func (c *Client) pause(event Event, hostname string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	paused := event.paused()
+	c.mu.Lock()
 	if c.paused == paused {
+		c.mu.Unlock()
 		return nil
 	}
 	if paused {
@@ -235,11 +236,15 @@ func (c *Client) pause(event Event, hostname string) error {
 	} else {
 		c.role = ""
 	}
+	c.mu.Unlock()
+
 	err := c.pauseReq(paused)
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
 	c.paused = paused
+	c.mu.Unlock()
 
 	actionText := "resumed"
 	if paused {
@@ -274,7 +279,7 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-func New(c context.Context, socket string, outgoing chan<- []byte, startAsSlave bool) (*Client, error) {
+func New(c context.Context, cancel context.CancelFunc, socket string, outgoing chan<- []byte, startAsSlave bool) (*Client, error) {
 	conn, err := newConnection(c, socket)
 	if err != nil {
 		return nil, err
@@ -297,8 +302,9 @@ func New(c context.Context, socket string, outgoing chan<- []byte, startAsSlave 
 	go func() {
 		err := client.watch()
 		if err != nil {
-			log.Fatalln(err)
+			log.Println("watch:", err)
 		}
+		cancel()
 	}()
 
 	events := []string{pause, timePos}

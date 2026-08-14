@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -38,21 +40,31 @@ func main() {
 
 	address := ""
 	if *local || *oblivious {
-		address = fmt.Sprintf("%s:%d", upnp.GetLocalIPAddr(), *port)
+		localIP := upnp.GetLocalIPAddr()
+		if localIP == "" {
+			panic("cannot determine local ip; are you connected to a network?")
+		}
+		address = fmt.Sprintf("%s:%d", localIP, *port)
 	} else {
 		upnpClient, err := upnp.New()
 		if err != nil {
 			panic(err)
 		}
 
-		_, err = upnpClient.AddPortMapping(upnp.AddPortMappingRequest{
+		mapping := upnp.AddPortMappingRequest{
 			NewProtocol:               "TCP",
 			NewExternalPort:           *publicPort,
 			NewInternalPort:           *port,
 			NewEnabled:                1,
 			NewPortMappingDescription: "watchparty",
 			NewLeaseDuration:          86400,
-		})
+		}
+		_, err = upnpClient.AddPortMapping(mapping)
+		var upnpErr *upnp.Error
+		if errors.As(err, &upnpErr) && upnpErr.Code == upnp.ErrOnlyPermanentLease {
+			mapping.NewLeaseDuration = 0
+			_, err = upnpClient.AddPortMapping(mapping)
+		}
 		if err != nil {
 			panic(err)
 		}
@@ -75,8 +87,9 @@ func main() {
 	mux.HandleFunc("/bye", ser.Bye)
 	mux.HandleFunc("/event", ser.Event)
 	s := &http.Server{
-		Addr:    fmt.Sprintf("0.0.0.0:%d", *port),
-		Handler: mux,
+		Addr:        fmt.Sprintf("0.0.0.0:%d", *port),
+		Handler:     mux,
+		BaseContext: func(_ net.Listener) context.Context { return c },
 	}
 	defer func() {
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -111,7 +124,8 @@ func main() {
 
 	log.Printf("your address to share is %s\n", address)
 
-	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), *mpvFlags, "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
+	args := append(strings.Fields(*mpvFlags), "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
+	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), args...)
 	defer cmd.Cancel()
 
 	mpv.Init(cmd)
@@ -134,7 +148,7 @@ func main() {
 	}
 	defer os.Remove(mpvSocket)
 
-	client, err := mpv.New(c, mpvSocket, outgoing, len(addresses) > 0)
+	client, err := mpv.New(c, cancel, mpvSocket, outgoing, len(addresses) > 0)
 	if err != nil {
 		panic(err)
 	}
