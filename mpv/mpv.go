@@ -10,11 +10,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"slices"
 	"sync"
 	"time"
-
-	"github.com/mhashemm/watchparty/types"
 )
 
 const (
@@ -33,34 +30,17 @@ var (
 	errNoChange  = errors.New("no change")
 	errDoNotSend = errors.New("do not send")
 	errSlave     = errors.New("slave")
-
-	skippedErrs = []error{errNoChange, errDoNotSend, errSlave}
 )
 
-type connection struct {
-	mu      sync.Mutex
-	conn    net.Conn
-	scanner *bufio.Scanner
-	ctx     context.Context
-	reqCh   chan Request
-	resCh   chan Response
+type IncomingMessage struct {
+	HostName string
+	Event    []byte
 }
 
-func (c *connection) doRequests() {
-	for req := range c.reqCh {
-		body, err := json.Marshal(req)
-		if err != nil {
-			log.Println("DoRequests:", err)
-			continue
-		}
-		body = append(body, '\n')
-		_, err = c.conn.Write(body)
-		log.Printf("DoRequests: %s", body)
-		if err != nil {
-			log.Println("DoRequests:", err)
-			continue
-		}
-	}
+type connection struct {
+	conn    net.Conn
+	scanner *bufio.Scanner
+	resCh   chan Response
 }
 
 func (c *connection) do(args ...any) error {
@@ -68,8 +48,16 @@ func (c *connection) do(args ...any) error {
 		Command:   args,
 		RequestId: rand.Int63(),
 	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	_, err = c.conn.Write(append(body, '\n'))
+	if err != nil {
+		return err
+	}
+	log.Printf("do: sent request: %s\n", body)
 
-	c.reqCh <- req
 	for {
 		select {
 		case res := <-c.resCh:
@@ -91,7 +79,6 @@ func (c *connection) do(args ...any) error {
 
 type Event struct {
 	EventType string `json:"event,omitempty"`
-	Id        int    `json:"id,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
 	Response
@@ -180,11 +167,11 @@ func (c *Client) watch() error {
 		if event.EventType == "" {
 			continue
 		}
-		err = c.handleEvent(event)
-		if slices.Contains(skippedErrs, err) {
+		switch err = c.handleEvent(event); err {
+		case nil:
+		case errNoChange, errDoNotSend, errSlave:
 			continue
-		}
-		if err != nil {
+		default:
 			log.Println("Watch:", err)
 			continue
 		}
@@ -195,7 +182,7 @@ func (c *Client) watch() error {
 	return scanner.Err()
 }
 
-func (c *Client) ProcessIncomingEvents(incoming <-chan types.IncomingMessage) {
+func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 	for e := range incoming {
 		event := Event{}
 		err := json.Unmarshal(e.Event, &event)
@@ -285,8 +272,6 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 		return nil, err
 	}
 	conn.scanner = bufio.NewScanner(conn.conn)
-	conn.ctx = c
-	conn.reqCh = make(chan Request, 10)
 	conn.resCh = make(chan Response, 10)
 	client := &Client{
 		conn:     conn,
@@ -296,8 +281,6 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 	if startAsSlave {
 		client.role = slave
 	}
-
-	go conn.doRequests()
 
 	go func() {
 		err := client.watch()

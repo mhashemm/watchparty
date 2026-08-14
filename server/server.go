@@ -7,22 +7,26 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mhashemm/watchparty/mpv"
-	"github.com/mhashemm/watchparty/types"
 )
 
 const (
 	addressHeaderKey  = "hit-me-up"
 	counterHeaderKey  = "counter"
 	hostnameHeaderKey = "hostname"
+
+	// ponytail: 3 strikes then drop, make it a flag if flaky wifi evicts people mid-movie
+	maxFails = 3
 )
 
 type peer struct {
@@ -30,6 +34,7 @@ type peer struct {
 	Hostname string     `json:"hostname"`
 	mu       sync.Mutex `json:"-"`
 	address  string     `json:"-"`
+	fails    int        `json:"-"`
 }
 
 func (p *peer) String() string {
@@ -40,11 +45,19 @@ type Server struct {
 	c         context.Context
 	addresses map[string]*peer
 	mu        sync.RWMutex
-	incoming  chan<- types.IncomingMessage
+	incoming  chan<- mpv.IncomingMessage
 	client    *http.Client
 	myAddress string
 	counter   uint64
 	hostname  string
+}
+
+func (s *Server) notify(hostname string, text string) {
+	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
+	select {
+	case s.incoming <- mpv.IncomingMessage{HostName: hostname, Event: event}:
+	default:
+	}
 }
 
 func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
@@ -69,11 +82,7 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 		log.Printf("%s %s: %s\n", addr, hostname, err)
 	}
 	log.Printf("connected to %s with ip %s", hostname, addr)
-	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("%s has joined", hostname)})
-	s.incoming <- types.IncomingMessage{
-		HostName: hostname,
-		Event:    event,
-	}
+	s.notify(hostname, fmt.Sprintf("%s has joined", hostname))
 }
 
 func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
@@ -86,31 +95,38 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	peer, exists := s.addresses[addr]
 	if !exists {
+		s.mu.RUnlock()
 		log.Printf("%s: does not exists\n", addr)
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	peer.mu.Lock()
-	defer peer.mu.Unlock()
 	if counter <= peer.Counter {
-		log.Printf("skipped event from %s\n", peer.String())
+		peer.mu.Unlock()
+		s.mu.RUnlock()
+		log.Printf("skipped event from %s\n", peer)
 		res.WriteHeader(http.StatusNoContent)
 		return
 	}
 	peer.Counter = counter
-	msg := types.IncomingMessage{
-		HostName: peer.Hostname,
-		Event:    body,
+	hostname := peer.Hostname
+	peer.mu.Unlock()
+	s.mu.RUnlock()
+
+	select {
+	case s.incoming <- mpv.IncomingMessage{HostName: hostname, Event: body}:
+		res.WriteHeader(http.StatusNoContent)
+	case <-req.Context().Done():
+		res.WriteHeader(http.StatusServiceUnavailable)
 	}
-	s.incoming <- msg
-	res.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	addr := req.Header.Get(addressHeaderKey)
+	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
+	// ponytail: identity is whatever the headers claim, add signing if this ever leaves trusted peers
 	s.mu.Lock()
 	peer, exists := s.addresses[addr]
 	if !exists {
@@ -119,79 +135,92 @@ func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	peer.mu.Lock()
+	stale := counter <= peer.Counter
+	peer.mu.Unlock()
+	if stale {
+		s.mu.Unlock()
+		log.Printf("skipped bye from %s\n", peer)
+		res.WriteHeader(http.StatusNoContent)
+		return
+	}
 	delete(s.addresses, addr)
 	s.mu.Unlock()
 	res.WriteHeader(http.StatusNoContent)
-	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("%s has left", peer.Hostname)})
-	s.incoming <- types.IncomingMessage{
-		HostName: peer.Hostname,
-		Event:    event,
-	}
+	s.notify(peer.Hostname, fmt.Sprintf("%s has left", peer.Hostname))
 }
 
-func (s *Server) AddAddress(addr string) error {
+func (s *Server) hi(addr string, counter uint64) (*peer, map[string]*peer, error) {
 	c, cancel := context.WithTimeout(s.c, 30*time.Second)
 	defer cancel()
 
+	res, err := s.request(c, addr, "/hi", nil, counter)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer res.Body.Close()
+
+	addresses := map[string]*peer{}
+	err = json.NewDecoder(res.Body).Decode(&addresses)
+	if err != nil {
+		return nil, nil, err
+	}
+	peerCounter, _ := strconv.ParseUint(res.Header.Get(counterHeaderKey), 10, 64)
+	return &peer{
+		Counter:  peerCounter,
+		Hostname: res.Header.Get(hostnameHeaderKey),
+		address:  addr,
+	}, addresses, nil
+}
+
+func (s *Server) AddAddress(addr string) error {
 	addr, hostname, _ := strings.Cut(addr, "|")
 	s.mu.RLock()
 	counter := s.counter
 	s.mu.RUnlock()
-	res, err := s.request(c, addr, "/hi", nil, counter)
-	if err != nil {
-		return err
-	}
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
-	addresses := map[string]*peer{}
-	err = json.Unmarshal(resBody, &addresses)
-	if err != nil {
-		return err
-	}
-	peerCounter, _ := strconv.ParseUint(res.Header.Get(counterHeaderKey), 10, 64)
-	if hostname == "" {
-		hostname = res.Header.Get(hostnameHeaderKey)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	for addr, peer := range addresses {
-		_, exists := s.addresses[addr]
-		if exists {
-			continue
+	p, addresses, err := s.hi(addr, counter)
+	if err != nil {
+		return err
+	}
+	if hostname != "" {
+		p.Hostname = hostname
+	}
+	added := []*peer{p}
+
+	s.mu.RLock()
+	for a := range addresses {
+		_, exists := s.addresses[a]
+		if exists || a == addr || a == s.myAddress {
+			delete(addresses, a)
 		}
-		c, cancel := context.WithTimeout(s.c, 30*time.Second)
-		defer cancel()
-		_, err := s.request(c, addr, "/hi", nil, counter)
+	}
+	s.mu.RUnlock()
+
+	for a, p := range addresses {
+		_, _, err := s.hi(a, counter)
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("connected to %s", peer.Hostname)})
-		peer.address = addr
-		s.addresses[addr] = peer
-		s.incoming <- types.IncomingMessage{
-			HostName: hostname,
-			Event:    event,
-		}
+		p.address = a
+		added = append(added, p)
 	}
-	s.addresses[addr] = &peer{
-		Counter:  peerCounter,
-		Hostname: hostname,
-		address:  addr,
+
+	s.mu.Lock()
+	for _, p := range added {
+		s.addresses[p.address] = p
 	}
-	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("connected to %s", hostname)})
-	s.incoming <- types.IncomingMessage{
-		HostName: hostname,
-		Event:    event,
+	s.mu.Unlock()
+
+	for _, p := range added {
+		s.notify(p.Hostname, fmt.Sprintf("connected to %s", p.Hostname))
 	}
 	return nil
 }
 
 func (s *Server) Shutdown() {
-	s.broadcast(func(c context.Context, p *peer, _ uint64) error {
+	s.broadcast(context.WithoutCancel(s.c), func(c context.Context, p *peer, _ uint64) error {
 		_, err := s.request(c, p.address, "/bye", nil, math.MaxUint64)
 		return err
 	})
@@ -199,40 +228,54 @@ func (s *Server) Shutdown() {
 
 func (s *Server) BroadcastEvents(outgoing chan []byte) {
 	for event := range outgoing {
-		go s.broadcast(func(c context.Context, p *peer, counter uint64) error {
+		s.broadcast(s.c, func(c context.Context, p *peer, counter uint64) error {
 			_, err := s.request(c, p.address, "/event", event, counter)
 			return err
 		})
 	}
 }
 
-func (s *Server) broadcast(f func(context.Context, *peer, uint64) error) {
+func (s *Server) broadcast(parent context.Context, f func(context.Context, *peer, uint64) error) {
 	s.mu.Lock()
 	s.counter += 1
 	counter := s.counter
+	peers := slices.Collect(maps.Values(s.addresses))
 	s.mu.Unlock()
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	c, cancel := context.WithTimeout(s.c, 10*time.Second)
+	c, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
+	errs := make([]error, len(peers))
 	wg := sync.WaitGroup{}
-	defer wg.Wait()
-	wg.Add(len(s.addresses))
-	for _, peer := range s.addresses {
+	wg.Add(len(peers))
+	for i, p := range peers {
 		go func() {
 			defer wg.Done()
-			err := f(c, peer, counter)
-			if err != nil {
-				log.Printf("%s: %s\n", peer.String(), err)
-				event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: fmt.Sprintf("error: %s", err)})
-				select {
-				case s.incoming <- types.IncomingMessage{HostName: peer.Hostname, Event: event}:
-				default:
-				}
-			}
+			errs[i] = f(c, p, counter)
 		}()
+	}
+	wg.Wait()
+
+	for i, p := range peers {
+		p.mu.Lock()
+		if errs[i] == nil {
+			p.fails = 0
+			p.mu.Unlock()
+			continue
+		}
+		p.fails += 1
+		dropped := p.fails >= maxFails
+		p.mu.Unlock()
+
+		log.Printf("%s: %s\n", p, errs[i])
+		if !dropped {
+			continue
+		}
+		s.mu.Lock()
+		if s.addresses[p.address] == p {
+			delete(s.addresses, p.address)
+		}
+		s.mu.Unlock()
+		s.notify(p.Hostname, fmt.Sprintf("dropped %s", p))
 	}
 }
 
@@ -254,7 +297,7 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 	return res, nil
 }
 
-func New(c context.Context, incoming chan types.IncomingMessage, myAddress string, hostname string) *Server {
+func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string) *Server {
 	if hostname == "" {
 		hostname, _ = os.Hostname()
 	}

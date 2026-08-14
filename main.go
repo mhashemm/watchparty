@@ -19,7 +19,6 @@ import (
 	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/server"
-	"github.com/mhashemm/watchparty/types"
 )
 
 func main() {
@@ -34,12 +33,11 @@ func main() {
 	mpvFlags := flag.String("mpvFlags", "", "any extra flags to pass to mpv")
 	local := flag.Bool("local", false, "run on local network")
 	hostname := flag.String("hostname", "", "set your hostname")
-	oblivious := flag.Bool("oblivious", false, "intended for people who don't know nothing about nothing and just copy past the command")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
 	address := ""
-	if *local || *oblivious {
+	if *local {
 		localIP := upnp.GetLocalIPAddr()
 		if localIP == "" {
 			panic("cannot determine local ip; are you connected to a network?")
@@ -78,9 +76,7 @@ func main() {
 		address = fmt.Sprintf("%s:%d", publicIp, *publicPort)
 	}
 
-	incoming, outgoing := make(chan types.IncomingMessage, 1024), make(chan []byte, 1024)
-	defer close(incoming)
-	defer close(outgoing)
+	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 	ser := server.New(c, incoming, address, *hostname)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
@@ -142,10 +138,6 @@ func main() {
 	case <-time.After(time.Duration(*cooldown) * time.Second):
 	}
 
-	_, err = os.Stat(mpvSocket)
-	if os.IsNotExist(err) {
-		panic(err)
-	}
 	defer os.Remove(mpvSocket)
 
 	client, err := mpv.New(c, cancel, mpvSocket, outgoing, len(addresses) > 0)
