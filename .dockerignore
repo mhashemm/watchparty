@@ -1,0 +1,11 @@
+# relay/Dockerfile does COPY . ., so everything here would otherwise be shipped to
+# the daemon on every build. .bin alone is ~10MB of an 11MB context.
+.bin
+.git
+.github
+.vscode
+.gitignore
+e2e.py
+CLAUDE.md
+LICENSE
+Dockerfile

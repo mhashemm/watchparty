@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""End-to-end watchparty suite. Real mpv processes, real HTTP mesh, no Go tests.
+"""End-to-end watchparty suite. Real mpv processes, real transports, no Go tests.
 
-Builds the binary, generates a test file, starts five nodes on this machine and
+Builds the binaries, generates a test file, starts five nodes on this machine and
 drives them by writing to one node's mpv IPC socket, then asserts the result on
 the other nodes' mpv. OSD notices are read back out of each node's log, since
 every show-text command appears there verbatim.
 
-Nobody is given the full peer list: each node bootstraps off one earlier
-node (A <- B,C; B <- D,E), so most of the mesh has to be discovered through
-/hi peer lists. All five still have to end up knowing all four others.
+Two phases, both run by default:
 
-    ./e2e.py                    # ~6 minutes
+  p2p    the direct HTTP mesh. Nobody is given the full peer list: each node
+         bootstraps off one earlier node (A <- B,C; B <- D,E), so most of the
+         mesh has to be discovered through /hi peer lists. All five still have
+         to end up knowing all four others.
+  relay  the same nodes against one ./relay websocket server, which is what
+         people behind carrier NAT use when UPNP cannot work. Covers fan-out,
+         room isolation, the secret, every abuse cap, and reconnect after the
+         relay dies.
+
+    ./e2e.py                    # both phases, ~12 minutes
+    ./e2e.py --mode relay       # one phase
     ./e2e.py --file movie.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
 
@@ -80,6 +88,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--file", help="media file to play (default: generate one with ffmpeg)")
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
+ap.add_argument("--mode", choices=("p2p", "relay", "both"), default="both")
 args = ap.parse_args()
 
 NODES = ["node" + chr(ord("A") + i) for i in range(args.nodes)]
@@ -88,6 +97,9 @@ NODES = ["node" + chr(ord("A") + i) for i in range(args.nodes)]
 BOOTSTRAP = {n: (None if i == 0 else NODES[(i - 1) // 2]) for i, n in enumerate(NODES)}
 PORTS = {n: args.port_base + i for i, n in enumerate(NODES)}
 PORTS["stub"] = args.port_base + len(NODES)
+PORTS["relay"] = args.port_base + len(NODES) + 1
+RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
+ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
 
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -95,6 +107,7 @@ RUN = tempfile.mkdtemp(prefix="watchparty-e2e-")
 
 fails = []
 nodes = {}
+relays = []
 
 
 def ok(name, cond, detail=""):
@@ -164,6 +177,12 @@ def osd(n):
     return out
 
 
+def pauses(n):
+    """How many 'paused by X' notices this node displayed. osd() returns a list, so
+    count() is an exact match, never a substring search."""
+    return sum(1 for s in osd(n) if s.startswith("paused by "))
+
+
 def known(n):
     """Peers this node has learned, inbound (/hi) or outbound (AddAddress)."""
     peers = set()
@@ -218,14 +237,33 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs):
-    path = f"{RUN}/{name}.log"
-    cmd = [BIN, "-local", "-file", MEDIA, "-port", str(PORTS[name]), "-cooldown", str(COOLDOWN),
-           "-hostname", name, "-mpvFlags", MPVFLAGS]
-    if addrs:
-        cmd += ["-addrs", addrs]
+def launch(name, addrs=None, room=None, secret=None, tag=None):
+    """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
+    key = tag or name
+    path = f"{RUN}/{key}.log"
+    cmd = [BIN, "-file", MEDIA, "-cooldown", str(COOLDOWN), "-hostname", name, "-mpvFlags", MPVFLAGS]
+    if room is not None:
+        cmd += ["-relay", RELAY_URL, "-room", room, "-secret", secret or SECRET]
+    else:
+        cmd += ["-local", "-port", str(PORTS[name])]
+        if addrs:
+            cmd += ["-addrs", addrs]
     p = subprocess.Popen(cmd, stdout=open(path, "wb"), stderr=subprocess.STDOUT)
-    nodes[name] = {"proc": p, "log": path, "sock": None, "addr": None}
+    nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None}
+    return key
+
+
+def launch_relay(extra=None):
+    path = f"{RUN}/relay.log"
+    cmd = [RELAY_BIN, "-addr", f"127.0.0.1:{PORTS['relay']}"] + (extra or [])
+    # append: a restart in [R12] must not lose the first run's lines
+    p = subprocess.Popen(cmd, stdout=open(path, "ab"), stderr=subprocess.STDOUT)
+    relays.append(p)
+    return p
+
+
+def relay_log():
+    return open(f"{RUN}/relay.log").read()
 
 
 def resolve(name):
@@ -247,9 +285,10 @@ def stop(name, sig=signal.SIGTERM, timeout=20):
     except subprocess.TimeoutExpired:
         n["proc"].kill()
         n["proc"].wait()
-        kill_mpv_for(n["sock"])
+        if n["sock"]:
+            kill_mpv_for(n["sock"])
         return False
-    if sig == signal.SIGKILL:
+    if sig == signal.SIGKILL and n["sock"]:
         kill_mpv_for(n["sock"])  # SIGKILL skips the deferred cmd.Cancel
     return True
 
@@ -280,9 +319,11 @@ def stub_stop(p):
 need("go")
 need("mpv")
 print(f"run directory: {RUN}")
-print("building watchparty")
+print("building watchparty and relay")
 subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=True)
+subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
 BIN = RUN + "/watchparty"
+RELAY_BIN = RUN + "/relay"
 
 if args.file:
     MEDIA = os.path.abspath(args.file)
@@ -294,7 +335,8 @@ else:
                     "-f", "lavfi", "-i", "sine=frequency=440", "-t", "120", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", MEDIA], check=True)
 
-try:
+def p2p_suite():
+    global STUB_ADDR
     chain = ", ".join(f"{n}->{BOOTSTRAP[n]}" for n in NODES[1:])
     print(f"\n=== setup: {len(NODES)} nodes, bootstrap chain {chain} ===")
     launch(A, None)
@@ -348,12 +390,34 @@ try:
         ok(f"{n} followed to 77s", v is not None and abs(v - 77.0) < 1.5, f"time-pos={v}")
     ok(f"{A} credited {LAST} for sync", f"synced by {LAST}" in osd(A))
 
-    print("\n[5b] a slave's own seek is NOT broadcast (role==slave suppresses it)")
-    before = get(LAST, "time-pos")
-    setp(NODES[1], "time-pos", 12.0)  # became a slave when LAST paused in [4]
+    print("\n[5b] any paused peer can seek for everyone, not just whoever drove the pause")
+    b = NODES[1]  # applied LAST's pause in [4]; under the old slave hack this was muted
+    setp(b, "time-pos", 12.0)
     time.sleep(SETTLE)
-    ok(f"{LAST} did not follow the slave's seek", abs(get(LAST, "time-pos") - before) < 1.5,
-       "slaves stop broadcasting until they un-pause")
+    for n in others(b):
+        v = get(n, "time-pos")
+        ok(f"{n} followed {b}'s seek", v is not None and abs(v - 12.0) < 1.5, f"time-pos={v}")
+
+    print("\n[5c] an applied event is not echoed back (the a->b->a rebound)")
+    # start from a known state: everyone playing, so the pause below is a real change
+    setp(A, "pause", False)
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} playing before the echo check", get(n, "pause") is False)
+    before = {n: pauses(n) for n in NODES}
+
+    setp(A, "pause", True)
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} paused", get(n, "pause") is True)
+    # if any peer rebroadcast the echo, the originator would be told it was paused
+    # by someone else and the rest would see the notice twice
+    ok(f"{A} was not told its own pause came back",
+       pauses(A) == before[A],
+       f"{pauses(A) - before[A]} echoes returned to the originator")
+    for n in others(A):
+        got = pauses(n) - before[n]
+        ok(f"{n} applied {A}'s pause exactly once", got == 1, f"{got} pause notices")
 
     print("\n[6] time-pos is NOT forwarded while playing (sync semantics stay narrow)")
     setp(A, "pause", False)
@@ -364,7 +428,7 @@ try:
         after = osd(n).count(f"synced by {A}")
         ok(f"no time-pos storm reached {n}", after == counts[n], f"{after - counts[n]} sync notices in 4s")
 
-    print("\n[7] slave role clears after un-pausing (a slave can drive again)")
+    print("\n[7] a peer that only ever followed can still drive the party")
     b = NODES[1]
     setp(b, "pause", True)
     time.sleep(SETTLE)
@@ -484,9 +548,219 @@ try:
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
+def relay_suite():
+    print(f"\n=== relay setup: {len(NODES)} nodes through one websocket server ===")
+    relay = launch_relay()
+    time.sleep(1.5)
+
+    for i, n in enumerate(NODES):
+        launch(n, room=ROOM)
+        time.sleep(STAGGER if i < len(NODES) - 1 else 0)
+    time.sleep(BOOT)
+    for n in NODES:
+        resolve(n)
+    time.sleep(SETTLE)
+
+    print(f"\n[R1] every node learns all {len(NODES) - 1} others through the relay")
+    for n in NODES:
+        missing = set(others(n)) - known(n)
+        ok(f"{n} knows the room", not missing, f"missing {sorted(missing)}" if missing else "")
+    ok("nobody was told it joined itself", not any(n in known(n) for n in NODES))
+
+    print(f"\n[R2] all {len(NODES)} start paused")
+    for n in NODES:
+        ok(f"{n} paused", get(n, "pause") is True)
+
+    print(f"\n[R3] resume on {A} fans out to everyone")
+    setp(A, "pause", False)
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} playing", get(n, "pause") is False)
+    for n in others(A):
+        ok(f"{n} credited {A}", f"resumed by {A}" in osd(n))
+
+    print(f"\n[R4] pause on {LAST} propagates back (the relay is not a host)")
+    time.sleep(1.5)
+    setp(LAST, "pause", True)
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} paused", get(n, "pause") is True)
+    ok(f"{A} credited {LAST}", f"paused by {LAST}" in osd(A))
+
+    print(f"\n[R5] seek while paused syncs everyone")
+    setp(LAST, "time-pos", 77.0)
+    time.sleep(SETTLE)
+    for n in others(LAST):
+        v = get(n, "time-pos")
+        ok(f"{n} followed to 77s", v is not None and abs(v - 77.0) < 1.5, f"time-pos={v}")
+
+    print("\n[R6] time-pos is NOT forwarded while playing")
+    setp(A, "pause", False)
+    time.sleep(SETTLE)
+    counts = {n: osd(n).count(f"synced by {A}") for n in others(A)}
+    time.sleep(4)
+    for n in others(A):
+        after = osd(n).count(f"synced by {A}")
+        ok(f"no time-pos storm reached {n}", after == counts[n], f"{after - counts[n]} sync notices in 4s")
+
+    print("\n[R7] no a->b->a rebound (relay has no counters; this is the only guard)")
+    # start from a known state: everyone playing, so the pause below is a real change
+    setp(A, "pause", False)
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} playing before the echo check", get(n, "pause") is False)
+    before = {n: pauses(n) for n in NODES}
+
+    setp(A, "pause", True)
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} paused", get(n, "pause") is True)
+    # if any peer rebroadcast the echo, the originator would be told it was paused
+    # by someone else and the rest would see the notice twice
+    ok(f"{A} was not told its own pause came back",
+       pauses(A) == before[A],
+       f"{pauses(A) - before[A]} echoes returned to the originator")
+    for n in others(A):
+        got = pauses(n) - before[n]
+        ok(f"{n} applied {A}'s pause exactly once", got == 1, f"{got} pause notices")
+
+    print("\n[R8] any paused peer can seek for everyone")
+    b = NODES[1]
+    setp(b, "time-pos", 33.0)
+    time.sleep(SETTLE)
+    for n in others(b):
+        v = get(n, "time-pos")
+        ok(f"{n} followed {b}'s seek", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
+
+    print("\n[R9] a late joiner does not rewind the party to 0")
+    launch("nodeLate", room=ROOM, tag="late")
+    time.sleep(BOOT + SETTLE)
+    for n in NODES:
+        v = get(n, "time-pos")
+        ok(f"{n} still at 33s after a late join", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
+    stop("late")
+
+    print("\n[R10] a different room is isolated")
+    launch("nodeOther", room="otherroom", tag="other")
+    time.sleep(BOOT)
+    resolve("other")
+    setp("other", "time-pos", 5.0)
+    time.sleep(SETTLE)
+    for n in NODES:
+        v = get(n, "time-pos")
+        ok(f"{n} ignored the other room's seek", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
+    ok("nobody in the main room saw the other room's node", not any("nodeOther" in known(n) for n in NODES))
+    stop("other")
+
+    print("\n[R11] a wrong secret is refused and the node gives up instead of retrying")
+    launch("nodeBad", room=ROOM, secret="wrongsecret", tag="bad")
+    nodes["bad"]["proc"].wait(timeout=30)
+    ok("the bad-secret node exited", nodes["bad"]["proc"].poll() is not None)
+    ok("it was told 403", "403" in log("bad"), "a wrong secret must not upgrade")
+    ok("it did not retry forever", log("bad").count("relay: dial") <= 1, "403 is permanent")
+    ok("nobody in the room saw it join", not any("nodeBad" in known(n) for n in NODES))
+
+    print("\n[R12] the party survives the relay dying and reconnects on its own")
+    relay.kill()
+    relay.wait(timeout=10)
+    time.sleep(3)
+    ok("no node died with the relay", len(live()) == len(NODES), f"{len(live())}/{len(NODES)} alive")
+    relay = launch_relay()
+    time.sleep(15)  # backoff is 1,2,4,8s
+    for n in NODES:
+        ok(f"{n} redialled", "relay: connected" in log(n) and log(n).count("relay: connected") > 1,
+           "reconnect never happened")
+    setp(A, "pause", False)
+    time.sleep(SETTLE + 2)
+    for n in others(A):
+        ok(f"{A} drives {n} again after the relay came back", get(n, "pause") is False)
+
+    print("\n[R13] clean leave: SIGTERM tells the room")
+    survivors = others(A)
+    ok(f"{A} exited cleanly", stop(A) and nodes[A]["proc"].returncode == 0,
+       f"rc={nodes[A]['proc'].returncode}")
+    time.sleep(SETTLE)
+    for n in survivors:
+        ok(f"{n} was told {A} left", f"{A} has left" in osd(n))
+
+    print("\n[R14] the room keeps working without the node that opened it")
+    setp(survivors[0], "pause", True)
+    time.sleep(SETTLE)
+    for n in survivors:
+        ok(f"{n} still in sync after {A} left", get(n, "pause") is True)
+    for n in survivors:
+        ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    relay.kill()
+    relay.wait(timeout=10)
+
+
+def caps_suite():
+    """The abuse caps, driven with real nodes rather than the Go handler tests."""
+    print("\n=== relay caps ===")
+
+    print("\n[R15] only room CREATION is rate limited, joining is free")
+    relay = launch_relay(["-roomsPerHour", "1"])
+    time.sleep(1.5)
+    launch(A, room="capA", tag="c1")
+    time.sleep(BOOT)
+    launch("nodeB", room="capB", tag="c2")
+    time.sleep(BOOT)
+    ok("the second NEW room was refused", "429" in log("c2"), "roomsPerHour=1 must bite")
+    launch("nodeC", room="capA", tag="c3")
+    time.sleep(BOOT)
+    ok("joining the EXISTING room still works", "relay: connected" in log("c3"),
+       "a party of eight must not exhaust one person's quota")
+    for t in ("c1", "c2", "c3"):
+        stop(t)
+    relay.kill(); relay.wait(timeout=10)
+
+    print("\n[R16] -maxRooms refuses a second room with 503")
+    relay = launch_relay(["-maxRooms", "1"])
+    time.sleep(1.5)
+    launch(A, room="roomOne", tag="m1")
+    time.sleep(BOOT)
+    launch("nodeB", room="roomTwo", tag="m2")
+    time.sleep(BOOT)
+    ok("the first room connected", "relay: connected" in log("m1"))
+    ok("the second room got 503", "503" in log("m2"), "maxRooms=1 must bite")
+    for t in ("m1", "m2"):
+        stop(t)
+    relay.kill(); relay.wait(timeout=10)
+
+    print("\n[R17] -maxConns refuses the third connection with 503")
+    relay = launch_relay(["-maxConns", "2"])
+    time.sleep(1.5)
+    for i, t in enumerate(("n1", "n2", "n3")):
+        launch(NODES[i], room="connroom", tag=t)
+        time.sleep(STAGGER)
+    time.sleep(BOOT)
+    ok("the first two connected", "relay: connected" in log("n1") and "relay: connected" in log("n2"))
+    ok("the third got 503", "503" in log("n3"), "maxConns=2 must bite")
+    for t in ("n1", "n2", "n3"):
+        stop(t)
+    relay.kill(); relay.wait(timeout=10)
+
+
+try:
+    if args.mode in ("p2p", "both"):
+        p2p_suite()
+        for name in list(nodes):
+            stop(name, signal.SIGKILL, timeout=5)
+        nodes.clear()
+    if args.mode in ("relay", "both"):
+        relay_suite()
+        for name in list(nodes):
+            stop(name, signal.SIGKILL, timeout=5)
+        nodes.clear()
+        caps_suite()
 finally:
     for name in list(nodes):
         stop(name, signal.SIGKILL, timeout=5)
+    for p in relays:
+        if p.poll() is None:
+            p.kill()
+            p.wait(timeout=5)
 
 print(f"\nlogs: {RUN}")
 print("ALL PASS" if not fails else f"{len(fails)} FAILURES: " + ", ".join(fails))
