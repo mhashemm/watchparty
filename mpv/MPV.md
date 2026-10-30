@@ -16,21 +16,26 @@ runs; re-probe after an mpv upgrade (recipe at the end).
 ## How `party.Run` starts mpv
 
 ```
-mpv <user MpvFlags...> --save-position-on-quit --pause --input-ipc-server=<sock> <file>
+mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --no-resume-playback --input-ipc-server=<sock> <file>
 ```
 
 | Flag | Why |
 |---|---|
 | `--pause` | Every node starts paused, so nobody plays ahead before the party is wired up. |
-| `--save-position-on-quit` | Quitting saves the position. The next start of the same file **resumes there** (see "Resuming"). |
+| `--speed=1` | **Pinned.** A `speed=1.1` in someone's config would make their player drift away steadily. |
+| `--hr-seek=yes` | **Pinned.** Every seek is exact, arrow keys included. Without it, relative seeks snap to a keyframe (see "Seeking"). |
+| `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
 | `--vo=null --ao=null` | Tests only (e2e, GUI checks): no window, no sound. |
 
-**We don't pass `--no-config`, so the user's mpv config applies to the party**:
-`mpv.conf`, `input.conf`, scripts, and the watch-later store. A user's `hr-seek=no`
-or `keep-open` changes the behaviour described below. The dev machine's own
-`mpv.conf` sets `save-position-on-quit`, so resume happens there even without our
-flag.
+**We don't pass `--no-config`, on purpose:** people keep their subtitle languages,
+audio device, key bindings and volume. Instead, **the three options that change sync
+are pinned on the command line, after the user's `MpvFlags`**. The command line beats
+`mpv.conf`, and a later flag beats an earlier one, so the pins win over both.
+Verified: a node started with `--speed=2 --hr-seek=no --resume-playback=yes` and a
+saved `start=50, speed=1.5` entry came up at 0, speed 1, `hr-seek` yes. e2e runs
+every node with those hostile flags (`[2b]`, `[5d]`). Anything else in a user's
+config still applies, for example `keep-open` (see "Ending").
 
 ## The connection
 
@@ -114,18 +119,16 @@ Every event goes through `handleEvent`; anything but `property-change` is
 ### Seeking (while paused)
 
 - **An absolute seek** (`set_property time-pos`, which `sync()` uses) **is exact**
-  under the default `--hr-seek=default`. `"77.000000"` echoed `77.000000`. A
+  (exact even under mpv's default `--hr-seek=default`, and we pin `yes`). `"77.000000"` echoed `77.000000`. A
   position between frames echoes the target first, then the landed frame after
   `playback-restart`: `123.456` → `123.456000`, then `123.458000`. So **an echo can
   come twice and be up to one frame off**. That's why the `time-pos` marker in
   `applied` matches within ±0.5s and is kept, not deleted, on the first match.
-- **A relative seek** (arrow keys, `seek N relative`) snaps to a keyframe. +10 from
-  123.458 sent `133.458000`, then `140.000000`, the keyframe. Both arrive while
-  paused, so the user's node broadcasts **both**, and peers apply both and end on the
-  same frame.
-- With a user's `hr-seek=no`, absolute seeks snap to keyframes too. The echo can
-  then be seconds off and gets rebroadcast once. Peers converge on the keyframe and
-  it stops, because applying that value echoes exactly.
+- **A relative seek** (arrow keys, `seek N relative`) **is exact too, because we pin
+  `--hr-seek=yes`**: +7 from 12 sent exactly one position, `19.000000`. Under mpv's
+  default it would snap to a keyframe instead: +10 from 123.458 sent `133.458000`
+  and then `140.000000`, the keyframe, so peers seeked twice and landed up to a
+  keyframe interval away from where the user aimed.
 
 ### Playing and pausing
 
@@ -153,13 +156,15 @@ Every event goes through `handleEvent`; anything but `property-change` is
 
 ### Resuming
 
-- With `save-position-on-quit` (always on in a party), a quit writes the position
-  to the watch-later dir (`~/.local/state/mpv/watch_later` on Linux, or
-  `--watch-later-dir`). The next start of that file **opens at the saved
-  position**, still paused.
-- `seen` swallows that position (the first `time-pos` with data), so a rejoining
-  node doesn't drag the party to where it left off. Verified: a node that quit at 33
-  restarted at 33 and broadcast nothing. It also doesn't follow the party until the next seek or pause.
+- With `save-position-on-quit` (we don't pass it, but a user's `mpv.conf` may set
+  it), a quit writes the position to the watch-later dir
+  (`~/.local/state/mpv/watch_later` on Linux, or `--watch-later-dir`), and plain mpv
+  opens the file there next time.
+- **In a party, `--no-resume-playback` skips that**, so every node opens at 0.
+  Without the pin, a rejoining node opened at its saved position. `seen` swallowed
+  that, so the party wasn't dragged along, but the node didn't follow the party
+  until the next seek or pause either. A node that rejoins mid-party still opens
+  at 0, and catches up on the next pause and seek.
 
 ## Re-probing
 
