@@ -14,7 +14,7 @@ go mod tidy                                # run it yourself; CI only does go mo
 go build ./relay                           # the relay server, a separate binary
 go build -o watchparty-gui ./gui           # the GUI; `-o` because ./gui is a directory
 docker build -f relay/Dockerfile -t watchparty-relay .   # from the REPO ROOT
-./e2e.py                                   # all three phases at once, real mpv, ~100s
+./e2e.py                                   # all three phases at once, real mpv, ~45s
 ./e2e.py --mode p2p | relay | caps         # one phase only
 ./e2e.py --file movie.mkv                  # ...against a real file
 ./e2e.py --nodes 3                         # fewer nodes, faster
@@ -37,7 +37,7 @@ phase sets the total, so a new slow case belongs in whichever phase is shortest.
   hears "has left"). Every other case ends nodes with a signal, which is how a
   regression there once slipped through.
 - **`caps`** — one fresh relay per case: every abuse cap, `CREATE_KEY`, and
-  dropping a client that never answers pings (`[R20]`, ~45s of the phase's ~100s).
+  dropping a client that never answers pings (`[R20]`, ~40s: it waits out the real 30s ping and 10s pong timeout, and sets the total).
 
 `e2e.py` does not drive the GUI. The GUI is covered by `go test ./gui` (the form →
 `Config` mapping and the request guard) and by the headless-Chrome checks described
@@ -50,8 +50,15 @@ Needs `mpv` on PATH and a `-local`-reachable interface.
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.
 
-Nodes are staggered ~1.6s apart on startup, so a node's listener is up before the
-next one bootstraps off it.
+**No fixed sleeps for things that happen.** Every wait is `until(cond, ceiling)`, which
+polls and returns as soon as the condition holds; `BOOT` and `SETTLE` are ceilings, not
+delays. A P2P node is launched once the previous one's port accepts (`listening()`),
+since it may bootstrap off it; relay nodes open no port and start together. Only a
+check that something did **not** happen sleeps: `QUIET` (1s) after its positive half
+holds (no echo, one broadcast per seek, no rewind from a late joiner, the other room
+ignored), plus the 4s `time-pos` storm windows. `toggle()` keeps its 0.9s because
+"no new strike while healthy" needs the broadcast to have finished. A new check that
+asserts an absence needs its own fixed window; anything else polls.
 
 Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. The GUI build also gets `-X main.version=<tag>`, which is what its self-update compares against (see `gui/CLAUDE.md`). Releases up to v0.0.11 lack it and report `dev`. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
 
