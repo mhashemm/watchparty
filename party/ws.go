@@ -1,4 +1,4 @@
-package main
+package party
 
 import (
 	"context"
@@ -23,8 +23,8 @@ const (
 	maxBackoff = 30 * time.Second
 )
 
-// declared again in relay/main.go; both are package main so neither can import the
-// other, and four lines beat a package that exists only to share them
+// declared again in relay/main.go, which is package main and cannot be imported; four
+// lines beat a package that exists only to share them
 type message struct {
 	Hostname string          `json:"hostname"`
 	Event    json.RawMessage `json:"event"`

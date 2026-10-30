@@ -1,27 +1,42 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
+
+	"github.com/mhashemm/watchparty/party"
 )
 
-func TestArgs(t *testing.T) {
-	relay := form{Mode: "relay", File: " /m.mkv ", Relay: "ws://r", Room: "a b", Secret: "s", Local: true, Port: "1", Addrs: "x:1"}
-	want := []string{"-file=/m.mkv", "-relay=ws://r", "-room=a b", "-secret=s"}
-	if got := relay.args(); !slices.Equal(got, want) {
-		t.Fatalf("relay args = %q, want %q", got, want)
+func TestConfig(t *testing.T) {
+	relay := form{Mode: "relay", File: " /m.mkv ", Mpv: "/bin/mpv", Relay: " ws://r ", Room: "a b", Secret: "s", Local: true, Port: "1", Addrs: "x:1"}
+	got, err := relay.config()
+	want := party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Cooldown: party.DefaultCooldown, Relay: "ws://r", Room: "a b", Secret: "s"}
+	if err != nil || got != want {
+		t.Fatalf("relay config = %+v, %v; want %+v", got, err, want)
 	}
-	direct := form{Mode: "direct", File: "/m.mkv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969"}
-	want = []string{"-file=/m.mkv", "-local", "-port=6970", "-addrs=1.2.3.4:6969"}
-	if got := direct.args(); !slices.Equal(got, want) {
-		t.Fatalf("direct args = %q, want %q", got, want)
+
+	direct := form{Mode: "direct", File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969", Cooldown: "2"}
+	got, err = direct.config()
+	want = party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Cooldown: 2, Local: true, Port: 6970, PublicPort: party.DefaultPort, Addrs: "1.2.3.4:6969"}
+	if err != nil || got != want {
+		t.Fatalf("direct config = %+v, %v; want %+v", got, err, want)
+	}
+
+	for _, f := range []form{
+		{Mode: "relay", Relay: "ws://r"},
+		{Mode: "relay", File: "/m.mkv"},
+		{Mode: "direct", File: "/m.mkv", Port: "abc"},
+	} {
+		if _, err := f.config(); err == nil {
+			t.Errorf("config(%+v) succeeded, want an error", f)
+		}
 	}
 }
 
 func TestGuard(t *testing.T) {
-	g := newGUI("127.0.0.1:1", "/nonexistent")
+	g := newGUI(context.Background(), "127.0.0.1:1")
 	cases := []struct {
 		method, path, host, token string
 		want                      int

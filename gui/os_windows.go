@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -35,14 +34,4 @@ func pickFile() (string, error) {
 
 func hide(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
-}
-
-func interrupt(p *os.Process, force bool) {
-	args := []string{"/T", "/PID", strconv.Itoa(p.Pid)}
-	if force {
-		args = append(args, "/F")
-	}
-	cmd := exec.Command("taskkill", args...)
-	hide(cmd)
-	cmd.Run()
 }

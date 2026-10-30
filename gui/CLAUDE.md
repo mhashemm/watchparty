@@ -15,7 +15,7 @@ go build -o watchparty-gui ./gui                         # from the repo root; `
 go test ./gui
 go vet ./gui && GOOS=windows go vet ./gui                # the two build-tagged halves
 GOOS=windows go build -ldflags=-H=windowsgui -o /dev/null ./gui
-./watchparty-gui -watchparty ./watchparty                # override the sibling lookup
+./watchparty-gui                                         # needs only mpv, on PATH or next to it
 ```
 
 Plain `go build ./gui` from the repo root fails: the output name `gui` collides with
@@ -24,8 +24,8 @@ the directory.
 ### Looking at the UI without opening a window on your desktop
 
 `openWindow` launches Chrome/Chromium, or `xdg-open` as a fallback. To keep it
-headless, run the GUI with a `PATH` that holds only the built binaries, an `mpv`
-symlink and a no-op `xdg-open` script. Then screenshot the page:
+headless, run the GUI with a `PATH` that holds only an `mpv` symlink and a no-op
+`xdg-open` script. Then screenshot the page:
 
 ```sh
 chromium --headless --disable-gpu --hide-scrollbars --force-prefers-reduced-motion \
@@ -47,26 +47,28 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
 
 ## Architecture
 
-A separate `package main`: stdlib plus `golang.org/x/sys/windows` (already in
-`go.mod`), no cgo, so it cross-compiles in the same `publisher.yml` matrix as the
-main binary. **It runs the `watchparty` binary as a subprocess and imports nothing
-from the repo.** mpv stays the player. The GUI only replaces typing flags, and its
-status display is driven entirely by the child's log output.
+A separate `package main`: stdlib, `golang.org/x/sys/windows` (already in `go.mod`)
+and the repo's own `party` package. No cgo, so it cross-compiles in the same
+`publisher.yml` matrix as the CLI. **It calls `party.Run` in-process**, the exact
+function the CLI's `main.go` calls, so it does everything on its own and needs only
+mpv. The `watchparty` binary is not required. mpv stays the player. The GUI's status
+display is driven entirely by the `log` lines `party`, `mpv` and `server` already
+print.
 
 | File | Role |
 |---|---|
-| `main.go` | HTTP server, guard, child process, log buffer, `form.args()` |
+| `main.go` | HTTP server, guard, party lifecycle, log capture, `form.config()` |
 | `index.html` | the entire UI: CSS, inline SVG art, vanilla JS. `//go:embed`ed |
-| `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile`, no-op `hide`, `interrupt` via signals (macOS through `runtime.GOOS` branches) |
-| `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker, `CREATE_NO_WINDOW`, `taskkill` |
-| `main_test.go` | `form.args()` per mode, and the host/token guard table |
+| `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile`, no-op `hide` (macOS through `runtime.GOOS` branches) |
+| `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker and `CREATE_NO_WINDOW` |
+| `main_test.go` | `form.config()` per mode plus its errors, and the host/token guard table |
 
 ### Server
 
 - Listens on `127.0.0.1:0`. `g.host` is the exact `ip:port`, and the guard compares
   against it.
-- **Guard (`ServeHTTP`), load-bearing because `/start` spawns a process with
-  user-supplied mpv flags:**
+- **Guard (`ServeHTTP`), load-bearing because `/start` launches mpv with
+  user-supplied flags:**
   - `r.Host` must equal `g.host`, which blocks DNS rebinding.
   - Every path except `/` needs `X-Token` equal to the `rand.Text()` token, which
     blocks CSRF. The token is templated into the page by replacing `{{TOKEN}}`, and
@@ -79,56 +81,60 @@ status display is driven entirely by the child's log output.
   |---|---|
   | `GET /{$}` | serves the page |
   | `POST /pick` | runs the OS file dialog and returns the path as plain text. Empty means cancelled |
-  | `POST /start` | JSON `form` → argv. 400 without a file, 409 if a party is running |
-  | `POST /stop` | stops the child |
+  | `POST /start` | JSON `form` → `party.Config`, then `party.Run` in a goroutine. 400 on a bad form, 409 if a party is running |
+  | `POST /stop` | cancels the party's context |
   | `GET /log?from=N&run=R` | `{run, from, lines, running, exitErr}` |
 
-- **`form.args()`** emits only a fixed set of flags, each as one `-name=value` argv
-  element with no shell, and skips empty values so the binary's own defaults apply.
-  The `=` form keeps a value starting with `-` from being read as a flag. Relay mode
-  ignores the direct fields and vice versa.
-- **The log** is the child's stdout and stderr (`log` writes to stderr) joined
-  through one `io.Pipe`. It is read with `bufio.Reader.ReadString`, not a `Scanner`,
-  because a Scanner stops on a too-long line, the pipe fills, and the child blocks
-  on its next write.
+- **`form.config()`** trims every field.
+  - Empty numbers fall back to `party.DefaultPort` / `party.DefaultCooldown`, the
+    same constants the CLI's flag defaults use. A non-number is a 400.
+  - It refuses an empty movie, and an empty relay address in relay mode. Without
+    that check, `party.Run` would treat an empty `Relay` as direct mode and try UPNP.
+  - Relay mode ignores the direct fields and vice versa.
+- **The log:** `main` calls `log.SetOutput(io.MultiWriter(g, os.Stderr))`, and
+  `gui.Write` appends each line to `g.lines`.
+  - `g` comes **first** in the MultiWriter: in the `-H=windowsgui` build, stderr can
+    be an invalid handle, and MultiWriter stops at the first writer that errors.
+  - `Write` takes `g.mu`, so **nothing may call `log` while holding `g.mu`**, or it
+    deadlocks.
+  - The capture is process-wide, so stray lines from a previous party's leftover
+    goroutines can land in the next one. That's cosmetic.
 - **`run`** goes up on every `/start`. A poll carrying an old `run` is answered from
   line 0, so a poll that was in flight during a restart can't splice two runs
   together. The log is uncapped in memory and reset per run.
-- **`cmd.WaitDelay = 5s`** stops `Wait` hanging if a grandchild ever holds the pipe.
+- **`party.Run`'s return value** becomes `exitErr`. It is `nil` after `/stop` or a
+  normal mpv quit, `errStopped` when something inside cancelled the party (relay
+  rejection, port already in use), and a setup error otherwise (mpv not found,
+  UPNP failed, no network). The page maps "mpv … not found" to its own diagnosis.
 
-### Finding the binaries
+### Finding mpv
 
-- **watchparty:** if the GUI's own file name contains `-gui`, it first looks for the
-  same name with `-gui` removed, then for `watchparty(.exe)` next to itself, then
-  `PATH`. This pairs the release names: `watchparty-gui_amd64` → `watchparty_amd64`,
-  `watchparty-gui.exe` → `watchparty.exe`. The `-gui` check matters: without it, a
-  renamed GUI binary would find *itself* and spawn copies of itself.
-- **mpv:** an empty mpv field becomes the absolute path of a sibling `mpv(.exe)`. It
-  must be absolute: since Go 1.19, `exec.LookPath` refuses to resolve a bare `mpv`
-  from the current directory, so on Windows "drop mpv.exe in the same folder" would
-  not work otherwise.
+An empty mpv field becomes the absolute path of a sibling `mpv(.exe)`, and falls back
+to plain `mpv` on `PATH`. The path must be absolute: since Go 1.19, `exec.LookPath`
+refuses to resolve a bare `mpv` from the current directory, so on Windows "drop
+mpv.exe in the same folder" would not work otherwise. mpv is never bundled. Users
+install it themselves.
 
-### Lifetime
+### Lifetime and stopping
 
-The Windows build is `-H=windowsgui` and has no console window to close. So a ticker
-exits the process once **no child is running and no `/log` poll has arrived for 2
-minutes**. Don't shorten that: Chrome throttles timers in a minimized or hidden window
-to about one per minute, and a shorter window would kill the server under a GUI that
-is still open. The first poll gets a one-minute grace period (`lastPoll` starts in
-the future) so a slow first browser launch is fine.
-
-The GUI never exits while a party runs, even if the window is closed. Opening the GUI
-again starts a second instance on a new port, which cannot see the first one's party.
-
-### Stopping
-
-- **Unix:** `SIGINT`. The binary's `signal.NotifyContext` cancels, mpv is killed, and
-  the deferred `/bye` and UPNP cleanup run. The other side gets "X has left". Verified.
-- **Windows:** `taskkill /T /PID` **without `/F`**. That sends WM_CLOSE to the tree's
-  windows, mpv quits normally, `cmd.Wait` returns in watchparty, and its defers run.
-  watchparty itself has no window, so taskkill complains about it, and that is fine.
-- **Both:** 5s later, if the same child is still running, it is forced (`Kill` /
-  `/F`).
+- **Stop** cancels the party's context, exactly like Ctrl-C in the CLI. mpv is killed
+  (`exec.CommandContext`), and `Run`'s defers send `/bye`, shut the listener and
+  delete the UPNP mapping. The other side gets "X has left". This is the same on
+  every OS: no signals, no taskkill.
+- **The GUI's own context** is a `signal.NotifyContext`. Each party's context derives
+  from it. On SIGINT/SIGTERM, `main` cancels the running party and `wg.Wait()`s for
+  `Run` to return before exiting, so Ctrl-C on the GUI never leaks a UPNP mapping.
+- **Idle exit:** the Windows build is `-H=windowsgui` and has no console window to
+  close. So a ticker cancels that same context once **no party is running and no
+  `/log` poll has arrived for 2 minutes**.
+  - Don't shorten that: Chrome throttles timers in a minimized or hidden window to
+    about one per minute, and a shorter window would kill the server under a GUI that
+    is still open.
+  - The first poll gets a one-minute grace period (`lastPoll` starts in the future),
+    so a slow first browser launch is fine.
+- The GUI never exits while a party runs, even if the window is closed. Opening the
+  GUI again starts a second instance on a new port, which cannot see the first one's
+  party.
 
 ### OS helpers
 
@@ -151,7 +157,7 @@ again starts a second instance on a new port, which cannot see the first one's p
 ## Log-line contract
 
 `handle()` in `index.html` matches the binary's existing log output. Change any of
-these strings in `main.go`, `ws.go` or `mpv/` and the GUI silently stops reacting:
+these strings in `party/`, `mpv/` or `server/` and the GUI silently stops reacting:
 
 | Log substring | UI effect |
 |---|---|
@@ -260,11 +266,12 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 Everything Windows-specific compiles, but has not been run on Windows:
 
 - The PowerShell picker appears in front of the window.
-- No console window flashes for the child, the picker or taskkill.
-- `taskkill /T` without `/F` closes mpv and lets watchparty send `/bye`.
+- No console window flashes for the picker.
+- mpv's window shows up when it is launched from a `-H=windowsgui` parent through
+  `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE`.
 - Edge opens in `--app` mode from the listed paths.
 
-Verified on Linux: relay and direct parties driven through two GUIs, pause and resume
-propagating, the party feed, Stop sending "has left" and leaving no orphaned mpv, the
-wrong-secret diagnosis, the guard (403 without a token or with a foreign `Host`), and
-the release-name sibling pairing.
+Verified on Linux, in-process, against real mpv: relay and direct parties driven
+through two GUIs, pause and resume propagating, the party feed, Stop sending "has
+left" and leaving no orphaned mpv, the wrong-secret diagnosis, the missing-mpv
+diagnosis, and the guard (403 without a token or with a foreign `Host`).

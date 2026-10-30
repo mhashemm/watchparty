@@ -1,26 +1,31 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
-	"flag"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/mhashemm/watchparty/party"
 )
 
 //go:embed index.html
@@ -43,49 +48,63 @@ type form struct {
 	Cooldown  string `json:"cooldown"`
 }
 
-func (f form) args() []string {
-	args := []string{}
-	add := func(name, value string) {
-		if value = strings.TrimSpace(value); value != "" {
-			args = append(args, "-"+name+"="+value)
+func (f form) config() (party.Config, error) {
+	cfg := party.Config{
+		File:     strings.TrimSpace(f.File),
+		Hostname: strings.TrimSpace(f.Hostname),
+		Mpv:      cmp.Or(strings.TrimSpace(f.Mpv), sibling("mpv"+exeSuffix), "mpv"),
+		MpvFlags: f.MpvFlags,
+	}
+	var err error
+	number := func(name, value string, fallback int) int {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fallback
 		}
+		n, convErr := strconv.Atoi(value)
+		if convErr != nil && err == nil {
+			err = fmt.Errorf("%s must be a number", name)
+		}
+		return n
 	}
-	add("file", f.File)
-	add("hostname", f.Hostname)
-	add("mpv", f.Mpv)
-	add("mpvFlags", f.MpvFlags)
-	add("cooldown", f.Cooldown)
+	if cfg.File == "" {
+		return cfg, errors.New("pick a movie first")
+	}
+	cfg.Cooldown = number("seconds to wait for mpv", f.Cooldown, party.DefaultCooldown)
 	if f.Mode == "relay" {
-		add("relay", f.Relay)
-		add("room", f.Room)
-		add("secret", f.Secret)
-		add("createKey", f.CreateKey)
-		return args
+		cfg.Relay = strings.TrimSpace(f.Relay)
+		cfg.Room = strings.TrimSpace(f.Room)
+		cfg.Secret = strings.TrimSpace(f.Secret)
+		cfg.CreateKey = strings.TrimSpace(f.CreateKey)
+		if cfg.Relay == "" {
+			return cfg, errors.New("enter the relay address, or paste an invite")
+		}
+		return cfg, err
 	}
-	if f.Local {
-		args = append(args, "-local")
-	}
-	add("port", f.Port)
-	add("pport", f.PPort)
-	add("addrs", f.Addrs)
-	return args
+	cfg.Local = f.Local
+	cfg.Port = number("your port", f.Port, party.DefaultPort)
+	cfg.PublicPort = number("public port", f.PPort, party.DefaultPort)
+	cfg.Addrs = strings.TrimSpace(f.Addrs)
+	return cfg, err
 }
 
 type gui struct {
-	token, host, bin string
-	page             []byte
-	mux              *http.ServeMux
+	token, host string
+	page        []byte
+	mux         *http.ServeMux
+	ctx         context.Context
+	wg          sync.WaitGroup
 
 	mu       sync.Mutex
-	cmd      *exec.Cmd
+	cancel   context.CancelFunc
 	run      int
 	lines    []string
 	exitErr  string
 	lastPoll time.Time
 }
 
-func newGUI(host, bin string) *gui {
-	g := &gui{token: rand.Text(), host: host, bin: bin, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux()}
+func newGUI(ctx context.Context, host string) *gui {
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux()}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -122,74 +141,54 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(f.File) == "" {
-		http.Error(w, "pick a movie first", http.StatusBadRequest)
+	cfg, err := f.config()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	f.Mpv = cmp.Or(strings.TrimSpace(f.Mpv), sibling("mpv"+exeSuffix))
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.cmd != nil {
+	if g.cancel != nil {
 		http.Error(w, "a party is already running", http.StatusConflict)
 		return
 	}
-	cmd := exec.Command(g.bin, f.args()...)
-	pr, pw := io.Pipe()
-	cmd.Stdout, cmd.Stderr = pw, pw
-	cmd.WaitDelay = 5 * time.Second
-	hide(cmd)
-	err = cmd.Start()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	g.cmd, g.lines, g.exitErr = cmd, nil, ""
+	c, cancel := context.WithCancel(g.ctx)
+	g.cancel, g.lines, g.exitErr = cancel, nil, ""
 	g.run++
-	go g.read(pr)
+	g.wg.Add(1)
 	go func() {
-		err := cmd.Wait()
-		pw.Close()
+		defer g.wg.Done()
+		err := party.Run(c, cfg)
+		cancel()
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.cmd = nil
+		g.cancel = nil
 		if err != nil {
 			g.exitErr = err.Error()
 		}
 	}()
 }
 
-func (g *gui) read(r io.Reader) {
-	br := bufio.NewReader(r)
-	for {
-		line, err := br.ReadString('\n')
-		if line != "" {
-			g.mu.Lock()
-			g.lines = append(g.lines, strings.TrimRight(line, "\r\n"))
-			g.mu.Unlock()
-		}
-		if err != nil {
-			return
-		}
+func (g *gui) Write(p []byte) (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for line := range strings.SplitSeq(strings.TrimRight(string(p), "\n"), "\n") {
+		g.lines = append(g.lines, line)
 	}
+	return len(p), nil
 }
 
 func (g *gui) stop(w http.ResponseWriter, r *http.Request) {
+	g.stopParty()
+}
+
+func (g *gui) stopParty() {
 	g.mu.Lock()
-	cmd := g.cmd
-	g.mu.Unlock()
-	if cmd == nil {
-		return
+	defer g.mu.Unlock()
+	if g.cancel != nil {
+		g.cancel()
 	}
-	interrupt(cmd.Process, false)
-	time.AfterFunc(5*time.Second, func() {
-		g.mu.Lock()
-		alive := g.cmd == cmd
-		g.mu.Unlock()
-		if alive {
-			interrupt(cmd.Process, true)
-		}
-	})
 }
 
 func (g *gui) log(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +206,7 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 		Lines   []string `json:"lines"`
 		Running bool     `json:"running"`
 		ExitErr string   `json:"exitErr"`
-	}{g.run, from, slices.Clone(g.lines[from:]), g.cmd != nil, g.exitErr}
+	}{g.run, from, slices.Clone(g.lines[from:]), g.cancel != nil, g.exitErr}
 	g.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
@@ -216,7 +215,7 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 func (g *gui) idle() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.cmd == nil && time.Since(g.lastPoll) > 2*time.Minute
+	return g.cancel == nil && time.Since(g.lastPoll) > 2*time.Minute
 }
 
 func sibling(name string) string {
@@ -229,16 +228,6 @@ func sibling(name string) string {
 		return ""
 	}
 	return path
-}
-
-func watchpartyBin() string {
-	exe, _ := os.Executable()
-	if base := filepath.Base(exe); strings.Contains(base, "-gui") {
-		if path := sibling(strings.Replace(base, "-gui", "", 1)); path != "" {
-			return path
-		}
-	}
-	return cmp.Or(sibling("watchparty"+exeSuffix), "watchparty")
 }
 
 func dialog(name string, args ...string) (string, error) {
@@ -266,24 +255,28 @@ func openWindow(url string) {
 }
 
 func main() {
-	bin := flag.String("watchparty", watchpartyBin(), "path to the watchparty binary")
-	flag.Parse()
+	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
-	g := newGUI(ln.Addr().String(), *bin)
+	g := newGUI(c, ln.Addr().String())
+	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
 	openWindow(url)
 
+	go http.Serve(ln, g)
 	go func() {
 		for range time.Tick(5 * time.Second) {
 			if g.idle() {
-				os.Exit(0)
+				stop()
 			}
 		}
 	}()
-	panic(http.Serve(ln, g))
+	<-c.Done()
+	g.stopParty()
+	g.wg.Wait()
 }

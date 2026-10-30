@@ -594,9 +594,7 @@ $("form").addEventListener("submit", async e => {
   const res = await api("/start", collect());
   if (!res.ok) {
     const text = (await res.text()).trim();
-    showError(/not found|no such file|cannot find/i.test(text)
-      ? "Diagnosis: the watchparty program is missing. Put it in the same folder as this app."
-      : "Diagnosis: " + text);
+    showError("Diagnosis: " + text + ".");
   }
 });
 
@@ -654,7 +652,10 @@ function render(exitErr) {
   } else if (running) {
     text = "You're in. Pause or seek in mpv and everyone follows.";
   } else if (exitErr) {
-    text = `Diagnosis: watchparty stopped (${exitErr}). The patient chart below has the details.`; bad = true; mood = "worried";
+    text = /mpv/.test(exitErr) && /not found|cannot find|no such file/i.test(exitErr)
+      ? "Diagnosis: mpv isn't installed, or this app can't find it. Install mpv, or choose mpv under Extra settings."
+      : `Diagnosis: ${exitErr}. The patient chart below has the details.`;
+    bad = true; mood = "worried";
     $("chart").open = true;
   } else {
     text = "The party has ended."; mood = "sleep";

@@ -4,7 +4,6 @@ package main
 
 import (
 	"errors"
-	"os"
 	"os/exec"
 	"runtime"
 )
@@ -32,11 +31,3 @@ func pickFile() (string, error) {
 }
 
 func hide(_ *exec.Cmd) {}
-
-func interrupt(p *os.Process, force bool) {
-	if force {
-		p.Kill()
-		return
-	}
-	p.Signal(os.Interrupt)
-}

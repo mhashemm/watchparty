@@ -2,197 +2,37 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"errors"
 	"flag"
-	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
-	"time"
 
-	"github.com/mhashemm/upnp"
-	"github.com/mhashemm/watchparty/mpv"
-	"github.com/mhashemm/watchparty/server"
+	"github.com/mhashemm/watchparty/party"
 )
 
 func main() {
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-	filePath := flag.String("file", "", "file path to play")
-	cooldown := flag.Int("cooldown", 5, "cooldown in seconds for mpv to init the server")
-	port := flag.Int("port", 6969, "local port")
-	publicPort := flag.Int("pport", 6969, "public port")
-	addrs := flag.String("addrs", "", "comma separated list of addresses to connect to")
-	mpvPath := flag.String("mpv", "mpv", "mpv path")
-	mpvFlags := flag.String("mpvFlags", "", "any extra flags to pass to mpv")
-	local := flag.Bool("local", false, "run on local network")
-	hostname := flag.String("hostname", "", "set your hostname")
-	relayAddr := flag.String("relay", "", "relay websocket url to use instead of a direct peer mesh")
-	room := flag.String("room", "", "relay room code (generated if empty)")
-	secret := flag.String("secret", "", "relay room secret (generated if empty)")
-	createKey := flag.String("createKey", "", "relay key needed to create a room, if the relay requires one")
+	cfg := party.Config{}
+	flag.StringVar(&cfg.File, "file", "", "file path to play")
+	flag.IntVar(&cfg.Cooldown, "cooldown", party.DefaultCooldown, "cooldown in seconds for mpv to init the server")
+	flag.IntVar(&cfg.Port, "port", party.DefaultPort, "local port")
+	flag.IntVar(&cfg.PublicPort, "pport", party.DefaultPort, "public port")
+	flag.StringVar(&cfg.Addrs, "addrs", "", "comma separated list of addresses to connect to")
+	flag.StringVar(&cfg.Mpv, "mpv", "mpv", "mpv path")
+	flag.StringVar(&cfg.MpvFlags, "mpvFlags", "", "any extra flags to pass to mpv")
+	flag.BoolVar(&cfg.Local, "local", false, "run on local network")
+	flag.StringVar(&cfg.Hostname, "hostname", "", "set your hostname")
+	flag.StringVar(&cfg.Relay, "relay", "", "relay websocket url to use instead of a direct peer mesh")
+	flag.StringVar(&cfg.Room, "room", "", "relay room code (generated if empty)")
+	flag.StringVar(&cfg.Secret, "secret", "", "relay room secret (generated if empty)")
+	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
 	flag.Parse()
-	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
-	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
-
-	if strings.TrimSpace(*relayAddr) != "" {
-		if *hostname == "" {
-			*hostname, _ = os.Hostname()
-		}
-		if *room == "" {
-			*room = rand.Text()
-		}
-		if *secret == "" {
-			*secret = rand.Text()
-		}
-		conn := &relayConn{
-			addr:      strings.TrimSpace(*relayAddr),
-			room:      *room,
-			secret:    *secret,
-			createKey: *createKey,
-			hostname:  *hostname,
-			session:   rand.Text(),
-			incoming:  incoming,
-		}
-		defer conn.Close()
-		go conn.Connect(c, cancel)
-		go conn.Broadcast(c, outgoing)
-		log.Printf("your address to share is -relay %s -room %s -secret %s\n", conn.addr, *room, *secret)
-	} else {
-		defer runMesh(c, cancel, incoming, outgoing, *local, *port, *publicPort, *addrs, *hostname)()
-	}
-
-	args := append(strings.Fields(*mpvFlags), "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(*filePath))
-	cmd := exec.CommandContext(c, strings.TrimSpace(*mpvPath), args...)
-	defer cmd.Cancel()
-
-	mpv.Init(cmd)
-
-	err := cmd.Start()
-	if err != nil {
-		panic(err)
-	}
-
-	select {
-	case <-c.Done():
-		log.Println(c.Err())
-		return
-	case <-time.After(time.Duration(*cooldown) * time.Second):
-	}
-
-	defer os.Remove(mpvSocket)
-
-	client, err := mpv.New(c, cancel, mpvSocket, outgoing)
-	if err != nil {
-		panic(err)
-	}
-
-	go client.ProcessIncomingEvents(incoming)
-
-	log.Println("init done. now you can start watching")
-
-	err = cmd.Wait()
+	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	err := party.Run(c, cfg)
+	cancel()
 	if err != nil {
 		log.Println(err)
-	}
-}
-
-func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, local bool, port, publicPort int, addrs, hostname string) func() {
-	cleanup := []func(){}
-	address := ""
-	if local {
-		localIP := upnp.GetLocalIPAddr()
-		if localIP == "" {
-			panic("cannot determine local ip; are you connected to a network?")
-		}
-		address = fmt.Sprintf("%s:%d", localIP, port)
-	} else {
-		upnpClient, err := upnp.New()
-		if err != nil {
-			panic(err)
-		}
-
-		mapping := upnp.AddPortMappingRequest{
-			NewProtocol:               "TCP",
-			NewExternalPort:           publicPort,
-			NewInternalPort:           port,
-			NewEnabled:                1,
-			NewPortMappingDescription: "watchparty",
-			NewLeaseDuration:          86400,
-		}
-		_, err = upnpClient.AddPortMapping(mapping)
-		var upnpErr *upnp.Error
-		if errors.As(err, &upnpErr) && upnpErr.Code == upnp.ErrOnlyPermanentLease {
-			mapping.NewLeaseDuration = 0
-			_, err = upnpClient.AddPortMapping(mapping)
-		}
-		if err != nil {
-			panic(err)
-		}
-		cleanup = append(cleanup, func() {
-			upnpClient.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: publicPort, NewProtocol: "TCP"})
-		})
-
-		externalIp, err := upnpClient.GetExternalIPAddress()
-		if err != nil {
-			panic(err)
-		}
-		publicIp := externalIp.NewExternalIPAddress
-		address = fmt.Sprintf("%s:%d", publicIp, publicPort)
-	}
-
-	ser := server.New(c, incoming, address, hostname)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/hi", ser.Hi)
-	mux.HandleFunc("/bye", ser.Bye)
-	mux.HandleFunc("/event", ser.Event)
-	s := &http.Server{
-		Addr:        fmt.Sprintf("0.0.0.0:%d", port),
-		Handler:     mux,
-		BaseContext: func(_ net.Listener) context.Context { return c },
-	}
-	cleanup = append(cleanup, func() {
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		s.Shutdown(shutdownContext)
-	})
-	cleanup = append(cleanup, ser.Shutdown)
-
-	go func() {
-		err := s.ListenAndServe()
-		if err != nil {
-			cancel()
-			log.Println(err)
-		}
-	}()
-	go ser.BroadcastEvents(outgoing)
-
-	for _, addr := range strings.Split(addrs, ",") {
-		addr = strings.TrimSpace(addr)
-		if addr == "" {
-			continue
-		}
-		err := ser.AddAddress(addr)
-		if err != nil {
-			log.Printf("%s: %s\n", addr, err)
-		}
-	}
-
-	log.Printf("your address to share is %s\n", address)
-
-	// callers defer this, so it runs in main and keeps the original LIFO order:
-	// /bye first, then the http server, then the upnp mapping
-	return func() {
-		for i := len(cleanup) - 1; i >= 0; i-- {
-			cleanup[i]()
-		}
+		os.Exit(1)
 	}
 }

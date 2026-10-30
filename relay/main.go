@@ -36,8 +36,8 @@ const (
 	cols = 16384
 )
 
-// declared again in the node's ws.go; both are package main so neither can import
-// the other, and four lines beat a package that exists only to share them
+// declared again in party/ws.go; importing party would drag upnp, server and mpv into
+// the relay binary, and four lines beat a package that exists only to share them
 type message struct {
 	Hostname string          `json:"hostname"`
 	Event    json.RawMessage `json:"event"`

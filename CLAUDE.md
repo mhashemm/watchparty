@@ -59,15 +59,18 @@ Or through a relay, which is what people behind carrier NAT need:
 
 ## Architecture
 
-Peer-to-peer mpv sync. Every node is both an HTTP server and a client to every other node — no central host. `main.go` wires three pieces together:
+Peer-to-peer mpv sync. Every node is both an HTTP server and a client to every other node — no central host. `party.Run` (`party/party.go`) wires three pieces together. Two
+front ends call it, and each does everything on its own: `main.go`, the CLI, which only
+turns flags into a `party.Config`, and `gui/`, which builds the same `Config` from a form.
+The pieces:
 
 1. **Address discovery** — `-local` advertises the LAN IP; otherwise UPNP adds a port mapping and the external IP is advertised (mapping deleted on exit). Peers are keyed by the address the remote advertises in `hit-me-up`, not the string you passed to `-addrs`. Under `-local` that is the LAN IP, so `-addrs 127.0.0.1:6969` completes the `/hi` handshake and then has every event rejected with `does not exists`. Always use the address the node prints.
 2. **`server/`** — HTTP peer mesh on `/hi` (handshake), `/event` (playback event), `/bye` (disconnect). All POST, all identity carried in headers: `hit-me-up` (address), `counter`, `hostname`.
 3. **`mpv/`** — mpv JSON IPC client over a unix socket (`/tmp/mpv<unixtime>`) or Windows named pipe (`\\.\pipe\...`), selected by build tag in `conn_unix.go` / `conn_windows.go`.
 
-`-relay <ws url>` selects the relay transport instead of steps 1 and 2: `runMesh` is skipped entirely, so no UPNP, no listener, no `server/`. `runMesh` returns a cleanup closure rather than using `defer` internally, because those defers have to fire in `main`, not when it returns.
+`-relay <ws url>` selects the relay transport instead of steps 1 and 2: `runMesh` is skipped entirely, so no UPNP, no listener, no `server/`. `runMesh` returns a cleanup closure rather than using `defer` internally, because those defers have to fire in `Run`, not when `runMesh` returns.
 
-Two channels bridge them, both created in `main.go`:
+Two channels bridge them, both created per call in `party.Run`:
 
 - `outgoing chan []byte` — `mpv.Client.watch()` → `server.BroadcastEvents` → POST `/event` to every peer.
 - `incoming chan mpv.IncomingMessage` — server handlers → `mpv.Client.ProcessIncomingEvents` → IPC commands back into mpv.
@@ -105,7 +108,7 @@ Two mechanisms now, in `mpv/mpv.go`, and they apply to both transports:
 
 - **Counters** (P2P only, `server/`) — each node has a monotonic `counter` bumped on every broadcast; each peer entry stores the last counter seen from that peer. `Server.Event` drops anything with `counter <= peer.Counter`. `Shutdown` sends `math.MaxUint64` so the `/bye` always wins. Relay mode has no counters and does not need them: the relay never echoes a frame back to its sender, so `applied` is the only thing between it and an infinite loop.
 
-`Shutdown` must pass `context.WithoutCancel(s.c)` to `broadcast`. `s.c` is `main`'s `signal.NotifyContext`, which SIGINT/SIGTERM has already cancelled by the time the deferred `ser.Shutdown()` runs — deriving the 10s timeout from it makes every `/bye` fail instantly with "terminated signal received", and peers only lose the leaver via the 3-strike eviction.
+`Shutdown` must pass `context.WithoutCancel(s.c)` to `broadcast`. `s.c` derives from the caller's context (the CLI's `signal.NotifyContext`, or the GUI's per-party cancel), which is already cancelled by the time the deferred `ser.Shutdown()` runs — deriving the 10s timeout from it makes every `/bye` fail instantly with "terminated signal received", and peers only lose the leaver via the 3-strike eviction.
 
 Only the node that *generates* an event broadcasts — a peer applying a remote change does not re-emit it. So a peer discovers a dead peer only when it drives something itself, which is why eviction is per-node and not simultaneous across the mesh.
 
@@ -145,8 +148,9 @@ by this feature.
 
 - **Dumb fan-out.** The relay forwards opaque bytes and never parses playback
   data. The node builds the envelope: `{"hostname":…, "event":<raw mpv JSON>}`,
-  declared identically in `relay/main.go` and `ws.go` because two `package main`s
-  cannot import each other.
+  declared identically in `relay/main.go` and `party/ws.go`. The relay is `package
+  main`, so it cannot be imported, and importing `party` the other way would pull
+  upnp, server and mpv into the relay image.
 - **Rooms** are memory-only. The first joiner's secret defines the room's secret
   (`crypto/subtle.ConstantTimeCompare`); the room is deleted when the last member
   leaves. The secret rides in a header, not the query string, which proxies log.
@@ -182,12 +186,17 @@ by this feature.
 
 ### `gui/` (desktop launcher)
 
-A separate `package main` that runs the `watchparty` binary as a subprocess and
-imports nothing from the repo. **Details are in `gui/CLAUDE.md`.** One thing reaches
-outside it: the GUI's status display matches these log lines, so **if you change any
-of them, update `handle()` in `gui/index.html` in the same commit**: `your address to
-share is`, `relay: connected`, `relay: dial:`, `relay: disconnected`, `is not open
-yet`, `rejected by relay`, `init done`, and `do: sent request:` (for `show-text`).
+A separate `package main` that serves a themed page and calls `party.Run`
+**in-process**. It does not need the `watchparty` binary, only mpv. **Details are in
+`gui/CLAUDE.md`.** Two things reach outside it:
+
+- The GUI captures the standard `log` (`log.SetOutput`) and its status display
+  matches these lines. **If you change any of them, update `handle()` in
+  `gui/index.html` in the same commit**: `your address to share is`, `relay:
+  connected`, `relay: dial:`, `relay: disconnected`, `is not open yet`, `rejected by
+  relay`, `init done`, and `do: sent request:` (for `show-text`).
+- `party.Run` can be called many times in one process, so it must not leave global
+  state behind. Flags live only in `main.go`.
 
 ### Relay hardening (it runs on a public VPS)
 
@@ -231,7 +240,7 @@ the relay bricks itself at room 11.
 
 `resCh` is shared, and `do()` discards responses whose id doesn't match — so two concurrent `do()` calls steal each other's replies. That holds today only because every caller is `ProcessIncomingEvents` (one goroutine) or `New` before it starts. Fan `do()` out to more goroutines and you need a per-request channel first.
 
-`main.go` sleeps `-cooldown` seconds (default 5) before dialing, because mpv creates the socket lazily after start.
+`party.Run` sleeps `-cooldown` seconds (default 5) before dialing, because mpv creates the socket lazily after start.
 
 ### Concurrency invariants
 
@@ -243,7 +252,8 @@ Each of these has already caused a real bug — they are easy to reintroduce bec
 - **Exactly one write pump for the whole process, spanning reconnects.** Restarting it per connection means two goroutines briefly both `range outgoing`, stealing frames from each other.
 - **`broadcast()` must not hold `s.mu` across the fan-out.** It snapshots the peers under the lock, releases, then waits — an earlier version held `RLock` until `wg.Wait()` returned, so one blocking send wedged every handler behind the next writer. Eviction re-takes the lock afterwards and re-checks `s.addresses[p.address] == p`, so a peer that reconnected via `/hi` in the meantime isn't dropped.
 - **Synthetic OSD events go through `Server.notify`, which is `select`/`default`.** Notices are cosmetic and nothing drains `incoming` until `ProcessIncomingEvents` starts, so dropping them is correct. Real playback events in `Server.Event` keep a blocking send, bounded by `req.Context()`.
-- **Never `log.Fatal` / `os.Exit`.** It skips `main`'s defers, which leaks the UPNP port mapping on the router and skips the `/bye` broadcast. Failing goroutines call the `cancel` passed down from `main` instead (same pattern as the `ListenAndServe` goroutine).
+- **Never `panic`, `log.Fatal` or `os.Exit` in `party/`, `mpv/` or `server/`.** They skip `Run`'s defers, which leaks the UPNP port mapping on the router and skips the `/bye` broadcast. The GUI also runs `party.Run` in-process, so a panic would take the window down with it. Setup failures are returned as errors. Failing goroutines call the `cancel` that `Run` passes down instead (same pattern as the `ListenAndServe` goroutine). `Run` returns `nil` when its caller cancelled it, and `errStopped` when something inside cancelled it. Only `main.go` calls `os.Exit`, and only after `Run` has returned.
+- **`defer cmd.Cancel()` only after `cmd.Start()` succeeds.** The default `Cancel` calls `Process.Kill()`, which nil-panics if `Start` failed, and that path is now an ordinary returned error.
 - **`bytes.Clone` anything from `scanner.Bytes()`** before putting it on a channel; `Scan()` overwrites that buffer and the consumer reads it later.
 
 ### Conventions
@@ -261,6 +271,12 @@ Every behaviour change lands with its `CLAUDE.md` note and its `e2e.py` case in 
 ## Known issues
 
 Confirmed by reading the code, not yet fixed:
+
+- [ ] `outgoing` and `incoming` are never closed, so the goroutines that `range` them
+  (`relayConn.Broadcast`, `Server.BroadcastEvents`, `ProcessIncomingEvents`) outlive
+  `party.Run`. That's harmless for the CLI, which exits. The GUI leaks a few idle
+  goroutines per party. Closing the channels needs every writer stopped first, or
+  it's a send-on-closed panic.
 
 - [ ] Real playback events still block on `incoming` during the `-cooldown` window, since `ProcessIncomingEvents` only starts after it — the 1024 buffer is what carries the gap. `Server.Event` bails out on `req.Context()` rather than wedging, but nothing is applied until mpv is up.
 - [ ] `/bye` and `/event` trust the `hit-me-up`/`counter` headers (P2P only). The counter check stops replays and unknown addresses, but a peer can still spoof another peer's address. Needs signing to go further, which is more than a LAN tool wants.
