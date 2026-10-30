@@ -34,9 +34,10 @@ flag.
 
 ## The connection
 
-- **The socket exists ~40ms after mpv starts**, long before the file is loaded. The
-  `-cooldown` (default 5s) is not waiting for the socket. What it buys is that the
-  file is loaded when we observe, which `seen` depends on (see "Observing").
+- **The socket exists ~40ms after mpv starts**, long before the file is loaded.
+  `party.Run` dials it every 50ms until it answers, and `mpv.New` then waits for the
+  first `time-pos` with data, which means the file is loaded. A movie is ready in
+  ~0.06s locally. (This replaced a fixed 5s `-cooldown`.)
 - Each connection is its own client. **Observers belong to the connection:** close
   it and they are gone, and mpv keeps running.
 - It is local-only and explicitly insecure (it can run arbitrary commands). Never
@@ -156,9 +157,9 @@ Every event goes through `handleEvent`; anything but `property-change` is
   to the watch-later dir (`~/.local/state/mpv/watch_later` on Linux, or
   `--watch-later-dir`). The next start of that file **opens at the saved
   position**, still paused.
-- With the default cooldown, the immediate observe event already carries that
-  position and `seen` swallows it, so a rejoining node doesn't drag the party to
-  where it left off. It also doesn't follow the party until the next seek or pause.
+- `seen` swallows that position (the first `time-pos` with data), so a rejoining
+  node doesn't drag the party to where it left off. Verified: a node that quit at 33
+  restarted at 33 and broadcast nothing. It also doesn't follow the party until the next seek or pause.
 
 ## Re-probing
 

@@ -17,7 +17,6 @@ type settings struct {
 	Relay     string `json:"relay"`
 	Mpv       string `json:"mpv"`
 	MpvFlags  string `json:"mpvFlags"`
-	Cooldown  string `json:"cooldown"`
 	CreateKey string `json:"createKey"`
 	PPort     string `json:"pport"`
 	Local     bool   `json:"local"`

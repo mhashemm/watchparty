@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -31,11 +33,12 @@ func (d *dripReader) Read(p []byte) (int, error) {
 func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 	return &Client{
 		ctx:      context.Background(),
+		ready:    make(chan struct{}),
 		outgoing: outgoing,
 		paused:   false,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
-		conn:     &connection{scanner: sc, pending: map[int64]chan Response{}},
+		conn:     &connection{scanner: sc, pending: map[int64]chan Response{}, closed: make(chan struct{})},
 	}
 }
 
@@ -237,5 +240,70 @@ func TestProcessIncomingEventsStopsWithTheParty(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("ProcessIncomingEvents outlived the party")
+	}
+}
+
+// fakeMpv answers every request on conn with success and then sends events; with
+// closeAfter > 0 it hangs up after that many requests instead.
+func fakeMpv(conn net.Conn, closeAfter int, events ...string) {
+	sc := bufio.NewScanner(conn)
+	for n := 1; sc.Scan(); n++ {
+		req := Request{}
+		json.Unmarshal(sc.Bytes(), &req)
+		if n == closeAfter {
+			conn.Close()
+			return
+		}
+		fmt.Fprintf(conn, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		if n == 2 {
+			for _, e := range events {
+				fmt.Fprint(conn, e+"\n")
+			}
+		}
+	}
+}
+
+// New returns only once the file is loaded, which is the first time-pos that has
+// data. The empty one mpv sends before that doesn't count.
+func TestNewWaitsForTheFileToLoad(t *testing.T) {
+	ours, theirs := net.Pipe()
+	defer ours.Close()
+	loaded := make(chan struct{})
+	go fakeMpv(theirs, 0, `{"event":"property-change","id":1,"name":"pause","data":"yes"}`,
+		`{"event":"property-change","id":2,"name":"time-pos"}`)
+
+	go func() {
+		New(context.Background(), func() {}, ours, make(chan []byte, 1))
+		close(loaded)
+	}()
+	select {
+	case <-loaded:
+		t.Fatal("New returned before time-pos had a value")
+	case <-time.After(300 * time.Millisecond):
+	}
+	fmt.Fprint(theirs, `{"event":"property-change","id":2,"name":"time-pos","data":"0.000000"}`+"\n")
+	select {
+	case <-loaded:
+	case <-time.After(time.Second):
+		t.Fatal("New never returned after the file loaded")
+	}
+}
+
+// mpv that dies before the file loads (a bad file) closes the socket mid-request.
+// New must return ErrClosed at once, not after do()'s 5s timeout, and must not
+// cancel the party: that would kill mpv and hide its real exit status.
+func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
+	ours, theirs := net.Pipe()
+	defer ours.Close()
+	go fakeMpv(theirs, 2)
+	cancelled := atomic.Bool{}
+	start := time.Now()
+	_, err := New(context.Background(), func() { cancelled.Store(true) }, ours, make(chan []byte, 1))
+	if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
+		t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if cancelled.Load() {
+		t.Fatal("cancelled the party before the movie was ready")
 	}
 }

@@ -538,10 +538,6 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         </div>
         <div class="grid">
           <div class="field">
-            <label for="cooldown">Seconds to wait for mpv</label>
-            <input type="text" id="cooldown" inputmode="numeric" placeholder="5">
-          </div>
-          <div class="field">
             <label for="createKey">Room create key</label>
             <input type="password" id="createKey" placeholder="Only if the relay asks">
           </div>
@@ -649,7 +645,7 @@ const api = (path, body) => fetch(path, {
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
-const FIELDS = ["hostname", "relay", "room", "secret", "createKey", "port", "pport", "addrs", "mpv", "mpvFlags", "cooldown"];
+const FIELDS = ["hostname", "relay", "room", "secret", "createKey", "port", "pport", "addrs", "mpv", "mpvFlags"];
 
 function mode() { return document.querySelector("input[name=mode]:checked").value; }
 function setMode(m) {
@@ -672,7 +668,7 @@ async function loadState() {
   if (!$("relay").value) $("relay").value = s.relay || "";
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
-  for (const k of ["mpv", "mpvFlags", "cooldown", "createKey", "pport"]) $(k).value = s[k] || "";
+  for (const k of ["mpv", "mpvFlags", "createKey", "pport"]) $(k).value = s[k] || "";
   $("set-relay").value = s.relay || "";
   $("store-path").textContent = saved.path;
   renderHistory();
@@ -736,7 +732,7 @@ $("clear-history").addEventListener("click", async () => {
 $("settings-form").addEventListener("submit", async e => {
   e.preventDefault();
   const body = { relay: $("set-relay").value };
-  for (const k of ["mpv", "mpvFlags", "cooldown", "createKey", "pport"]) body[k] = $(k).value;
+  for (const k of ["mpv", "mpvFlags", "createKey", "pport"]) body[k] = $(k).value;
   const res = await api("/settings", body);
   $("settings-saved").textContent = res.ok ? "Saved." : `Couldn't save: ${(await res.text()).trim()}`;
   $("settings-saved").hidden = false;

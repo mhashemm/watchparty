@@ -35,6 +35,8 @@ var (
 	errDoNotSend = errors.New("do not send")
 	errEcho      = errors.New("echo")
 	errTimeout   = errors.New("mpv did not answer within 5s")
+
+	ErrClosed = errors.New("mpv closed the IPC connection")
 )
 
 type IncomingMessage struct {
@@ -47,6 +49,7 @@ type connection struct {
 	scanner *bufio.Scanner
 	mu      sync.Mutex
 	pending map[int64]chan Response
+	closed  chan struct{}
 }
 
 func (c *connection) wait(id int64) chan Response {
@@ -102,6 +105,8 @@ func (c *connection) do(args ...any) error {
 			return errors.New(res.Error)
 		}
 		return nil
+	case <-c.closed:
+		return ErrClosed
 	case <-time.After(5 * time.Second):
 		log.Printf("do: response timeout: [requestId=%d]\n", req.RequestId)
 		return errTimeout
@@ -130,6 +135,7 @@ type Response struct {
 
 type Client struct {
 	ctx      context.Context
+	ready    chan struct{}
 	outgoing chan<- []byte
 	conn     *connection
 	mu       sync.Mutex
@@ -183,6 +189,9 @@ func (c *Client) handleEvent(event Event) error {
 		}
 		first := !c.seen[event.Name]
 		c.seen[event.Name] = true
+		if first && event.Name == timePos {
+			close(c.ready)
+		}
 		switch event.Name {
 		case pause:
 			if c.paused == event.paused() {
@@ -337,15 +346,16 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-func New(c context.Context, cancel context.CancelFunc, socket string, outgoing chan<- []byte) (*Client, error) {
-	conn, err := newConnection(c, socket)
-	if err != nil {
-		return nil, err
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte) (*Client, error) {
+	conn := &connection{
+		conn:    nc,
+		scanner: bufio.NewScanner(nc),
+		pending: map[int64]chan Response{},
+		closed:  make(chan struct{}),
 	}
-	conn.scanner = bufio.NewScanner(conn.conn)
-	conn.pending = map[int64]chan Response{}
 	client := &Client{
 		ctx:      c,
+		ready:    make(chan struct{}),
 		conn:     conn,
 		outgoing: outgoing,
 		paused:   true,
@@ -354,12 +364,17 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 	}
 
 	go func() {
-		defer conn.conn.Close()
 		err := client.watch()
 		if err != nil {
 			log.Println("watch:", err)
 		}
-		cancel()
+		conn.conn.Close()
+		close(conn.closed)
+		select {
+		case <-client.ready:
+			cancel()
+		default:
+		}
 	}()
 
 	events := []string{pause, timePos}
@@ -370,5 +385,12 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 		}
 	}
 
-	return client, nil
+	select {
+	case <-client.ready:
+		return client, nil
+	case <-conn.closed:
+		return nil, ErrClosed
+	case <-c.Done():
+		return nil, c.Err()
+	}
 }

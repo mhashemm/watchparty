@@ -13,25 +13,31 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
 
 | File | Contents |
 |---|---|
-| `mpv.go` | `Client`, `connection.do`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
-| `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, unix-socket dial, no-op `Init` |
-| `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `go-winio` pipe dial, and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
+| `mpv.go` | `Client`, `connection.do`, `ErrClosed`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
+| `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, `Dial` (unix socket), no-op `Init` |
+| `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `Dial` (`go-winio` pipe), and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
 | `MPV.md` | the slice of mpv we use, and its observed behaviour |
 | `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown |
 
 ## Public surface
 
-- `New(ctx, cancel, socket, outgoing) (*Client, error)` is called once mpv is up.
-  - It dials, starts the `watch()` goroutine, then sends `observe_property_string`
-    for `pause` (id 1) and `time-pos` (id 2).
+- `Dial(ctx, socket) (net.Conn, error)` opens the unix socket or the Windows pipe. It
+  starts nothing, so `party.Run` retries it until mpv has created the socket.
+- `New(ctx, cancel, conn, outgoing) (*Client, error)` starts the `watch()` goroutine,
+  sends `observe_property_string` for `pause` (id 1) and `time-pos` (id 2), then
+  **waits for `ready`**: closed by `handleEvent` on the first `time-pos` that has
+  data, i.e. once the file is loaded.
   - **`watch` must be running before those `do()` calls**, because only `watch`
     delivers replies.
-  - When `watch` returns (EOF when mpv quits, or a read error), it closes the conn
-    and calls `cancel`. This is how the party learns that mpv is gone. `party.Run`
-    wraps that cancel to tell "mpv quit" apart from other stops (see
-    `party/CLAUDE.md`).
-  - If an observe fails, `New` returns the error. The party ends and mpv is killed,
-    which ends `watch`.
+  - When `watch` returns (EOF when mpv quits, or a read error), it closes the conn,
+    closes `connection.closed`, and **calls `cancel` only if `ready` was reached**.
+    This is how the party learns that mpv is gone. `party.Run` wraps that cancel to
+    tell "mpv quit" apart from other stops (see `party/CLAUDE.md`).
+  - Before `ready`, a hang-up makes `New` (and any `do()` in flight) return
+    **`ErrClosed`** at once, and nothing is cancelled. `party.Run` then reads mpv's
+    real exit status; cancelling would have killed mpv and turned it into `signal:
+    killed`.
+  - If an observe fails for another reason, `New` returns that error.
   - `ctx` is the party's context, kept on the `Client`. `watch`'s send to `outgoing`
     and `ProcessIncomingEvents`' receive both select on it, so neither outlives the
     party. The channels are never closed.

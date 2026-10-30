@@ -73,8 +73,8 @@ Invariants, each of which has caused a real bug:
 - **Never hold `s.mu` across the fan-out.** Holding it until `wg.Wait()` returns lets
   one blocking send wedge every handler behind the next writer.
 - **Synthetic notices go through `notify`, which is `select`/`default`.** Notices are
-  cosmetic, and nothing drains `incoming` until `ProcessIncomingEvents` starts after
-  the cooldown, so dropping them is correct. Real events in `Event` keep the blocking
+  cosmetic, and nothing drains `incoming` until `ProcessIncomingEvents` starts once
+  mpv has loaded the file, so dropping them is correct. Real events in `Event` keep the blocking
   send.
 - **`Shutdown` must use `context.WithoutCancel(s.c)`.** `s.c` is the party's context,
   which is already cancelled when the deferred `Shutdown` runs. A timeout derived from
@@ -121,8 +121,9 @@ real by `e2e.py --mode p2p`.
   and `broadcast`'s callers discard the `*http.Response` without closing it. A 2xx
   `/event` or `/bye` answers 204 with an empty body, so in practice this only leaks
   on error responses.
-- **Events during the cooldown.** Real playback events block on `incoming` until
-  `ProcessIncomingEvents` starts. The 1024 buffer carries that gap, and `Event` gives
-  up on `req.Context()` rather than wedging.
+- **Events before mpv is ready.** Real playback events wait on `incoming` until mpv
+  has loaded the file and `ProcessIncomingEvents` starts (well under a second for a
+  local file). The 1024 buffer carries that gap, and `Event` gives up on
+  `req.Context()` rather than wedging.
 - **Fixed strike count.** `maxFails` is a constant (`ponytail:`). Make it a flag if
   flaky Wi-Fi starts evicting people mid-movie.

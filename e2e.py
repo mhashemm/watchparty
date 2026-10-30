@@ -30,8 +30,7 @@ import argparse, glob, http.server, json, os, shutil, signal, socket, subprocess
 import sys, tempfile, threading, time, urllib.error, urllib.request
 
 MPVFLAGS = "--vo=null --ao=null --no-resume-playback --msg-level=all=error"
-COOLDOWN = 3
-BOOT = COOLDOWN + 4  # cooldown, plus mpv creating its socket, plus the handshake
+BOOT = 4             # mpv loading the file, plus the handshake
 STAGGER = 1.6        # lets a node's listener come up before the next one
                      # bootstraps off it
 SETTLE = 2.5
@@ -241,7 +240,7 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", MEDIA, "-cooldown", str(COOLDOWN), "-hostname", name, "-mpvFlags", MPVFLAGS]
+    cmd = [BIN, "-file", MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:

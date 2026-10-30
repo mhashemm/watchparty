@@ -10,16 +10,9 @@ import (
 
 const SocketPrefix = "/tmp/"
 
-func newConnection(c context.Context, socket string) (*connection, error) {
+func Dial(c context.Context, socket string) (net.Conn, error) {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(c, "unix", socket)
-	if err != nil {
-		return nil, err
-	}
-
-	return &connection{
-		conn: conn,
-	}, nil
+	return dialer.DialContext(c, "unix", socket)
 }
 
 func Init(_ *exec.Cmd) {}

@@ -10,7 +10,7 @@ import (
 )
 
 // A failing peer makes broadcast post a notice onto incoming, which nobody drains
-// during the cooldown. That send must not block, or BroadcastEvents stops for good.
+// until mpv has loaded the file. That send must not block, or BroadcastEvents stops for good.
 func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 	incoming := make(chan mpv.IncomingMessage) // nobody is draining this
 	s := New(context.Background(), incoming, "127.0.0.1:1", "me")
