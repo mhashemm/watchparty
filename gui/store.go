@@ -62,7 +62,6 @@ func openStore(path string) *store {
 	return s
 }
 
-// save must be called with s.mu held.
 func (s *store) save() error {
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -114,7 +113,6 @@ func (s *store) begin(f form) int {
 	return len(s.History) - 1
 }
 
-// observe records what a party's log line says about the session at index i.
 func (s *store) observe(i int, line string) {
 	person := ""
 	if _, after, ok := strings.Cut(line, "your address to share is "); ok {
@@ -163,7 +161,6 @@ func (s *store) update(i int, f func(*session)) {
 	s.save()
 }
 
-// notice extracts the text of an on-screen notice from mpv's "do: sent request:" log line.
 func notice(line string) (string, bool) {
 	_, body, ok := strings.Cut(line, "do: sent request: ")
 	if !ok {

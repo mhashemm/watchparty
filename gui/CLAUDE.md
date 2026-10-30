@@ -199,17 +199,35 @@ install it themselves.
 - **The GUI's own context** is a `signal.NotifyContext`. Each party's context derives
   from it. On SIGINT/SIGTERM, `main` cancels the running party and `wg.Wait()`s for
   `Run` to return before exiting, so Ctrl-C on the GUI never leaks a UPNP mapping.
-- **Idle exit:** the Windows build is `-H=windowsgui` and has no console window to
-  close. So a ticker cancels that same context once **no party is running and no
-  `/log` poll has arrived for 2 minutes**.
+- **Closing the window shuts everything down.** `openWindow` launches the browser as
+  **its own instance**, with a fresh temporary profile (`--user-data-dir` under
+  `os.TempDir()`), so the browser process the GUI started lives exactly as long as
+  the window. When it exits, `main` logs `gui: window closed` and cancels the GUI's
+  context. That ends any running party gracefully (`/bye`, mpv closed, UPNP mapping
+  deleted), and the temporary profile is deleted.
+  - **A fresh profile per launch, not a shared one.** With a shared profile, a second
+    GUI's browser would hand its window to the first instance and exit at once.
+  - **The hand-off guard:** a browser that exits within `handoffWindow` (5s) is
+    assumed to have passed the page to another, already-running instance, not to have
+    been closed. Then the window can't be watched, and the idle exit below applies.
+    Edge's background "startup boost" on Windows is the expected case. Without the
+    guard, the app would quit the instant it opened.
+  - Verified on Linux with a stand-in browser:
+    - closing mid-party sent "has left" to the guest, closed the host's mpv, removed
+      the profile, saved the party as ended, and exited
+    - an instant browser exit did not shut the GUI down
+- **Idle exit**, the fallback when the window can't be watched (the default browser
+  opened a tab, or a hand-off): a ticker cancels the context once **no party is
+  running and no `/log` poll has arrived for 2 minutes**. The Windows build is
+  `-H=windowsgui` with no console to close, so this matters there.
   - Don't shorten that: Chrome throttles timers in a minimized or hidden window to
     about one per minute, and a shorter window would kill the server under a GUI that
     is still open.
   - The first poll gets a one-minute grace period (`lastPoll` starts in the future),
     so a slow first browser launch is fine.
-- The GUI never exits while a party runs, even if the window is closed. Opening the
-  GUI again starts a second instance on a new port, which cannot see the first one's
-  party.
+- In that fallback, the GUI never exits while a party runs, even if the tab is
+  closed. Opening the GUI again starts a second instance on a new port, which cannot
+  see the first one's party.
 
 ### OS helpers
 
@@ -245,11 +263,19 @@ install it themselves.
 - On macOS and Windows, a non-zero exit from the picker command (`*exec.ExitError`)
   means cancelled and returns an empty path.
 - **Window:** each browser in `browsers` is tried with `--app=URL
-  --window-size=560,940`, then `openURL` (`rundll32` / `xdg-open` / `open`).
-  - Windows lists absolute Edge/Chrome paths, because `msedge` is not on `PATH` and
-    `cmd /c start msedge` shows an error dialog when it is missing.
-  - The browser is never killed, and the GUI does not learn when the window closes.
-    That is what the poll heartbeat is for.
+  --window-size=560,940 --user-data-dir=<temp> --no-first-run
+  --no-default-browser-check`, then `openURL` (`rundll32` / `xdg-open` / `open`)
+  opens the default browser as a plain tab.
+  - **Only Chromium-family browsers are in the list**, because only they have an
+    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name.
+  - Windows lists absolute paths, **Chrome first, then Edge**. Edge ships with every
+    Windows 10/11, so the app window always works there. Chrome goes first because
+    Edge's startup boost can hand windows off. `msedge` is not on `PATH`, and `cmd /c
+    start msedge` shows an error dialog when it is missing.
+  - **Firefox has no app mode**, so it's never used for the window. It only appears as
+    the default-browser tab when no Chromium-family browser is installed. Closing that
+    tab can't be detected, so the idle exit applies.
+  - macOS has no list (the browsers aren't on `PATH`), so it always opens a tab.
 
 ## Log-line contract
 
@@ -450,7 +476,10 @@ Everything Windows-specific compiles, but has not been run on Windows:
 - No console window flashes for the picker.
 - mpv's window shows up when it is launched from a `-H=windowsgui` parent through
   `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE`.
-- Edge opens in `--app` mode from the listed paths.
+- Chrome and Edge open in `--app` mode from the listed paths, and with a fresh
+  `--user-data-dir` the launched process stays alive until the window is closed. If
+  either one hands off and exits at once, the hand-off guard keeps the app running,
+  but closing the window then won't stop it.
 
 Verified on Linux, in-process, against real mpv: relay and direct parties driven
 through two GUIs, pause and resume propagating, the party feed, Stop sending "has

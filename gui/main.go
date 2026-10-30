@@ -300,19 +300,35 @@ func dialog(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-func openWindow(url string) {
-	for _, browser := range browsers {
-		cmd := exec.Command(browser, "--app="+url, "--window-size=560,940")
-		if cmd.Start() == nil {
-			go cmd.Wait()
-			return
+func openWindow(url string) <-chan struct{} {
+	profile, err := os.MkdirTemp("", "watchparty-gui-browser-")
+	if err == nil {
+		for _, browser := range browsers {
+			cmd := exec.Command(browser, "--app="+url, "--window-size=560,940", "--user-data-dir="+profile, "--no-first-run", "--no-default-browser-check")
+			if cmd.Start() != nil {
+				continue
+			}
+			closed := make(chan struct{})
+			started := time.Now()
+			go func() {
+				cmd.Wait()
+				os.RemoveAll(profile)
+				if time.Since(started) > handoffWindow {
+					close(closed)
+				}
+			}()
+			return closed
 		}
+		os.RemoveAll(profile)
 	}
 	cmd := openURL(url)
 	if cmd.Start() == nil {
 		go cmd.Wait()
 	}
+	return nil
 }
+
+const handoffWindow = 5 * time.Second
 
 func main() {
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -330,7 +346,13 @@ func main() {
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
-	openWindow(url)
+	if closed := openWindow(url); closed != nil {
+		go func() {
+			<-closed
+			log.Println("gui: window closed")
+			stop()
+		}()
+	}
 
 	go http.Serve(ln, g)
 	go func() {
