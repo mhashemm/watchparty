@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"testing"
 
 	"github.com/mhashemm/watchparty/party"
@@ -94,5 +96,25 @@ func TestAssetName(t *testing.T) {
 		if got := assetName(c.goos, c.goarch); got != c.want {
 			t.Errorf("assetName(%q, %q) = %q, want %q", c.goos, c.goarch, got, c.want)
 		}
+	}
+}
+
+// One syntax error anywhere in the page's script kills every button, and nothing
+// on the Go side notices. vm.Script parses it the way a browser parses a classic
+// <script>: no top-level await, no top-level return.
+func TestPageScriptParses(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	_, script, ok := bytes.Cut(page, []byte("<script>"))
+	script, _, ok2 := bytes.Cut(script, []byte("</script>"))
+	if !ok || !ok2 {
+		t.Fatal("no <script> in index.html")
+	}
+	cmd := exec.Command(node, "-e", `new (require("vm").Script)(require("fs").readFileSync(0, "utf8"), { filename: "index.html" })`)
+	cmd.Stdin = bytes.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the page script does not parse:\n%s", out)
 	}
 }

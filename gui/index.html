@@ -972,17 +972,6 @@ async function restartNow() {
 $("restart").addEventListener("click", restartNow);
 $("restart-now").addEventListener("click", restartNow);
 $("restart-later").addEventListener("click", () => $("restart-dialog").close());
-  const text = (await res.text()).trim();
-  if (!res.ok) {
-    $("version-text").textContent = `Update failed: ${text}.`;
-    b.textContent = `Update to ${latest}`;
-    b.disabled = running;
-    return;
-  }
-  updated = true;
-  b.hidden = true;
-  $("version-text").textContent = `Updated to ${text}. The new version is opening in its own window, so you can close this one.`;
-});
 
 if (["history", "settings"].includes(location.hash.slice(1))) show(location.hash.slice(1));
 loadState();
