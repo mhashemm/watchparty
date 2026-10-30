@@ -236,20 +236,23 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
   3. the head ellipse
   4. the tabby stripes: three forehead lines and the cheek bars
   5. the light muzzle and chin bib
-  6. the eyes: a relaxed, half-closed "slow blink". A green iris with a small
-     pupil sits under a fur-coloured upper lid (`.lid`) with an arched lid line, and
-     one glint sits below the lid. This is how a content cat actually looks. Wide
-     round eyes with big pupils read as startled or staring, not happy (a cat's
-     pupils dilate when it's scared or excited), and the earlier wide-eyed version
-     was rejected for exactly that.
+  6. the eyes: **bright and open**. A round green iris (7.5×8) with a medium pupil
+     (3.4×4.6), one big and one small glint, and nothing covering the eye. Chosen by
+     the user from drawn options, after two rejected versions:
+     - big round eyes with huge pupils read as **startled**, because a cat's pupils
+       dilate when it's scared or excited
+     - half-closed "slow blink" lids read as **high**, not content, especially next
+       to strong blush right under the eyes and the open grin
+     When changing the face, draw a few options side by side and let the user pick.
   7. cheeks, nose, mouth (smile and rest variants), whiskers
   8. the `z`s
   9. the stethoscope
   10. the white paws on top
 - **Moods** come from `body[data-mood]`, set in `render()`:
   - `sleep` (idle or ended): closed eyes, floating `z`s
-  - `awake` (running, and on errors): the half-closed eyes with the CSS blink, an **open smile
-    with a pink tongue** (`.mouth-smile`) and stronger blush. Asleep, he has the
+  - `awake` (running, and on errors): the bright open eyes with the CSS blink, an **open smile
+    with a pink tongue** (`.mouth-smile`) and a soft blush (opacity .6), set low and
+    outward (`cy=87`) so it doesn't redden the eyes. Asleep, he has the
     small closed "w" mouth (`.mouth-rest`) instead.
   - **Fosdo2 is always content: there is deliberately no worried or sad face.**
     Errors are carried by the red "Diagnosis:" status text alone. Keep anything
