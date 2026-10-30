@@ -2,12 +2,14 @@ package mpv
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // dripReader hands back a few bytes per Read, like the mpv socket does, which
@@ -28,6 +30,7 @@ func (d *dripReader) Read(p []byte) (int, error) {
 
 func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 	return &Client{
+		ctx:      context.Background(),
 		outgoing: outgoing,
 		paused:   false,
 		applied:  map[string]string{},
@@ -196,5 +199,22 @@ func TestConcurrentRequestsGetTheirOwnResponse(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestProcessIncomingEventsStopsWithTheParty(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newTestClient(nil, nil)
+	c.ctx = ctx
+	done := make(chan struct{})
+	go func() {
+		c.ProcessIncomingEvents(make(chan IncomingMessage))
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ProcessIncomingEvents outlived the party")
 	}
 }

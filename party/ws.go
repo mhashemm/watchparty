@@ -128,7 +128,13 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 // per connection: two of these ranging over outgoing would steal frames from each
 // other during a redial.
 func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
-	for event := range outgoing {
+	for {
+		var event []byte
+		select {
+		case event = <-outgoing:
+		case <-c.Done():
+			return
+		}
 		b, err := json.Marshal(message{Hostname: r.hostname, Event: event})
 		if err != nil {
 			log.Printf("relay: marshal: %s\n", err)

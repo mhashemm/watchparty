@@ -14,23 +14,26 @@ Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/mast
 | `mpv.go` | `Client`, `connection.do`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
 | `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, unix-socket dial, no-op `Init` |
 | `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `go-winio` pipe dial, and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
-| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe` |
+| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown |
 
 ## Public surface
 
 - `New(ctx, cancel, socket, outgoing) (*Client, error)` is called once mpv is up.
-  - It dials, sets up the scanner and the `pending` reply map, starts the `watch()`
-    goroutine, then sends `observe_property_string` for `pause` (id 1) and `time-pos`
-    (id 2).
+  - It dials, starts the `watch()` goroutine, then sends `observe_property_string`
+    for `pause` (id 1) and `time-pos` (id 2).
   - **`watch` must be running before those `do()` calls**, because only `watch`
     delivers replies.
-  - When `watch` returns (EOF when mpv quits, or a read error), it calls `cancel`.
-    This is how the party learns that mpv is gone. `party.Run` wraps that cancel to
-    tell "mpv quit" apart from other stops (see `party/CLAUDE.md`).
-  - If an observe fails, `New` returns the error. The watch goroutine and the conn are
-    not cleaned up here; the party ends and mpv is killed, which closes them.
+  - When `watch` returns (EOF when mpv quits, or a read error), it closes the conn
+    and calls `cancel`. This is how the party learns that mpv is gone. `party.Run`
+    wraps that cancel to tell "mpv quit" apart from other stops (see
+    `party/CLAUDE.md`).
+  - If an observe fails, `New` returns the error. The party ends and mpv is killed,
+    which ends `watch`.
+  - `ctx` is the party's context, kept on the `Client`. `watch`'s send to `outgoing`
+    and `ProcessIncomingEvents`' receive both select on it, so neither outlives the
+    party. The channels are never closed.
 - `(*Client).ProcessIncomingEvents(incoming)` is the only consumer of remote events. It
-  runs in one goroutine for the whole party.
+  runs in one goroutine until the party ends.
 - `Init(cmd)` must be called on the mpv `exec.Cmd` before `Start`.
 - `SocketPrefix` is used to build the socket or pipe name.
 - `IncomingMessage{HostName, Event}` is what both transports push. `Event` is raw mpv

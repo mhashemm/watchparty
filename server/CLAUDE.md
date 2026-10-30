@@ -70,12 +70,8 @@ The counter check only guards `/event` and `/bye`.
 
 Invariants, each of which has caused a real bug:
 
-- **Never hold `s.mu` across the fan-out.** An earlier version held `RLock` until
-  `wg.Wait()` returned, so one blocking send wedged every handler behind the next
-  writer.
-  - Note: the comment on `TestBroadcastDoesNotBlockOnFullIncoming` still describes
-    that old RLock behaviour. The test is still valid: it proves `broadcast` returns
-    while `incoming` is full.
+- **Never hold `s.mu` across the fan-out.** Holding it until `wg.Wait()` returns lets
+  one blocking send wedge every handler behind the next writer.
 - **Synthetic notices go through `notify`, which is `select`/`default`.** Notices are
   cosmetic, and nothing drains `incoming` until `ProcessIncomingEvents` starts after
   the cooldown, so dropping them is correct. Real events in `Event` keep the blocking
@@ -84,6 +80,8 @@ Invariants, each of which has caused a real bug:
   which is already cancelled when the deferred `Shutdown` runs. A timeout derived from
   it makes every `/bye` fail instantly, and peers only lose the leaver through the
   3-strike eviction.
+- **`BroadcastEvents` selects on `s.c`**, so it returns with the party. `outgoing`
+  is never closed (see `party/CLAUDE.md`).
 - **Only the node that generated an event broadcasts it.** Applying a remote change
   never re-emits it, so a node discovers a dead peer only when it drives something
   itself. Eviction is therefore per-node and not simultaneous across the mesh.
@@ -107,6 +105,8 @@ fixtures.
   a failing peer must not block `broadcast` (`notify` must not block).
 - `TestBroadcastEvictsPeerAfterMaxFails`: exactly `maxFails` consecutive failures
   evict, and any success in between resets the count.
+- `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
+  `BroadcastEvents`.
 
 Mesh formation, propagation, `/bye`, eviction and the header checks are covered for
 real by `e2e.py --mode p2p`.

@@ -129,6 +129,7 @@ type Response struct {
 }
 
 type Client struct {
+	ctx      context.Context
 	outgoing chan<- []byte
 	conn     *connection
 	mu       sync.Mutex
@@ -232,15 +233,25 @@ func (c *Client) watch() error {
 			log.Println("Watch:", err)
 			continue
 		}
-		c.outgoing <- bytes.Clone(scanner.Bytes())
-		log.Println("Watch: broadcasted event:", scanner.Text())
+		select {
+		case c.outgoing <- bytes.Clone(scanner.Bytes()):
+			log.Println("Watch: broadcasted event:", scanner.Text())
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		}
 	}
 
 	return scanner.Err()
 }
 
 func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
-	for e := range incoming {
+	for {
+		var e IncomingMessage
+		select {
+		case e = <-incoming:
+		case <-c.ctx.Done():
+			return
+		}
 		event := Event{}
 		err := json.Unmarshal(e.Event, &event)
 		if err != nil {
@@ -331,6 +342,7 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 	conn.scanner = bufio.NewScanner(conn.conn)
 	conn.pending = map[int64]chan Response{}
 	client := &Client{
+		ctx:      c,
 		conn:     conn,
 		outgoing: outgoing,
 		paused:   true,
@@ -339,6 +351,7 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 	}
 
 	go func() {
+		defer conn.conn.Close()
 		err := client.watch()
 		if err != nil {
 			log.Println("watch:", err)

@@ -140,8 +140,6 @@ print.
     be an invalid handle, and MultiWriter stops at the first writer that errors.
   - `Write` takes `g.mu`, so **nothing may call `log` while holding `g.mu`**, or it
     deadlocks.
-  - The capture is process-wide, so stray lines from a previous party's leftover
-    goroutines can land in the next one. That's cosmetic.
 - **`run`** goes up on every `/start`. A poll carrying an old `run` is answered from
   line 0, so a poll that was in flight during a restart can't splice two runs
   together. The log is uncapped in memory and reset per run.

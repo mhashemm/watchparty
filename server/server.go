@@ -227,7 +227,13 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) BroadcastEvents(outgoing chan []byte) {
-	for event := range outgoing {
+	for {
+		var event []byte
+		select {
+		case event = <-outgoing:
+		case <-s.c.Done():
+			return
+		}
 		s.broadcast(s.c, func(c context.Context, p *peer, counter uint64) error {
 			_, err := s.request(c, p.address, "/event", event, counter)
 			return err
