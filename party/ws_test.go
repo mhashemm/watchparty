@@ -185,3 +185,21 @@ func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
 	cancel()
 	waitDone(t, returned, "Broadcast outlived the party")
 }
+
+// An invite pasted as wss://host/ must not dial //ws, which the relay's mux
+// redirects instead of upgrading.
+func TestTrailingSlashOnRelayAddress(t *testing.T) {
+	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws" {
+			http.NotFound(w, r)
+			return
+		}
+		conn := accept(t, w, r)
+		conn.Read(r.Context())
+	})
+	conn, err := newRelayConn(addr+"/", nil).dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.CloseNow()
+}
