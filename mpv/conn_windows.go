@@ -4,6 +4,7 @@ package mpv
 
 import (
 	"context"
+	"net"
 	"os/exec"
 	"syscall"
 
@@ -13,14 +14,8 @@ import (
 
 const SocketPrefix = "\\\\.\\pipe\\"
 
-func newConnection(c context.Context, socket string) (*connection, error) {
-	conn, err := win.DialPipeContext(c, socket)
-	if err != nil {
-		return nil, err
-	}
-	return &connection{
-		conn: conn,
-	}, nil
+func Dial(c context.Context, socket string) (net.Conn, error) {
+	return win.DialPipeContext(c, socket)
 }
 
 func Init(cmd *exec.Cmd) {

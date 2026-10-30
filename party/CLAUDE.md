@@ -14,7 +14,7 @@ times in one GUI process, so it must not leave state behind.
 
 | File | Contents |
 |---|---|
-| `party.go` | `Config`, `Run`, `runMesh` (P2P setup), `DefaultPort`/`DefaultCooldown`, `errStopped` |
+| `party.go` | `Config`, `Run`, `runMesh` (P2P setup), `DefaultPort`, `errStopped`, `notReady` |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
 | `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 
@@ -47,17 +47,26 @@ them in-process (see `gui/CLAUDE.md`).
 5. Both transports log `your address to share is …`. **This exact string is
    load-bearing:** the GUI's invite box, the GUI's history (`gui/store.go`, which takes
    the real room and secret from it) and `e2e.py` all parse it.
-6. Start mpv: `--save-position-on-quit --pause --input-ipc-server=<sock> <file>`,
-   with the user's `MpvFlags` first. `mpv.Init(cmd)` sets the Windows process
+6. Start mpv: `--pause --speed=1 --hr-seek=yes --no-resume-playback
+   --input-ipc-server=<sock> <file>`, with the user's `MpvFlags`
+   first, so the pins win over them and over `mpv.conf` (why each is pinned:
+   `mpv/MPV.md`). `mpv.Init(cmd)` sets the Windows process
    attributes. **`defer cmd.Cancel()` only after `Start` succeeds.** The default
    `Cancel` is `Process.Kill()`, which nil-panics on a process that never started.
-7. Sleep `Cooldown` seconds, or return early if `c` is cancelled. mpv creates the IPC
-   socket lazily, so dialing it immediately fails.
-8. `mpv.New(c, onWatchEnd, sock, outgoing)` dials the socket, registers the two
-   observers, and starts the reader. Then `ProcessIncomingEvents(incoming)` starts in
-   a goroutine, and `init done. now you can start watching` is logged. That line is
+7. `cmd.Wait()` runs in a goroutine that reports on `exited`. `mpv.Dial` is retried
+   every 50ms until the socket answers (~40ms after start). If mpv exits first, `Run`
+   returns `notReady`: mpv's real exit status ("exit status 2" for a bad file, 1 for
+   a bad flag), or `nil` for exit 0 (the user closed it). If `c` ends, `stopReason`.
+8. `mpv.New(c, onWatchEnd, conn, outgoing)` registers the two observers, starts the
+   reader, and **waits until the file is loaded** (the first `time-pos` with data).
+   If mpv hangs up before that, `New` returns `mpv.ErrClosed` at once and `Run`
+   returns `notReady(<-exited)`. The reader doesn't cancel the party before the
+   movie is ready: cancelling would kill the exiting mpv, and its real exit status
+   would read as `signal: killed`. Then `ProcessIncomingEvents(incoming)` starts in
+   a goroutine (events that arrived meanwhile wait in the 1024 buffer), and `init
+   done. now you can start watching` is logged. That line is
    also load-bearing for the GUI.
-9. `cmd.Wait()`, then pick a return value (see the next section).
+9. Wait on `exited`, then pick a return value (see the next section).
 
 Deferred cleanup runs in LIFO order:
 
@@ -74,7 +83,8 @@ Deferred cleanup runs in LIFO order:
 | The caller cancelled `parent` (Ctrl-C, GUI Stop, GUI exit) | `nil` |
 | **The user quit mpv** | `nil` |
 | Something inside cancelled `c` (relay rejection, mesh listener failed to bind) | `errStopped` ("the party stopped unexpectedly") |
-| Setup failed (mpv binary missing, UPNP, no LAN IP, socket dial) | that error |
+| Setup failed (mpv binary missing, UPNP, no LAN IP) | that error |
+| mpv exited before the movie was ready (bad file, bad flag) | `mpv exited before the movie was ready: exit status N` |
 | mpv's own `Wait` error with nothing cancelled | that error |
 
 **The mpv-quit case is subtle, and it was a real bug.** When mpv quits, it closes its
@@ -173,7 +183,5 @@ ran three parties is back to its baseline goroutine count.
 
 ## Known issues
 
-- If mpv exits during the cooldown (a bad file, a bad flag), `Run` only finds out when
-  `mpv.New` fails to dial the socket. The error is then a confusing `dial unix
-  /tmp/mpv…: no such file or directory`, not mpv's own message. mpv's stdout/stderr
-  are not captured.
+- mpv's stdout/stderr are not captured, so a failed start reports only mpv's exit
+  status, not its message.

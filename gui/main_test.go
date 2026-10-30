@@ -14,14 +14,14 @@ import (
 func TestConfig(t *testing.T) {
 	relay := form{Mode: "relay", File: " /m.mkv ", Mpv: "/bin/mpv", Relay: " ws://r ", Room: "a b", Secret: "s", Local: true, Port: "1", Addrs: "x:1"}
 	got, err := relay.config()
-	want := party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Cooldown: party.DefaultCooldown, Relay: "ws://r", Room: "a b", Secret: "s"}
+	want := party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Room: "a b", Secret: "s"}
 	if err != nil || got != want {
 		t.Fatalf("relay config = %+v, %v; want %+v", got, err, want)
 	}
 
-	direct := form{Mode: "direct", File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969", Cooldown: "2"}
+	direct := form{Mode: "direct", File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969"}
 	got, err = direct.config()
-	want = party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Cooldown: 2, Local: true, Port: 6970, PublicPort: party.DefaultPort, Addrs: "1.2.3.4:6969"}
+	want = party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Local: true, Port: 6970, PublicPort: party.DefaultPort, Addrs: "1.2.3.4:6969"}
 	if err != nil || got != want {
 		t.Fatalf("direct config = %+v, %v; want %+v", got, err, want)
 	}

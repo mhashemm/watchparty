@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	DefaultPort     = 6969
-	DefaultCooldown = 5
+	DefaultPort = 6969
 )
 
 type Config struct {
@@ -29,7 +28,6 @@ type Config struct {
 	Mpv        string
 	MpvFlags   string
 	Hostname   string
-	Cooldown   int
 	Relay      string
 	Room       string
 	Secret     string
@@ -83,7 +81,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--save-position-on-quit", "--pause", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
@@ -93,15 +91,22 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 	defer cmd.Cancel()
-
-	select {
-	case <-c.Done():
-		log.Println(c.Err())
-		return stopReason(parent)
-	case <-time.After(time.Duration(cfg.Cooldown) * time.Second):
-	}
-
 	defer os.Remove(mpvSocket)
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	conn, err := mpv.Dial(c, mpvSocket)
+	for err != nil {
+		select {
+		case <-c.Done():
+			log.Println(c.Err())
+			return stopReason(parent)
+		case err := <-exited:
+			return notReady(err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		conn, err = mpv.Dial(c, mpvSocket)
+	}
 
 	mpvQuit := atomic.Bool{}
 	client, err := mpv.New(c, func() {
@@ -109,8 +114,16 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, mpvSocket, outgoing)
+	}, conn, outgoing)
 	if err != nil {
+		switch {
+		case mpvQuit.Load():
+			return nil
+		case c.Err() != nil:
+			return stopReason(parent)
+		case errors.Is(err, mpv.ErrClosed):
+			return notReady(<-exited)
+		}
 		return err
 	}
 
@@ -118,7 +131,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	log.Println("init done. now you can start watching")
 
-	err = cmd.Wait()
+	err = <-exited
 	if err != nil {
 		log.Println(err)
 	}
@@ -129,6 +142,15 @@ func Run(parent context.Context, cfg Config) error {
 		return stopReason(parent)
 	}
 	return err
+}
+
+// notReady reports mpv exiting before the movie was loaded. Exit 0 is the user
+// closing it, which is a normal end; mpv exits non-zero for a bad file or flag.
+func notReady(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("mpv exited before the movie was ready: %w", err)
 }
 
 func stopReason(parent context.Context) error {

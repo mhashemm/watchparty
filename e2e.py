@@ -29,9 +29,9 @@ printed at the end.
 import argparse, glob, http.server, json, os, shutil, signal, socket, subprocess
 import sys, tempfile, threading, time, urllib.error, urllib.request
 
-MPVFLAGS = "--vo=null --ao=null --no-resume-playback --msg-level=all=error"
-COOLDOWN = 3
-BOOT = COOLDOWN + 4  # cooldown, plus mpv creating its socket, plus the handshake
+# the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
+MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --resume-playback=yes"
+BOOT = 4             # mpv loading the file, plus the handshake
 STAGGER = 1.6        # lets a node's listener come up before the next one
                      # bootstraps off it
 SETTLE = 2.5
@@ -241,7 +241,7 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", MEDIA, "-cooldown", str(COOLDOWN), "-hostname", name, "-mpvFlags", MPVFLAGS]
+    cmd = [BIN, "-file", MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -401,6 +401,12 @@ def p2p_suite():
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
 
+    print("\n[2b] the sync-critical mpv options win over the user's own flags")
+    for n in NODES:
+        ok(f"{n} plays at normal speed", get(n, "speed") == 1, f"speed={get(n, 'speed')}")
+        ok(f"{n} seeks precisely", get(n, "hr-seek") in (True, "yes"), f"hr-seek={get(n, 'hr-seek')}")
+        ok(f"{n} ignores saved positions", get(n, "resume-playback") is False)
+
     print(f"\n[3] resume on {A} propagates to all {len(NODES) - 1} others")
     setp(A, "pause", False)
     time.sleep(SETTLE)
@@ -432,6 +438,16 @@ def p2p_suite():
     for n in others(b):
         v = get(n, "time-pos")
         ok(f"{n} followed {b}'s seek", v is not None and abs(v - 12.0) < 1.5, f"time-pos={v}")
+
+    print("\n[5d] an arrow-key (relative) seek lands exactly, and goes out once")
+    sent = lambda: sum("broadcasted event" in l and '"time-pos"' in l for l in log(b).splitlines())
+    before = sent()
+    ipc(nodes[b]["sock"], "seek", 7, "relative")
+    time.sleep(SETTLE)
+    for n in NODES:
+        v = get(n, "time-pos")
+        ok(f"{n} at exactly 19s, not a keyframe", v is not None and abs(v - 19.0) < 0.15, f"time-pos={v}")
+    ok(f"{b} broadcast one position for one seek", sent() - before == 1, f"{sent() - before} sent")
 
     print("\n[5c] an applied event is not echoed back (the a->b->a rebound)")
     # start from a known state: everyone playing, so the pause below is a real change

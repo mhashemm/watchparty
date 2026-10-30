@@ -50,7 +50,7 @@ To drive a party without clicking, read the token from the page and POST to `/st
 
 ```sh
 T=$(curl -s $U/ | grep -o 'const TOKEN = "[^"]*"' | cut -d'"' -f2)
-curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null","cooldown":"2"}'
+curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null"}'
 ```
 
 More recipes that have been used and work:
@@ -122,15 +122,15 @@ print.
   | `POST /stop` | cancels the party's context |
   | `GET /log?from=N&run=R` | `{run, from, lines, running, exitErr}` |
   | `GET /state` | `{settings, history, path, version}` from the store |
-  | `POST /settings` | saves the Settings page's fields (relay, mpv, mpvFlags, cooldown, createKey, pport) |
+  | `POST /settings` | saves the Settings page's fields (relay, mpv, mpvFlags, createKey, pport) |
   | `POST /history/clear` | empties the history |
   | `GET /update` | `{current, latest, available}`: asks GitHub for the latest release |
   | `POST /update` | installs the latest release, without restarting (see "Self-update") |
   | `POST /restart` | starts the installed version, closes this window and quits |
 
 - **`form.config()`** trims every field.
-  - Empty numbers fall back to `party.DefaultPort` / `party.DefaultCooldown`, the
-    same constants the CLI's flag defaults use. A non-number is a 400.
+  - Empty port numbers fall back to `party.DefaultPort`, the same constant the CLI's
+    flag default uses. A non-number is a 400.
   - It refuses an empty movie, and an empty relay address in relay mode. Without
     that check, `party.Run` would treat an empty `Relay` as direct mode and try UPNP.
   - Relay mode ignores the direct fields and vice versa.
@@ -164,7 +164,7 @@ print.
   every start, so "remember my name" never worked until it moved server-side.
 - **Settings** (`settings`): the name, `local` and `port` are remembered from the last
   party, the latter two only from a Wi-Fi party. Everything on the Settings page
-  (default relay, mpv, mpvFlags, cooldown, createKey, pport) is saved by its Save
+  (default relay, mpv, mpvFlags, createKey, pport) is saved by its Save
   button. The first relay you use becomes the default relay if none is set.
 - **History** (`session`), up to `maxHistory` (100) parties, oldest dropped:
   - `begin` records the movie, mode, relay/room/secret or friend's address, and the

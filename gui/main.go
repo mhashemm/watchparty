@@ -45,7 +45,6 @@ type form struct {
 	Addrs     string `json:"addrs"`
 	Mpv       string `json:"mpv"`
 	MpvFlags  string `json:"mpvFlags"`
-	Cooldown  string `json:"cooldown"`
 }
 
 func (f form) config() (party.Config, error) {
@@ -70,7 +69,6 @@ func (f form) config() (party.Config, error) {
 	if cfg.File == "" {
 		return cfg, errors.New("pick a movie first")
 	}
-	cfg.Cooldown = number("seconds to wait for mpv", f.Cooldown, party.DefaultCooldown)
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)
 		cfg.Room = strings.TrimSpace(f.Room)
@@ -224,7 +222,7 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 	defer g.store.mu.Unlock()
 	s := &g.store.Settings
 	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
-	s.Cooldown, s.CreateKey, s.PPort = strings.TrimSpace(in.Cooldown), strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
+	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
 	err = g.store.save()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

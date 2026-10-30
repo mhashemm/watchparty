@@ -5,30 +5,39 @@ IPC over a unix socket (or a Windows named pipe), turns the player's own pause a
 seek changes into broadcastable events, and applies remote ones without bouncing
 them back.
 
-Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/master/#properties>
+Reference: **`MPV.md`** in this folder covers the commands, properties and events we
+use, and how mpv actually behaves (probed against real mpv). Upstream:
+<https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/master/#properties>
 
 ## Files
 
 | File | Contents |
 |---|---|
-| `mpv.go` | `Client`, `connection.do`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
-| `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, unix-socket dial, no-op `Init` |
-| `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `go-winio` pipe dial, and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
+| `mpv.go` | `Client`, `connection.do`, `ErrClosed`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
+| `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, `Dial` (unix socket), no-op `Init` |
+| `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `Dial` (`go-winio` pipe), and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
+| `MPV.md` | the slice of mpv we use, and its observed behaviour |
 | `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown |
 
 ## Public surface
 
-- `New(ctx, cancel, socket, outgoing) (*Client, error)` is called once mpv is up.
-  - It dials, starts the `watch()` goroutine, then sends `observe_property_string`
-    for `pause` (id 1) and `time-pos` (id 2).
+- `Dial(ctx, socket) (net.Conn, error)` opens the unix socket or the Windows pipe. It
+  starts nothing, so `party.Run` retries it until mpv has created the socket.
+- `New(ctx, cancel, conn, outgoing) (*Client, error)` starts the `watch()` goroutine,
+  sends `observe_property_string` for `pause` (id 1) and `time-pos` (id 2), then
+  **waits for `ready`**: closed by `handleEvent` on the first `time-pos` that has
+  data, i.e. once the file is loaded.
   - **`watch` must be running before those `do()` calls**, because only `watch`
     delivers replies.
-  - When `watch` returns (EOF when mpv quits, or a read error), it closes the conn
-    and calls `cancel`. This is how the party learns that mpv is gone. `party.Run`
-    wraps that cancel to tell "mpv quit" apart from other stops (see
-    `party/CLAUDE.md`).
-  - If an observe fails, `New` returns the error. The party ends and mpv is killed,
-    which ends `watch`.
+  - When `watch` returns (EOF when mpv quits, or a read error), it closes the conn,
+    closes `connection.closed`, and **calls `cancel` only if `ready` was reached**.
+    This is how the party learns that mpv is gone. `party.Run` wraps that cancel to
+    tell "mpv quit" apart from other stops (see `party/CLAUDE.md`).
+  - Before `ready`, a hang-up makes `New` (and any `do()` in flight) return
+    **`ErrClosed`** at once, and nothing is cancelled. `party.Run` then reads mpv's
+    real exit status; cancelling would have killed mpv and turned it into `signal:
+    killed`.
+  - If an observe fails for another reason, `New` returns that error.
   - `ctx` is the party's context, kept on the `Client`. `watch`'s send to `outgoing`
     and `ProcessIncomingEvents`' receive both select on it, so neither outlives the
     party. The channels are never closed.
@@ -71,6 +80,7 @@ three sentinels.
 | Situation | Result |
 |---|---|
 | Not a `property-change` (seek, file-loaded, …) | `errDoNotSend` |
+| A `property-change` with no `data` (property unavailable: before the file loads, while quitting) | `errDoNotSend`, and it does **not** count as the first change for `seen` |
 | `isEcho`: the value is one this node just applied from a peer | `errEcho` |
 | `pause` with the same value as the current state | `errNoChange` |
 | `pause` that changed | state updated (and the `time-pos` marker cleared on unpause), then broadcast |
@@ -102,8 +112,9 @@ counters, that loops forever.
   echo can arrive before `do()` returns, so setting the marker afterwards is a race.
 - `pause` matches exactly and **deletes** the marker on match.
 - `time-pos` matches as a float within **±0.5s** and **keeps** the marker, updating it
-  to the echoed value. mpv snaps a seek to a keyframe, so `77.000000` can come back as
-  `77.041000`, sometimes more than once. The marker is cleared when the node unpauses.
+  to the echoed value. A seek's echo comes back once or twice and up to a frame off
+  (`123.456` → `123.456000`, then `123.458000`), and further off under a user's
+  `hr-seek=no` (see `MPV.md`). The marker is cleared when the node unpauses.
   - Known limit (`ponytail:` on `timePosTolerance`): a deliberate seek of under 0.5s
     from the applied position is also swallowed.
 - `TestAppliedValueIsNotRebroadcast` and `TestAppliedPauseIsNotRebroadcast` cover

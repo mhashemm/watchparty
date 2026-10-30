@@ -14,7 +14,6 @@ import (
 func main() {
 	cfg := party.Config{}
 	flag.StringVar(&cfg.File, "file", "", "file path to play")
-	flag.IntVar(&cfg.Cooldown, "cooldown", party.DefaultCooldown, "cooldown in seconds for mpv to init the server")
 	flag.IntVar(&cfg.Port, "port", party.DefaultPort, "local port")
 	flag.IntVar(&cfg.PublicPort, "pport", party.DefaultPort, "public port")
 	flag.StringVar(&cfg.Addrs, "addrs", "", "comma separated list of addresses to connect to")
