@@ -13,25 +13,30 @@ go mod tidy                                # run it yourself; CI only does go mo
 go build ./relay                           # the relay server, a separate binary
 go build -o watchparty-gui ./gui           # the GUI; `-o` because ./gui is a directory
 docker build -f relay/Dockerfile -t watchparty-relay .   # from the REPO ROOT
-./e2e.py                                   # both suites, real mpv, ~12 min
-./e2e.py --mode p2p | --mode relay         # one phase only
+./e2e.py                                   # all three phases at once, real mpv, ~100s
+./e2e.py --mode p2p | relay | caps         # one phase only
 ./e2e.py --file movie.mkv                  # ...against a real file
 ./e2e.py --nodes 3                         # fewer nodes, faster
 ```
 
 `e2e.py` builds both binaries, generates a test file with ffmpeg and runs five
-headless nodes on this machine, driving them through mpv's IPC socket. It has two
-phases:
+headless nodes on this machine, driving them through mpv's IPC socket. It has three
+phases. By default it runs them at the same time as three copies of itself, each with
+its own ports (`--port-base` + 0, 20, 40) and run directory, and prints each one's
+output when it ends. That works because relay-mode nodes open no ports. The slowest
+phase sets the total, so a new slow case belongs in whichever phase is shortest.
 
 - **`p2p`** — no node is given the full peer list (A is the root, the rest
   bootstrap off an earlier node), so the mesh has to close itself through `/hi`
   peer lists. Covers mesh formation, propagation from any node, echo suppression,
   peer eviction and strike reset, `/bye`, and the header checks.
 - **`relay`** — the same nodes against one `./relay` process. Covers fan-out,
-  room isolation, the shared secret, every abuse cap, reconnect after the
-  relay is killed mid-party, dropping a client that never answers pings (`[R20]`, ~45s), and `[R15b]`: closing a node's mpv is a normal end
-  (exit 0, the room hears "has left"). Every other case ends nodes with a signal,
-  which is how a regression there once slipped through.
+  room isolation, the shared secret, reconnect after the relay is killed
+  mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room
+  hears "has left"). Every other case ends nodes with a signal, which is how a
+  regression there once slipped through.
+- **`caps`** — one fresh relay per case: every abuse cap, `CREATE_KEY`, and
+  dropping a client that never answers pings (`[R20]`, ~45s of the phase's ~100s).
 
 `e2e.py` does not drive the GUI. The GUI is covered by `go test ./gui` (the form →
 `Config` mapping and the request guard) and by the headless-Chrome checks described

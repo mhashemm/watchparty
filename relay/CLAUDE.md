@@ -191,8 +191,9 @@ The tests use real websockets against an `httptest` server (`serve`, `join`,
 | `TestLimiterResetsOnWindowRollover` | the window |
 | `TestMemberThatStopsAnsweringPingsIsRemoved` | a failed ping drops the member and reaps its room |
 
-The end-to-end versions (fan-out, room isolation, every cap, reconnect through a TCP
-proxy, `CREATE_KEY`, a raw socket that never answers pings in `[R20]`) are `e2e.py --mode relay`.
+The end-to-end versions are `e2e.py --mode relay` (fan-out, room isolation, reconnect
+through a TCP proxy) and `e2e.py --mode caps` (every cap, `CREATE_KEY`, a raw socket
+that never answers pings in `[R20]`).
 
 ## Known issues
 

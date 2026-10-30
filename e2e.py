@@ -6,7 +6,8 @@ drives them by writing to one node's mpv IPC socket, then asserts the result on
 the other nodes' mpv. OSD notices are read back out of each node's log, since
 every show-text command appears there verbatim.
 
-Two phases, both run by default:
+Three phases, run by default at the same time as three copies of this script,
+each on its own ports and in its own run directory:
 
   p2p    the direct HTTP mesh. Nobody is given the full peer list: each node
          bootstraps off one earlier node (A <- B,C; B <- D,E), so most of the
@@ -14,10 +15,11 @@ Two phases, both run by default:
          to end up knowing all four others.
   relay  the same nodes against one ./relay websocket server, which is what
          people behind carrier NAT use when UPNP cannot work. Covers fan-out,
-         room isolation, the secret, every abuse cap, and reconnect after the
-         relay dies.
+         room isolation, the secret, and reconnect after the relay dies.
+  caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
+         client that never answers pings.
 
-    ./e2e.py                    # both phases, ~12 minutes
+    ./e2e.py                    # all three phases in parallel, ~2 minutes
     ./e2e.py --mode relay       # one phase
     ./e2e.py --file movie.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
@@ -88,8 +90,20 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--file", help="media file to play (default: generate one with ffmpeg)")
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
-ap.add_argument("--mode", choices=("p2p", "relay", "both"), default="both")
+ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
 args = ap.parse_args()
+
+# relay-mode nodes open no ports, so the phases only need disjoint port bases
+if args.mode == "all":
+    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else [])
+    procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+             for i, m in enumerate(("p2p", "relay", "caps"))]
+    for m, p in procs:
+        print(f"\n######## {m} ########\n" + p.communicate()[0], end="")
+    bad = [m for m, p in procs if p.returncode]
+    print("\n" + ("ALL PASS" if not bad else "FAILED: " + ", ".join(bad)))
+    sys.exit(1 if bad else 0)
 
 NODES = ["node" + chr(ord("A") + i) for i in range(args.nodes)]
 # Nobody gets the full list: A is the root, then each node bootstraps off an
@@ -866,17 +880,7 @@ def caps_suite():
 
 
 try:
-    if args.mode in ("p2p", "both"):
-        p2p_suite()
-        for name in list(nodes):
-            stop(name, signal.SIGKILL, timeout=5)
-        nodes.clear()
-    if args.mode in ("relay", "both"):
-        relay_suite()
-        for name in list(nodes):
-            stop(name, signal.SIGKILL, timeout=5)
-        nodes.clear()
-        caps_suite()
+    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite}[args.mode]()
 finally:
     for name in list(nodes):
         stop(name, signal.SIGKILL, timeout=5)
