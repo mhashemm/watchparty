@@ -43,18 +43,26 @@ body {
     radial-gradient(ellipse 45% 30% at 92% 30%, rgba(255, 255, 238, .4), transparent 70%),
     radial-gradient(ellipse 80% 30% at 50% 100%, rgba(79, 122, 52, .22), transparent 75%),
     var(--lichen);
-  background-attachment: fixed;
-  overflow-x: hidden;
   color: var(--forest);
   font: 16px/1.5 var(--body);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 main {
   width: min(520px, calc(100% - 32px));
-  margin: 112px 0 150px;
+  margin: 112px 0 28px;
   position: relative;
 }
 .cat {
@@ -238,36 +246,21 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
   margin: 0;
 }
 
+.ground-strip {
+  flex: none;
+  height: 130px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(to bottom, transparent 108px, var(--soil) 108px);
+  pointer-events: none;
+}
 .ground {
-  position: fixed;
+  position: absolute;
   bottom: 0;
   left: 50%;
   width: 560px;
   height: 130px;
   transform: translateX(-50%);
-  z-index: 3;
-  pointer-events: none;
-}
-body::before {
-  content: "";
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 90px;
-  background: linear-gradient(to bottom, transparent, var(--lichen) 75%);
-  z-index: 2;
-  pointer-events: none;
-}
-body::after {
-  content: "";
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 22px;
-  background: var(--soil);
-  z-index: 2;
 }
 .ground .soil { fill: var(--soil); }
 .ground .grass { fill: var(--moss); }
@@ -304,6 +297,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 </style>
 </head>
 <body data-mood="sleep">
+<div class="scroll">
 <main>
   <svg class="cat" viewBox="0 0 160 142" role="img" aria-label="Fosdo2 the cat">
     <title>Fosdo2</title>
@@ -468,7 +462,9 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 
   </div>
 </main>
+</div>
 
+<div class="ground-strip">
 <svg class="ground" viewBox="0 0 560 130" aria-hidden="true">
   <path class="soil" d="M0 110 Q90 98 180 106 T360 103 T560 108 V130 H0 Z"/>
   <path class="grass" d="M2 110 l6 -14 l4 14 l5 -10 l4 10 M150 106 l5 -12 l4 12 l6 -16 l3 16 M300 104 l4 -11 l5 11 l5 -14 l4 14 M386 104 l4 -10 l5 10 M520 107 l6 -14 l3 14 l5 -10 l4 10"/>
@@ -535,6 +531,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
     </g>
   </g>
 </svg>
+</div>
 
 <script>
 const TOKEN = "{{TOKEN}}";
