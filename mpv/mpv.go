@@ -175,6 +175,9 @@ func (c *Client) handleEvent(event Event) error {
 	// 	return errDoNotSend
 
 	case propertyChange:
+		if event.Data == "" {
+			return errDoNotSend
+		}
 		if c.isEcho(event) {
 			return errEcho
 		}

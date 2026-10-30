@@ -115,6 +115,27 @@ func TestInitialPropertyChangeIsNotBroadcast(t *testing.T) {
 	}
 }
 
+// Observed before the file loads, time-pos first comes with no data, then the real
+// position once it has loaded. The empty one must not count as the first change,
+// or the real 0 is broadcast and rewinds the party. Quitting while paused also
+// sends an empty one, which must not go out either.
+func TestDatalessPropertyChangeIsIgnored(t *testing.T) {
+	outgoing := make(chan []byte, 4)
+	c := newTestClient(outgoing, nil)
+	c.paused = true
+
+	empty := `{"event":"property-change","id":2,"name":"time-pos"}` + "\n"
+	got := feed(t, c, outgoing, empty+propertyChangeLine(timePos, "0.000000", 0))
+	if len(got) != 0 {
+		t.Fatalf("broadcast the position the file loaded at: %+v", got)
+	}
+
+	got = feed(t, c, outgoing, propertyChangeLine(timePos, "42.000000", 1)+empty)
+	if len(got) != 1 || got[0].Data != "42.000000" {
+		t.Fatalf("want only the real seek broadcast, got %+v", got)
+	}
+}
+
 // b applies a's seek, mpv echoes the change back, and b must not rebroadcast it
 // to a. Without this the event ping-pongs; relay mode has no counters to stop it.
 func TestAppliedValueIsNotRebroadcast(t *testing.T) {

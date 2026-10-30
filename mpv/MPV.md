@@ -105,11 +105,10 @@ Every event goes through `handleEvent`; anything but `property-change` is
   `property-change` with the current value. This is what `seen` swallows.
 - **If the file isn't loaded yet**, `time-pos`'s immediate event has no `data`, and
   the real value follows after `file-loaded`: `0.000000` for a fresh file, the saved
-  position for a resumed one. **`seen` swallows only the empty one, and the next one
-  would be broadcast, rewinding (or seeking) the whole party.** Only the cooldown
-  being longer than the load time prevents this today: a short `-cooldown` or a slow
-  file (network, huge mkv) brings it back. A fix would be to never broadcast or
-  count a data-less change. Not done yet.
+  position for a resumed one. **`handleEvent` ignores a data-less change entirely**
+  (it neither broadcasts it nor counts it for `seen`), so `seen` swallows the real
+  value instead. Otherwise that value would be broadcast and rewind (or seek) the
+  whole party.
 
 ### Seeking (while paused)
 
@@ -142,9 +141,8 @@ Every event goes through `handleEvent`; anything but `property-change` is
   not verified): the reply, then (if `time-pos` is observed) a **data-less
   `time-pos` change**, then `end-file` with `reason: "quit"`, then socket EOF, exit
   code 0.
-  - That data-less change passes `handleEvent` while paused and is broadcast as a
-    `time-pos` with no data. Receivers drop it in `sync()` (`event.Data == ""`),
-    which is the only reason it's harmless.
+  - `handleEvent` drops that data-less change. (Receivers also ignore an empty
+    `time-pos` in `sync()`, for peers on older versions that still send it.)
   - The EOF is what ends `watch()` and the party (see `party/CLAUDE.md`, "Return
     values").
 - **End of file:** without `keep-open`, mpv plays to the end, sends `end-file`

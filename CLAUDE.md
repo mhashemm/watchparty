@@ -290,10 +290,6 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
-- [ ] **`seen` assumes the file is loaded when we observe.** If not, `time-pos`'s first
-  event is empty, `seen` swallows that, and the real value (`0` or a resume position)
-  is broadcast. Only the 5s default `-cooldown` hides this. Fix: never broadcast or
-  count a data-less change (`mpv/MPV.md`, "Observing").
 - [ ] Real playback events still block on `incoming` during the `-cooldown` window, since `ProcessIncomingEvents` only starts after it — the 1024 buffer is what carries the gap. `Server.Event` bails out on `req.Context()` rather than wedging, but nothing is applied until mpv is up.
 - [ ] `/bye` and `/event` trust the `hit-me-up`/`counter` headers (P2P only). The counter check stops replays and unknown addresses, but a peer can still spoof another peer's address. Needs signing to go further, which is more than a LAN tool wants. Accepted: P2P is for friends and LANs.
 - [ ] Relay identity is only as strong as the room secret: the `hostname` is whatever the joiner claims, so anyone who knows the secret can impersonate a member. Same trade as above.

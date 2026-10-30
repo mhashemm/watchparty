@@ -74,6 +74,7 @@ three sentinels.
 | Situation | Result |
 |---|---|
 | Not a `property-change` (seek, file-loaded, …) | `errDoNotSend` |
+| A `property-change` with no `data` (property unavailable: before the file loads, while quitting) | `errDoNotSend`, and it does **not** count as the first change for `seen` |
 | `isEcho`: the value is one this node just applied from a peer | `errEcho` |
 | `pause` with the same value as the current state | `errNoChange` |
 | `pause` that changed | state updated (and the `time-pos` marker cleared on unpause), then broadcast |
