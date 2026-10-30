@@ -22,9 +22,15 @@
   --berry: #9a3a35;
   --ink-soft: #55644f;
   --line: #c9cfae;
-  --fur: #8a8178;
-  --fur-dark: #5f5750;
-  --ear: #e7b7a3;
+  --fur: #8b7763;
+  --fur-dark: #3d3229;
+  --fur-light: #d6c4a7;
+  --paw: #f7f2e8;
+  --ear: #e4b4a0;
+  --iris: #8cb44a;
+  --iris-rim: #4d6b2b;
+  --blush: #ee9f98;
+  --nose: #c98a79;
   --display: "Gluten", "Comic Sans MS", system-ui, sans-serif;
   --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -62,15 +68,21 @@ main {
   overflow: visible;
 }
 .cat .fur { fill: var(--fur); }
+.cat .ruff { stroke: var(--fur-dark); stroke-width: 1; stroke-opacity: .35; }
 .cat .stripe { stroke: var(--fur-dark); stroke-width: 3; stroke-linecap: round; fill: none; }
 .cat .ear { fill: var(--ear); }
-.cat .cheek { fill: var(--ear); opacity: .55; }
-.cat .paw { stroke: var(--fur-dark); stroke-width: 1.5; }
-.cat .toes { stroke: var(--fur-dark); stroke-width: 1.5; stroke-linecap: round; }
+.cat .cheek { fill: var(--blush); opacity: .75; }
+.cat .paw { fill: var(--paw); stroke: var(--fur-dark); stroke-width: 1.5; }
+.cat .toes { stroke: #b9ad9c; stroke-width: 1.5; stroke-linecap: round; }
 .cat .line { stroke: var(--forest); stroke-width: 2; stroke-linecap: round; fill: none; }
-.cat .eye { fill: var(--forest); }
+.cat .eye { fill: var(--iris); stroke: var(--iris-rim); stroke-width: 1.4; }
+.cat .head { stroke: var(--fur); stroke-width: 5; stroke-linejoin: round; }
+.cat .pupil { fill: #1f1a14; }
+.cat .light { fill: var(--fur-light); }
+.cat .wisp { stroke: var(--fur-light); stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.cat .tuft { stroke: var(--fur-dark); stroke-width: 2; stroke-linecap: round; fill: none; }
 .cat .glint { fill: #fff; }
-.cat .nose { fill: var(--ear); stroke: var(--fur-dark); stroke-width: 1; }
+.cat .nose { fill: var(--nose); stroke: var(--fur-dark); stroke-width: 1; }
 .cat .whisker { stroke: var(--paper); stroke-width: 1.4; stroke-linecap: round; opacity: .9; }
 .cat .eyes-closed, .cat .brows { display: none; }
 body[data-mood="sleep"] .cat .eyes-open { display: none; }
@@ -113,7 +125,7 @@ h1 {
   text-align: center;
   color: var(--forest);
 }
-h1 .rx { color: var(--porcini); font-size: 1.6rem; margin-right: 6px; }
+.title-mush { width: 30px; height: 30px; margin-right: 8px; vertical-align: -3px; }
 .lede { text-align: center; color: var(--ink-soft); margin: 0 auto 24px; max-width: 40ch; }
 h2 { font: 700 1.25rem/1.2 var(--display); margin: 0 0 10px; color: var(--bark); }
 
@@ -289,40 +301,51 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 <main>
   <svg class="cat" viewBox="0 0 160 142" role="img" aria-label="Fosdo2 the cat">
     <title>Fosdo2</title>
-    <path class="fur" d="M42 20 L64 44 L96 44 L118 20 L124 70 L124 98 L36 98 L36 70 Z"/>
+    <path class="fur ruff" d="M80 76 L44.6 97.9 Q31.9 101.8 37.1 91.9 Q24.2 92.9 32.1 84.9 Q19.9 83.0 30.0 77.4 Q19.2 72.6 31.0 69.7 Q22.2 62.5 35.0 62.5 Q28.8 53.2 41.7 56.1 Z"/>
+    <path class="fur ruff" d="M80 76 L118.3 56.1 Q131.2 53.2 125.0 62.5 Q137.8 62.5 129.0 69.7 Q140.8 72.6 130.0 77.4 Q140.1 83.0 127.9 84.9 Q135.8 92.9 122.9 91.9 Q128.1 101.8 115.4 97.9 Z"/>
+    <path class="fur head" d="M42 20 L64 44 L96 44 L118 20 L124 70 L124 98 L36 98 L36 70 Z"/>
+    <path class="tuft" d="M42 20 q-1 -5 1 -8 M118 20 q1 -5 -1 -8"/>
     <path class="ear" d="M46 32 L60 46 L48 52 Z"/>
     <path class="ear" d="M114 32 L100 46 L112 52 Z"/>
+    <path class="wisp" d="M49 50 q2 -8 -1 -15 M53 50 q3 -7 1 -12 M111 50 q-2 -8 1 -15 M107 50 q-3 -7 -1 -12"/>
     <ellipse class="fur" cx="80" cy="72" rx="46" ry="34"/>
     <path class="stripe" d="M70 42 l3 9 M80 40 v11 M90 42 l-3 9"/>
-    <path class="stripe" d="M37 74 h8 M36 82 h8 M123 74 h-8 M124 82 h-8"/>
+    <path class="stripe" d="M62 46 q2 4 6 6 M98 46 q-2 4 -6 6" style="stroke-width:2.2"/>
+    <path class="stripe" d="M38 70 q6 1 10 4 M37 79 q6 0 10 2 M122 70 q-6 1 -10 4 M123 79 q-6 0 -10 2"/>
+    <ellipse class="light" cx="80" cy="86" rx="14" ry="9"/>
+    <path class="light" d="M66 92 l5 -6 l4 5 l5 -7 l5 7 l4 -5 l5 6 l-2 8 h-24 z"/>
     <g class="eyes-open">
-      <ellipse class="eye" cx="63" cy="68" rx="6" ry="7.5"/>
-      <ellipse class="eye" cx="97" cy="68" rx="6" ry="7.5"/>
-      <circle class="glint" cx="65" cy="65.5" r="2"/>
-      <circle class="glint" cx="99" cy="65.5" r="2"/>
+      <ellipse class="eye" cx="61" cy="72" rx="9" ry="9.5"/>
+      <ellipse class="eye" cx="99" cy="72" rx="9" ry="9.5"/>
+      <ellipse class="pupil" cx="61.5" cy="72.5" rx="5" ry="6.5"/>
+      <ellipse class="pupil" cx="99.5" cy="72.5" rx="5" ry="6.5"/>
+      <circle class="glint" cx="64.5" cy="68" r="2.8"/>
+      <circle class="glint" cx="102.5" cy="68" r="2.8"/>
+      <circle class="glint" cx="58.5" cy="76" r="1.3"/>
+      <circle class="glint" cx="96.5" cy="76" r="1.3"/>
     </g>
     <g class="eyes-closed">
-      <path class="line" d="M56 69 q7 5 14 0 M90 69 q7 5 14 0"/>
+      <path class="line" d="M52 73 q9 6 18 0 M90 73 q9 6 18 0"/>
     </g>
     <g class="brows">
-      <path class="line" d="M54 59 l13 -5 M106 59 l-13 -5"/>
+      <path class="line" d="M52 61 l13 -5 M108 61 l-13 -5"/>
     </g>
-    <ellipse class="cheek" cx="54" cy="80" rx="6" ry="3.5"/>
-    <ellipse class="cheek" cx="106" cy="80" rx="6" ry="3.5"/>
-    <path class="nose" d="M75 78 h10 l-5 5 z"/>
-    <path class="line" d="M80 83 q-4 6 -10 3 M80 83 q4 6 10 3"/>
-    <path class="whisker" d="M52 80 l-20 -3 M52 85 l-20 3 M108 80 l20 -3 M108 85 l20 3"/>
+    <ellipse class="cheek" cx="49" cy="84" rx="7.5" ry="4.5"/>
+    <ellipse class="cheek" cx="111" cy="84" rx="7.5" ry="4.5"/>
+    <path class="nose" d="M76.5 82 h7 q0 3 -3.5 4 q-3.5 -1 -3.5 -4 z"/>
+    <path class="line" d="M80 86 q-2.5 4 -6 1.5 M80 86 q2.5 4 6 1.5"/>
+    <path class="whisker" d="M50 86 l-20 -3 M50 90 l-19 4 M110 86 l20 -3 M110 90 l19 4"/>
     <g class="zzz"><text x="126" y="34">z</text><text x="136" y="22">z</text><text x="146" y="10">z</text></g>
     <path class="steth" d="M47 102 C47 117, 70 123, 80 123 M113 102 C113 117, 90 123, 80 123 M80 123 C80 136, 100 140, 113 132"/>
     <circle class="bell" cx="119" cy="129" r="7.5"/>
     <circle class="bell-in" cx="119" cy="129" r="3.5"/>
-    <ellipse class="fur paw" cx="54" cy="100" rx="15" ry="9"/>
-    <ellipse class="fur paw" cx="106" cy="100" rx="15" ry="9"/>
+    <ellipse class="paw" cx="54" cy="100" rx="15" ry="9"/>
+    <ellipse class="paw" cx="106" cy="100" rx="15" ry="9"/>
     <path class="toes" d="M49 99 v6 M59 99 v6 M101 99 v6 M111 99 v6"/>
   </svg>
 
   <div class="card">
-    <h1><span class="rx" aria-hidden="true">℞</span>Fosdo2's Movie Clinic</h1>
+    <h1><svg class="title-mush" viewBox="0 0 32 32" aria-hidden="true"><path d="M12 18h8l1 11h-10z" fill="#f1ead6" stroke="#6e4b30" stroke-width="1.5"/><path d="M3 18C5 5 27 5 29 18z" fill="#a8642a" stroke="#4a3220" stroke-width="1.5"/><circle cx="11" cy="12" r="2" fill="#f6efdc"/><circle cx="19" cy="9.5" r="1.6" fill="#f6efdc"/></svg>Fosdo2's Movie Clinic</h1>
     <p class="lede">Pick a movie and start the party. When anyone pauses or seeks, everyone's player follows.</p>
 
     <section id="vitals" hidden aria-live="polite">
