@@ -42,7 +42,8 @@ There are no unit tests in this package. It is wiring, and it is covered end to 
    - **Mesh:** `runMesh` returns a cleanup closure, and `Run` defers it. On error,
      `runMesh` has already undone everything it did.
 5. Both transports log `your address to share is …`. **This exact string is
-   load-bearing:** the GUI's invite box and `e2e.py` both parse it.
+   load-bearing:** the GUI's invite box, the GUI's history (`gui/store.go`, which takes
+   the real room and secret from it) and `e2e.py` all parse it.
 6. Start mpv: `--save-position-on-quit --pause --input-ipc-server=<sock> <file>`,
    with the user's `MpvFlags` first. `mpv.Init(cmd)` sets the Windows process
    attributes. **`defer cmd.Cancel()` only after `Start` succeeds.** The default
