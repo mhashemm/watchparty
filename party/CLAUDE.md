@@ -16,10 +16,14 @@ times in one GUI process, so it must not leave state behind.
 |---|---|
 | `party.go` | `Config`, `Run`, `runMesh` (P2P setup), `DefaultPort`/`DefaultCooldown`, `errStopped` |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
+| `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 
-There are no unit tests in this package. It is wiring, and it is covered end to end:
-`e2e.py` drives the CLI through it, and the GUI's manual checks drive it in-process
-(see `gui/CLAUDE.md`).
+`ws_test.go` covers the relay client's decisions: 403/400 end the party, 401 keeps
+retrying, a dropped connection redials with the same session and both connections'
+frames reach `incoming`, the secret rides in a header, `Broadcast` sends the envelope
+and stops with the party. `Run` and `runMesh` need mpv and a network, so they are
+covered end to end: `e2e.py` drives the CLI through them, and the GUI's checks drive
+them in-process (see `gui/CLAUDE.md`).
 
 ## `Run`, step by step
 
