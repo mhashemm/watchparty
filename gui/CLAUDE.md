@@ -236,16 +236,19 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
   3. the head ellipse
   4. the tabby stripes: three forehead lines and the cheek bars
   5. the light muzzle and chin bib
-  6. the eyes: large and set low, round pupils, one big and one small glint. Large
-     low eyes, round pupils and a small nose are what make the face read as cute.
-     Slit pupils and high eyes read as stern.
+  6. the eyes: a relaxed, half-closed "slow blink". A green iris with a small
+     pupil sits under a fur-coloured upper lid (`.lid`) with an arched lid line, and
+     one glint sits below the lid. This is how a content cat actually looks. Wide
+     round eyes with big pupils read as startled or staring, not happy (a cat's
+     pupils dilate when it's scared or excited), and the earlier wide-eyed version
+     was rejected for exactly that.
   7. cheeks, nose, mouth (smile and rest variants), whiskers
   8. the `z`s
   9. the stethoscope
   10. the white paws on top
 - **Moods** come from `body[data-mood]`, set in `render()`:
   - `sleep` (idle or ended): closed eyes, floating `z`s
-  - `awake` (running, and on errors): open eyes with the CSS blink, an **open smile
+  - `awake` (running, and on errors): the half-closed eyes with the CSS blink, an **open smile
     with a pink tongue** (`.mouth-smile`) and stronger blush. Asleep, he has the
     small closed "w" mouth (`.mouth-rest`) instead.
   - **Fosdo2 is always content: there is deliberately no worried or sad face.**

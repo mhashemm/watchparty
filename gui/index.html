@@ -84,6 +84,7 @@ body:not([data-mood="sleep"]) .cat .cheek { opacity: .95; }
 .cat .eye { fill: var(--iris); stroke: var(--iris-rim); stroke-width: 1.4; }
 .cat .head { stroke: var(--fur); stroke-width: 5; stroke-linejoin: round; }
 .cat .pupil { fill: #1f1a14; }
+.cat .lid { fill: var(--fur); }
 .cat .light { fill: var(--fur-light); }
 .cat .wisp { stroke: var(--fur-light); stroke-width: 1.6; stroke-linecap: round; fill: none; }
 .cat .tuft { stroke: var(--fur-dark); stroke-width: 2; stroke-linecap: round; fill: none; }
@@ -319,14 +320,16 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
     <ellipse class="light" cx="80" cy="86" rx="14" ry="9"/>
     <path class="light" d="M66 92 l5 -6 l4 5 l5 -7 l5 7 l4 -5 l5 6 l-2 8 h-24 z"/>
     <g class="eyes-open">
-      <ellipse class="eye" cx="61" cy="72" rx="9" ry="9.5"/>
-      <ellipse class="eye" cx="99" cy="72" rx="9" ry="9.5"/>
-      <ellipse class="pupil" cx="61.5" cy="72.5" rx="5" ry="6.5"/>
-      <ellipse class="pupil" cx="99.5" cy="72.5" rx="5" ry="6.5"/>
-      <circle class="glint" cx="64.5" cy="68" r="2.8"/>
-      <circle class="glint" cx="102.5" cy="68" r="2.8"/>
-      <circle class="glint" cx="58.5" cy="76" r="1.3"/>
-      <circle class="glint" cx="96.5" cy="76" r="1.3"/>
+      <ellipse class="eye" cx="61" cy="73" rx="8.5" ry="8"/>
+      <ellipse class="pupil" cx="61" cy="75" rx="2.6" ry="4.2"/>
+      <path class="lid" d="M50 74 Q61 66 72 74 L72 62 L50 62 Z"/>
+      <path class="line" d="M52 74 Q61 66.5 70 74"/>
+      <circle class="glint" cx="63.5" cy="75" r="1.8"/>
+      <ellipse class="eye" cx="99" cy="73" rx="8.5" ry="8"/>
+      <ellipse class="pupil" cx="99" cy="75" rx="2.6" ry="4.2"/>
+      <path class="lid" d="M88 74 Q99 66 110 74 L110 62 L88 62 Z"/>
+      <path class="line" d="M90 74 Q99 66.5 108 74"/>
+      <circle class="glint" cx="101.5" cy="75" r="1.8"/>
     </g>
     <g class="eyes-closed">
       <path class="line" d="M52 73 q9 6 18 0 M90 73 q9 6 18 0"/>
