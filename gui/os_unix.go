@@ -29,15 +29,7 @@ func pickFile() (string, error) {
 	if runtime.GOOS == "darwin" {
 		return dialog("osascript", "-e", "POSIX path of (choose file)")
 	}
-	path, err := portalPick()
-	if err == nil {
-		return path, nil
-	}
-	path, err = dialog("zenity", "--file-selection")
-	if errors.Is(err, exec.ErrNotFound) {
-		return dialog("kdialog", "--getopenfilename")
-	}
-	return path, err
+	return portalPick()
 }
 
 func portalPick() (string, error) {
