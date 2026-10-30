@@ -25,6 +25,10 @@ string passed to `-addrs`. Under `-local` that is the LAN IP, so `-addrs
 127.0.0.1:6969` completes the handshake and then has every event rejected with `<addr>:
 does not exists`. Always use the address the node prints.
 
+**The notice texts are parsed elsewhere.** The GUI's party history reads "X has
+joined" and "connected to X" to record who was at a party. The relay sends the same
+two, so keep the wording identical in both.
+
 ## Joining: `AddAddress`
 
 1. `addr` may be written `ip:port|hostname`, which overrides the hostname the peer

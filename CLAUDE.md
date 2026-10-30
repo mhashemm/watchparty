@@ -47,7 +47,7 @@ string (`f"paused by {A}"`) or the `pauses()` helper.
 Nodes are staggered ~1.6s apart on startup: the socket is named
 `/tmp/mpv<unixtime>`, so two started in the same second would collide on one path.
 
-Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
+Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. The GUI build also gets `-X main.version=<tag>`, which is what its self-update compares against (see `gui/CLAUDE.md`). Releases up to v0.0.11 lack it and report `dev`. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
 
 Manual run (two terminals / two machines):
 
@@ -287,6 +287,102 @@ mpv emits no `property-change` for a no-op set, so `set_property pause yes` when
 `e2e.py` recovers each node's OSD notices by parsing its `do: sent request:` log line. That format is load-bearing for the suite — change it and update `osd()` in the same commit. The relay suite likewise greps `relay: connected` and `relay: dial` out of node logs.
 
 Every behaviour change lands with its `CLAUDE.md` note and its `e2e.py` case in the same commit.
+
+## How we work
+
+This is how work on this repo has gone best. Follow it unless asked otherwise.
+
+### Git and releases
+
+- **Never commit on `master`.** Branch first (`gui-portal-picker`, `update-claude-md`,
+  …). If you find yourself on `master` with a commit, move it to a branch and reset
+  `master` to `origin/master`. Check `git status -sb` before committing: the user
+  switches branches between requests (for example after merging a PR on GitHub).
+- **Commit each change as soon as it is verified**, without asking. Don't let finished
+  work pile up uncommitted. One logical change per commit.
+  - The subject is `area: what changed and why it matters` (`party: closing mpv is a
+    normal end, not an unexpected stop`). The body has the reasoning, what was tested,
+    and anything left unverified, plus the session's attribution trailer.
+  - Put the `CLAUDE.md` note for a change in the same commit.
+- **Push and open PRs only when asked.** A PR description lists what changed and how
+  it was tested, and says plainly what was not exercised.
+- **Merge with a merge commit** (`gh pr merge N --merge`), matching the history's
+  "Merge pull request #N". Then pull `master` and delete the merged local branch.
+- **Releases:** a lightweight tag `vX.Y.Z` on the merge commit on `master` (`git tag
+  vX.Y.Z <sha> && git push origin vX.Y.Z`), only when asked. The tag push runs
+  `publisher.yml`, which uploads 10 files (CLI and GUI × linux amd64/arm64, darwin
+  amd64/arm64, windows amd64).
+- **Verify a release by its files, not the Actions status.** The GitHub API has
+  returned 502s and stale "queued" job states while the release was already complete.
+  1. Wait until all 10 assets are `uploaded`.
+  2. Download the Linux GUI.
+  3. Run it headless and check `GET /update` reports the new tag.
+- History was rewritten once to remove personal wording, which took a
+  `--force-with-lease` that the user ran. Never force-push yourself.
+
+### Approaching a problem
+
+- **Find the root cause before fixing.** Several bugs here read fine locally and were
+  only understood by tracing them through:
+  - `localStorage` "remembering" the name while the per-launch random port made it a
+    new origin every time
+  - mpv's socket EOF cancelling the context, so a normal quit looked like a failure
+  - a file picker that only failed on desktops without zenity or kdialog
+- **Look at the actual environment before guessing.** Examples: the desktop
+  (`XDG_CURRENT_DESKTOP`, `/etc/os-release`), how a browser is installed (deb, snap or
+  flatpak changes what paths it can see), what the portal exposes (`busctl
+  introspect`).
+- **Prefer a standard API over hard-coding tools.** The Linux picker uses only the XDG
+  desktop portal. Hard-coded zenity/kdialog were exactly what broke.
+- **Prove a test catches the bug.** Reintroduce the bug, watch the test fail, restore
+  the fix, watch it pass (done for `[R15b]`). An existing suite passing is not proof:
+  e2e passed with the mpv-quit bug because every case ended nodes with a signal.
+- **When a check fails, suspect the check first.** A stand-in browser "failed" because
+  its `PATH` had no `sleep`, and a `grep -c` on a binary printed nothing. Fix the test,
+  rerun, and only then judge the code.
+- **Add a dependency only when the alternative isn't a few lines.** The GUI took
+  exactly one, `godbus`, because a hand-written D-Bus client isn't small. It is pure
+  Go, so cross-compiling is unaffected.
+
+### Verifying without touching the user's machine
+
+- **Real runs:** `./relay` on a high localhost port, real mpv with `--vo=null
+  --ao=null`, and parties driven through the GUI's API with `curl` (see `gui/CLAUDE.md`
+  for the token recipe). Two GUIs as host and guest cover sync, the feed, "has left"
+  and Stop.
+- **Isolation:** each test gets a `mktemp -d` folder.
+  - `XDG_CONFIG_HOME=<tmp>` keeps the GUI off the real `~/.config/watchparty`, one
+    folder per GUI so two instances don't share a store.
+  - A `PATH` with only an `mpv` symlink and a no-op `xdg-open` stops any window
+    opening. A stand-in `chromium` script can record its arguments and "close" by
+    exiting. Use absolute paths inside stand-ins, because `PATH` is minimal.
+- **Never pop UI on the user's screen** (a file dialog, a browser window). Prefer
+  read-only checks, and leave the click-through to the user with a ready-built binary
+  such as `/tmp/watchparty-gui-test`.
+- **Clean up:** kill every started process (`pgrep -x watchparty-gui`, `relay`,
+  leftover mpv), and delete temp folders and downloads by their **literal** path. The
+  safety check refuses `rm -rf "$(…)"`.
+- **mpv sockets are named by the second.** Never run GUI parties while `e2e.py` is
+  running, or the two collide on `/tmp/mpv<unixtime>`.
+- **Say what was not verified.** Windows-only behaviour compiles in CI but has never
+  been run on Windows. Every summary and PR lists it.
+
+### Design and communication
+
+- **Visual taste is the user's call.** Draw options in a sandbox, render them side by
+  side (with any reference, and a GIF if it moves), let the user pick, and apply only
+  that. The workflow and its tools are in `gui/CLAUDE.md` under "Working on the look".
+  Guessing cost many rounds on the mascot's face.
+- **Change only what was asked.** "Fix the eyes" means the eyes, not a new face. A
+  reverted change stays reverted: don't bring back a rejected layout.
+- **Show, don't describe:** give screenshot paths for every visual change, taken at
+  the real 560×940 window size.
+- **Keep the theme neutral in docs and commits.** The forest palette, mushrooms,
+  turtles, the cat mascot Fosdo2 and the medical touches are the product's own
+  identity. Never tie them to a particular person.
+- **Every package has its own `CLAUDE.md`** (`party/`, `mpv/`, `server/`, `relay/`,
+  `gui/`). Detail goes there, and this file keeps the overview and the cross-cutting
+  rules. Check a doc against the code when you change either.
 
 ## Known issues
 

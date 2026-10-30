@@ -53,6 +53,29 @@ T=$(curl -s $U/ | grep -o 'const TOKEN = "[^"]*"' | cut -d'"' -f2)
 curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null","cooldown":"2"}'
 ```
 
+More recipes that have been used and work:
+
+- **Keep tests off the real saved file:** start each GUI with `XDG_CONFIG_HOME=<tmp>/cN`
+  (one folder per GUI). `GET /state` and the file itself then show exactly what was
+  remembered. Restarting the GUI on the same folder proves persistence, because the
+  port changes on every launch.
+- **Host and guest:** start the host with an empty room and secret, read the generated
+  ones out of `/log` (`grep -o 'room [A-Z0-9]* -secret [A-Z0-9]*'`), and start the
+  guest with them. The guest's `/log` then shows the host's "has joined", "paused by"
+  and "has left" notices.
+- **Drive mpv directly:** each party's IPC socket is the newest `/tmp/mpv<unixtime>`.
+  Writing `{"command":["set_property","pause",false]}` or `{"command":["quit"]}` to
+  it simulates the user, and `get_property` checks the other side followed.
+- **The window lifecycle:** put a stand-in `chromium` script first on `PATH` that
+  writes `"$@"` to a file and runs `/bin/sleep N` (absolute, since `PATH` is
+  minimal). Its exit is "closing the window". An instant `exit 0` checks the hand-off
+  guard.
+- **The self-update:** build with `-ldflags "-X main.version=v0.0.1"`, start it in a
+  temp folder, and `POST /update`. Then check the file's SHA-256 against the release's
+  `digest`, and that the old process exited while a new one runs.
+- **A released binary:** `gh release download <tag> -p watchparty-gui_amd64`, run it
+  the same headless way, and `GET /update` must report that tag as `current`.
+
 ## Architecture
 
 A separate `package main`: stdlib, `golang.org/x/sys/windows` (already in `go.mod`),
@@ -468,7 +491,13 @@ When a reference is given, work out *what makes it work* (proportions, eye
 construction, outline, simplicity) and apply that essence. Don't copy it wholesale:
 a full kawaii redraw of Fosdo2's face lost what made him him.
 
-## Not yet verified
+## Verified, and not yet verified
+
+Confirmed by the user on Pop!_OS 24.04 (COSMIC, Wayland) with Chromium:
+
+- the History and Settings pages
+- **Browse** through the XDG portal
+- closing the window ending the process started from the shell
 
 Everything Windows-specific compiles, but has not been run on Windows:
 
@@ -481,7 +510,17 @@ Everything Windows-specific compiles, but has not been run on Windows:
   either one hands off and exits at once, the hand-off guard keeps the app running,
   but closing the window then won't stop it.
 
-Verified on Linux, in-process, against real mpv: relay and direct parties driven
-through two GUIs, pause and resume propagating, the party feed, Stop sending "has
-left" and leaving no orphaned mpv, the wrong-secret diagnosis, the missing-mpv
-diagnosis, and the guard (403 without a token or with a foreign `Host`).
+- The Windows self-update swap (`.exe` → `.old`, new file in place, `.old` deleted on
+  the next start).
+
+Verified on Linux, in-process, against real mpv:
+
+- relay and direct parties driven through two GUIs, pause and resume propagating, the
+  party feed
+- Stop sending "has left" and leaving no orphaned mpv
+- the wrong-secret and missing-mpv diagnoses
+- the guard: 403 without a token or with a foreign `Host`
+- the saved name, default relay and history surviving a restart
+- closing the window mid-party, and the hand-off guard
+- the self-update against the real v0.0.11 release
+- v0.0.12's released GUI reporting `current: v0.0.12`

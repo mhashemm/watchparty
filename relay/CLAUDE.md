@@ -30,6 +30,9 @@ Docker image.
   - "X has joined" goes to the room.
   - "connected to Y" goes to the joiner, once per member already there.
   - "X has left" goes to the room.
+
+  The GUI's party history parses "X has joined" and "connected to Y" to record who
+  was there. `server/` sends the same texts in P2P mode, so change both or neither.
 - **`message` is declared again in `party/ws.go`.** This package is `package main`,
   so it can't be imported. Importing `party` from here would pull upnp, server and
   mpv into the relay image. Keep the two structs in sync by hand.

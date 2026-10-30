@@ -42,8 +42,9 @@ Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/mast
 
 - `do(args...)` writes `{"command": args, "request_id": rand.Int63()}\n` and **logs
   `do: sent request: <json>`**.
-  - That log line is load-bearing: `e2e.py`'s `osd()` and the GUI's party feed
-    recover every on-screen notice by parsing it for `["show-text", text, …]`.
+  - That log line is load-bearing: `e2e.py`'s `osd()`, the GUI's party feed and the
+    GUI's history (`gui/store.go`'s `notice()`) recover every on-screen notice by
+    parsing it for `["show-text", text, …]`.
   - Then it blocks on `resCh` for the matching id, with a 5s timeout that returns
     `context.Canceled`.
   - A response with `error != "success"` becomes an error.
