@@ -36,7 +36,7 @@ func TestConfig(t *testing.T) {
 }
 
 func TestGuard(t *testing.T) {
-	g := newGUI(context.Background(), "127.0.0.1:1")
+	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
 	cases := []struct {
 		method, path, host, token string
 		want                      int

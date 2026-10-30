@@ -213,6 +213,10 @@ A separate `package main` that serves a themed page and calls `party.Run`
   relay`, `init done`, and `do: sent request:` (for `show-text`).
 - `party.Run` can be called many times in one process, so it must not leave global
   state behind. Flags live only in `main.go`.
+- The GUI's party history (`gui/store.go`) also parses two of those lines in Go:
+  `your address to share is` (for the real room and secret) and the `show-text` notices
+  "X has joined" and "connected to X" (for who joined). Changing their wording breaks
+  the history too.
 
 ### Relay hardening (it runs on a public VPS)
 
