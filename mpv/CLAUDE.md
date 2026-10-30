@@ -1,0 +1,152 @@
+# mpv/CLAUDE.md
+
+`mpv` is the bridge between one running mpv process and the party. It speaks mpv's JSON
+IPC over a unix socket (or a Windows named pipe), turns the player's own pause and
+seek changes into broadcastable events, and applies remote ones without bouncing
+them back.
+
+Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/master/#properties>
+
+## Files
+
+| File | Contents |
+|---|---|
+| `mpv.go` | `Client`, `connection.do`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
+| `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, unix-socket dial, no-op `Init` |
+| `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `go-winio` pipe dial, and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
+| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader |
+
+## Public surface
+
+- `New(ctx, cancel, socket, outgoing) (*Client, error)` is called once mpv is up.
+  - It dials, sets up the scanner and a 10-slot `resCh`, starts the `watch()`
+    goroutine, then sends `observe_property_string` for `pause` (id 1) and `time-pos`
+    (id 2).
+  - **`watch` must be running before those `do()` calls**, because only `watch` fills
+    `resCh`.
+  - When `watch` returns (EOF when mpv quits, or a read error), it calls `cancel`.
+    This is how the party learns that mpv is gone. `party.Run` wraps that cancel to
+    tell "mpv quit" apart from other stops (see `party/CLAUDE.md`).
+  - If an observe fails, `New` returns the error. The watch goroutine and the conn are
+    not cleaned up here; the party ends and mpv is killed, which closes them.
+- `(*Client).ProcessIncomingEvents(incoming)` is the only consumer of remote events. It
+  runs in one goroutine for the whole party.
+- `Init(cmd)` must be called on the mpv `exec.Cmd` before `Start`.
+- `SocketPrefix` is used to build the socket or pipe name.
+- `IncomingMessage{HostName, Event}` is what both transports push. `Event` is raw mpv
+  JSON.
+- `Event`, `Request` and `Response` are the wire types. `server` and `relay` also use
+  `Event` to synthesize `show-text` notices.
+
+## Request/response: `connection.do`
+
+- `do(args...)` writes `{"command": args, "request_id": rand.Int63()}\n` and **logs
+  `do: sent request: <json>`**.
+  - That log line is load-bearing: `e2e.py`'s `osd()` and the GUI's party feed
+    recover every on-screen notice by parsing it for `["show-text", text, …]`.
+  - Then it blocks on `resCh` for the matching id, with a 5s timeout that returns
+    `context.Canceled`.
+  - A response with `error != "success"` becomes an error.
+- **`resCh` is shared.** `do()` discards responses whose id doesn't match, so two
+  concurrent `do()` calls steal each other's replies. That is safe today only because
+  `do()` is called from exactly two places: `New`, before `ProcessIncomingEvents`
+  starts, and `ProcessIncomingEvents` itself, which is one goroutine. Calling `do()`
+  from anywhere else requires per-request channels first.
+- **`watch()` is the only reader of the socket.** Never read `conn.scanner` anywhere
+  else.
+  - A line with `request_id > 0` and a non-empty `error` is a response. It is pushed
+    to `resCh` with a non-blocking send; a full buffer drops it, which is logged as
+    `Watch: dropped response`.
+  - A request id of 0 is never treated as a response. Hand-written test commands
+    without an id are harmless.
+  - A line with an `event` field goes to `handleEvent`.
+
+## What gets broadcast: `handleEvent`
+
+This runs under `c.mu`, called from `watch()`, and returns `nil` (broadcast) or one of
+three sentinels.
+
+| Situation | Result |
+|---|---|
+| Not a `property-change` (seek, file-loaded, …) | `errDoNotSend` |
+| `isEcho`: the value is one this node just applied from a peer | `errEcho` |
+| `pause` with the same value as the current state | `errNoChange` |
+| `pause` that changed | state updated (and the `time-pos` marker cleared on unpause), then broadcast |
+| `time-pos` while **playing** | `errDoNotSend`. Positions only sync while paused |
+| `time-pos` while paused | broadcast. This is a seek |
+| any other property | `errDoNotSend` |
+| **the first** `property-change` per property | state updated, but `errDoNotSend` |
+
+On `nil`, `watch` sends **`bytes.Clone(scanner.Bytes())`** to `outgoing` and logs
+`Watch: broadcasted event: …`. The clone is mandatory: `Scan()` reuses that buffer,
+and the consumer reads it later. `TestWatchDoesNotAliasScannerBuffer` reproduces the
+corruption only because `dripReader` returns about 7 bytes per `Read` against a
+128-byte buffer. With the whole input in one fill, the bug hides.
+
+### Why the first change is swallowed (`seen`)
+
+`observe_property_string` makes mpv emit the current value immediately. A fresh node
+is paused, so that first `time-pos` passes the "only while paused" rule and would be
+broadcast as `time-pos=0`, rewinding everyone. The state is still recorded.
+`TestInitialPropertyChangeIsNotBroadcast` covers this.
+
+### Echo suppression (`applied` / `isEcho`)
+
+When a peer's change is applied, mpv reports it back as a `property-change`. Without
+suppression, b would rebroadcast a's pause to a, and in relay mode, which has no
+counters, that loops forever.
+
+- **`pause()` and `sync()` set `applied[prop] = value` before the IPC call.** mpv's
+  echo can arrive before `do()` returns, so setting the marker afterwards is a race.
+- `pause` matches exactly and **deletes** the marker on match.
+- `time-pos` matches as a float within **±0.5s** and **keeps** the marker, updating it
+  to the echoed value. mpv snaps a seek to a keyframe, so `77.000000` can come back as
+  `77.041000`, sometimes more than once. The marker is cleared when the node unpauses.
+  - Known limit (`ponytail:` on `timePosTolerance`): a deliberate seek of under 0.5s
+    from the applied position is also swallowed.
+- `TestAppliedValueIsNotRebroadcast` and `TestAppliedPauseIsNotRebroadcast` cover
+  both halves, including that a genuine seek and a later genuine pause still go out.
+
+### `seek` is commented out on purpose
+
+The `case seek:` branch in `handleEvent` is disabled. Syncing works as pause → seek
+(the `time-pos` change while paused) → peers apply it → resume. Re-enabling `seek`
+changes that interaction. The `seek` const then looks unused; leave it.
+
+## Applying remote events: `ProcessIncomingEvents`
+
+Each `IncomingMessage.Event` is unmarshalled and dispatched by `Name`:
+
+- **`pause`** → `pause(event, host)`.
+  - A no-op if the node is already in that state. mpv emits no `property-change` for
+    a no-op set, so no marker is left dangling.
+  - Otherwise it marks `applied`, sends `set_property pause`, updates `c.paused`, and
+    shows `paused by <host>` / `resumed by <host>`.
+- **`time-pos`** → `sync(event, host)`.
+  - Ignored unless this node is paused, and ignored for an empty value.
+  - Otherwise it marks `applied`, sends `set_property time-pos`, and shows `synced by
+    <host>`.
+- **`show-text`** → `showText(event.Data)`. These are the join/leave/connect notices
+  that `server` and `relay` synthesize.
+- Errors are logged as `ProcessIncomingEvents: … [event=…] [host=…]` and skipped.
+
+**Never hold `c.mu` across `do()`.** `do()` waits for `watch()`, and `watch()` needs
+`c.mu` for `handleEvent`, so holding it turns every call into a 5s timeout. `pause()`
+and `sync()` lock, mutate, unlock, and only then do IPC.
+
+## Windows
+
+- The pipe name is `\\.\pipe\mpv<unix seconds>`, dialed with `go-winio`.
+- `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group. mpv's
+  video window is a normal window and is unaffected. Whether that holds when the
+  parent is the `-H=windowsgui` GUI has not been verified on Windows yet.
+
+## Testing notes
+
+- Tests build a `Client` by hand (`newTestClient`) and drive `watch()` through
+  `feed()`. They never touch a real socket.
+- mpv emits nothing for a no-op set, so tests that count events must strictly
+  alternate values, never repeat them.
+- When fixing a buffer or concurrency bug here, reintroduce it and watch the test fail
+  before trusting the fix.
+- Run with `go test -race ./mpv`. Every invariant above is a concurrency one.
