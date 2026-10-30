@@ -215,6 +215,8 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
   1. Wait until all 10 assets are `uploaded`.
   2. Download the Linux GUI.
   3. Run it headless and check `GET /update` reports the new tag.
+  4. Load its page in headless Chromium and click a tab. `GET /update` only proves
+     the server; a broken page script shipped in three releases that passed step 3.
 - History was rewritten once to remove personal wording, which took a
   `--force-with-lease` that the user ran. Never force-push yourself.
 

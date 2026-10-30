@@ -96,7 +96,7 @@ print.
 | `index.html` | the entire UI: CSS, inline SVG art, vanilla JS. `//go:embed`ed |
 | `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile` (the XDG portal on Linux, osascript on macOS), no-op `hide` |
 | `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker and `CREATE_NO_WINDOW` |
-| `main_test.go` | `form.config()` per mode plus its errors, and the host/token guard table |
+| `main_test.go` | `form.config()` per mode plus its errors, the host/token guard table, and `TestPageScriptParses` |
 | `store_test.go` | a party recorded and reloaded (invite → room/secret, people from notices, dedupe, "has left" ignored), the history cap, `notice()` |
 | `os_unix_test.go` | `fileURIPath`: plain, percent-encoded and non-ASCII portal URIs, plus rejecting a non-`file` URI |
 
@@ -303,6 +303,12 @@ install it themselves.
     the default-browser tab when no Chromium-family browser is installed. Closing that
     tab can't be detected, so the idle exit applies.
   - macOS has no list (the browsers aren't on `PATH`), so it always opens a tab.
+
+**One syntax error in the page script kills every button**, and the Go side never
+notices: the server still answers. v0.0.14 to v0.0.16 shipped with a stray block at
+the top level of the script, so not even the tabs worked. `TestPageScriptParses`
+parses the embedded script with Node's `vm.Script` (classic-script rules, like the
+browser) and skips when `node` isn't installed, so run `go test ./gui` somewhere it is.
 
 ## Log-line contract
 
