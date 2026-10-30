@@ -237,13 +237,15 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
     key = tag or name
     path = f"{RUN}/{key}.log"
     cmd = [BIN, "-file", MEDIA, "-cooldown", str(COOLDOWN), "-hostname", name, "-mpvFlags", MPVFLAGS]
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
+        if create_key:
+            cmd += ["-createKey", create_key]
     else:
         cmd += ["-local", "-port", str(PORTS[name])]
         if addrs:
@@ -788,6 +790,27 @@ def caps_suite():
     ok("the first two connected", "relay: connected" in log("n1") and "relay: connected" in log("n2"))
     ok("the third got 503", "503" in log("n3"), "maxConns=2 must bite")
     for t in ("n1", "n2", "n3"):
+        stop(t)
+    relay.kill(); relay.wait(timeout=10)
+
+    print("\n[R19] -createKey: only the key holder opens a room, the rest just join")
+    relay = launch_relay(["-createKey", "k"])
+    time.sleep(1.5)
+    launch("nodeB", room="keyroom", tag="k1")
+    time.sleep(BOOT)
+    ok("a keyless node waits for the room instead of giving up",
+       "not open yet" in log("k1") and nodes["k1"]["proc"].poll() is None)
+    launch("nodeC", room="keyroom", tag="k2", create_key="wrong")
+    nodes["k2"]["proc"].wait(timeout=30)
+    ok("a wrong key is refused and the node exits", "403" in log("k2"))
+    launch(A, room="keyroom", tag="k3", create_key="k")
+    time.sleep(BOOT)
+    ok("the key holder opened the room", "relay: connected" in log("k3"))
+    deadline = time.time() + 35  # the keyless node's backoff may be up to 16s by now
+    while time.time() < deadline and "relay: connected" not in log("k1"):
+        time.sleep(1)
+    ok("the waiting node got in once the room was open", "relay: connected" in log("k1"))
+    for t in ("k1", "k2", "k3"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 

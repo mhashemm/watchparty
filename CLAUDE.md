@@ -51,8 +51,9 @@ Manual run (two terminals / two machines):
 Or through a relay, which is what people behind carrier NAT need:
 
 ```sh
-./relay -addr :8080
-./watchparty -relay ws://host:8080 -room test -secret hunter2 -file movie.mkv
+./relay -addr :8080 -createKey k                # omit -createKey to let anyone open rooms
+./watchparty -relay ws://host:8080 -room test -secret hunter2 -createKey k -file movie.mkv   # host
+./watchparty -relay ws://host:8080 -room test -secret hunter2 -file movie.mkv                # guests
 ```
 
 ## Architecture
@@ -173,13 +174,20 @@ by this feature.
   timeout at all, which is free slowloris.
 - **The node gives up on 403/400 (`errRejected`) but retries everything else** with
   1s→30s backoff. A wrong secret never becomes right, and retrying it just burns
-  the relay's rate limiter.
+  the relay's rate limiter. **401 is retried on purpose**: it means "room not
+  open yet, and you sent no `-createKey`". After a relay restart, whichever node
+  redials first recreates the room. If that's a guest, they have to wait for the
+  host, not exit.
 
 ### Relay hardening (it runs on a public VPS)
 
-The room secret is the only auth, so the caps below are load-bearing, not
-decoration. Handler rejects in cost order — **conn cap → rate limit → secret →
-room cap → `Accept`** — so a flood is refused before anything is allocated.
+The room secret guards a room, and `-createKey` (optional, off by default) guards
+*opening* one. Joining an existing room never needs the key, so guests only get
+the room and secret. Even so, the caps below are load-bearing, not decoration.
+The handler rejects in cost order, so a flood is refused before anything is
+allocated. For a join, the order is **conn cap → secret → `Accept`**. For a
+create, it is **conn cap → keyless 401 → rate limit → create key → room cap →
+`Accept`**.
 
 **The rate limiter is a count-min sketch, not a `map[string]int`. Do not
 "simplify" it back into a map.** A per-IP map allocates one entry per *distinct*
@@ -196,7 +204,9 @@ quota, and the cost is an occasional false rejection for a busy shared NAT.
 
 Counted against `-roomsPerHour`: **room creation only** (joining an existing room
 is free, or a party of eight would exhaust one person's quota) and **failed secret
-attempts** (the brute-force floor). `-maxRooms` and `-maxConns` bound the global
+attempts** and **any create with a key, right or wrong** (the brute-force floor).
+A create with **no** key is free: it is a guest early for the party, not a guess,
+and charging it would spend a shared NAT's quota while they wait. `-maxRooms` and `-maxConns` bound the global
 totals, which the per-IP limiter cannot.
 
 `-trustProxy` takes the client IP from the **last** `X-Forwarded-For` element, not

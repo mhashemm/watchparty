@@ -17,6 +17,7 @@ import (
 
 const (
 	secretHeaderKey = "room-secret"
+	createHeaderKey = "create-key"
 
 	minBackoff = 1 * time.Second
 	maxBackoff = 30 * time.Second
@@ -33,12 +34,13 @@ type relayConn struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
 
-	addr     string
-	room     string
-	secret   string
-	hostname string
-	session  string
-	incoming chan<- mpv.IncomingMessage
+	addr      string
+	room      string
+	secret    string
+	createKey string
+	hostname  string
+	session   string
+	incoming  chan<- mpv.IncomingMessage
 }
 
 func (r *relayConn) set(conn *websocket.Conn) {
@@ -54,12 +56,14 @@ var errRejected = errors.New("rejected by relay")
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}}
 	conn, res, err := websocket.Dial(c, r.addr+"/ws?"+q.Encode(), &websocket.DialOptions{
-		HTTPHeader: http.Header{secretHeaderKey: {r.secret}},
+		HTTPHeader: http.Header{secretHeaderKey: {r.secret}, createHeaderKey: {r.createKey}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
 		case http.StatusForbidden, http.StatusBadRequest:
 			return nil, fmt.Errorf("%w: %s", errRejected, res.Status)
+		case http.StatusUnauthorized:
+			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
 	}
 	return conn, err

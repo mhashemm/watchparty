@@ -32,11 +32,11 @@ func serve(t *testing.T, r *relay) string {
 	return "ws" + s.URL[len("http"):]
 }
 
-func join(t *testing.T, url, roomName, secret, hostname string) (*websocket.Conn, int) {
+func join(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, int) {
 	t.Helper()
 	conn, res, err := websocket.Dial(context.Background(),
 		url+"/ws?room="+roomName+"&hostname="+hostname,
-		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}}})
+		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}, createHeaderKey: createKey}})
 	if err != nil {
 		if res != nil {
 			return nil, res.StatusCode
@@ -215,6 +215,33 @@ func TestSecretGrindingIsRateLimited(t *testing.T) {
 	}
 	if codes[http.StatusTooManyRequests] == 0 {
 		t.Fatalf("brute force was never throttled: %v", codes)
+	}
+}
+
+// Only the key holder opens rooms; everyone else joins with the room secret alone.
+// A keyless join before the room exists is a member early for the party, so it
+// must not cost quota, but a wrong key is a guess and must.
+func TestCreateKey(t *testing.T) {
+	r := newRelay(2, 100, 100)
+	r.createKey = []byte("k")
+	url := serve(t, r)
+
+	for range 5 {
+		if _, code := join(t, url, "movie", "s", "b"); code != http.StatusUnauthorized {
+			t.Fatalf("keyless create got %d, want 401", code)
+		}
+	}
+	if _, code := join(t, url, "movie", "s", "a", "wrong"); code != http.StatusForbidden {
+		t.Fatalf("wrong key got %d, want 403", code)
+	}
+	if _, code := join(t, url, "movie", "s", "a", "k"); code != http.StatusSwitchingProtocols {
+		t.Fatalf("right key got %d after keyless retries, want an upgrade", code)
+	}
+	if _, code := join(t, url, "movie", "s", "b"); code != http.StatusSwitchingProtocols {
+		t.Fatalf("keyless join of an open room got %d, want an upgrade", code)
+	}
+	if _, code := join(t, url, "other", "s", "a", "k"); code != http.StatusTooManyRequests {
+		t.Fatalf("third create got %d, want 429: the wrong key must have cost quota", code)
 	}
 }
 

@@ -37,6 +37,7 @@ func main() {
 	relayAddr := flag.String("relay", "", "relay websocket url to use instead of a direct peer mesh")
 	room := flag.String("room", "", "relay room code (generated if empty)")
 	secret := flag.String("secret", "", "relay room secret (generated if empty)")
+	createKey := flag.String("createKey", "", "relay key needed to create a room, if the relay requires one")
 	flag.Parse()
 	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
 
@@ -53,12 +54,13 @@ func main() {
 			*secret = rand.Text()
 		}
 		conn := &relayConn{
-			addr:     strings.TrimSpace(*relayAddr),
-			room:     *room,
-			secret:   *secret,
-			hostname: *hostname,
-			session:  rand.Text(),
-			incoming: incoming,
+			addr:      strings.TrimSpace(*relayAddr),
+			room:      *room,
+			secret:    *secret,
+			createKey: *createKey,
+			hostname:  *hostname,
+			session:   rand.Text(),
+			incoming:  incoming,
 		}
 		defer conn.Close()
 		go conn.Connect(c, cancel)

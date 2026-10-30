@@ -25,6 +25,7 @@ import (
 
 const (
 	secretHeaderKey = "room-secret"
+	createHeaderKey = "create-key"
 
 	sendBuffer    = 64
 	pingInterval  = 30 * time.Second
@@ -95,12 +96,13 @@ type relay struct {
 	mu    sync.Mutex
 	rooms map[string]*room
 
-	limiter  *limiter
-	conns    atomic.Int64
-	perHour  int
-	maxRooms int
-	maxConns int64
-	trusted  bool
+	limiter   *limiter
+	createKey []byte
+	conns     atomic.Int64
+	perHour   int
+	maxRooms  int
+	maxConns  int64
+	trusted   bool
 }
 
 func (r *relay) ip(req *http.Request) string {
@@ -153,7 +155,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 
 // admit enforces the caps in cost order, creating the room if it is new. It runs
 // before the upgrade so a refused caller never becomes a websocket.
-func (r *relay) admit(name string, secret []byte, ip string) (int, error) {
+func (r *relay) admit(name string, secret, key []byte, ip string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -169,8 +171,16 @@ func (r *relay) admit(name string, secret []byte, ip string) (int, error) {
 		}
 		return 0, nil
 	}
+	// no key is a member waiting for the host to open the room, not a guess, so
+	// it costs no quota and the node keeps retrying
+	if r.createKey != nil && len(key) == 0 {
+		return http.StatusUnauthorized, fmt.Errorf("room not open yet")
+	}
 	if !r.limiter.allow(ip, r.perHour) {
 		return http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
+	}
+	if r.createKey != nil && subtle.ConstantTimeCompare(r.createKey, key) != 1 {
+		return http.StatusForbidden, fmt.Errorf("bad create key")
 	}
 	if len(r.rooms) >= r.maxRooms {
 		return http.StatusServiceUnavailable, fmt.Errorf("relay is full")
@@ -268,7 +278,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	ip := r.ip(req)
 
-	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), ip)
+	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), ip)
 	if err != nil {
 		log.Printf("%s %s: %s\n", ip, name, err)
 		http.Error(res, err.Error(), code)
@@ -331,6 +341,7 @@ func main() {
 	maxRooms := flag.Int("maxRooms", 10000, "rooms held at once before new ones are refused")
 	maxConns := flag.Int64("maxConns", 5000, "connections held at once before new ones are refused")
 	trustProxy := flag.Bool("trustProxy", false, "take the client ip from the last X-Forwarded-For element")
+	createKey := flag.String("createKey", "", "key required to create a room; empty lets anyone create one")
 	flag.Parse()
 
 	r := &relay{
@@ -340,6 +351,9 @@ func main() {
 		maxRooms: *maxRooms,
 		maxConns: *maxConns,
 		trusted:  *trustProxy,
+	}
+	if *createKey != "" {
+		r.createKey = []byte(*createKey)
 	}
 
 	mux := http.NewServeMux()
