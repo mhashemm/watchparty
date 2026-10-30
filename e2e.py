@@ -844,6 +844,26 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
+    print("\n[R20] a member that stops answering pings is dropped and the room hears it left")
+    relay = launch_relay()
+    time.sleep(1.5)
+    launch(A, room="deafroom", tag="d1")
+    time.sleep(BOOT)
+    deaf = socket.create_connection(("127.0.0.1", PORTS["relay"]))
+    deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                  f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                  f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nroom-secret: {SECRET}\r\n\r\n").encode())
+    ok("the deaf client got in", deaf.recv(4096).startswith(b"HTTP/1.1 101"))
+    time.sleep(SETTLE)
+    ok(f"{A} was told deaf joined", "deaf has joined" in osd("d1"))
+    deadline = time.time() + 50  # one 30s ping interval plus the 10s pong wait
+    while time.time() < deadline and "deaf has left" not in osd("d1"):
+        time.sleep(1)
+    ok(f"{A} was told deaf left", "deaf has left" in osd("d1"), "the relay kept a member that never answers pings")
+    deaf.close()
+    stop("d1")
+    relay.kill(); relay.wait(timeout=10)
+
 
 try:
     if args.mode in ("p2p", "both"):

@@ -29,13 +29,14 @@ const (
 	createHeaderKey = "create-key"
 
 	sendBuffer    = 64
-	pingInterval  = 30 * time.Second
 	readLimit     = 4096
 	limiterWindow = time.Hour
 
 	rows = 4
 	cols = 16384
 )
+
+var pingInterval, writeTimeout = 30 * time.Second, 10 * time.Second
 
 // declared again in party/ws.go; importing party would drag upnp, server and mpv into
 // the relay binary, and four lines beat a package that exists only to share them
@@ -237,12 +238,13 @@ func (r *relay) leave(name string, m *member) {
 func (r *relay) write(c context.Context, m *member) {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
+	defer m.conn.CloseNow()
 	for {
 		select {
 		case <-c.Done():
 			return
 		case b := <-m.ch:
-			ctx, cancel := context.WithTimeout(c, 10*time.Second)
+			ctx, cancel := context.WithTimeout(c, writeTimeout)
 			err := m.conn.Write(ctx, websocket.MessageText, b)
 			cancel()
 			if err != nil {
@@ -251,7 +253,7 @@ func (r *relay) write(c context.Context, m *member) {
 		case <-ticker.C:
 			// a party sits idle for hours between pauses; without this, NAT and
 			// proxy idle timeouts kill the connection silently
-			ctx, cancel := context.WithTimeout(c, 10*time.Second)
+			ctx, cancel := context.WithTimeout(c, writeTimeout)
 			err := m.conn.Ping(ctx)
 			cancel()
 			if err != nil {
