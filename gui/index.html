@@ -234,6 +234,20 @@ details[open] summary { margin-bottom: 14px; }
 .about p { margin: 0 0 10px; }
 .about code { font-size: .85rem; word-break: break-all; color: var(--soil); }
 #settings-saved { margin-left: 10px; }
+dialog {
+  border: 2px solid var(--bark);
+  border-radius: 18px;
+  background: var(--paper);
+  color: var(--forest);
+  padding: 22px 24px;
+  width: min(420px, calc(100% - 32px));
+  box-shadow: 0 6px 0 var(--bark);
+}
+dialog::backdrop { background: rgba(35, 64, 43, .35); }
+dialog p { margin: 0; }
+.dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+button.primary { background: var(--moss); border-color: var(--moss-deep); color: #fff; }
+button.primary:hover { background: var(--moss-deep); }
 button.small { font-size: .875rem; padding: 4px 10px; border-radius: 10px; margin-left: 6px; }
 .msg { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: #eef3df; }
 .msg.bad { background: #f6e4e0; color: var(--berry); }
@@ -542,13 +556,22 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 
       <div class="about">
         <h2>About</h2>
-        <p><span id="version-text">Checking the version…</span> <button type="button" class="small" id="update" hidden></button></p>
+        <p><span id="version-text">Checking the version…</span> <button type="button" class="small" id="update" hidden></button> <button type="button" class="small" id="restart" hidden>Restart now</button></p>
         <p class="hint">Your name, settings and party history are saved on this computer in <code id="store-path"></code></p>
       </div>
     </section>
 
   </div>
 </main>
+
+<dialog id="restart-dialog" aria-labelledby="restart-title">
+  <h2 id="restart-title">Update installed</h2>
+  <p id="restart-text"></p>
+  <div class="dialog-actions">
+    <button type="button" id="restart-later">Restart later</button>
+    <button type="button" class="primary" id="restart-now">Restart now</button>
+  </div>
+</dialog>
 
 <svg class="ground" viewBox="0 0 560 130" aria-hidden="true">
   <path class="soil" d="M0 110 Q90 98 180 106 T360 103 T560 108 V130 H0 Z"/>
@@ -848,6 +871,8 @@ function render(exitErr) {
   document.body.classList.toggle("alive", running && state.ready);
   $("go").classList.toggle("stop", running);
   $("update").disabled = running;
+  $("restart").disabled = running;
+  $("restart-now").disabled = running;
   document.querySelectorAll(".again").forEach(b => b.disabled = running);
 }
 
@@ -893,12 +918,14 @@ document.querySelector(".cat").addEventListener("click", () => {
   document.querySelector("main").append(heart);
 });
 
-let updated = false, latest = "";
+let updated = false, latest = "", installed = "";
 async function checkUpdate() {
   try {
     const j = await (await api("/update")).json();
     $("version-text").textContent = j.current === "dev" ? "Development build" : `Version ${j.current}`;
-    if (j.available) {
+    if (j.installed) {
+      pendingRestart(j.installed);
+    } else if (j.available) {
       latest = j.latest;
       $("update").textContent = `Update to ${j.latest}`;
       $("update").hidden = false;
@@ -906,11 +933,45 @@ async function checkUpdate() {
     }
   } catch {}
 }
+function pendingRestart(tag) {
+  installed = tag;
+  $("version-text").textContent = `${tag} is installed. Restart the app to start using it.`;
+  $("update").hidden = true;
+  $("restart").hidden = false;
+  $("update-dot").hidden = false;
+  $("restart-text").textContent = `Version ${tag} is installed. A restart is required to start using it.`;
+}
 $("update").addEventListener("click", async () => {
   const b = $("update");
   b.disabled = true;
   b.textContent = "Updating…";
   const res = await api("/update", {});
+  const text = (await res.text()).trim();
+  if (!res.ok) {
+    $("version-text").textContent = `Update failed: ${text}.`;
+    b.textContent = `Update to ${latest}`;
+    b.disabled = running;
+    return;
+  }
+  pendingRestart(text);
+  $("restart-dialog").showModal();
+});
+async function restartNow() {
+  $("restart-dialog").close();
+  $("restart").disabled = true;
+  const res = await api("/restart", {});
+  if (!res.ok) {
+    $("version-text").textContent = `Restart failed: ${(await res.text()).trim()}.`;
+    $("restart").disabled = running;
+    return;
+  }
+  updated = true;
+  $("restart").hidden = true;
+  $("version-text").textContent = `Restarting into ${installed}. If this window stays open, you can close it.`;
+}
+$("restart").addEventListener("click", restartNow);
+$("restart-now").addEventListener("click", restartNow);
+$("restart-later").addEventListener("click", () => $("restart-dialog").close());
   const text = (await res.text()).trim();
   if (!res.ok) {
     $("version-text").textContent = `Update failed: ${text}.`;

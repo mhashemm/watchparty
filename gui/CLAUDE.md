@@ -124,7 +124,8 @@ print.
   | `POST /settings` | saves the Settings page's fields (relay, mpv, mpvFlags, cooldown, createKey, pport) |
   | `POST /history/clear` | empties the history |
   | `GET /update` | `{current, latest, available}`: asks GitHub for the latest release |
-  | `POST /update` | installs the latest release and restarts (see "Self-update") |
+  | `POST /update` | installs the latest release, without restarting (see "Self-update") |
+  | `POST /restart` | starts the installed version, closes this window and quits |
 
 - **`form.config()`** trims every field.
   - Empty numbers fall back to `party.DefaultPort` / `party.DefaultCooldown`, the
@@ -200,8 +201,18 @@ print.
      - Windows: a running `.exe` can't be overwritten, so it is renamed to `.old` and
        the new one put in its place (with a rollback if that fails). Every start
        deletes a leftover `.old`.
-  5. Start the new binary, answer the request, and quit a second later. The new
-     process opens its own window, and the old page says so.
+  5. **Don't restart.** Record the tag in `g.installed` and answer. The page then
+     opens a modal `<dialog>`: "Update installed. A restart is required" with
+     **Restart later** (focused first, and Esc does the same) and **Restart now**.
+     - Later does nothing. About shows "vX is installed" plus a Restart now button,
+       and the next normal start runs the new file anyway.
+     - **Restart now** (`POST /restart`, refused during a party) starts the new
+       binary, kills this instance's browser process so its window closes
+       (`g.closeWindow`), and quits.
+     - The restart uses `g.exe`, resolved once at startup by `executable()`. After
+       the rename, the running process's own path lookup can point at the replaced
+       file.
+     - An earlier version restarted straight away, which left two windows open.
 - Verified end to end against the real v0.0.11 release: a build stamped `v0.0.1`
   updated itself, and the installed file matched GitHub's digest.
 
