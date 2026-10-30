@@ -87,8 +87,12 @@ func (g *gui) checkUpdate(w http.ResponseWriter, r *http.Request) {
 		Current   string `json:"current"`
 		Latest    string `json:"latest"`
 		Available bool   `json:"available"`
+		Installed string `json:"installed,omitempty"`
 		Error     string `json:"error,omitempty"`
 	}{Current: version}
+	g.mu.Lock()
+	res.Installed = g.installed
+	g.mu.Unlock()
 	if version != "dev" {
 		rel, err := latestRelease(r.Context())
 		if err != nil {
@@ -114,19 +118,51 @@ func (g *gui) update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "development builds do not update themselves", http.StatusBadRequest)
 		return
 	}
-	tag, err := install(r.Context())
+	tag, err := install(r.Context(), g.exe)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	g.mu.Lock()
+	g.installed = tag
+	g.mu.Unlock()
 	io.WriteString(w, tag)
+}
+
+func (g *gui) restart(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	running, installed := g.cancel != nil, g.installed
+	g.mu.Unlock()
+	if running {
+		http.Error(w, "end the party before restarting", http.StatusConflict)
+		return
+	}
+	if installed == "" {
+		http.Error(w, "no update is waiting for a restart", http.StatusBadRequest)
+		return
+	}
+	err := exec.Command(g.exe).Start()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	io.WriteString(w, installed)
 	go func() {
-		time.Sleep(time.Second)
+		time.Sleep(500 * time.Millisecond)
+		g.closeWindow()
 		g.quit()
 	}()
 }
 
-func install(c context.Context) (string, error) {
+func executable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+func install(c context.Context, exe string) (string, error) {
 	rel, err := latestRelease(c)
 	if err != nil {
 		return "", err
@@ -148,14 +184,6 @@ func install(c context.Context) (string, error) {
 		return "", fmt.Errorf("%s has no sha256 digest to verify against", asset.Name)
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", err
-	}
 	tmp, err := os.CreateTemp(filepath.Dir(exe), ".watchparty-gui-update-*")
 	if err != nil {
 		return "", err
@@ -198,5 +226,5 @@ func install(c context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return rel.Tag, exec.Command(exe).Start()
+	return rel.Tag, nil
 }

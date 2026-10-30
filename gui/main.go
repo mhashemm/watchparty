@@ -94,20 +94,23 @@ type gui struct {
 	mux         *http.ServeMux
 	ctx         context.Context
 	quit        func()
+	closeWindow func()
+	exe         string
 	wg          sync.WaitGroup
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	store    *store
-	session  int
-	run      int
-	lines    []string
-	exitErr  string
-	lastPoll time.Time
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	store     *store
+	session   int
+	installed string
+	run       int
+	lines     []string
+	exitErr   string
+	lastPoll  time.Time
 }
 
 func newGUI(ctx context.Context, host string, st *store) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux(), store: st, session: -1}
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -119,6 +122,7 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 	g.mux.HandleFunc("GET /log", g.log)
 	g.mux.HandleFunc("GET /update", g.checkUpdate)
 	g.mux.HandleFunc("POST /update", g.update)
+	g.mux.HandleFunc("POST /restart", g.restart)
 	g.mux.HandleFunc("GET /state", g.state)
 	g.mux.HandleFunc("POST /settings", g.saveSettings)
 	g.mux.HandleFunc("POST /history/clear", g.clearHistory)
@@ -300,7 +304,7 @@ func dialog(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-func openWindow(url string) <-chan struct{} {
+func openWindow(url string) (<-chan struct{}, *os.Process) {
 	profile, err := os.MkdirTemp("", "watchparty-gui-browser-")
 	if err == nil {
 		for _, browser := range browsers {
@@ -317,7 +321,7 @@ func openWindow(url string) <-chan struct{} {
 					close(closed)
 				}
 			}()
-			return closed
+			return closed, cmd.Process
 		}
 		os.RemoveAll(profile)
 	}
@@ -325,7 +329,7 @@ func openWindow(url string) <-chan struct{} {
 	if cmd.Start() == nil {
 		go cmd.Wait()
 	}
-	return nil
+	return nil, nil
 }
 
 const handoffWindow = 5 * time.Second
@@ -340,13 +344,18 @@ func main() {
 	}
 	g := newGUI(c, ln.Addr().String(), openStore(storePath()))
 	g.quit = stop
-	if exe, err := os.Executable(); err == nil {
-		os.Remove(exe + ".old")
+	g.exe, err = executable()
+	if err == nil {
+		os.Remove(g.exe + ".old")
 	}
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
-	if closed := openWindow(url); closed != nil {
+	closed, browser := openWindow(url)
+	if browser != nil {
+		g.closeWindow = func() { browser.Kill() }
+	}
+	if closed != nil {
 		go func() {
 			<-closed
 			log.Println("gui: window closed")
