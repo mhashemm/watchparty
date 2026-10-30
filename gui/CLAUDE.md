@@ -239,13 +239,15 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
   6. the eyes: large and set low, round pupils, one big and one small glint. Large
      low eyes, round pupils and a small nose are what make the face read as cute.
      Slit pupils and high eyes read as stern.
-  7. cheeks, nose, mouth, whiskers
+  7. cheeks, nose, mouth (smile and rest variants), whiskers
   8. the `z`s
   9. the stethoscope
   10. the white paws on top
 - **Moods** come from `body[data-mood]`, set in `render()`:
   - `sleep` (idle or ended): closed eyes, floating `z`s
-  - `awake` (running): open eyes with the CSS blink
+  - `awake` (running, and on errors): open eyes with the CSS blink, an **open smile
+    with a pink tongue** (`.mouth-smile`) and stronger blush. Asleep, he has the
+    small closed "w" mouth (`.mouth-rest`) instead.
   - **Fosdo2 is always content: there is deliberately no worried or sad face.**
     Errors are carried by the red "Diagnosis:" status text alone. Keep anything
     above the eyes clear: an earlier pair of temple stripes sat right over the
