@@ -290,6 +290,12 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
+- [ ] **Arrow-key seeks are relative, so mpv snaps them to a keyframe.** Most people
+  seek with the arrows. While paused, the seeking node broadcasts two positions: the
+  target (`133.458`), then the keyframe it landed on (`140.000`, up to the file's
+  keyframe interval away). Peers seek twice and end on the same frame, but the
+  position jumps further than the user asked, and every peer pays two seeks. Seen on
+  real mpv; details in `mpv/MPV.md` under "Seeking".
 - [ ] `/bye` and `/event` trust the `hit-me-up`/`counter` headers (P2P only). The counter check stops replays and unknown addresses, but a peer can still spoof another peer's address. Needs signing to go further, which is more than a LAN tool wants. Accepted: P2P is for friends and LANs.
 - [ ] Relay identity is only as strong as the room secret: the `hostname` is whatever the joiner claims, so anyone who knows the secret can impersonate a member. Same trade as above.
 
