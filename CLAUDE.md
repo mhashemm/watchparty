@@ -29,7 +29,7 @@ phases:
   peer eviction and strike reset, `/bye`, and the header checks.
 - **`relay`** — the same nodes against one `./relay` process. Covers fan-out,
   room isolation, the shared secret, every abuse cap, reconnect after the
-  relay is killed mid-party, and `[R15b]`: closing a node's mpv is a normal end
+  relay is killed mid-party, dropping a client that never answers pings (`[R20]`, ~45s), and `[R15b]`: closing a node's mpv is a normal end
   (exit 0, the room hears "has left"). Every other case ends nodes with a signal,
   which is how a regression there once slipped through.
 

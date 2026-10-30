@@ -315,3 +315,22 @@ func TestLimiterResetsOnWindowRollover(t *testing.T) {
 		t.Fatal("window rollover did not clear the counts")
 	}
 }
+
+func TestMemberThatStopsAnsweringPingsIsRemoved(t *testing.T) {
+	pingInterval, writeTimeout = 50*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { pingInterval, writeTimeout = 30*time.Second, 10*time.Second })
+	r := newRelay(10, 10, 10)
+	join(t, serve(t, r), "deaf", "s", "a")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		n := len(r.rooms)
+		r.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("a member that never answers a ping still holds its room")
+}

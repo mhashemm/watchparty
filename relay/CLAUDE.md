@@ -90,7 +90,13 @@ allocated:
 - **`write`** is one goroutine per member. It drains `ch` with a 10s timeout per
   write, and **pings every 30s**. A party sits idle for hours between pauses, and NAT
   and proxy idle timeouts kill silent connections. Any error ends the writer, and the
-  read loop's failure then cleans up.
+  writer **`CloseNow`s the conn on its way out**, which fails the read loop, which
+  calls `leave`.
+  - Without that close, a client that stops answering pings (a frozen process, a
+    bot) only lost its writer. Its read loop blocked forever on a socket that was
+    still open, so the member and its room stayed until the TCP connection died, if
+    it ever did.
+  - `pingInterval` and `writeTimeout` are `var`s only so the test can shorten them.
 - **`leave`** deletes the member, deletes the room once it is empty (rooms are
   memory-only), and announces "has left" only for a member it actually removed.
 
@@ -183,9 +189,10 @@ The tests use real websockets against an `httptest` server (`serve`, `join`,
 | `TestLimiterNeverUnderCounts` | the sketch's safe-direction error |
 | `TestLimiterDoesNotFalselyRejectAtRealisticLoad` | sketch width at realistic load |
 | `TestLimiterResetsOnWindowRollover` | the window |
+| `TestMemberThatStopsAnsweringPingsIsRemoved` | a failed ping drops the member and reaps its room |
 
 The end-to-end versions (fan-out, room isolation, every cap, reconnect through a TCP
-proxy, `CREATE_KEY`) are `e2e.py --mode relay`.
+proxy, `CREATE_KEY`, a raw socket that never answers pings in `[R20]`) are `e2e.py --mode relay`.
 
 ## Known issues
 
