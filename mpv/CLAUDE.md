@@ -14,16 +14,16 @@ Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/mast
 | `mpv.go` | `Client`, `connection.do`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
 | `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, unix-socket dial, no-op `Init` |
 | `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `go-winio` pipe dial, and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
-| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader |
+| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe` |
 
 ## Public surface
 
 - `New(ctx, cancel, socket, outgoing) (*Client, error)` is called once mpv is up.
-  - It dials, sets up the scanner and a 10-slot `resCh`, starts the `watch()`
+  - It dials, sets up the scanner and the `pending` reply map, starts the `watch()`
     goroutine, then sends `observe_property_string` for `pause` (id 1) and `time-pos`
     (id 2).
-  - **`watch` must be running before those `do()` calls**, because only `watch` fills
-    `resCh`.
+  - **`watch` must be running before those `do()` calls**, because only `watch`
+    delivers replies.
   - When `watch` returns (EOF when mpv quits, or a read error), it calls `cancel`.
     This is how the party learns that mpv is gone. `party.Run` wraps that cancel to
     tell "mpv quit" apart from other stops (see `party/CLAUDE.md`).
@@ -40,24 +40,22 @@ Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/mast
 
 ## Request/response: `connection.do`
 
-- `do(args...)` writes `{"command": args, "request_id": rand.Int63()}\n` and **logs
+- `do(args...)` registers a one-slot reply channel under a random `request_id` in
+  `connection.pending`, writes `{"command": args, "request_id": id}\n` and **logs
   `do: sent request: <json>`**.
   - That log line is load-bearing: `e2e.py`'s `osd()`, the GUI's party feed and the
     GUI's history (`gui/store.go`'s `notice()`) recover every on-screen notice by
     parsing it for `["show-text", text, …]`.
-  - Then it blocks on `resCh` for the matching id, with a 5s timeout that returns
-    `context.Canceled`.
+  - Then it waits on its own channel, with a 5s timeout that returns `errTimeout`.
   - A response with `error != "success"` becomes an error.
-- **`resCh` is shared.** `do()` discards responses whose id doesn't match, so two
-  concurrent `do()` calls steal each other's replies. That is safe today only because
-  `do()` is called from exactly two places: `New`, before `ProcessIncomingEvents`
-  starts, and `ProcessIncomingEvents` itself, which is one goroutine. Calling `do()`
-  from anywhere else requires per-request channels first.
+- Each request has its own channel, so `do()` is safe from any number of goroutines.
+  (A single shared channel once let concurrent calls steal each other's replies;
+  `TestConcurrentRequestsGetTheirOwnResponse` covers it.)
 - **`watch()` is the only reader of the socket.** Never read `conn.scanner` anywhere
   else.
-  - A line with `request_id > 0` and a non-empty `error` is a response. It is pushed
-    to `resCh` with a non-blocking send; a full buffer drops it, which is logged as
-    `Watch: dropped response`.
+  - A line with `request_id > 0` and a non-empty `error` is a response. `respond`
+    hands it to the waiting request with a non-blocking send. An id nobody waits for
+    (a request that already timed out) is logged as `Watch: dropped response`.
   - A request id of 0 is never treated as a response. Hand-written test commands
     without an id are harmless.
   - A line with an `event` field goes to `handleEvent`.
@@ -145,7 +143,8 @@ and `sync()` lock, mutate, unlock, and only then do IPC.
 ## Testing notes
 
 - Tests build a `Client` by hand (`newTestClient`) and drive `watch()` through
-  `feed()`. They never touch a real socket.
+  `feed()`, or over a `net.Pipe` with a fake mpv on the other end. They never touch
+  a real socket.
 - mpv emits nothing for a no-op set, so tests that count events must strictly
   alternate values, never repeat them.
 - When fixing a buffer or concurrency bug here, reintroduce it and watch the test fail

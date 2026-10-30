@@ -3,7 +3,9 @@ package mpv
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"strings"
 	"testing"
 )
@@ -30,7 +32,7 @@ func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 		paused:   false,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
-		conn:     &connection{scanner: sc, resCh: make(chan Response, 1)},
+		conn:     &connection{scanner: sc, pending: map[int64]chan Response{}},
 	}
 }
 
@@ -159,5 +161,40 @@ func TestAppliedPauseIsNotRebroadcast(t *testing.T) {
 	got = feed(t, c, outgoing, propertyChangeLine(pause, "yes", 1))
 	if len(got) != 1 {
 		t.Fatalf("stale marker swallowed a genuine pause: %+v", got)
+	}
+}
+
+// Two do() calls in flight must each get their own reply, even when mpv answers
+// them out of order. A shared response channel let one steal the other's reply
+// and leave it to time out.
+func TestConcurrentRequestsGetTheirOwnResponse(t *testing.T) {
+	ours, theirs := net.Pipe()
+	defer ours.Close()
+	defer theirs.Close()
+	c := newTestClient(make(chan []byte, 1), bufio.NewScanner(ours))
+	c.conn.conn = ours
+	go c.watch()
+
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		ids := []int64{}
+		for len(ids) < 2 && sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			ids = append(ids, req.RequestId)
+		}
+		for i := len(ids) - 1; i >= 0; i-- {
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", ids[i])
+		}
+	}()
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- c.conn.do("get_property", pause) }()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

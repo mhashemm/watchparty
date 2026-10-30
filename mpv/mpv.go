@@ -34,6 +34,7 @@ var (
 	errNoChange  = errors.New("no change")
 	errDoNotSend = errors.New("do not send")
 	errEcho      = errors.New("echo")
+	errTimeout   = errors.New("mpv did not answer within 5s")
 )
 
 type IncomingMessage struct {
@@ -44,7 +45,37 @@ type IncomingMessage struct {
 type connection struct {
 	conn    net.Conn
 	scanner *bufio.Scanner
-	resCh   chan Response
+	mu      sync.Mutex
+	pending map[int64]chan Response
+}
+
+func (c *connection) wait(id int64) chan Response {
+	ch := make(chan Response, 1)
+	c.mu.Lock()
+	c.pending[id] = ch
+	c.mu.Unlock()
+	return ch
+}
+
+func (c *connection) done(id int64) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	c.mu.Unlock()
+}
+
+func (c *connection) respond(res Response) bool {
+	c.mu.Lock()
+	ch, ok := c.pending[res.RequestId]
+	c.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- res:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *connection) do(args ...any) error {
@@ -56,28 +87,24 @@ func (c *connection) do(args ...any) error {
 	if err != nil {
 		return err
 	}
+	ch := c.wait(req.RequestId)
+	defer c.done(req.RequestId)
 	_, err = c.conn.Write(append(body, '\n'))
 	if err != nil {
 		return err
 	}
 	log.Printf("do: sent request: %s\n", body)
 
-	for {
-		select {
-		case res := <-c.resCh:
-			if res.RequestId != req.RequestId {
-				log.Printf("do: received wrong response: [requestId=%d] [expectedRequestId=%d]\n", res.RequestId, req.RequestId)
-				continue
-			}
-			log.Printf("do: received response: [requestId=%d] [error=%s]\n", res.RequestId, res.Error)
-			if res.Error != "success" {
-				return errors.New(res.Error)
-			}
-			return nil
-		case <-time.After(5 * time.Second):
-			log.Printf("do: response timeout: [requestId=%d]\n", req.RequestId)
-			return context.Canceled
+	select {
+	case res := <-ch:
+		log.Printf("do: received response: [requestId=%d] [error=%s]\n", res.RequestId, res.Error)
+		if res.Error != "success" {
+			return errors.New(res.Error)
 		}
+		return nil
+	case <-time.After(5 * time.Second):
+		log.Printf("do: response timeout: [requestId=%d]\n", req.RequestId)
+		return errTimeout
 	}
 }
 
@@ -188,10 +215,9 @@ func (c *Client) watch() error {
 			continue
 		}
 		if event.RequestId > 0 && event.Error != "" {
-			select {
-			case c.conn.resCh <- event.Response:
+			if c.conn.respond(event.Response) {
 				log.Println("Watch: queued response:", scanner.Text())
-			default:
+			} else {
 				log.Println("Watch: dropped response:", scanner.Text())
 			}
 		}
@@ -303,7 +329,7 @@ func New(c context.Context, cancel context.CancelFunc, socket string, outgoing c
 		return nil, err
 	}
 	conn.scanner = bufio.NewScanner(conn.conn)
-	conn.resCh = make(chan Response, 10)
+	conn.pending = map[int64]chan Response{}
 	client := &Client{
 		conn:     conn,
 		outgoing: outgoing,
