@@ -144,6 +144,34 @@ func TestJoinerLearnsWhoIsAlreadyThere(t *testing.T) {
 	}
 }
 
+// A node whose connection died on its side but not on the relay's redials with the
+// same session. The relay must swap it in silently rather than keep the stale
+// member until the ping reaps it and tell the room it joined twice.
+func TestReconnectReplacesStaleMember(t *testing.T) {
+	url := serve(t, newRelay(10, 10, 10))
+	a, _ := join(t, url, "movie", "s", "a")
+	stale, _ := join(t, url, "movie", "s", "b&session=x")
+	fresh, _ := join(t, url, "movie", "s", "b&session=x")
+
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		if _, _, err := stale.Read(c); err != nil {
+			if c.Err() != nil {
+				t.Fatal("the stale connection was left open")
+			}
+			break
+		}
+	}
+	// a timed-out Read closes the conn, so check a before its leave reaches fresh
+	if got := recvNotices(t, a, 2); !slices.Equal(got, []string{"b has joined"}) {
+		t.Fatalf("room was told %v, want one join and no leave", got)
+	}
+	if got := recvNotices(t, fresh, 2); !slices.Contains(got, "connected to a") || slices.Contains(got, "connected to b") {
+		t.Fatalf("reconnected node was told %v, want a and not itself", got)
+	}
+}
+
 func TestWrongSecretIsRejected(t *testing.T) {
 	url := serve(t, newRelay(100, 10, 10))
 	join(t, url, "movie", "right", "a")

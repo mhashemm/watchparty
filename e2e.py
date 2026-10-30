@@ -237,13 +237,13 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
     key = tag or name
     path = f"{RUN}/{key}.log"
     cmd = [BIN, "-file", MEDIA, "-cooldown", str(COOLDOWN), "-hostname", name, "-mpvFlags", MPVFLAGS]
     if room is not None:
-        cmd += ["-relay", RELAY_URL, "-room", room, "-secret", secret or SECRET]
+        cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
     else:
         cmd += ["-local", "-port", str(PORTS[name])]
         if addrs:
@@ -256,10 +256,43 @@ def launch(name, addrs=None, room=None, secret=None, tag=None):
 def launch_relay(extra=None):
     path = f"{RUN}/relay.log"
     cmd = [RELAY_BIN, "-addr", f"127.0.0.1:{PORTS['relay']}"] + (extra or [])
-    # append: a restart in [R12] must not lose the first run's lines
+    # append: a restart in [R13] must not lose the first run's lines
     p = subprocess.Popen(cmd, stdout=open(path, "ab"), stderr=subprocess.STDOUT)
     relays.append(p)
     return p
+
+
+class Proxy:
+    """A TCP hop in front of the relay. cut() drops the node's side and leaves the
+    relay's side open and silent, which is how a NAT rebinding looks to the relay."""
+
+    def __init__(self, port):
+        self.port, self.pairs = port, []
+        self.ls = socket.create_server(("127.0.0.1", 0))
+        self.url = f"ws://127.0.0.1:{self.ls.getsockname()[1]}"
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self):
+        while True:
+            c, _ = self.ls.accept()
+            pair = {"c": c, "u": socket.create_connection(("127.0.0.1", self.port)), "live": True}
+            self.pairs.append(pair)
+            threading.Thread(target=self.pump, args=(pair, "c", "u"), daemon=True).start()
+            threading.Thread(target=self.pump, args=(pair, "u", "c"), daemon=True).start()
+
+    def pump(self, pair, src, dst):
+        try:
+            while (b := pair[src].recv(65536)) and pair["live"]:
+                pair[dst].sendall(b)
+            if pair["live"]:
+                pair[dst].shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+    def cut(self):
+        for pair in self.pairs:
+            pair["live"] = False
+            pair["c"].shutdown(socket.SHUT_RDWR)
 
 
 def relay_log():
@@ -660,7 +693,24 @@ def relay_suite():
     ok("it did not retry forever", log("bad").count("relay: dial") <= 1, "403 is permanent")
     ok("nobody in the room saw it join", not any("nodeBad" in known(n) for n in NODES))
 
-    print("\n[R12] the party survives the relay dying and reconnects on its own")
+    print("\n[R12] a node that reconnects while the relay still holds its dead conn")
+    proxy = Proxy(PORTS["relay"])
+    launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
+    time.sleep(BOOT)
+    proxy.cut()
+    time.sleep(SETTLE + 2)  # 1s backoff, then the redial
+    ok("nodeFlaky redialled", log("flaky").count("relay: connected") == 2, "reconnect never happened")
+    for n in NODES:
+        ok(f"{n} was told nodeFlaky joined once", osd(n).count("nodeFlaky has joined") == 1,
+           f"{osd(n).count('nodeFlaky has joined')} joins")
+        ok(f"{n} was not told the stale nodeFlaky left", "nodeFlaky has left" not in osd(n))
+    ok("nodeFlaky was not told it is in the room", "connected to nodeFlaky" not in osd("flaky"))
+    stop("flaky")
+    time.sleep(SETTLE)
+    for n in NODES:
+        ok(f"{n} was told nodeFlaky left", "nodeFlaky has left" in osd(n))
+
+    print("\n[R13] the party survives the relay dying and reconnects on its own")
     relay.kill()
     relay.wait(timeout=10)
     time.sleep(3)
@@ -675,7 +725,7 @@ def relay_suite():
     for n in others(A):
         ok(f"{A} drives {n} again after the relay came back", get(n, "pause") is False)
 
-    print("\n[R13] clean leave: SIGTERM tells the room")
+    print("\n[R14] clean leave: SIGTERM tells the room")
     survivors = others(A)
     ok(f"{A} exited cleanly", stop(A) and nodes[A]["proc"].returncode == 0,
        f"rc={nodes[A]['proc'].returncode}")
@@ -683,7 +733,7 @@ def relay_suite():
     for n in survivors:
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n))
 
-    print("\n[R14] the room keeps working without the node that opened it")
+    print("\n[R15] the room keeps working without the node that opened it")
     setp(survivors[0], "pause", True)
     time.sleep(SETTLE)
     for n in survivors:
@@ -699,7 +749,7 @@ def caps_suite():
     """The abuse caps, driven with real nodes rather than the Go handler tests."""
     print("\n=== relay caps ===")
 
-    print("\n[R15] only room CREATION is rate limited, joining is free")
+    print("\n[R16] only room CREATION is rate limited, joining is free")
     relay = launch_relay(["-roomsPerHour", "1"])
     time.sleep(1.5)
     launch(A, room="capA", tag="c1")
@@ -715,7 +765,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    print("\n[R16] -maxRooms refuses a second room with 503")
+    print("\n[R17] -maxRooms refuses a second room with 503")
     relay = launch_relay(["-maxRooms", "1"])
     time.sleep(1.5)
     launch(A, room="roomOne", tag="m1")
@@ -728,7 +778,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    print("\n[R17] -maxConns refuses the third connection with 503")
+    print("\n[R18] -maxConns refuses the third connection with 503")
     relay = launch_relay(["-maxConns", "2"])
     time.sleep(1.5)
     for i, t in enumerate(("n1", "n2", "n3")):

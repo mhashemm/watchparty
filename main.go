@@ -57,6 +57,7 @@ func main() {
 			room:     *room,
 			secret:   *secret,
 			hostname: *hostname,
+			session:  rand.Text(),
 			incoming: incoming,
 		}
 		defer conn.Close()

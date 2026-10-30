@@ -37,6 +37,7 @@ type relayConn struct {
 	room     string
 	secret   string
 	hostname string
+	session  string
 	incoming chan<- mpv.IncomingMessage
 }
 
@@ -51,7 +52,7 @@ func (r *relayConn) set(conn *websocket.Conn) {
 var errRejected = errors.New("rejected by relay")
 
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
-	q := url.Values{"room": {r.room}, "hostname": {r.hostname}}
+	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}}
 	conn, res, err := websocket.Dial(c, r.addr+"/ws?"+q.Encode(), &websocket.DialOptions{
 		HTTPHeader: http.Header{secretHeaderKey: {r.secret}},
 	})

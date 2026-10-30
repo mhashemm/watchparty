@@ -81,6 +81,7 @@ func (l *limiter) allow(key string, cap int) bool {
 
 type member struct {
 	hostname string
+	session  string
 	ch       chan []byte
 	conn     *websocket.Conn
 }
@@ -179,23 +180,31 @@ func (r *relay) admit(name string, secret []byte, ip string) (int, error) {
 }
 
 // add registers the member only once its conn is set, so broadcast can never
-// reach a member whose conn is still nil. It returns who was already in the room.
-func (r *relay) add(name string, m *member) []string {
+// reach a member whose conn is still nil. It returns who was already in the room,
+// and the stale member m replaced if this is the same node reconnecting.
+func (r *relay) add(name string, m *member) ([]string, *member) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rm, ok := r.rooms[name]
 	if !ok {
-		return nil
+		return nil, nil
 	}
+	var stale *member
 	present := make([]string, 0, len(rm.members))
 	for other := range rm.members {
+		if m.session != "" && other.session == m.session {
+			delete(rm.members, other)
+			stale = other
+			continue
+		}
 		present = append(present, other.hostname)
 	}
 	rm.members[m] = struct{}{}
-	return present
+	return present, stale
 }
 
-// leave removes m and reaps the room once it is empty. A nil m only reaps.
+// leave removes m and reaps the room once it is empty. A nil m only reaps, and so
+// does an m that add already replaced: the room was never told it left.
 func (r *relay) leave(name string, m *member) {
 	r.mu.Lock()
 	rm, ok := r.rooms[name]
@@ -203,14 +212,13 @@ func (r *relay) leave(name string, m *member) {
 		r.mu.Unlock()
 		return
 	}
-	if m != nil {
-		delete(rm.members, m)
-	}
+	_, present := rm.members[m]
+	delete(rm.members, m)
 	if len(rm.members) == 0 {
 		delete(r.rooms, name)
 	}
 	r.mu.Unlock()
-	if m != nil {
+	if present {
 		r.broadcast(name, m, notice(m.hostname, fmt.Sprintf("%s has left", m.hostname)))
 	}
 }
@@ -267,7 +275,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	m := &member{hostname: hostname, ch: make(chan []byte, sendBuffer)}
+	m := &member{hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer)}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
@@ -277,7 +285,10 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	conn.SetReadLimit(readLimit)
 	m.conn = conn
-	present := r.add(name, m)
+	present, stale := r.add(name, m)
+	if stale != nil {
+		stale.conn.CloseNow()
+	}
 
 	c, cancel := context.WithCancel(req.Context())
 	defer func() {
@@ -289,8 +300,11 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	go r.write(c, m)
 	log.Printf("%s joined %s from %s\n", hostname, name, ip)
 	// the room learns about the joiner, and the joiner learns about the room --
-	// without the second half the last one in would think it was alone
-	r.broadcast(name, m, notice(hostname, fmt.Sprintf("%s has joined", hostname)))
+	// without the second half the last one in would think it was alone. A
+	// reconnect is not news to the room, which never heard it leave.
+	if stale == nil {
+		r.broadcast(name, m, notice(hostname, fmt.Sprintf("%s has joined", hostname)))
+	}
 	for _, other := range present {
 		select {
 		case m.ch <- notice(other, fmt.Sprintf("connected to %s", other)):

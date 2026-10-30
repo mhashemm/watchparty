@@ -155,6 +155,16 @@ by this feature.
   member has a 64-frame buffered channel and its own writer goroutine; the send is
   `select`/`default` and a member 64 frames behind is closed. One stalled TCP
   connection must not freeze the party.
+- **A reconnect replaces, it does not rejoin.** Each node sends a random
+  `session` (`rand.Text()`, once per process) in the dial query. When a new
+  connection arrives with a session already in the room, `add` swaps the old
+  member out and `CloseNow`s it. The room gets no new "has joined" and the
+  stale member's `leave` sends no "has left", since `leave` only announces a
+  member it actually removed. This is keyed on session, not hostname: two
+  machines that share a hostname would otherwise keep kicking each other out.
+  A connection with no session (an old client) is never deduped. e2e `[R12]`
+  covers this through a TCP proxy that drops the node's side of the connection
+  and leaves the relay's side open.
 - **30s `conn.Ping`** per member. A party sits idle for hours between pauses, and
   NAT/proxy idle timeouts kill the connection silently without it.
 - **No `ReadTimeout` on the `http.Server`**, deliberately: it puts an absolute
@@ -235,7 +245,6 @@ Confirmed by reading the code, not yet fixed:
 - [ ] Real playback events still block on `incoming` during the `-cooldown` window, since `ProcessIncomingEvents` only starts after it — the 1024 buffer is what carries the gap. `Server.Event` bails out on `req.Context()` rather than wedging, but nothing is applied until mpv is up.
 - [ ] `/bye` and `/event` trust the `hit-me-up`/`counter` headers (P2P only). The counter check stops replays and unknown addresses, but a peer can still spoof another peer's address. Needs signing to go further, which is more than a LAN tool wants.
 - [ ] Relay identity is only as strong as the room secret: the `hostname` is whatever the joiner claims, so anyone who knows the secret can impersonate a member. Same trade as above.
-- [ ] A relay reconnect is a fresh join, so the room is told "X has joined" again and the stale member lingers until the 30s ping reaps it.
 
 ## Reference
 
