@@ -66,11 +66,14 @@ print.
 
 | File | Role |
 |---|---|
-| `main.go` | HTTP server, guard, party lifecycle, log capture, `form.config()` |
+| `main.go` | HTTP server, guard, party lifecycle, log capture, `form.config()`, the `/state`, `/settings` and `/history/clear` handlers |
+| `store.go` | the saved settings and party history (`gui.json`) |
+| `update.go` | the self-update: version, GitHub release check, verified download and swap |
 | `index.html` | the entire UI: CSS, inline SVG art, vanilla JS. `//go:embed`ed |
 | `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile` (the XDG portal on Linux, osascript on macOS), no-op `hide` |
 | `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker and `CREATE_NO_WINDOW` |
 | `main_test.go` | `form.config()` per mode plus its errors, and the host/token guard table |
+| `store_test.go` | a party recorded and reloaded (invite → room/secret, people from notices, dedupe, "has left" ignored), the history cap, `notice()` |
 | `os_unix_test.go` | `fileURIPath`: plain, percent-encoded and non-ASCII portal URIs, plus rejecting a non-`file` URI |
 
 ### Server
@@ -94,6 +97,11 @@ print.
   | `POST /start` | JSON `form` → `party.Config`, then `party.Run` in a goroutine. 400 on a bad form, 409 if a party is running |
   | `POST /stop` | cancels the party's context |
   | `GET /log?from=N&run=R` | `{run, from, lines, running, exitErr}` |
+  | `GET /state` | `{settings, history, path, version}` from the store |
+  | `POST /settings` | saves the Settings page's fields (relay, mpv, mpvFlags, cooldown, createKey, pport) |
+  | `POST /history/clear` | empties the history |
+  | `GET /update` | `{current, latest, available}`: asks GitHub for the latest release |
+  | `POST /update` | installs the latest release and restarts (see "Self-update") |
 
 - **`form.config()`** trims every field.
   - Empty numbers fall back to `party.DefaultPort` / `party.DefaultCooldown`, the
@@ -118,6 +126,62 @@ print.
   rejection, port already in use), and a setup error otherwise (mpv not found,
   UPNP failed, no network). The page maps "mpv … not found" to its own diagnosis.
 
+### Saved settings and history (`store.go`)
+
+- **One JSON file, `os.UserConfigDir()/watchparty/gui.json`**: `~/.config/...` on
+  Linux, `%AppData%\...` on Windows, `~/Library/Application Support/...` on macOS. The
+  Settings page shows the exact path.
+  - It is written atomically (temp file + rename) on every change, with mode 0600 in
+    a 0700 directory. It holds room secrets and the create key.
+  - `save()` must be called with `store.mu` held. Lock order is always `g.mu` →
+    `store.mu`, never the reverse: `gui.Write` and `/start` hold `g.mu` while they
+    record into the store.
+- **Why not `localStorage`:** the server listens on a random port each launch, which
+  makes the page a different origin every time. Browser storage was silently empty on
+  every start, so "remember my name" never worked until it moved server-side.
+- **Settings** (`settings`): the name, `local` and `port` are remembered from the last
+  party, the latter two only from a Wi-Fi party. Everything on the Settings page
+  (default relay, mpv, mpvFlags, cooldown, createKey, pport) is saved by its Save
+  button. The first relay you use becomes the default relay if none is set.
+- **History** (`session`), up to `maxHistory` (100) parties, oldest dropped:
+  - `begin` records the movie, mode, relay/room/secret or friend's address, and the
+    start time when `/start` succeeds. `end` stamps the end time.
+  - `observe` runs on **every log line during a party** (from `gui.Write`):
+    - `your address to share is …` fills in `invite` and the *real* room and secret.
+      The relay generates them when the fields were empty, so the form values alone
+      would be blank.
+    - on-screen notices (parsed from `do: sent request:` by `notice()`) add people:
+      "X has joined" and "connected to X". "has left", "paused by" and the rest are
+      ignored, and each name is listed once.
+  - "Watch again" refills the Party form from an entry: the movie, plus the relay,
+    room and secret or the friend's address.
+
+### Self-update (`update.go`)
+
+- **`version`** is `"dev"` unless the release workflow stamps it with `-ldflags "-X
+  main.version=<tag>"`. A `dev` build never offers or installs updates, so a local
+  build can't overwrite itself with a release. Releases up to v0.0.11 carry no
+  version and report `dev`, so they have to be replaced by hand once.
+- **Check:** `GET` `releases/latest` from the GitHub API (15s timeout). `newer`
+  compares dotted numbers after an optional `v`.
+- **Install** (`POST /update`, refused while a party runs):
+  1. Pick this platform's asset by `assetName(GOOS, GOARCH)`, matching the release
+     matrix's names.
+  2. Download it next to the running binary (same filesystem, so the swap is a
+     rename).
+  3. **Refuse it unless its SHA-256 matches the `digest` GitHub publishes for the
+     asset.** No digest means no install.
+  4. Swap it in with `replaceExe`:
+     - Linux and macOS: an atomic rename over the running file. The running process
+       keeps its old inode.
+     - Windows: a running `.exe` can't be overwritten, so it is renamed to `.old` and
+       the new one put in its place (with a rollback if that fails). Every start
+       deletes a leftover `.old`.
+  5. Start the new binary, answer the request, and quit a second later. The new
+     process opens its own window, and the old page says so.
+- Verified end to end against the real v0.0.11 release: a build stamped `v0.0.1`
+  updated itself, and the installed file matched GitHub's digest.
+
 ### Finding mpv
 
 An empty mpv field becomes the absolute path of a sibling `mpv(.exe)`, and falls back
@@ -135,17 +199,35 @@ install it themselves.
 - **The GUI's own context** is a `signal.NotifyContext`. Each party's context derives
   from it. On SIGINT/SIGTERM, `main` cancels the running party and `wg.Wait()`s for
   `Run` to return before exiting, so Ctrl-C on the GUI never leaks a UPNP mapping.
-- **Idle exit:** the Windows build is `-H=windowsgui` and has no console window to
-  close. So a ticker cancels that same context once **no party is running and no
-  `/log` poll has arrived for 2 minutes**.
+- **Closing the window shuts everything down.** `openWindow` launches the browser as
+  **its own instance**, with a fresh temporary profile (`--user-data-dir` under
+  `os.TempDir()`), so the browser process the GUI started lives exactly as long as
+  the window. When it exits, `main` logs `gui: window closed` and cancels the GUI's
+  context. That ends any running party gracefully (`/bye`, mpv closed, UPNP mapping
+  deleted), and the temporary profile is deleted.
+  - **A fresh profile per launch, not a shared one.** With a shared profile, a second
+    GUI's browser would hand its window to the first instance and exit at once.
+  - **The hand-off guard:** a browser that exits within `handoffWindow` (5s) is
+    assumed to have passed the page to another, already-running instance, not to have
+    been closed. Then the window can't be watched, and the idle exit below applies.
+    Edge's background "startup boost" on Windows is the expected case. Without the
+    guard, the app would quit the instant it opened.
+  - Verified on Linux with a stand-in browser:
+    - closing mid-party sent "has left" to the guest, closed the host's mpv, removed
+      the profile, saved the party as ended, and exited
+    - an instant browser exit did not shut the GUI down
+- **Idle exit**, the fallback when the window can't be watched (the default browser
+  opened a tab, or a hand-off): a ticker cancels the context once **no party is
+  running and no `/log` poll has arrived for 2 minutes**. The Windows build is
+  `-H=windowsgui` with no console to close, so this matters there.
   - Don't shorten that: Chrome throttles timers in a minimized or hidden window to
     about one per minute, and a shorter window would kill the server under a GUI that
     is still open.
   - The first poll gets a one-minute grace period (`lastPoll` starts in the future),
     so a slow first browser launch is fine.
-- The GUI never exits while a party runs, even if the window is closed. Opening the
-  GUI again starts a second instance on a new port, which cannot see the first one's
-  party.
+- In that fallback, the GUI never exits while a party runs, even if the tab is
+  closed. Opening the GUI again starts a second instance on a new port, which cannot
+  see the first one's party.
 
 ### OS helpers
 
@@ -181,11 +263,19 @@ install it themselves.
 - On macOS and Windows, a non-zero exit from the picker command (`*exec.ExitError`)
   means cancelled and returns an empty path.
 - **Window:** each browser in `browsers` is tried with `--app=URL
-  --window-size=560,940`, then `openURL` (`rundll32` / `xdg-open` / `open`).
-  - Windows lists absolute Edge/Chrome paths, because `msedge` is not on `PATH` and
-    `cmd /c start msedge` shows an error dialog when it is missing.
-  - The browser is never killed, and the GUI does not learn when the window closes.
-    That is what the poll heartbeat is for.
+  --window-size=560,940 --user-data-dir=<temp> --no-first-run
+  --no-default-browser-check`, then `openURL` (`rundll32` / `xdg-open` / `open`)
+  opens the default browser as a plain tab.
+  - **Only Chromium-family browsers are in the list**, because only they have an
+    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name.
+  - Windows lists absolute paths, **Chrome first, then Edge**. Edge ships with every
+    Windows 10/11, so the app window always works there. Chrome goes first because
+    Edge's startup boost can hand windows off. `msedge` is not on `PATH`, and `cmd /c
+    start msedge` shows an error dialog when it is missing.
+  - **Firefox has no app mode**, so it's never used for the window. It only appears as
+    the default-browser tab when no Chromium-family browser is installed. Closing that
+    tab can't be detected, so the idle exit applies.
+  - macOS has no list (the browsers aren't on `PATH`), so it always opens a tab.
 
 ## Log-line contract
 
@@ -242,7 +332,15 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 
 ### Layout and voice
 
-- One centred card, `min(520px, 100% - 32px)`.
+- One centred card, `min(520px, 100% - 32px)`, with three views switched by the pill
+  tabs under the title:
+  - **Party**: Vitals and the form
+  - **History**: recent parties, newest first, each with **Watch again**
+  - **Settings**: the defaults, then **About** with the version, the Update button and
+    the saved-file path. A red dot on the Settings tab means an update is available.
+
+  The view is mirrored in the URL hash (`#history`, `#settings`), so a reload keeps it
+  and a screenshot can open a view directly.
 - The **Vitals** section sits above the form and is hidden until the first `/start`.
 - While a party runs, the form fieldset is `hidden` (not just disabled), so Vitals and
   the End button sit right under the title.
@@ -345,8 +443,8 @@ him; change only what is asked, and show options before changing his face.**
   fields showed up in relay mode.
 - **`render()`** writes the button text to `#go-label`, not `#go`. Writing
   `#go.textContent` would delete the paw icon.
-- **`localStorage`** (`watchparty-gui`, every access in try/catch) remembers every
-  field except the movie path, which changes each time.
+- **Nothing is kept in browser storage.** See "Saved settings and history" for why.
+  The page loads everything from `GET /state`.
 - **Reduced motion** stops every ambient animation and leaves the turtles parked
   mid-ground. Hearts still play, because they answer a click.
 - **Copy invite** uses `navigator.clipboard`. That works because `127.0.0.1` is a
@@ -378,7 +476,10 @@ Everything Windows-specific compiles, but has not been run on Windows:
 - No console window flashes for the picker.
 - mpv's window shows up when it is launched from a `-H=windowsgui` parent through
   `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE`.
-- Edge opens in `--app` mode from the listed paths.
+- Chrome and Edge open in `--app` mode from the listed paths, and with a fresh
+  `--user-data-dir` the launched process stays alive until the window is closed. If
+  either one hands off and exits at once, the hand-off guard keeps the app running,
+  but closing the window then won't stop it.
 
 Verified on Linux, in-process, against real mpv: relay and direct parties driven
 through two GUIs, pause and resume propagating, the party feed, Stop sending "has

@@ -37,7 +37,7 @@ jobs:
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o ${{ matrix.out }} .
 
       - name: Build gui
-        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-X main.version=${{ github.ref_name }} ${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
 
       - name: Publish
         run: gh release create "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} --generate-notes || gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }}

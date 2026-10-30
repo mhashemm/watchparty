@@ -93,18 +93,21 @@ type gui struct {
 	page        []byte
 	mux         *http.ServeMux
 	ctx         context.Context
+	quit        func()
 	wg          sync.WaitGroup
 
 	mu       sync.Mutex
 	cancel   context.CancelFunc
+	store    *store
+	session  int
 	run      int
 	lines    []string
 	exitErr  string
 	lastPoll time.Time
 }
 
-func newGUI(ctx context.Context, host string) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux()}
+func newGUI(ctx context.Context, host string, st *store) *gui {
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux(), store: st, session: -1}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -114,6 +117,11 @@ func newGUI(ctx context.Context, host string) *gui {
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
 	g.mux.HandleFunc("GET /log", g.log)
+	g.mux.HandleFunc("GET /update", g.checkUpdate)
+	g.mux.HandleFunc("POST /update", g.update)
+	g.mux.HandleFunc("GET /state", g.state)
+	g.mux.HandleFunc("POST /settings", g.saveSettings)
+	g.mux.HandleFunc("POST /history/clear", g.clearHistory)
 	return g
 }
 
@@ -156,6 +164,7 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	c, cancel := context.WithCancel(g.ctx)
 	g.cancel, g.lines, g.exitErr = cancel, nil, ""
 	g.run++
+	g.session = g.store.begin(f)
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
@@ -163,7 +172,8 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 		cancel()
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.cancel = nil
+		g.store.end(g.session)
+		g.cancel, g.session = nil, -1
 		if err != nil {
 			g.exitErr = err.Error()
 		}
@@ -175,8 +185,58 @@ func (g *gui) Write(p []byte) (int, error) {
 	defer g.mu.Unlock()
 	for line := range strings.SplitSeq(strings.TrimRight(string(p), "\n"), "\n") {
 		g.lines = append(g.lines, line)
+		if g.session >= 0 {
+			g.store.observe(g.session, line)
+		}
 	}
 	return len(p), nil
+}
+
+func (g *gui) state(w http.ResponseWriter, r *http.Request) {
+	g.store.mu.Lock()
+	b, err := json.Marshal(struct {
+		Settings settings  `json:"settings"`
+		History  []session `json:"history"`
+		Path     string    `json:"path"`
+		Version  string    `json:"version"`
+	}{g.store.Settings, g.store.History, g.store.path, version})
+	g.store.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
+func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
+	in := settings{}
+	err := json.NewDecoder(r.Body).Decode(&in)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	s := &g.store.Settings
+	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
+	s.Cooldown, s.CreateKey, s.PPort = strings.TrimSpace(in.Cooldown), strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
+	err = g.store.save()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (g *gui) clearHistory(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.History, g.session = nil, -1
+	err := g.store.save()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (g *gui) stop(w http.ResponseWriter, r *http.Request) {
@@ -240,19 +300,35 @@ func dialog(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-func openWindow(url string) {
-	for _, browser := range browsers {
-		cmd := exec.Command(browser, "--app="+url, "--window-size=560,940")
-		if cmd.Start() == nil {
-			go cmd.Wait()
-			return
+func openWindow(url string) <-chan struct{} {
+	profile, err := os.MkdirTemp("", "watchparty-gui-browser-")
+	if err == nil {
+		for _, browser := range browsers {
+			cmd := exec.Command(browser, "--app="+url, "--window-size=560,940", "--user-data-dir="+profile, "--no-first-run", "--no-default-browser-check")
+			if cmd.Start() != nil {
+				continue
+			}
+			closed := make(chan struct{})
+			started := time.Now()
+			go func() {
+				cmd.Wait()
+				os.RemoveAll(profile)
+				if time.Since(started) > handoffWindow {
+					close(closed)
+				}
+			}()
+			return closed
 		}
+		os.RemoveAll(profile)
 	}
 	cmd := openURL(url)
 	if cmd.Start() == nil {
 		go cmd.Wait()
 	}
+	return nil
 }
+
+const handoffWindow = 5 * time.Second
 
 func main() {
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -262,11 +338,21 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	g := newGUI(c, ln.Addr().String())
+	g := newGUI(c, ln.Addr().String(), openStore(storePath()))
+	g.quit = stop
+	if exe, err := os.Executable(); err == nil {
+		os.Remove(exe + ".old")
+	}
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
-	openWindow(url)
+	if closed := openWindow(url); closed != nil {
+		go func() {
+			<-closed
+			log.Println("gui: window closed")
+			stop()
+		}()
+	}
 
 	go http.Serve(ln, g)
 	go func() {

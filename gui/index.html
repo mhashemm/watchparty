@@ -221,6 +221,20 @@ details { border-top: 2px dashed var(--line); padding-top: 12px; margin: 6px 0 1
 summary { cursor: pointer; font-weight: 700; color: var(--bark); }
 details[open] summary { margin-bottom: 14px; }
 
+.tabs { display: flex; gap: 6px; justify-content: center; margin: -6px 0 24px; }
+.tabs button { font-size: .9rem; padding: 6px 16px; border-radius: 999px; border-color: var(--line); }
+.tabs button[aria-current="page"] { border-color: var(--moss); background: #eef3df; color: var(--forest); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--berry); margin-left: 6px; vertical-align: 2px; }
+#history-list { list-style: none; padding: 0; margin: 0 0 18px; }
+#history-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+#history-list b { word-break: break-word; }
+#history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
+#history-list .again { grid-column: 2; grid-row: 1 / span 2; }
+.about { margin-top: 26px; border-top: 2px dashed var(--line); padding-top: 18px; }
+.about p { margin: 0 0 10px; }
+.about code { font-size: .85rem; word-break: break-all; color: var(--soil); }
+#settings-saved { margin-left: 10px; }
+button.small { font-size: .875rem; padding: 4px 10px; border-radius: 10px; margin-left: 6px; }
 .msg { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: #eef3df; }
 .msg.bad { background: #f6e4e0; color: var(--berry); }
 
@@ -393,6 +407,13 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
     <h1><svg class="title-mush" viewBox="0 0 32 32" aria-hidden="true"><path d="M12 18h8l1 11h-10z" fill="#f1ead6" stroke="#6e4b30" stroke-width="1.5"/><path d="M3 18C5 5 27 5 29 18z" fill="#a8642a" stroke="#4a3220" stroke-width="1.5"/><circle cx="11" cy="12" r="2" fill="#f6efdc"/><circle cx="19" cy="9.5" r="1.6" fill="#f6efdc"/></svg>Fosdo2's Movie Clinic</h1>
     <p class="lede">Pick a movie and start the party. When anyone pauses or seeks, everyone's player follows.</p>
 
+    <nav class="tabs" aria-label="Sections">
+      <button type="button" data-view="party" aria-current="page">Party</button>
+      <button type="button" data-view="history">History</button>
+      <button type="button" data-view="settings">Settings<span class="dot" id="update-dot" hidden></span></button>
+    </nav>
+
+    <div id="view-party">
     <section id="vitals" hidden aria-live="polite">
       <h2>Vitals <svg class="ecg" viewBox="0 0 64 20" aria-hidden="true"><path d="M0 11 H18 L22 4 L27 17 L31 2 L35 11 H64"/></svg></h2>
       <p class="status" id="status"></p>
@@ -468,39 +489,63 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           </div>
         </div>
 
-        <details>
-          <summary>Extra settings</summary>
-          <div class="field">
-            <label for="mpv">mpv program</label>
-            <div class="row">
-              <input type="text" id="mpv" placeholder="Found automatically">
-              <button type="button" data-pick="mpv">Browse</button>
-            </div>
-          </div>
-          <div class="field">
-            <label for="mpvFlags">Extra mpv options</label>
-            <input type="text" id="mpvFlags" placeholder="--fullscreen --volume=70">
-          </div>
-          <div class="grid">
-            <div class="field">
-              <label for="cooldown">Seconds to wait for mpv</label>
-              <input type="text" id="cooldown" inputmode="numeric" placeholder="5">
-            </div>
-            <div class="field">
-              <label for="createKey">Room create key</label>
-              <input type="password" id="createKey" placeholder="Only if the relay asks">
-            </div>
-            <div class="field">
-              <label for="pport">Public port</label>
-              <input type="text" id="pport" inputmode="numeric" placeholder="6969">
-            </div>
-          </div>
-        </details>
       </fieldset>
 
       <p class="msg bad" id="error" hidden></p>
       <button class="go" id="go" type="submit"><svg class="paw-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="16" rx="5.5" ry="4.5"/><circle cx="5" cy="10" r="2.3"/><circle cx="9.3" cy="5.5" r="2.3"/><circle cx="14.7" cy="5.5" r="2.3"/><circle cx="19" cy="10" r="2.3"/></svg><span id="go-label">Start the party</span></button>
     </form>
+    </div>
+
+    <section id="view-history" hidden>
+      <h2>Recent parties</h2>
+      <p class="hint" id="history-empty">No parties yet. Each one shows up here after you start it, with the movie and everyone who joined.</p>
+      <ul id="history-list"></ul>
+      <button type="button" id="clear-history" hidden>Clear history</button>
+    </section>
+
+    <section id="view-settings" hidden>
+      <form id="settings-form">
+        <h2>Defaults</h2>
+        <div class="field">
+          <label for="set-relay">Default relay address</label>
+          <input type="text" id="set-relay" placeholder="ws://example.com:8080">
+          <p class="hint">Filled in for you on the Party page.</p>
+        </div>
+        <div class="field">
+          <label for="mpv">mpv program</label>
+          <div class="row">
+            <input type="text" id="mpv" placeholder="Found automatically">
+            <button type="button" data-pick="mpv">Browse</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="mpvFlags">Extra mpv options</label>
+          <input type="text" id="mpvFlags" placeholder="--fullscreen --volume=70">
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="cooldown">Seconds to wait for mpv</label>
+            <input type="text" id="cooldown" inputmode="numeric" placeholder="5">
+          </div>
+          <div class="field">
+            <label for="createKey">Room create key</label>
+            <input type="password" id="createKey" placeholder="Only if the relay asks">
+          </div>
+          <div class="field">
+            <label for="pport">Public port</label>
+            <input type="text" id="pport" inputmode="numeric" placeholder="6969">
+          </div>
+        </div>
+        <button type="submit">Save settings</button>
+        <span class="hint" id="settings-saved" hidden></span>
+      </form>
+
+      <div class="about">
+        <h2>About</h2>
+        <p><span id="version-text">Checking the version…</span> <button type="button" class="small" id="update" hidden></button></p>
+        <p class="hint">Your name, settings and party history are saved on this computer in <code id="store-path"></code></p>
+      </div>
+    </section>
 
   </div>
 </main>
@@ -582,7 +627,6 @@ const api = (path, body) => fetch(path, {
 });
 
 const FIELDS = ["hostname", "relay", "room", "secret", "createKey", "port", "pport", "addrs", "mpv", "mpvFlags", "cooldown"];
-const SAVE_KEY = "watchparty-gui";
 
 function mode() { return document.querySelector("input[name=mode]:checked").value; }
 function setMode(m) {
@@ -597,19 +641,85 @@ function collect() {
   for (const k of FIELDS) f[k] = $(k).value;
   return f;
 }
-function save() {
-  const f = collect();
-  delete f.file;
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(f)); } catch {}
+let saved = { settings: {}, history: [] };
+async function loadState() {
+  try { saved = await (await api("/state")).json(); } catch { return; }
+  const s = saved.settings || {};
+  if (!$("hostname").value) $("hostname").value = s.hostname || "";
+  if (!$("relay").value) $("relay").value = s.relay || "";
+  if (!$("port").value) $("port").value = s.port || "";
+  $("local").checked = s.local !== false;
+  for (const k of ["mpv", "mpvFlags", "cooldown", "createKey", "pport"]) $(k).value = s[k] || "";
+  $("set-relay").value = s.relay || "";
+  $("store-path").textContent = saved.path;
+  renderHistory();
 }
-function load() {
-  let f = null;
-  try { f = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch {}
-  if (!f) return;
-  for (const k of FIELDS) if (typeof f[k] === "string") $(k).value = f[k];
-  $("local").checked = f.local !== false;
-  setMode(f.mode === "direct" ? "direct" : "relay");
+
+function show(view) {
+  for (const v of ["party", "history", "settings"]) $("view-" + v).hidden = v !== view;
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-current", b.dataset.view === view ? "page" : "false"));
+  history.replaceState(null, "", view === "party" ? location.pathname : "#" + view);
 }
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  show(b.dataset.view);
+  if (b.dataset.view === "history") loadState();
+}));
+
+const fileName = path => (path || "").split(/[\\/]/).pop() || path;
+const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
+function renderHistory() {
+  const parties = (saved.history || []).slice().reverse();
+  $("history-empty").hidden = parties.length > 0;
+  $("clear-history").hidden = parties.length === 0;
+  $("history-list").replaceChildren(...parties.map(p => {
+    const li = document.createElement("li");
+    const title = document.createElement("b");
+    title.textContent = fileName(p.file);
+    title.title = p.file;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    const when = new Date(p.started).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    const who = p.people && p.people.length ? `with ${names(p.people)}` : "just you";
+    meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "on Wi-Fi" : "over the internet"}`;
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = "small again";
+    again.textContent = "Watch again";
+    again.disabled = running;
+    again.addEventListener("click", () => watchAgain(p));
+    li.append(title, meta, again);
+    return li;
+  }));
+}
+function watchAgain(p) {
+  $("file").value = p.file;
+  if (p.mode === "direct") {
+    setMode("direct");
+    $("addrs").value = p.addrs || "";
+  } else {
+    setMode("relay");
+    $("relay").value = p.relay || $("relay").value;
+    $("room").value = p.room || "";
+    $("secret").value = p.secret || "";
+  }
+  show("party");
+}
+$("clear-history").addEventListener("click", async () => {
+  if (!confirm("Clear the whole party history?")) return;
+  await api("/history/clear", {});
+  await loadState();
+});
+
+$("settings-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const body = { relay: $("set-relay").value };
+  for (const k of ["mpv", "mpvFlags", "cooldown", "createKey", "pport"]) body[k] = $(k).value;
+  const res = await api("/settings", body);
+  $("settings-saved").textContent = res.ok ? "Saved." : `Couldn't save: ${(await res.text()).trim()}`;
+  $("settings-saved").hidden = false;
+  setTimeout(() => $("settings-saved").hidden = true, 3000);
+  if (res.ok && !$("relay").value) $("relay").value = body.relay;
+});
 
 $("invite").addEventListener("input", () => {
   const text = $("invite").value.replace(/^[\s\S]*your address to share is/, "").trim();
@@ -658,12 +768,12 @@ $("form").addEventListener("submit", async e => {
   }
   showError("");
   if (!$("file").value.trim()) { showError("Pick a movie first."); $("file").focus(); return; }
-  save();
   const res = await api("/start", collect());
   if (!res.ok) {
     const text = (await res.text()).trim();
     showError("Diagnosis: " + text + ".");
   }
+  if (res.ok) loadState();
 });
 
 let run = 0, from = 0, state = {};
@@ -721,7 +831,7 @@ function render(exitErr) {
     text = "You're in. Pause or seek in mpv and everyone follows.";
   } else if (exitErr) {
     text = /mpv/.test(exitErr) && /not found|cannot find|no such file/i.test(exitErr)
-      ? "Diagnosis: mpv isn't installed, or this app can't find it. Install mpv, or choose mpv under Extra settings."
+      ? "Diagnosis: mpv isn't installed, or this app can't find it. Install mpv, or choose mpv on the Settings page."
       : `Diagnosis: ${exitErr}. The patient chart below has the details.`;
     bad = true;
     $("chart").open = true;
@@ -737,6 +847,8 @@ function render(exitErr) {
   $("go-label").textContent = running ? "End the party" : "Start the party";
   document.body.classList.toggle("alive", running && state.ready);
   $("go").classList.toggle("stop", running);
+  $("update").disabled = running;
+  document.querySelectorAll(".again").forEach(b => b.disabled = running);
 }
 
 async function poll() {
@@ -747,12 +859,14 @@ async function poll() {
     const lines = j.lines || [];
     lines.forEach(handle);
     from = j.from + lines.length;
+    if (running && !j.running) loadState();
     running = j.running;
     if (run > 0) {
       $("vitals").hidden = false;
       render(j.exitErr);
     }
   } catch {
+    if (updated) return;
     showError("The app closed in the background. Close this window and open it again.");
     document.body.dataset.mood = "sleep";
   }
@@ -779,8 +893,40 @@ document.querySelector(".cat").addEventListener("click", () => {
   document.querySelector("main").append(heart);
 });
 
-load();
+let updated = false, latest = "";
+async function checkUpdate() {
+  try {
+    const j = await (await api("/update")).json();
+    $("version-text").textContent = j.current === "dev" ? "Development build" : `Version ${j.current}`;
+    if (j.available) {
+      latest = j.latest;
+      $("update").textContent = `Update to ${j.latest}`;
+      $("update").hidden = false;
+      $("update-dot").hidden = false;
+    }
+  } catch {}
+}
+$("update").addEventListener("click", async () => {
+  const b = $("update");
+  b.disabled = true;
+  b.textContent = "Updating…";
+  const res = await api("/update", {});
+  const text = (await res.text()).trim();
+  if (!res.ok) {
+    $("version-text").textContent = `Update failed: ${text}.`;
+    b.textContent = `Update to ${latest}`;
+    b.disabled = running;
+    return;
+  }
+  updated = true;
+  b.hidden = true;
+  $("version-text").textContent = `Updated to ${text}. The new version is opening in its own window, so you can close this one.`;
+});
+
+if (["history", "settings"].includes(location.hash.slice(1))) show(location.hash.slice(1));
+loadState();
 poll();
+checkUpdate();
 </script>
 </body>
 </html>

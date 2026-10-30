@@ -12,10 +12,10 @@ import (
 const exeSuffix = ".exe"
 
 var browsers = []string{
-	filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
-	filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
 	filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
 	filepath.Join(os.Getenv("LocalAppData"), `Google\Chrome\Application\chrome.exe`),
+	filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
+	filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
 }
 
 func openURL(url string) *exec.Cmd {
@@ -34,4 +34,18 @@ func pickFile() (string, error) {
 
 func hide(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+}
+
+func replaceExe(src, dst string) error {
+	old := dst + ".old"
+	os.Remove(old)
+	err := os.Rename(dst, old)
+	if err != nil {
+		return err
+	}
+	err = os.Rename(src, dst)
+	if err != nil {
+		os.Rename(old, dst)
+	}
+	return err
 }
