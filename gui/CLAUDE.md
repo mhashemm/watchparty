@@ -32,9 +32,17 @@ chromium --headless --disable-gpu --hide-scrollbars --force-prefers-reduced-moti
   --window-size=560,940 --virtual-time-budget=4000 --screenshot=out.png http://127.0.0.1:<port>/
 ```
 
-- **`--force-prefers-reduced-motion`** freezes the turtles at a fixed position. Without
-  it, a screenshot taken at t≈0 has them offscreen at `translateX(-90px)`.
-- **`--force-device-scale-factor=2`** with a short window gives a close-up of Fosdo2.
+- **`--force-prefers-reduced-motion`** freezes the turtles and Fosdo2 at their static
+  pose. Without it, a screenshot taken at t≈0 has the turtles offscreen at
+  `translateX(-90px)`.
+- **`--virtual-time-budget` does not advance CSS animation time**, so waiting longer
+  never shows a later frame. To capture a specific moment, inject `* {
+  animation-play-state: paused !important; animation-delay: -<seconds>s !important; }`
+  into a copy of the page (strip the `<script>` and set `<body data-mood="awake">` so
+  polling doesn't reset the mood). For example, -13.6s is mid-lick. A GIF of one cycle
+  is just those frames joined by `ffmpeg`.
+- **`--force-device-scale-factor=2`** or 3 with a short window gives a close-up of
+  Fosdo2.
 - **560×940** is the size of the real app window. Check every visual change at that
   size, and at a wide browser tab (1280×800) for the fallback path.
 
@@ -217,8 +225,8 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 - **Voice:** plain, active, sentence case. The medical theme lives in the names only:
   "Fosdo2's Movie Clinic" (with a small mushroom before it), "Vitals", "Patient chart" (the raw log), and every error
   starts with "Diagnosis:" followed by what happened and what to do.
-- Avoid the generic AI-page tells: no all-caps labels, no eyebrows, no `→` on
-  buttons, no middle-dot meta strings.
+- Avoid the generic AI-page tells: no all-caps labels, no small "eyebrow" labels above
+  headings, no `→` on buttons, no middle-dot meta strings.
 
 ### Fosdo2 (`svg.cat`)
 
@@ -272,10 +280,7 @@ him; change only what is asked, and show options before changing his face.**
     closed eyes and the `z`s.
   - **Reduced motion** stops the tail, blink, lick and `z`s. The lick parts then stay
     at their static state: paw down, eyes open.
-  - **Previewing a frame:** headless Chrome does not advance CSS animation time with
-    `--virtual-time-budget`. To screenshot a moment, inject `* { animation-play-state:
-    paused !important; animation-delay: -<seconds>s !important; }` into a copy of the
-    page. For example, -13.6s is mid-lick.
+    - **Previewing a frame:** see "Looking at the UI" above.
 - **Moods** come from `body[data-mood]`, set in `render()`:
   - `sleep` (idle or ended): closed eyes, floating `z`s, a slow tail
   - `awake` (running, and on errors): hazel eyes, blinking, tail swishing, licking
@@ -287,7 +292,10 @@ him; change only what is asked, and show options before changing his face.**
 ### Ground, mushrooms and turtles (`svg.ground`)
 
 - `position: fixed` at the bottom, 560×130 and centred, so it is always visible.
-  The content scrolls *under* it.
+  The content scrolls *under* it, and **covering whatever has scrolled beneath is
+  intended**. The user prefers scrolling to read over a ground that takes its own space.
+  A layout with a separate, non-overlapping ground strip was tried and reverted, so
+  don't reintroduce it.
 - `main` has a 150px bottom margin so the card can scroll clear of the ground.
 - Layering:
   - `body::before`: a fixed 90px lichen fade, so content dissolves into the ground
@@ -320,6 +328,23 @@ him; change only what is asked, and show options before changing his face.**
 - **Copy invite** uses `navigator.clipboard`. That works because `127.0.0.1` is a
   secure context. If it fails, the invite text is selected and the button says to
   press Ctrl+C.
+
+## Working on the look
+
+Visual taste here is the user's call, and guessing has repeatedly gone wrong. What
+works:
+
+1. Make the change in a **sandbox copy** of `index.html` (or a standalone SVG) outside
+   the repo.
+2. Render it with the commands in "Looking at the UI". For a face change, render it
+   next to the current version and any reference the user gave.
+3. Show **two or three options** side by side, plus a GIF if it moves, and ask which
+   one.
+4. Apply only the chosen one, then check it in the real app during a live party.
+
+When a reference is given, work out *what makes it work* (proportions, eye
+construction, outline, simplicity) and apply that essence. Don't copy it wholesale:
+a full kawaii redraw of Fosdo2's face lost what made him him.
 
 ## Not yet verified
 

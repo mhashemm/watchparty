@@ -28,8 +28,15 @@ phases:
   peer lists. Covers mesh formation, propagation from any node, echo suppression,
   peer eviction and strike reset, `/bye`, and the header checks.
 - **`relay`** — the same nodes against one `./relay` process. Covers fan-out,
-  room isolation, the shared secret, every abuse cap, and reconnect after the
-  relay is killed mid-party.
+  room isolation, the shared secret, every abuse cap, reconnect after the
+  relay is killed mid-party, and `[R15b]`: closing a node's mpv is a normal end
+  (exit 0, the room hears "has left"). Every other case ends nodes with a signal,
+  which is how a regression there once slipped through.
+
+`e2e.py` does not drive the GUI. The GUI is covered by `go test ./gui` (the form →
+`Config` mapping and the request guard) and by the headless-Chrome checks described
+in `gui/CLAUDE.md`. Since it calls the same `party.Run`, the e2e suites cover
+everything underneath it.
 
 Needs `mpv` on PATH and a `-local`-reachable interface.
 
@@ -40,13 +47,19 @@ string (`f"paused by {A}"`) or the `pauses()` helper.
 Nodes are staggered ~1.6s apart on startup: the socket is named
 `/tmp/mpv<unixtime>`, so two started in the same second would collide on one path.
 
-Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
+Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
 
 Manual run (two terminals / two machines):
 
 ```sh
 ./watchparty -local -file movie.mkv -port 6969
 ./watchparty -local -file movie.mkv -port 6970 -addrs 192.168.1.5:6969
+```
+
+Or with the GUI, which does all of the above from a form and needs only mpv:
+
+```sh
+go build -o watchparty-gui ./gui && ./watchparty-gui
 ```
 
 Or through a relay, which is what people behind carrier NAT need:
