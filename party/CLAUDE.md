@@ -129,8 +129,8 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
 
 - **`dial`** connects to `addr + "/ws?room=…&hostname=…&session=…"`, with the secret
   and create key in the `room-secret` / `create-key` **headers**, never in the query
-  string (proxies log query strings). `addr` is used verbatim, so `ws://host:8080/`
-  with a trailing slash produces `//ws`.
+  string (proxies log query strings). A trailing slash on `addr` is trimmed, so an
+  invite pasted as `wss://host/` still dials `/ws`.
   - 403 and 400 → `errRejected`: `Connect` logs `rejected by relay` and calls
     `cancel()`. A wrong secret never becomes right, and retrying burns the relay's
     rate limiter.

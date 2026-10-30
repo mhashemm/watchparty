@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,7 +56,7 @@ var errRejected = errors.New("rejected by relay")
 
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}}
-	conn, res, err := websocket.Dial(c, r.addr+"/ws?"+q.Encode(), &websocket.DialOptions{
+	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+"/ws?"+q.Encode(), &websocket.DialOptions{
 		HTTPHeader: http.Header{secretHeaderKey: {r.secret}, createHeaderKey: {r.createKey}},
 	})
 	if err != nil && res != nil {

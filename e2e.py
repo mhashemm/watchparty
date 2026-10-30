@@ -668,8 +668,9 @@ def relay_suite():
         ok(f"{n} followed {b}'s seek", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
 
     print("\n[R9] a late joiner does not rewind the party to 0")
-    launch("nodeLate", room=ROOM, tag="late")
+    launch("nodeLate", room=ROOM, tag="late", relay=RELAY_URL + "/")
     time.sleep(BOOT + SETTLE)
+    ok("a trailing slash on the relay address still connects", "relay: connected" in log("late"))
     for n in NODES:
         v = get(n, "time-pos")
         ok(f"{n} still at 33s after a late join", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
