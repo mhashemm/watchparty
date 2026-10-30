@@ -27,10 +27,11 @@
   --fur-light: #d6c4a7;
   --paw: #f7f2e8;
   --ear: #e4b4a0;
-  --outline: #3a2a22;
-  --eye-top: #16210f;
-  --eye-mid: #2d4a20;
-  --eye-low: #86b84a;
+  --eye-in: #4f8f34;
+  --eye-mid: #86b04a;
+  --eye-gold: #c8a245;
+  --eye-out: #946330;
+  --blush: #ee9f98;
   --nose: #c98a79;
   --display: "Gluten", "Comic Sans MS", system-ui, sans-serif;
   --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -55,37 +56,58 @@ body {
 }
 main {
   width: min(520px, calc(100% - 32px));
-  margin: 112px 0 150px;
+  margin: 190px 0 150px;
   position: relative;
 }
 .cat {
   position: absolute;
-  width: 170px;
+  width: 180px;
   left: 50%;
-  top: -101px;
+  top: -181px;
   transform: translateX(-50%);
   z-index: 2;
   cursor: pointer;
   overflow: visible;
 }
-.cat .head { fill: var(--fur); stroke: var(--outline); stroke-width: 2.6; stroke-linejoin: round; }
+.cat .fur { fill: var(--fur); }
+.cat .ruff { stroke: var(--fur-dark); stroke-width: 1; stroke-opacity: .35; }
+.cat .stripe { stroke: var(--fur-dark); stroke-width: 3; stroke-linecap: round; fill: none; }
 .cat .ear { fill: var(--ear); }
-.cat .wisp { stroke: var(--fur-light); stroke-width: 1.6; stroke-linecap: round; fill: none; }
-.cat .stripe { stroke: var(--fur-dark); stroke-width: 2.6; stroke-linecap: round; fill: none; opacity: .7; }
-.cat .light { fill: var(--fur-light); }
-.cat .eye { fill: url(#eye-fill); stroke: var(--outline); stroke-width: 1.2; }
-.cat .glint { fill: #fff; }
-.cat .glint.small { fill: #e3f2c9; }
-.cat .line { stroke: var(--outline); stroke-width: 2; stroke-linecap: round; fill: none; }
-.cat .nose { fill: var(--nose); stroke: var(--outline); stroke-width: 1; }
-.cat .tongue { fill: #ef8f8c; stroke: var(--outline); stroke-width: 1.2; stroke-linejoin: round; }
-body[data-mood="sleep"] .cat .tongue { display: none; }
-.cat .paw { fill: var(--paw); stroke: var(--outline); stroke-width: 2; }
+.cat .cheek { fill: var(--blush); opacity: .75; }
+.cat .paw { fill: var(--paw); stroke: var(--fur-dark); stroke-width: 1.5; }
 .cat .toes { stroke: #b9ad9c; stroke-width: 1.5; stroke-linecap: round; }
+.cat .line { stroke: var(--forest); stroke-width: 2; stroke-linecap: round; fill: none; }
+.cat .eye { fill: url(#hazel); stroke: #4a3428; stroke-width: 1.3; }
+.cat .o { stroke: var(--fur-dark); stroke-width: 1.2; stroke-opacity: .45; stroke-linejoin: round; }
+.cat .seam { stroke: var(--fur-dark); stroke-width: 1.4; stroke-opacity: .5; stroke-linecap: round; }
+.cat .tongue { fill: #ef8f8c; }
+.cat .tail { transform-box: view-box; transform-origin: 136px 186px; animation: swish 3.2s ease-in-out infinite alternate; }
+@keyframes swish { from { transform: rotate(-5deg); } to { transform: rotate(7deg); } }
+.cat .head-move { transform-box: view-box; transform-origin: 100px 120px; }
+.cat .lick, .cat .lick-eyes { opacity: 0; }
+body:not([data-mood="sleep"]) .cat .lick { animation: lick-show 16s infinite; }
+body:not([data-mood="sleep"]) .cat .paw-lick { animation: lick-show 16s infinite, lick-bob 16s infinite; transform-box: view-box; }
+body:not([data-mood="sleep"]) .cat .paw-rest { animation: lick-hide 16s infinite; }
+body:not([data-mood="sleep"]) .cat .head-move { animation: lick-tilt 16s ease-in-out infinite; }
+body:not([data-mood="sleep"]) .cat .eyes-closed { display: inline; opacity: 0; animation: lick-show 16s infinite; }
+body:not([data-mood="sleep"]) .cat .eyes-open { animation: blink 6s infinite, lick-hide 16s infinite; }
+@keyframes lick-show { 0%, 79%, 99%, 100% { opacity: 0; } 81%, 97% { opacity: 1; } }
+@keyframes lick-hide { 0%, 79%, 99%, 100% { opacity: 1; } 81%, 97% { opacity: 0; } }
+@keyframes lick-bob { 0%, 81%, 86%, 91%, 96%, 100% { transform: translateY(0); } 83.5%, 88.5%, 93.5% { transform: translateY(-3px); } }
+@keyframes lick-tilt { 0%, 78%, 99%, 100% { transform: rotate(0); } 82%, 96% { transform: rotate(5deg); } }
+body[data-mood="sleep"] .cat .tail { animation-duration: 7s; }
+.cat .head { stroke: var(--fur); stroke-width: 5; stroke-linejoin: round; }
+.cat .pupil { fill: #1f1a14; }
+.cat .light { fill: var(--fur-light); }
+.cat .wisp { stroke: var(--fur-light); stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.cat .tuft { stroke: var(--fur-dark); stroke-width: 2; stroke-linecap: round; fill: none; }
+.cat .glint { fill: #fff; }
+.cat .nose { fill: var(--nose); stroke: var(--fur-dark); stroke-width: 1; }
+.cat .whisker { stroke: var(--paper); stroke-width: 1.4; stroke-linecap: round; opacity: .9; }
 .cat .eyes-closed { display: none; }
 body[data-mood="sleep"] .cat .eyes-open { display: none; }
 body[data-mood="sleep"] .cat .eyes-closed { display: inline; }
-.cat .eyes-open { transform-box: fill-box; transform-origin: center; animation: blink 6s infinite; }
+.cat .eyes-open { transform-box: fill-box; transform-origin: center; }
 @keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.1); } }
 .cat .steth { stroke: var(--moss-deep); stroke-width: 3.5; fill: none; stroke-linecap: round; }
 .cat .bell { fill: #dfe3e6; stroke: #7d8790; stroke-width: 1.5; }
@@ -98,7 +120,7 @@ body[data-mood="sleep"] .cat .zzz { display: inline; }
 @keyframes snooze { 0% { opacity: 0; transform: translate(0, 6px); } 30% { opacity: .9; } 100% { opacity: 0; transform: translate(6px, -10px); } }
 .heart {
   position: absolute;
-  top: -70px;
+  top: -120px;
   z-index: 3;
   color: var(--berry);
   font-size: 22px;
@@ -111,7 +133,7 @@ body[data-mood="sleep"] .cat .zzz { display: inline; }
   background: var(--paper);
   border: 2px solid var(--bark);
   border-radius: 22px;
-  padding: 54px 28px 28px;
+  padding: 34px 28px 28px;
   position: relative;
   z-index: 1;
   box-shadow: 0 6px 0 var(--bark);
@@ -283,7 +305,8 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 @keyframes step { from { transform: translateY(0); } to { transform: translateY(-2px); } }
 @keyframes bob { from { transform: translateY(0); } to { transform: translateY(-1.5px); } }
 @media (prefers-reduced-motion: reduce) {
-  .turtle, .turtle .leg, .turtle .body, .cat .eyes-open, .cat .zzz text, .ecg path { animation: none !important; }
+  .turtle, .turtle .leg, .turtle .body, .cat .eyes-open, .cat .zzz text, .ecg path,
+  .cat .tail, .cat .head-move, .cat .lick, .cat .paw-lick, .cat .paw-rest, .cat .eyes-closed { animation: none !important; }
   .turtle { transform: translateX(230px); }
   .turtle.baby { transform: translateX(196px); }
   .cat .zzz text { opacity: .8; }
@@ -296,42 +319,74 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 </head>
 <body data-mood="sleep">
 <main>
-  <svg class="cat" viewBox="0 0 160 142" role="img" aria-label="Fosdo2 the cat">
+  <svg class="cat" viewBox="0 0 200 220" role="img" aria-label="Fosdo2 the cat">
     <title>Fosdo2</title>
     <defs>
-      <linearGradient id="eye-fill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" style="stop-color: var(--eye-top)"/>
-        <stop offset=".55" style="stop-color: var(--eye-mid)"/>
-        <stop offset="1" style="stop-color: var(--eye-low)"/>
-      </linearGradient>
+      <radialGradient id="hazel" cx=".5" cy=".55" r=".6">
+        <stop offset="0" style="stop-color: var(--eye-in)"/>
+        <stop offset=".45" style="stop-color: var(--eye-mid)"/>
+        <stop offset=".78" style="stop-color: var(--eye-gold)"/>
+        <stop offset="1" style="stop-color: var(--eye-out)"/>
+      </radialGradient>
     </defs>
-    <path class="head" d="M40 100 Q30 97 30.5 89 Q25 88 24 84.5 Q28 84 31 81 Q26 78.5 25.5 74.5 Q30 75.5 33 72 C31 58 37 48 45 42 L36 15 Q36 11 40 12 L64 30 Q80 26 96 30 L120 12 Q124 11 124 15 L115 42 C123 48 129 58 127 72 Q130 75.5 134.5 74.5 Q134 78.5 129 81 Q132 84 136 84.5 Q135 88 129.5 89 Q130 97 120 100 Z"/>
-    <path class="ear" d="M42 38 L40 19 L58 32 Q49 33 42 38 Z"/>
-    <path class="ear" d="M118 38 L120 19 L102 32 Q111 33 118 38 Z"/>
-    <path class="wisp" d="M43 35 q4 -3 7 -2 M117 35 q-4 -3 -7 -2"/>
-    <path class="stripe" d="M72 33 l2 7 M80 31.5 v8 M88 33 l-2 7"/>
-    <ellipse class="light" cx="80" cy="88" rx="13" ry="8.5"/>
-    <g class="eyes-open">
-      <ellipse class="eye" cx="55" cy="76" rx="10.5" ry="11.5"/>
-      <circle class="glint" cx="58.5" cy="70.5" r="3.8"/>
-      <circle class="glint small" cx="51" cy="81.5" r="1.7"/>
-      <ellipse class="eye" cx="105" cy="76" rx="10.5" ry="11.5"/>
-      <circle class="glint" cx="108.5" cy="70.5" r="3.8"/>
-      <circle class="glint small" cx="101" cy="81.5" r="1.7"/>
+    <g class="tail">
+      <path class="fur o" d="M134 194 C182 198 194 160 180 136 C174 125 156 125 152 138 C158 150 164 172 134 180 Z"/>
+      <path class="stripe" d="M176 140 q-9 1 -13 7 M182 158 q-10 -1 -15 4 M174 178 q-8 -3 -14 0"/>
     </g>
-    <g class="eyes-closed">
-      <path class="line" d="M46 77 q9 6 18 0 M96 77 q9 6 18 0"/>
+    <path class="fur o" d="M76 120 C54 136 48 170 56 192 Q100 204 144 192 C152 170 146 136 124 120 Z"/>
+    <path class="stripe" d="M60 158 q8 -2 12 2 M58 174 q8 -2 13 2 M140 158 q-8 -2 -12 2 M142 174 q-8 -2 -13 2"/>
+    <path class="light" d="M80 120 Q100 128 120 120 Q126 146 116 172 Q111 166 106 174 Q100 166 94 174 Q89 166 84 172 Q74 146 80 120 Z"/>
+    <path class="seam" d="M100 176 V193"/>
+    <ellipse class="paw" cx="88.5" cy="194" rx="12" ry="7"/>
+    <path class="toes" d="M84.5 191 v4 M92.5 191 v4"/>
+    <g class="paw-rest">
+      <ellipse class="paw" cx="111.5" cy="194" rx="12" ry="7"/>
+      <path class="toes" d="M107.5 191 v4 M115.5 191 v4"/>
     </g>
-    <path class="nose" d="M77.4 83 h5.2 q0 2.6 -2.6 3.3 q-2.6 -0.7 -2.6 -3.3 z"/>
-    <path class="tongue" d="M77.6 88.6 Q80 94.5 82.4 88.6 Z"/>
-    <path class="line" d="M80 86.3 q-2.3 3.6 -5.6 1.7 M80 86.3 q2.3 3.6 5.6 1.7"/>
-    <g class="zzz"><text x="126" y="34">z</text><text x="136" y="22">z</text><text x="146" y="10">z</text></g>
-    <path class="steth" d="M47 102 C47 117, 70 123, 80 123 M113 102 C113 117, 90 123, 80 123 M80 123 C80 136, 100 140, 113 132"/>
-    <circle class="bell" cx="119" cy="129" r="7.5"/>
-    <circle class="bell-in" cx="119" cy="129" r="3.5"/>
-    <ellipse class="paw" cx="54" cy="100" rx="15" ry="9"/>
-    <ellipse class="paw" cx="106" cy="100" rx="15" ry="9"/>
-    <path class="toes" d="M49 99 v6 M59 99 v6 M101 99 v6 M111 99 v6"/>
+    <path class="steth" d="M84 121 C82 140 92 148 100 148 C108 148 118 140 116 121"/>
+    <circle class="bell" cx="100" cy="153" r="5.5"/>
+    <circle class="bell-in" cx="100" cy="153" r="2.4"/>
+    <g class="head-move">
+      <g transform="translate(100 86) scale(1.05) translate(-80 -72)">
+        <path class="fur ruff" d="M80 76 L44.6 97.9 Q31.9 101.8 37.1 91.9 Q24.2 92.9 32.1 84.9 Q19.9 83.0 30.0 77.4 Q19.2 72.6 31.0 69.7 Q22.2 62.5 35.0 62.5 Q28.8 53.2 41.7 56.1 Z"/>
+        <path class="fur ruff" d="M80 76 L118.3 56.1 Q131.2 53.2 125.0 62.5 Q137.8 62.5 129.0 69.7 Q140.8 72.6 130.0 77.4 Q140.1 83.0 127.9 84.9 Q135.8 92.9 122.9 91.9 Q128.1 101.8 115.4 97.9 Z"/>
+        <path class="fur head" d="M42 20 L64 44 L96 44 L118 20 L124 70 L120 80 L40 80 L36 70 Z"/>
+        <path class="tuft" d="M42 20 q-1 -5 1 -8 M118 20 q1 -5 -1 -8"/>
+        <path class="ear" d="M46 32 L60 46 L48 52 Z"/>
+        <path class="ear" d="M114 32 L100 46 L112 52 Z"/>
+        <path class="wisp" d="M49 50 q2 -8 -1 -15 M53 50 q3 -7 1 -12 M111 50 q-2 -8 1 -15 M107 50 q-3 -7 -1 -12"/>
+        <ellipse class="fur" cx="80" cy="72" rx="46" ry="34"/>
+        <path class="stripe" d="M70 42 l3 9 M80 40 v11 M90 42 l-3 9"/>
+        <path class="stripe" d="M62 46 q2 4 6 6 M98 46 q-2 4 -6 6" style="stroke-width:2.2"/>
+        <path class="stripe" d="M38 70 q6 1 10 4 M37 79 q6 0 10 2 M122 70 q-6 1 -10 4 M123 79 q-6 0 -10 2"/>
+        <ellipse class="light" cx="80" cy="86" rx="14" ry="9"/>
+        <path class="light" d="M66 92 l5 -6 l4 5 l5 -7 l5 7 l4 -5 l5 6 Q80 106 66 92 z"/>
+        <g class="eyes-open">
+          <ellipse class="eye" cx="61" cy="72" rx="9" ry="9.5"/>
+          <ellipse class="pupil" cx="61" cy="72.5" rx="3.4" ry="6.2"/>
+          <circle class="glint" cx="64" cy="68" r="2.6"/>
+          <circle class="glint" cx="58.2" cy="76.5" r="1.2"/>
+          <ellipse class="eye" cx="99" cy="72" rx="9" ry="9.5"/>
+          <ellipse class="pupil" cx="99" cy="72.5" rx="3.4" ry="6.2"/>
+          <circle class="glint" cx="102" cy="68" r="2.6"/>
+          <circle class="glint" cx="96.2" cy="76.5" r="1.2"/>
+        </g>
+        <g class="eyes-closed">
+          <path class="line" d="M52 73 q9 6 18 0 M90 73 q9 6 18 0"/>
+        </g>
+        <ellipse class="cheek" cx="49" cy="84" rx="7.5" ry="4.5"/>
+        <ellipse class="cheek" cx="111" cy="84" rx="7.5" ry="4.5"/>
+        <path class="nose" d="M76.5 82 h7 q0 3 -3.5 4 q-3.5 -1 -3.5 -4 z"/>
+        <path class="line" d="M80 86 q-2.5 4 -6 1.5 M80 86 q2.5 4 6 1.5"/>
+        <path class="whisker" d="M50 86 l-20 -3 M50 90 l-19 4 M110 86 l20 -3 M110 90 l19 4"/>
+      </g>
+    </g>
+    <g class="paw-lick lick">
+      <path class="fur o" d="M106 152 Q101 130 104 112 L120 110 Q125 130 122 152 Z"/>
+      <ellipse class="paw" cx="112" cy="108" rx="9.5" ry="7" transform="rotate(-18 112 108)"/>
+    </g>
+    <ellipse class="tongue lick" cx="103.2" cy="103.6" rx="2.8" ry="2"/>
+    <g class="zzz"><text x="150" y="40">z</text><text x="162" y="26">z</text><text x="174" y="12">z</text></g>
   </svg>
 
   <div class="card">

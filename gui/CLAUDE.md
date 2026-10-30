@@ -193,19 +193,20 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
   Hyperlegible** for body text. Both load from Google Fonts. Offline, the fallbacks are
   Comic Sans / system-ui. That is a known trade, and the next step would be embedding
   the woff2 files.
-- **Fosdo2 is a brown tabby with white paws and green eyes, drawn kawaii/chibi
-  style.** The colours are tokens, so recolouring never means editing the SVG:
+- **Fosdo2 is a fluffy long-haired brown tabby with white paws and hazel eyes,**
+  drawn as a full chibi cat sitting on the card. The colours are tokens, so
+  recolouring never means editing the SVG:
 
   | Token | Value | Use |
   |---|---|---|
-  | `--fur` | `#8b7763` | the head |
-  | `--fur-dark` | `#3d3229` | forehead stripes |
-  | `--fur-light` | `#d6c4a7` | muzzle, inner-ear wisps |
-  | `--outline` | `#3a2a22` | the one outline around head and paws, eye rims, mouth, nose |
+  | `--fur` | `#8b7763` | head, body, tail |
+  | `--fur-dark` | `#3d3229` | tabby stripes, the faint body and ruff outline |
+  | `--fur-light` | `#d6c4a7` | muzzle, chin, chest bib, inner-ear wisps |
   | `--paw` | `#f7f2e8` | white paws |
   | `--ear` | `#e4b4a0` | inner ears |
-  | `--eye-top`, `--eye-mid`, `--eye-low` | `#16210f`, `#2d4a20`, `#86b84a` | the eye gradient (`#eye-fill`), near-black at the top to bright green at the bottom |
+  | `--blush` | `#ee9f98` | cheeks |
   | `--nose` | `#c98a79` | nose |
+  | `--eye-in`, `--eye-mid`, `--eye-gold`, `--eye-out` | `#4f8f34`, `#86b04a`, `#c8a245`, `#946330` | the hazel `#hazel` radial gradient: green at the pupil, through yellow-green and gold, to brown at the rim |
 
 ### Layout and voice
 
@@ -221,42 +222,67 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 
 ### Fosdo2 (`svg.cat`)
 
-- `viewBox 0 0 160 142` at `width:170px`, positioned `top:-101px` so that viewBox
-  y≈95 lands on the card's top border. The paws (`cy=100`) straddle the border, and
-  the stethoscope (Y-shaped tube plus a chestpiece at `119,129`) hangs over the card
-  face. **If you change the viewBox height or width, recompute `top`**
-  (`95/viewBoxHeight × renderedHeight`). Also keep the card's `padding-top` (54px) big
-  enough that the chestpiece clears the title.
-- **What makes him cute.** The face follows a kawaii reference the user supplied.
-  These are the rules, and each of them was learned from a rejected version:
-  - **Big, dark, glossy eyes, set wide apart and low.** Each eye is 10.5×11.5, filled
-    with a vertical gradient (near-black → green), with a large white glint top-right
-    and a small pale-green one bottom-left. There is no pale iris ring and no separate
-    pupil. Rejected before this:
-    - a pale green ring around a big black pupil read as **startled**
-    - half-closed lids read as **high**
-    - small eyes with a ring and dot read as a **dummy**
-  - **A wide, round head, wider than it is tall**, as one path with one even
-    `--outline` stroke. The ears lean outward, and two soft curved cheek flicks per
-    side sit at eye level. Straight sides read as boxy, and zigzag tufts read as
-    spikes.
-  - **A simple face.** No whiskers, no cheek stripes, no blush, no ear-tip tufts, and
-    nothing above the eyes except three faint forehead stripes. Marks near the eyes
-    read as eyebrows.
-  - **A tiny nose and a ":3" mouth** with a small tongue peeking out while awake.
-    A wide open grin read as goofy.
-  - When changing the face, draw a few options side by side with the reference and
-    let the user pick. Don't guess.
-- **Drawing order, back to front:** `defs` (the eye gradient) → head → inner ears and
-  wisps → forehead stripes → muzzle → eyes (open and closed groups) → nose → tongue →
-  ":3" mouth → `z`s → stethoscope → white paws on top.
+**This design was chosen by the user after many rejected attempts. Don't redesign
+him; change only what is asked, and show options before changing his face.**
+
+- **Placement.** `viewBox 0 0 200 220` at `width:180px` (198px tall), positioned
+  `top:-181px`, so his paws (viewBox y≈201) sit on the card's top border. `main` has
+  a 190px top margin to make room. If you change the size, recompute `top` as
+  `201/220 × renderedHeight`.
+- **Structure, back to front:**
+  1. `defs`: the hazel gradient
+  2. `.tail`: a bushy striped tail
+  3. the round body, its stripes and the cream chest bib
+  4. the left paw, then `.paw-rest` (the right paw and its toes)
+  5. the stethoscope
+  6. `.head-move` > `<g transform="translate(100 86) scale(1.05) translate(-80 -72)">`,
+     the head
+  7. `.paw-lick` (the raised arm and paw) and the lick tongue
+  8. the `z`s
+- **The head is the original fluffy face** the user liked, originally drawn in a
+  160×142 space, hence the transform:
+  - scalloped `.ruff` cheeks, ears with tip tufts and inner wisps
+  - three forehead stripes plus temple curves, a light muzzle and chin
+  - cheeks, a "w" mouth, whiskers
+  - `.head` is only the ears and upper skull. Its bottom edge (y 80) is hidden inside
+    the head ellipse. When the head peeked over the card the old flat bottom was
+    covered by paws, but on a full body it showed as a hard edge under the chin.
+- **Eyes:** a hazel iris (9×9.5, the `#hazel` radial gradient), a vertical oval pupil
+  (3.4×6.2) and two glints. Earlier eyes were rejected:
+  - a pale ring around a huge pupil read as startled
+  - half-closed lids read as high
+  - small ring-and-dot eyes read as a dummy
+  - a fully kawaii redraw of the whole face read as not him
+- **Motion** (CSS only, each part on its own animation):
+  - **The tail** swishes −5° → 7° around its base (`136px 186px`, `transform-box:
+    view-box`), every 3.2s alternating. It slows to 7s while asleep.
+  - **Blink:** `blink` on `.eyes-open`, every 6s.
+  - **Lick:** a 16s cycle shared by five elements. From 79% to 99%:
+    - `.head-move` tilts 5° (`lick-tilt`)
+    - `.eyes-open` hides and `.eyes-closed` shows (`lick-hide` / `lick-show`)
+    - `.paw-rest` hides while `.paw-lick` and the tongue show
+    - the paw bobs three times (`lick-bob`)
+
+    They stay in sync only because they all use the same 16s duration with no delay.
+    Change one duration and change them all.
+  - **SVG transform rule:** CSS `transform` replaces an SVG `transform` attribute, so
+    anything animated with CSS must be a *separate* group from anything positioned
+    with the attribute. That's why `.head-move` wraps the transformed head group.
+  - **The lick only runs awake** (`body:not([data-mood="sleep"])`). Asleep, he shows
+    closed eyes and the `z`s.
+  - **Reduced motion** stops the tail, blink, lick and `z`s. The lick parts then stay
+    at their static state: paw down, eyes open.
+  - **Previewing a frame:** headless Chrome does not advance CSS animation time with
+    `--virtual-time-budget`. To screenshot a moment, inject `* { animation-play-state:
+    paused !important; animation-delay: -<seconds>s !important; }` into a copy of the
+    page. For example, -13.6s is mid-lick.
 - **Moods** come from `body[data-mood]`, set in `render()`:
-  - `sleep` (idle or ended): closed arc eyes, floating `z`s, no tongue
-  - `awake` (running, and on errors): the glossy eyes with the CSS blink, and the
-    tongue showing
-  - **Fosdo2 is always content: there is deliberately no worried or sad face.**
-    Errors are carried by the red "Diagnosis:" status text alone.
-- Clicking the cat spawns a `.heart` in `main` that removes itself on `animationend`.
+  - `sleep` (idle or ended): closed eyes, floating `z`s, a slow tail
+  - `awake` (running, and on errors): hazel eyes, blinking, tail swishing, licking
+  - **He is always content: there is deliberately no worried or sad face.** Errors are
+    carried by the red "Diagnosis:" status text alone.
+- Clicking the cat spawns a `.heart` in `main` (at `top: -120px`, by his face) that
+  removes itself on `animationend`.
 
 ### Ground, mushrooms and turtles (`svg.ground`)
 
