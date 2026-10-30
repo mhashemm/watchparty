@@ -55,8 +55,9 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
 
 ## Architecture
 
-A separate `package main`: stdlib, `golang.org/x/sys/windows` (already in `go.mod`)
-and the repo's own `party` package. No cgo, so it cross-compiles in the same
+A separate `package main`: stdlib, `golang.org/x/sys/windows` (already in `go.mod`),
+`github.com/godbus/dbus/v5` (pure Go, for the Linux file picker) and the repo's own
+`party` package. No cgo, so it cross-compiles in the same
 `publisher.yml` matrix as the CLI. **It calls `party.Run` in-process**, the exact
 function the CLI's `main.go` calls, so it does everything on its own and needs only
 mpv. The `watchparty` binary is not required. mpv stays the player. The GUI's status
@@ -67,9 +68,10 @@ print.
 |---|---|
 | `main.go` | HTTP server, guard, party lifecycle, log capture, `form.config()` |
 | `index.html` | the entire UI: CSS, inline SVG art, vanilla JS. `//go:embed`ed |
-| `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile`, no-op `hide` (macOS through `runtime.GOOS` branches) |
+| `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile` (portal → zenity → kdialog, or osascript on macOS), no-op `hide` |
 | `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker and `CREATE_NO_WINDOW` |
 | `main_test.go` | `form.config()` per mode plus its errors, and the host/token guard table |
+| `os_unix_test.go` | `fileURIPath`: plain, percent-encoded and non-ASCII portal URIs, plus rejecting a non-`file` URI |
 
 ### Server
 
@@ -153,9 +155,30 @@ install it themselves.
 - **`hide()` uses only `CREATE_NO_WINDOW`.** Don't add `HideWindow`: it sets SW_HIDE
   for the child's first `ShowWindow`, which can hide the PowerShell file dialog
   itself.
-- **Linux picker:** `zenity`, then `kdialog`. **macOS picker:** `osascript`. A
-  non-zero exit (`*exec.ExitError`) means cancelled and returns an empty path. If no
-  picker exists the call returns an error, and the page asks the user to type the path.
+- **Linux picker: the XDG desktop portal first** (`portalPick`), then `zenity`, then
+  `kdialog`.
+  - The portal is the desktop-independent way to get the desktop's own file dialog.
+    GNOME, KDE, COSMIC and most others run it. Pop!_OS 24.04's COSMIC ships neither
+    zenity nor kdialog, so before the portal, Browse there only ever said "No file
+    picker found".
+  - The call sequence:
+    1. Subscribe to `org.freedesktop.portal.Request.Response` on the predicted request
+       path `/org/freedesktop/portal/desktop/request/<sender>/<token>`. The sender is
+       the bus name without the `:`, with `.` replaced by `_`.
+    2. Call `FileChooser.OpenFile` with that `handle_token`. Subscribing first means
+       the reply can't be missed.
+    3. Wait for the signal. Response code 0 carries `uris`, and anything else means
+       cancelled.
+    4. `fileURIPath` turns the `file://` URI into a path, percent-decoding spaces and
+       non-ASCII.
+  - Any portal error (no session bus, no portal) falls through to zenity and kdialog.
+  - Checking a desktop without opening a dialog: `busctl --user introspect
+    org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop
+    org.freedesktop.portal.FileChooser` must list `.OpenFile ssa{sv}`.
+- **macOS picker:** `osascript`.
+- A non-zero exit from a command picker (`*exec.ExitError`) means cancelled and
+  returns an empty path. If no picker works the call returns an error, and the page
+  asks the user to type the path.
 - **Window:** each browser in `browsers` is tried with `--app=URL
   --window-size=560,940`, then `openURL` (`rundll32` / `xdg-open` / `open`).
   - Windows lists absolute Edge/Chrome paths, because `msedge` is not on `PATH` and
