@@ -234,7 +234,7 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
      Pointed zigzags read as wings; keep the bumps round.
   2. the ears with tip tufts and inner wisps
   3. the head ellipse
-  4. the tabby stripes: three forehead lines, two temple curves, cheek bars
+  4. the tabby stripes: three forehead lines and the cheek bars
   5. the light muzzle and chin bib
   6. the eyes: large and set low, round pupils, one big and one small glint. Large
      low eyes, round pupils and a small nose are what make the face read as cute.
@@ -246,8 +246,10 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 - **Moods** come from `body[data-mood]`, set in `render()`:
   - `sleep` (idle or ended): closed eyes, floating `z`s
   - `awake` (running): open eyes with the CSS blink
-  - `worried` (error or reconnecting): open eyes plus sad brows, which slope *up*
-    toward the middle. The other way round reads as angry.
+  - **Fosdo2 is always content: there is deliberately no worried or sad face.**
+    Errors are carried by the red "Diagnosis:" status text alone. Keep anything
+    above the eyes clear: an earlier pair of temple stripes sat right over the
+    enlarged eyes and read as worried eyebrows.
 - Clicking the cat spawns a `.heart` in `main` that removes itself on `animationend`.
 
 ### Ground, mushrooms and turtles (`svg.ground`)
