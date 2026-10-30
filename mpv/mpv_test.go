@@ -130,11 +130,11 @@ func TestAppliedValueIsNotRebroadcast(t *testing.T) {
 		t.Fatalf("rebroadcast the event it had just applied: %+v", got)
 	}
 
-	// mpv snaps a seek to a keyframe, so the echo can come back slightly off
+	// a seek's echo can land a frame off the applied value
 	c.applied[timePos] = "12.000000"
 	got = feed(t, c, outgoing, propertyChangeLine(timePos, "12.041000", 1))
 	if len(got) != 0 {
-		t.Fatalf("keyframe-snapped echo escaped the tolerance: %+v", got)
+		t.Fatalf("a frame-off echo escaped the tolerance: %+v", got)
 	}
 
 	// but this peer's own seek is not an echo and must reach everyone else

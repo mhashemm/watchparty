@@ -5,7 +5,9 @@ IPC over a unix socket (or a Windows named pipe), turns the player's own pause a
 seek changes into broadcastable events, and applies remote ones without bouncing
 them back.
 
-Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/master/#properties>
+Reference: **`MPV.md`** in this folder covers the commands, properties and events we
+use, and how mpv actually behaves (probed against real mpv). Upstream:
+<https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/master/#properties>
 
 ## Files
 
@@ -14,6 +16,7 @@ Reference: <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/mast
 | `mpv.go` | `Client`, `connection.do`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
 | `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, unix-socket dial, no-op `Init` |
 | `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `go-winio` pipe dial, and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
+| `MPV.md` | the slice of mpv we use, and its observed behaviour |
 | `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown |
 
 ## Public surface
@@ -102,8 +105,9 @@ counters, that loops forever.
   echo can arrive before `do()` returns, so setting the marker afterwards is a race.
 - `pause` matches exactly and **deletes** the marker on match.
 - `time-pos` matches as a float within **±0.5s** and **keeps** the marker, updating it
-  to the echoed value. mpv snaps a seek to a keyframe, so `77.000000` can come back as
-  `77.041000`, sometimes more than once. The marker is cleared when the node unpauses.
+  to the echoed value. A seek's echo comes back once or twice and up to a frame off
+  (`123.456` → `123.456000`, then `123.458000`), and further off under a user's
+  `hr-seek=no` (see `MPV.md`). The marker is cleared when the node unpauses.
   - Known limit (`ponytail:` on `timePosTolerance`): a deliberate seek of under 0.5s
     from the applied position is also swallowed.
 - `TestAppliedValueIsNotRebroadcast` and `TestAppliedPauseIsNotRebroadcast` cover

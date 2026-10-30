@@ -51,8 +51,10 @@ them in-process (see `gui/CLAUDE.md`).
    with the user's `MpvFlags` first. `mpv.Init(cmd)` sets the Windows process
    attributes. **`defer cmd.Cancel()` only after `Start` succeeds.** The default
    `Cancel` is `Process.Kill()`, which nil-panics on a process that never started.
-7. Sleep `Cooldown` seconds, or return early if `c` is cancelled. mpv creates the IPC
-   socket lazily, so dialing it immediately fails.
+7. Sleep `Cooldown` seconds, or return early if `c` is cancelled. The socket exists
+   within ~40ms. What the wait really buys is a loaded file: observed earlier,
+   `time-pos`'s first event is empty, `seen` swallows that instead of the real value,
+   and the real value is broadcast (see `mpv/MPV.md`, "Observing").
 8. `mpv.New(c, onWatchEnd, sock, outgoing)` dials the socket, registers the two
    observers, and starts the reader. Then `ProcessIncomingEvents(incoming)` starts in
    a goroutine, and `init done. now you can start watching` is logged. That line is

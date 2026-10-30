@@ -205,8 +205,10 @@ Matching differs per property, and the `time-pos` case is the subtle one:
 - **`time-pos`** — compared as floats with a **±0.5s tolerance**, and the marker is
   *kept*, refreshed to the echoed value.
 
-  Exact compare is wrong here because **mpv snaps a seek to a keyframe**. Applying
-  `77.000000` can echo back `77.041000`; an exact compare misses, the node
+  Exact compare is wrong here because **a seek's echo can land off the applied
+  value**: up to a frame for an absolute seek, more under `hr-seek=no`, and
+  sometimes twice (see `mpv/MPV.md`). Applying `77.000000` can echo back
+  `77.041000`; an exact compare misses, the node
   rebroadcasts `77.041`, the next peer applies it and snaps again, and the position
   walks forward one hop per peer. Keeping the marker also absorbs a seek that emits
   more than one `property-change`. It is cleared when the node un-pauses, which is
