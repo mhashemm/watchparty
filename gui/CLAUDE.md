@@ -262,18 +262,17 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 
 ### Ground, mushrooms and turtles (`svg.ground`)
 
-- **The ground has its own space and never overlaps content.** `body` is a
-  full-height flex column (`height: 100vh; overflow: hidden`) with two children:
-  - `.scroll` (`flex: 1; overflow-y: auto`) holds `main`, so only the area above the
-    ground scrolls. A `mask-image` fades its last 28px, so the card dissolves into
-    the forest floor instead of ending on a hard line. `main`'s 28px bottom margin
-    keeps the end of the content clear of that fade.
-  - `.ground-strip` (`flex: none`, 130px) holds the 560×130 SVG, centred. Its
-    background puts a full-width soil band under the SVG's own soil path, so wide
-    browser tabs have ground past the SVG's edges.
-  - An earlier version pinned the ground with `position: fixed` over the page, so the
-    mushrooms covered whatever text had scrolled beneath them. Don't go back to an
-    overlay.
+- `position: fixed` at the bottom, 560×130 and centred, so it is always visible.
+  The content scrolls *under* it.
+- `main` has a 150px bottom margin so the card can scroll clear of the ground.
+- Layering:
+  - `body::before`: a fixed 90px lichen fade, so content dissolves into the ground
+    instead of being cut off.
+  - `body::after`: a fixed 22px full-width soil strip, so wide browser tabs have
+    ground past the SVG's edges. Its height matches the soil path's height at the
+    SVG edges.
+  - z-order: card (1) < fade and soil (2) < ground SVG (3) < Fosdo2 (2, inside `main`)
+    and hearts.
 - **Turtles:** a mother and a baby. The baby uses the same markup at `scale(.55)`,
   trailing 40px behind. Both `.turtle` groups run one 60s `stroll` loop all the time.
   - `body.walking` (connecting / reconnecting) only speeds up the legs and adds a
