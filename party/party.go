@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -49,7 +48,7 @@ var errStopped = errors.New("the party stopped unexpectedly")
 func Run(parent context.Context, cfg Config) error {
 	c, cancel := context.WithCancel(parent)
 	defer cancel()
-	mpvSocket := mpv.SocketPrefix + "mpv" + strconv.FormatInt(time.Now().Unix(), 10)
+	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 

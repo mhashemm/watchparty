@@ -16,19 +16,22 @@ times in one GUI process, so it must not leave state behind.
 |---|---|
 | `party.go` | `Config`, `Run`, `runMesh` (P2P setup), `DefaultPort`/`DefaultCooldown`, `errStopped` |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
+| `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 
-There are no unit tests in this package. It is wiring, and it is covered end to end:
-`e2e.py` drives the CLI through it, and the GUI's manual checks drive it in-process
-(see `gui/CLAUDE.md`).
+`ws_test.go` covers the relay client's decisions: 403/400 end the party, 401 keeps
+retrying, a dropped connection redials with the same session and both connections'
+frames reach `incoming`, the secret rides in a header, `Broadcast` sends the envelope
+and stops with the party. `Run` and `runMesh` need mpv and a network, so they are
+covered end to end: `e2e.py` drives the CLI through them, and the GUI's checks drive
+them in-process (see `gui/CLAUDE.md`).
 
 ## `Run`, step by step
 
 1. `c, cancel := context.WithCancel(parent)`. **`parent` belongs to the caller**: the
    CLI's `signal.NotifyContext`, or the GUI's per-party context. **`c` is Run's own.**
    Everything inside is handed `c` and `cancel`, never `parent`.
-2. The mpv socket name is `mpv.SocketPrefix + "mpv" + <unix seconds>`. Two `Run`s
-   started in the same second on one machine collide on that path. `e2e.py` staggers
-   its nodes for this reason.
+2. The mpv socket name is `mpv.SocketPrefix + "mpv" + rand.Text()`, unique per `Run`,
+   so parties started in the same second (e2e nodes, two GUIs) never share one.
 3. Two channels are created, each with a 1024 buffer:
    - `outgoing`: mpv → the transport
    - `incoming`: the transport → mpv
@@ -116,7 +119,7 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
 3. `ListenAndServe` runs in a goroutine. **Any** error, including `ErrServerClosed` at
    shutdown, calls `cancel()`. At shutdown that is a harmless no-op. On a bind failure
    it ends the party, and `Run` returns `errStopped`.
-4. `ser.BroadcastEvents(outgoing)` runs in a goroutine.
+4. `ser.BroadcastEvents(outgoing)` runs in a goroutine until `c` ends.
 5. `AddAddress` is called for each comma-separated `Addrs` entry. A failure is logged,
    not fatal, so one dead bootstrap peer doesn't stop the node.
 6. The returned closure runs the cleanup LIFO: `ser.Shutdown` (`/bye` to everyone) →
@@ -144,10 +147,10 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
 - **`read`** unmarshals each frame into the `message` envelope and pushes
   `mpv.IncomingMessage{HostName, Event}` onto `incoming`. The send blocks, but it is
   bounded by `c`.
-- **`Broadcast`** is **the only writer, for the whole process, across every
-  reconnect**. Starting one per connection would leave two goroutines ranging
-  `outgoing` during a redial, stealing frames from each other. It wraps each event as
-  `{"hostname", "event": <raw mpv JSON>}`.
+- **`Broadcast`** is **the only writer for the whole party, across every
+  reconnect**, and returns when `c` ends. Starting one per connection would leave two
+  goroutines reading `outgoing` during a redial, stealing frames from each other. It
+  wraps each event as `{"hostname", "event": <raw mpv JSON>}`.
   - It takes `r.mu` only long enough to copy the conn pointer, **never across the 10s
     `Write`**. Otherwise `Connect`'s `set()` would wedge behind a stalled write.
   - With no connection it logs `relay: not connected, dropping event` and moves on.
@@ -159,13 +162,17 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
   can't be imported, and importing `party` the other way would pull upnp, server and
   mpv into the relay image. Keep the two in sync by hand.
 
+## Lifetime of the goroutines
+
+Every goroutine a party starts ends with `c`: `Connect`, `Broadcast`, `read`,
+`BroadcastEvents`, `ProcessIncomingEvents`, and `watch` (its `outgoing` send selects
+on `c`, and mpv's death ends its read). `outgoing` and `incoming` are **never
+closed**: their writers (`watch`, `read`, the server's handlers, `notify`) can still
+be running when the readers stop, and a send on a closed channel panics. A GUI that
+ran three parties is back to its baseline goroutine count.
+
 ## Known issues
 
-- `outgoing` and `incoming` are never closed, so `Broadcast` / `BroadcastEvents` and
-  `ProcessIncomingEvents` outlive `Run`, parked on channels nobody writes to. In the
-  CLI the process exits right after. In the GUI, a few goroutines per party stay
-  behind. Closing the channels safely needs every writer (`watch`, `read`, the
-  server's handlers and `notify`) stopped first, or it becomes a send-on-closed panic.
 - If mpv exits during the cooldown (a bad file, a bad flag), `Run` only finds out when
   `mpv.New` fails to dial the socket. The error is then a confusing `dial unix
   /tmp/mpv…: no such file or directory`, not mpv's own message. mpv's stdout/stderr

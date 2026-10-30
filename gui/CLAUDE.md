@@ -63,7 +63,8 @@ More recipes that have been used and work:
   ones out of `/log` (`grep -o 'room [A-Z0-9]* -secret [A-Z0-9]*'`), and start the
   guest with them. The guest's `/log` then shows the host's "has joined", "paused by"
   and "has left" notices.
-- **Drive mpv directly:** each party's IPC socket is the newest `/tmp/mpv<unixtime>`.
+- **Drive mpv directly:** each party's IPC socket is the `--input-ipc-server=` argument
+  of its mpv (`pgrep -a mpv`).
   Writing `{"command":["set_property","pause",false]}` or `{"command":["quit"]}` to
   it simulates the user, and `get_property` checks the other side followed.
 - **The window lifecycle:** put a stand-in `chromium` script first on `PATH` that
@@ -139,8 +140,6 @@ print.
     be an invalid handle, and MultiWriter stops at the first writer that errors.
   - `Write` takes `g.mu`, so **nothing may call `log` while holding `g.mu`**, or it
     deadlocks.
-  - The capture is process-wide, so stray lines from a previous party's leftover
-    goroutines can land in the next one. That's cosmetic.
 - **`run`** goes up on every `/start`. A poll carrying an old `run` is answered from
   line 0, so a poll that was in flight during a restart can't splice two runs
   together. The log is uncapped in memory and reset per run.
@@ -212,9 +211,7 @@ print.
      - The restart uses `g.exe`, resolved once at startup by `executable()`. After
        the rename, the running process's own path lookup can point at the replaced
        file.
-     - An earlier version restarted straight away, which left two windows open.
-- Verified end to end against the real v0.0.11 release: a build stamped `v0.0.1`
-  updated itself, and the installed file matched GitHub's digest.
+     - Restarting without asking left two windows open, which is why it asks.
 
 ### Finding mpv
 
@@ -246,10 +243,6 @@ install it themselves.
     been closed. Then the window can't be watched, and the idle exit below applies.
     Edge's background "startup boost" on Windows is the expected case. Without the
     guard, the app would quit the instant it opened.
-  - Verified on Linux with a stand-in browser:
-    - closing mid-party sent "has left" to the guest, closed the host's mpv, removed
-      the profile, saved the party as ended, and exited
-    - an instant browser exit did not shut the GUI down
 - **Idle exit**, the fallback when the window can't be watched (the default browser
   opened a tab, or a hand-off): a ticker cancels the context once **no party is
   running and no `/log` poll has arrived for 2 minutes**. The Windows build is
@@ -502,36 +495,20 @@ When a reference is given, work out *what makes it work* (proportions, eye
 construction, outline, simplicity) and apply that essence. Don't copy it wholesale:
 a full kawaii redraw of Fosdo2's face lost what made him him.
 
-## Verified, and not yet verified
+## Not yet verified on Windows
 
-Confirmed by the user on Pop!_OS 24.04 (COSMIC, Wayland) with Chromium:
-
-- the History and Settings pages
-- **Browse** through the XDG portal
-- closing the window ending the process started from the shell
-
-Everything Windows-specific compiles, but has not been run on Windows:
+Everything Windows-specific compiles, but has not been run on Windows. Check these
+first:
 
 - The PowerShell picker appears in front of the window.
 - No console window flashes for the picker.
 - mpv's window shows up when it is launched from a `-H=windowsgui` parent through
   `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE`.
+- The mpv named pipe (`\\.\pipe\mpv<random>`) connects, and a party syncs with a
+  Linux peer.
 - Chrome and Edge open in `--app` mode from the listed paths, and with a fresh
   `--user-data-dir` the launched process stays alive until the window is closed. If
   either one hands off and exits at once, the hand-off guard keeps the app running,
   but closing the window then won't stop it.
-
 - The Windows self-update swap (`.exe` → `.old`, new file in place, `.old` deleted on
   the next start).
-
-Verified on Linux, in-process, against real mpv:
-
-- relay and direct parties driven through two GUIs, pause and resume propagating, the
-  party feed
-- Stop sending "has left" and leaving no orphaned mpv
-- the wrong-secret and missing-mpv diagnoses
-- the guard: 403 without a token or with a foreign `Host`
-- the saved name, default relay and history surviving a restart
-- closing the window mid-party, and the hand-off guard
-- the self-update against the real v0.0.11 release
-- v0.0.12's released GUI reporting `current: v0.0.12`

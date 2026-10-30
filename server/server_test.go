@@ -9,9 +9,8 @@ import (
 	"github.com/mhashemm/watchparty/mpv"
 )
 
-// broadcast holds s.mu.RLock until wg.Wait returns, so nothing inside the
-// per-peer goroutines may block on a channel: a backed-up incoming would
-// wedge every handler waiting on s.mu.
+// A failing peer makes broadcast post a notice onto incoming, which nobody drains
+// during the cooldown. That send must not block, or BroadcastEvents stops for good.
 func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 	incoming := make(chan mpv.IncomingMessage) // nobody is draining this
 	s := New(context.Background(), incoming, "127.0.0.1:1", "me")
@@ -61,5 +60,21 @@ func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 	s.broadcast(context.Background(), fail)
 	if _, exists := s.addresses[dead.address]; exists {
 		t.Fatalf("still registered after %d consecutive failures", maxFails)
+	}
+}
+
+func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
+	c, cancel := context.WithCancel(context.Background())
+	s := New(c, make(chan mpv.IncomingMessage), "127.0.0.1:1", "me")
+	done := make(chan struct{})
+	go func() {
+		s.BroadcastEvents(make(chan []byte))
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("BroadcastEvents outlived the party")
 	}
 }
