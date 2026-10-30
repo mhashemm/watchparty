@@ -148,7 +148,8 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
     retries. This is a guest who arrived before the key holder.
   - Everything else, 429 and 503 included, is retried with backoff.
 - **`Connect`** is the supervisor for the whole party.
-  - Backoff goes 1s → 30s, doubling, and resets after a successful dial.
+  - Backoff goes 1s → 30s, doubling, and resets after a successful dial. The 1s is
+    `r.retry` (`minBackoff` in `Run`), so the tests retry after 1ms.
   - On each connection it logs `relay: connected to <addr> room <room>`, `set(conn)`s
     it, and blocks in `read`.
   - When `read` fails it logs `relay: disconnected: …` and redials.

@@ -29,14 +29,14 @@ const (
 	createHeaderKey = "create-key"
 
 	sendBuffer    = 64
+	pingInterval  = 30 * time.Second
+	writeTimeout  = 10 * time.Second
 	readLimit     = 4096
 	limiterWindow = time.Hour
 
 	rows = 4
 	cols = 16384
 )
-
-var pingInterval, writeTimeout = 30 * time.Second, 10 * time.Second
 
 // declared again in party/ws.go; importing party would drag upnp, server and mpv into
 // the relay binary, and four lines beat a package that exists only to share them
@@ -105,6 +105,8 @@ type relay struct {
 	maxRooms  int
 	maxConns  int64
 	trusted   bool
+	ping      time.Duration
+	timeout   time.Duration
 }
 
 func (r *relay) ip(req *http.Request) string {
@@ -236,7 +238,7 @@ func (r *relay) leave(name string, m *member) {
 }
 
 func (r *relay) write(c context.Context, m *member) {
-	ticker := time.NewTicker(pingInterval)
+	ticker := time.NewTicker(r.ping)
 	defer ticker.Stop()
 	defer m.conn.CloseNow()
 	for {
@@ -244,7 +246,7 @@ func (r *relay) write(c context.Context, m *member) {
 		case <-c.Done():
 			return
 		case b := <-m.ch:
-			ctx, cancel := context.WithTimeout(c, writeTimeout)
+			ctx, cancel := context.WithTimeout(c, r.timeout)
 			err := m.conn.Write(ctx, websocket.MessageText, b)
 			cancel()
 			if err != nil {
@@ -253,7 +255,7 @@ func (r *relay) write(c context.Context, m *member) {
 		case <-ticker.C:
 			// a party sits idle for hours between pauses; without this, NAT and
 			// proxy idle timeouts kill the connection silently
-			ctx, cancel := context.WithTimeout(c, writeTimeout)
+			ctx, cancel := context.WithTimeout(c, r.timeout)
 			err := m.conn.Ping(ctx)
 			cancel()
 			if err != nil {
@@ -361,6 +363,8 @@ func main() {
 		maxRooms: env("MAX_ROOMS", 10000, strconv.Atoi),
 		maxConns: int64(env("MAX_CONNS", 5000, strconv.Atoi)),
 		trusted:  env("TRUST_PROXY", false, strconv.ParseBool),
+		ping:     pingInterval,
+		timeout:  writeTimeout,
 	}
 	if k := env("CREATE_KEY", "", str); k != "" {
 		r.createKey = []byte(k)

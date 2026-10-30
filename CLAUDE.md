@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 go build ./...
 go test ./...
 go test -race ./...                        # the invariants below are all concurrency ones
+GORACE=atexit_sleep_ms=0 go test -race ./...   # same, minus the race runtime's 1s sleep per package at exit
 go test ./mpv -run '^TestName$' -v         # single test
 go mod tidy                                # run it yourself; CI only does go mod download
 go build ./relay                           # the relay server, a separate binary
@@ -184,6 +185,21 @@ have the full story.
 The code carries almost no comments — match that. Explanatory comments get removed in review; put the reasoning in the commit message or here instead.
 
 Tests: `server/server_test.go` drives `broadcast` directly with a stub `f` — no HTTP server, no fixtures. `party/ws_test.go` points a `relayConn` at a stub `httptest` websocket handler, not the real relay. `mpv/mpv_test.go` feeds `watch()` through a `dripReader` that returns ~7 bytes per `Read` with a small `sc.Buffer`, because the scanner-aliasing bug does **not** reproduce when the whole input fits one buffer fill. When fixing a concurrency/buffer bug here, reintroduce it and confirm the test fails before trusting it.
+
+Every Go test calls `t.Parallel()` and finishes in milliseconds; the whole suite is bounded by
+compile time. Keep it that way:
+
+- **No real-time waits.** A delay the code under test owns is a struct field that the test
+  shortens (`relay.ping`/`relay.timeout`, `relayConn.retry`), never a package `var` the test
+  reassigns, which races with every other parallel test.
+- **Prove an absence with an ordering, not a timeout.** Send a marker after the thing that
+  must not happen; a FIFO delivers anything that did happen first (`mark`/`noticesBefore` in
+  `relay/main_test.go`). The one exception is `mpv`'s `TestNewWaitsForTheFileToLoad`, whose
+  300ms window has nothing to order against.
+- **The only serial test is `TestLimiterDoesNotAllocatePerIP`**: `testing.AllocsPerRun`
+  panics in a parallel test.
+- Stress a changed test before trusting it: `GORACE=atexit_sleep_ms=0 go test -race -count=30
+  -cpu=1,4,16 ./...`. Running in parallel exposed two races the serial suite had hidden.
 
 mpv emits no `property-change` for a no-op set, so `set_property pause yes` when already paused produces nothing. Tests that count events must strictly alternate rather than repeat a value.
 

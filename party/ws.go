@@ -42,6 +42,7 @@ type relayConn struct {
 	hostname  string
 	session   string
 	incoming  chan<- mpv.IncomingMessage
+	retry     time.Duration
 }
 
 func (r *relayConn) set(conn *websocket.Conn) {
@@ -93,7 +94,7 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 // Connect owns the reconnect loop for the lifetime of the process. A dropped
 // relay is not a reason to tear down the player, so only a rejection cancels.
 func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
-	backoff := minBackoff
+	backoff := r.retry
 	for c.Err() == nil {
 		conn, err := r.dial(c)
 		if errors.Is(err, errRejected) {
@@ -111,7 +112,7 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
-		backoff = minBackoff
+		backoff = r.retry
 		r.set(conn)
 		log.Printf("relay: connected to %s room %s\n", r.addr, r.room)
 

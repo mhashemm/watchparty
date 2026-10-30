@@ -12,6 +12,7 @@ import (
 // A failing peer makes broadcast post a notice onto incoming, which nobody drains
 // until mpv has loaded the file. That send must not block, or BroadcastEvents stops for good.
 func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
+	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage) // nobody is draining this
 	s := New(context.Background(), incoming, "127.0.0.1:1", "me")
 	s.addresses["127.0.0.1:1"] = &peer{address: "127.0.0.1:1", Hostname: "dead"}
@@ -34,6 +35,7 @@ func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 // A peer that keeps failing has to be evicted, otherwise every later broadcast
 // pays its 10s timeout. Any success in between resets the strike count.
 func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
+	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage, 8)
 	s := New(context.Background(), incoming, "127.0.0.1:1", "me")
 	dead := &peer{address: "127.0.0.1:2", Hostname: "dead"}
@@ -64,6 +66,7 @@ func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 }
 
 func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
+	t.Parallel()
 	c, cancel := context.WithCancel(context.Background())
 	s := New(c, make(chan mpv.IncomingMessage), "127.0.0.1:1", "me")
 	done := make(chan struct{})

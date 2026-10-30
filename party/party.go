@@ -68,6 +68,7 @@ func Run(parent context.Context, cfg Config) error {
 			hostname:  cfg.Hostname,
 			session:   rand.Text(),
 			incoming:  incoming,
+			retry:     minBackoff,
 		}
 		defer conn.Close()
 		go conn.Connect(c, cancel)
