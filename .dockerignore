@@ -9,3 +9,4 @@ e2e.py
 CLAUDE.md
 LICENSE
 Dockerfile
+.env

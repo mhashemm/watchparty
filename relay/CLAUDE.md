@@ -146,6 +146,20 @@ allocated:
   also bind :80 (verified). Under podman or a hardened host, listen on :8080 inside the
   container and publish `-p 80:8080`.
 
+## Compose (`compose.yaml`)
+
+```sh
+printf 'CREATE_KEY=%s\n' "$(openssl rand -hex 16)" > relay/.env   # also PORT, TRUST_PROXY
+docker compose -f relay/compose.yaml up -d --build
+```
+
+- Compose reads `.env` from the compose file's directory, so it is `relay/.env`. It
+  is in `.gitignore` and `.dockerignore`.
+- `context: ..` because the build needs the repo root, same as the plain
+  `docker build`.
+- Flags are written `-name=value`, so an unset `CREATE_KEY` becomes `-createKey=`
+  (anyone can create rooms) and `TRUST_PROXY` parses as a Go bool.
+
 ## Tests (`main_test.go`)
 
 The tests use real websockets against an `httptest` server (`serve`, `join`,

@@ -1,0 +1,12 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    command:
+      - -addr=:80
+      - -createKey=${CREATE_KEY:-}
+      - -trustProxy=${TRUST_PROXY:-false}
