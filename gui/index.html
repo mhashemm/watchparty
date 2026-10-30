@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fosdo2's Movie Clinic</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M12 18h8l1 11h-10z' fill='%23f1ead6' stroke='%236e4b30' stroke-width='1.5'/%3E%3Cpath d='M3 18C5 5 27 5 29 18z' fill='%23a8642a' stroke='%234a3220' stroke-width='1.5'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23f6efdc'/%3E%3Ccircle cx='19' cy='9.5' r='1.6' fill='%23f6efdc'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Gluten:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --lichen: #dfe6c8;
+  --paper: #fbfaf1;
+  --forest: #23402b;
+  --moss: #4f7a34;
+  --moss-deep: #3d6128;
+  --bark: #6e4b30;
+  --soil: #4a3220;
+  --porcini: #a8642a;
+  --ochre: #e0b452;
+  --berry: #9a3a35;
+  --ink-soft: #55644f;
+  --line: #c9cfae;
+  --fur: #8a8178;
+  --fur-dark: #5f5750;
+  --ear: #e7b7a3;
+  --display: "Gluten", "Comic Sans MS", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background:
+    radial-gradient(ellipse 60% 35% at 12% 6%, rgba(255, 255, 238, .6), transparent 70%),
+    radial-gradient(ellipse 45% 30% at 92% 30%, rgba(255, 255, 238, .4), transparent 70%),
+    radial-gradient(ellipse 80% 30% at 50% 100%, rgba(79, 122, 52, .22), transparent 75%),
+    var(--lichen);
+  background-attachment: fixed;
+  overflow-x: hidden;
+  color: var(--forest);
+  font: 16px/1.5 var(--body);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+main {
+  width: min(520px, calc(100% - 32px));
+  margin: 112px 0 150px;
+  position: relative;
+}
+.cat {
+  position: absolute;
+  width: 170px;
+  left: 50%;
+  top: -101px;
+  transform: translateX(-50%);
+  z-index: 2;
+  cursor: pointer;
+  overflow: visible;
+}
+.cat .fur { fill: var(--fur); }
+.cat .stripe { stroke: var(--fur-dark); stroke-width: 3; stroke-linecap: round; fill: none; }
+.cat .ear { fill: var(--ear); }
+.cat .cheek { fill: var(--ear); opacity: .55; }
+.cat .paw { stroke: var(--fur-dark); stroke-width: 1.5; }
+.cat .toes { stroke: var(--fur-dark); stroke-width: 1.5; stroke-linecap: round; }
+.cat .line { stroke: var(--forest); stroke-width: 2; stroke-linecap: round; fill: none; }
+.cat .eye { fill: var(--forest); }
+.cat .glint { fill: #fff; }
+.cat .nose { fill: var(--ear); stroke: var(--fur-dark); stroke-width: 1; }
+.cat .whisker { stroke: var(--paper); stroke-width: 1.4; stroke-linecap: round; opacity: .9; }
+.cat .eyes-closed, .cat .brows { display: none; }
+body[data-mood="sleep"] .cat .eyes-open { display: none; }
+body[data-mood="sleep"] .cat .eyes-closed { display: inline; }
+body[data-mood="worried"] .cat .brows { display: inline; }
+.cat .eyes-open { transform-box: fill-box; transform-origin: center; animation: blink 6s infinite; }
+@keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.1); } }
+.cat .steth { stroke: var(--moss-deep); stroke-width: 3.5; fill: none; stroke-linecap: round; }
+.cat .bell { fill: #dfe3e6; stroke: #7d8790; stroke-width: 1.5; }
+.cat .bell-in { fill: #b9c1c7; }
+.cat .zzz { display: none; fill: var(--bark); font: 700 16px var(--display); }
+body[data-mood="sleep"] .cat .zzz { display: inline; }
+.cat .zzz text { animation: snooze 3.6s ease-in-out infinite; opacity: 0; }
+.cat .zzz text:nth-child(2) { animation-delay: 1.2s; }
+.cat .zzz text:nth-child(3) { animation-delay: 2.4s; }
+@keyframes snooze { 0% { opacity: 0; transform: translate(0, 6px); } 30% { opacity: .9; } 100% { opacity: 0; transform: translate(6px, -10px); } }
+.heart {
+  position: absolute;
+  top: -70px;
+  z-index: 3;
+  color: var(--berry);
+  font-size: 22px;
+  pointer-events: none;
+  animation: float 1.5s ease-out forwards;
+}
+@keyframes float { from { opacity: 1; transform: translate(-50%, 0) scale(.6); } to { opacity: 0; transform: translate(-50%, -60px) scale(1.2); } }
+
+.card {
+  background: var(--paper);
+  border: 2px solid var(--bark);
+  border-radius: 22px;
+  padding: 54px 28px 28px;
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 6px 0 var(--bark);
+}
+h1 {
+  font: 700 2.1rem/1.1 var(--display);
+  margin: 0 0 6px;
+  text-align: center;
+  color: var(--forest);
+}
+h1 .rx { color: var(--porcini); font-size: 1.6rem; margin-right: 6px; }
+.lede { text-align: center; color: var(--ink-soft); margin: 0 auto 24px; max-width: 40ch; }
+h2 { font: 700 1.25rem/1.2 var(--display); margin: 0 0 10px; color: var(--bark); }
+
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.field { margin-bottom: 18px; }
+label, .label { display: block; font-weight: 700; margin-bottom: 6px; }
+.hint { font-size: .875rem; color: var(--ink-soft); margin: 6px 0 0; }
+input[type=text], input[type=password], textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--forest);
+  background: #fff;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+textarea { resize: vertical; min-height: 48px; }
+input:focus-visible, textarea:focus-visible, button:focus-visible, summary:focus-visible, .seg input:focus-visible + span {
+  outline: 3px solid var(--ochre);
+  outline-offset: 2px;
+  border-color: var(--moss);
+}
+.row { display: flex; gap: 8px; }
+.row input { flex: 1; min-width: 0; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.grid .wide { grid-column: 1 / -1; }
+
+button {
+  font: 700 1rem var(--body);
+  border-radius: 12px;
+  border: 2px solid var(--bark);
+  background: #fff;
+  color: var(--bark);
+  padding: 10px 14px;
+  cursor: pointer;
+}
+button:hover { background: #f3eedf; }
+button:disabled { opacity: .55; cursor: default; }
+.go {
+  width: 100%;
+  font: 700 1.3rem var(--display);
+  padding: 14px;
+  background: var(--moss);
+  border-color: var(--moss-deep);
+  color: #fff;
+  box-shadow: 0 4px 0 var(--moss-deep);
+  margin-top: 6px;
+}
+.go:hover { background: var(--moss-deep); }
+.go { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.paw-icon { width: 22px; height: 22px; fill: currentColor; }
+.go:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--moss-deep); }
+.go.stop { background: var(--paper); color: var(--berry); border-color: var(--berry); box-shadow: 0 4px 0 var(--berry); }
+.go.stop:hover { background: #f6e9e4; }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg label { margin: 0; font-weight: 400; cursor: pointer; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg span {
+  display: block;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  height: 100%;
+}
+.seg span b { display: block; }
+.seg span small { color: var(--ink-soft); }
+.seg input:checked + span { border-color: var(--moss); background: #eef3df; }
+.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+.check input { width: 18px; height: 18px; accent-color: var(--moss); }
+
+details { border-top: 2px dashed var(--line); padding-top: 12px; margin: 6px 0 16px; }
+summary { cursor: pointer; font-weight: 700; color: var(--bark); }
+details[open] summary { margin-bottom: 14px; }
+
+.msg { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: #eef3df; }
+.msg.bad { background: #f6e4e0; color: var(--berry); }
+
+#vitals h2:first-child { display: flex; align-items: center; gap: 10px; }
+.ecg { width: 64px; height: 20px; stroke: var(--porcini); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinite; }
+@keyframes beat { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
+#vitals { margin-bottom: 24px; border-bottom: 2px dashed var(--line); padding-bottom: 6px; }
+.status { font-size: 1.1rem; font-weight: 700; margin: 0 0 16px; }
+.status.bad { color: var(--berry); }
+.share { background: #f3eedf; border: 2px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 18px; }
+.share code { display: block; font: .9rem/1.4 ui-monospace, Consolas, monospace; word-break: break-all; margin: 6px 0 10px; color: var(--soil); }
+#feed { list-style: none; padding: 0; margin: 0 0 18px; }
+#feed li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+#feed time { color: var(--ink-soft); font-size: .875rem; min-width: 3.2em; padding-top: 1px; }
+#feed .empty { color: var(--ink-soft); }
+#feed li:not(.empty)::before { content: ""; flex: none; width: 16px; height: 16px; margin-top: 3px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M12 18h8l1 11h-10z' fill='%23f1ead6' stroke='%236e4b30' stroke-width='1.5'/%3E%3Cpath d='M3 18C5 5 27 5 29 18z' fill='%23a8642a' stroke='%234a3220' stroke-width='1.5'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23f6efdc'/%3E%3Ccircle cx='19' cy='9.5' r='1.6' fill='%23f6efdc'/%3E%3C/svg%3E") center / contain no-repeat; }
+#chart pre {
+  background: #22301f;
+  color: #d5e2b8;
+  font: .78rem/1.45 ui-monospace, Consolas, monospace;
+  padding: 12px;
+  border-radius: 12px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.ground {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  width: 560px;
+  height: 130px;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+}
+body::before {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 90px;
+  background: linear-gradient(to bottom, transparent, var(--lichen) 75%);
+  z-index: 2;
+  pointer-events: none;
+}
+body::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  background: var(--soil);
+  z-index: 2;
+}
+.ground .soil { fill: var(--soil); }
+.ground .grass { fill: var(--moss); }
+.ground .stem { fill: #f1ead6; stroke: var(--bark); stroke-width: 1.5; }
+.ground .gill { stroke: var(--bark); stroke-width: 1; opacity: .5; fill: none; }
+.ground .cap { fill: var(--porcini); stroke: var(--soil); stroke-width: 1.5; }
+.ground .cap.red { fill: var(--berry); }
+.ground .cap.cream { fill: #d8c49a; }
+.ground .spot { fill: #f6efdc; }
+.turtle .shell { fill: var(--moss); stroke: var(--forest); stroke-width: 1.5; }
+.turtle .rim { fill: #6b8f45; stroke: var(--forest); stroke-width: 1.3; }
+.turtle .scute { stroke: var(--forest); stroke-width: 1.3; fill: none; }
+.turtle .skin { fill: #9cb36b; stroke: var(--forest); stroke-width: 1.3; }
+.turtle .eye { fill: var(--forest); }
+.turtle .cheek { fill: #e9a99a; opacity: .7; }
+.turtle { animation: stroll 60s linear infinite; }
+.turtle .leg { animation: step .7s ease-in-out infinite alternate; }
+.turtle .leg.b { animation-delay: .35s; }
+body.walking .turtle .leg { animation-duration: .3s; }
+body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; }
+@keyframes stroll { from { transform: translateX(-90px); } to { transform: translateX(620px); } }
+@keyframes step { from { transform: translateY(0); } to { transform: translateY(-2px); } }
+@keyframes bob { from { transform: translateY(0); } to { transform: translateY(-1.5px); } }
+@media (prefers-reduced-motion: reduce) {
+  .turtle, .turtle .leg, .turtle .body, .cat .eyes-open, .cat .zzz text, .ecg path { animation: none !important; }
+  .turtle { transform: translateX(230px); }
+  .turtle.baby { transform: translateX(196px); }
+  .cat .zzz text { opacity: .8; }
+}
+@media (max-width: 420px) {
+  .card { padding: 32px 18px 22px; }
+  .grid, .seg { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body data-mood="sleep">
+<main>
+  <svg class="cat" viewBox="0 0 160 142" role="img" aria-label="Fosdo2 the cat">
+    <title>Fosdo2</title>
+    <path class="fur" d="M42 20 L64 44 L96 44 L118 20 L124 70 L124 98 L36 98 L36 70 Z"/>
+    <path class="ear" d="M46 32 L60 46 L48 52 Z"/>
+    <path class="ear" d="M114 32 L100 46 L112 52 Z"/>
+    <ellipse class="fur" cx="80" cy="72" rx="46" ry="34"/>
+    <path class="stripe" d="M70 42 l3 9 M80 40 v11 M90 42 l-3 9"/>
+    <path class="stripe" d="M37 74 h8 M36 82 h8 M123 74 h-8 M124 82 h-8"/>
+    <g class="eyes-open">
+      <ellipse class="eye" cx="63" cy="68" rx="6" ry="7.5"/>
+      <ellipse class="eye" cx="97" cy="68" rx="6" ry="7.5"/>
+      <circle class="glint" cx="65" cy="65.5" r="2"/>
+      <circle class="glint" cx="99" cy="65.5" r="2"/>
+    </g>
+    <g class="eyes-closed">
+      <path class="line" d="M56 69 q7 5 14 0 M90 69 q7 5 14 0"/>
+    </g>
+    <g class="brows">
+      <path class="line" d="M54 59 l13 -5 M106 59 l-13 -5"/>
+    </g>
+    <ellipse class="cheek" cx="54" cy="80" rx="6" ry="3.5"/>
+    <ellipse class="cheek" cx="106" cy="80" rx="6" ry="3.5"/>
+    <path class="nose" d="M75 78 h10 l-5 5 z"/>
+    <path class="line" d="M80 83 q-4 6 -10 3 M80 83 q4 6 10 3"/>
+    <path class="whisker" d="M52 80 l-20 -3 M52 85 l-20 3 M108 80 l20 -3 M108 85 l20 3"/>
+    <g class="zzz"><text x="126" y="34">z</text><text x="136" y="22">z</text><text x="146" y="10">z</text></g>
+    <path class="steth" d="M47 102 C47 117, 70 123, 80 123 M113 102 C113 117, 90 123, 80 123 M80 123 C80 136, 100 140, 113 132"/>
+    <circle class="bell" cx="119" cy="129" r="7.5"/>
+    <circle class="bell-in" cx="119" cy="129" r="3.5"/>
+    <ellipse class="fur paw" cx="54" cy="100" rx="15" ry="9"/>
+    <ellipse class="fur paw" cx="106" cy="100" rx="15" ry="9"/>
+    <path class="toes" d="M49 99 v6 M59 99 v6 M101 99 v6 M111 99 v6"/>
+  </svg>
+
+  <div class="card">
+    <h1><span class="rx" aria-hidden="true">℞</span>Fosdo2's Movie Clinic</h1>
+    <p class="lede">Pick a movie and start the party. When anyone pauses or seeks, everyone's player follows.</p>
+
+    <section id="vitals" hidden aria-live="polite">
+      <h2>Vitals <svg class="ecg" viewBox="0 0 64 20" aria-hidden="true"><path d="M0 11 H18 L22 4 L27 17 L31 2 L35 11 H64"/></svg></h2>
+      <p class="status" id="status"></p>
+      <div class="share" id="share" hidden>
+        <span class="label">Invite to share</span>
+        <code id="share-text"></code>
+        <button type="button" id="copy">Copy invite</button>
+      </div>
+      <h2>Party feed</h2>
+      <ul id="feed"><li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li></ul>
+      <details id="chart">
+        <summary>Patient chart</summary>
+        <pre id="log"></pre>
+      </details>
+    </section>
+
+    <form id="form">
+      <fieldset id="fields">
+        <div class="field">
+          <label for="invite">Got an invite? Paste it here</label>
+          <textarea id="invite" rows="2" placeholder="-relay ws://… -room … -secret …   or   192.168.1.5:6969"></textarea>
+          <p class="hint" id="invite-hint" hidden>Filled in from the invite. Now pick your movie.</p>
+        </div>
+
+        <div class="field">
+          <label for="hostname">Your name</label>
+          <input type="text" id="hostname" placeholder="Shown to everyone when you pause" autocomplete="nickname">
+        </div>
+
+        <div class="field">
+          <label for="file">Movie</label>
+          <div class="row">
+            <input type="text" id="file" placeholder="Full path to the movie file" required>
+            <button type="button" data-pick="file">Browse</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="label" id="mode-label">How are you connecting?</span>
+          <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+            <label><input type="radio" name="mode" value="relay" checked><span><b>Over the internet</b><small>Through a relay, works from anywhere</small></span></label>
+            <label><input type="radio" name="mode" value="direct"><span><b>Same Wi-Fi</b><small>Or straight to a friend's address</small></span></label>
+          </div>
+        </div>
+
+        <div id="relay-fields" class="grid">
+          <div class="field wide">
+            <label for="relay">Relay address</label>
+            <input type="text" id="relay" placeholder="ws://example.com:8080">
+          </div>
+          <div class="field">
+            <label for="room">Room</label>
+            <input type="text" id="room" placeholder="New room if empty">
+          </div>
+          <div class="field">
+            <label for="secret">Secret</label>
+            <input type="password" id="secret" placeholder="New secret if empty">
+          </div>
+          <p class="hint wide" style="margin:-10px 0 18px">Leave room and secret empty to open a new party, then share the invite.</p>
+        </div>
+
+        <div id="direct-fields" class="grid" hidden>
+          <div class="field wide">
+            <label class="check"><input type="checkbox" id="local" checked> We're on the same Wi-Fi</label>
+          </div>
+          <div class="field wide">
+            <label for="addrs">Friend's address</label>
+            <input type="text" id="addrs" placeholder="Leave empty if you're first">
+          </div>
+          <div class="field">
+            <label for="port">Your port</label>
+            <input type="text" id="port" inputmode="numeric" placeholder="6969">
+          </div>
+        </div>
+
+        <details>
+          <summary>Extra settings</summary>
+          <div class="field">
+            <label for="mpv">mpv program</label>
+            <div class="row">
+              <input type="text" id="mpv" placeholder="Found automatically">
+              <button type="button" data-pick="mpv">Browse</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="mpvFlags">Extra mpv options</label>
+            <input type="text" id="mpvFlags" placeholder="--fullscreen --volume=70">
+          </div>
+          <div class="grid">
+            <div class="field">
+              <label for="cooldown">Seconds to wait for mpv</label>
+              <input type="text" id="cooldown" inputmode="numeric" placeholder="5">
+            </div>
+            <div class="field">
+              <label for="createKey">Room create key</label>
+              <input type="password" id="createKey" placeholder="Only if the relay asks">
+            </div>
+            <div class="field">
+              <label for="pport">Public port</label>
+              <input type="text" id="pport" inputmode="numeric" placeholder="6969">
+            </div>
+          </div>
+        </details>
+      </fieldset>
+
+      <p class="msg bad" id="error" hidden></p>
+      <button class="go" id="go" type="submit"><svg class="paw-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="16" rx="5.5" ry="4.5"/><circle cx="5" cy="10" r="2.3"/><circle cx="9.3" cy="5.5" r="2.3"/><circle cx="14.7" cy="5.5" r="2.3"/><circle cx="19" cy="10" r="2.3"/></svg><span id="go-label">Start the party</span></button>
+    </form>
+
+  </div>
+</main>
+
+<svg class="ground" viewBox="0 0 560 130" aria-hidden="true">
+  <path class="soil" d="M0 110 Q90 98 180 106 T360 103 T560 108 V130 H0 Z"/>
+  <path class="grass" d="M2 110 l6 -14 l4 14 l5 -10 l4 10 M150 106 l5 -12 l4 12 l6 -16 l3 16 M300 104 l4 -11 l5 11 l5 -14 l4 14 M386 104 l4 -10 l5 10 M520 107 l6 -14 l3 14 l5 -10 l4 10"/>
+  <g transform="translate(58 107)">
+    <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
+    <path class="cap" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
+    <path class="gill" d="M-26 -30 q26 4 52 0"/>
+    <circle class="spot" cx="-13" cy="-46" r="3.5"/><circle class="spot" cx="10" cy="-50" r="3"/><circle class="spot" cx="-2" cy="-40" r="2"/>
+  </g>
+  <g transform="translate(98 108) scale(.62)">
+    <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
+    <path class="cap red" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
+    <circle class="spot" cx="-15" cy="-42" r="5"/><circle class="spot" cx="7" cy="-52" r="4.5"/><circle class="spot" cx="22" cy="-38" r="3.5"/>
+  </g>
+  <g transform="translate(26 110) scale(.42)">
+    <path class="stem" d="M-6 0 q-3 -26 2 -38 h8 q5 12 2 38 z"/>
+    <path class="cap cream" d="M-22 -34 q22 -30 44 0 q-22 5 -44 0 z"/>
+  </g>
+  <g transform="translate(470 106) scale(.95)">
+    <path class="stem" d="M-6 0 q-3 -30 2 -44 h8 q5 14 2 44 z"/>
+    <path class="cap cream" d="M-24 -40 q24 -34 48 0 q-24 6 -48 0 z"/>
+    <path class="gill" d="M-16 -38 q16 3 32 0"/>
+  </g>
+  <g transform="translate(502 108) scale(.7)">
+    <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
+    <path class="cap" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
+    <circle class="spot" cx="-8" cy="-46" r="4"/><circle class="spot" cx="12" cy="-42" r="3"/>
+  </g>
+  <g transform="translate(530 109) scale(.45)">
+    <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
+    <path class="cap red" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
+    <circle class="spot" cx="-10" cy="-44" r="6"/><circle class="spot" cx="12" cy="-40" r="5"/>
+  </g>
+  <g class="turtle">
+    <g transform="translate(0 80)">
+      <g class="body">
+        <rect class="skin leg a" x="10" y="20" width="9" height="10" rx="4"/>
+        <rect class="skin leg b" x="34" y="20" width="9" height="10" rx="4"/>
+        <ellipse class="skin" cx="58" cy="16" rx="10" ry="8"/>
+        <circle class="eye" cx="62" cy="14" r="1.8"/>
+        <circle class="cheek" cx="61" cy="19" r="2.2"/>
+        <path class="line-smile" d="M63 20 q2 1.5 4 -0.5" stroke="#23402b" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+        <path class="skin" d="M3 22 l-7 3 l6 -8 z"/>
+        <path class="shell" d="M2 24 C2 -4 52 -4 52 24 Z"/>
+        <path class="scute" d="M13 23 L18 10 L36 10 L41 23 M18 10 L27 3.5 L36 10 M27 10 V23"/>
+        <rect class="rim" x="0" y="21" width="54" height="5" rx="2.5"/>
+      </g>
+    </g>
+  </g>
+  <g class="turtle baby">
+    <g transform="translate(-40 93) scale(.55)">
+      <g class="body">
+        <rect class="skin leg a" x="10" y="20" width="9" height="10" rx="4"/>
+        <rect class="skin leg b" x="34" y="20" width="9" height="10" rx="4"/>
+        <ellipse class="skin" cx="58" cy="16" rx="10" ry="8"/>
+        <circle class="eye" cx="62" cy="14" r="1.8"/>
+        <circle class="cheek" cx="61" cy="19" r="2.2"/>
+        <path class="line-smile" d="M63 20 q2 1.5 4 -0.5" stroke="#23402b" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+        <path class="skin" d="M3 22 l-7 3 l6 -8 z"/>
+        <path class="shell" d="M2 24 C2 -4 52 -4 52 24 Z"/>
+        <path class="scute" d="M13 23 L18 10 L36 10 L41 23 M18 10 L27 3.5 L36 10 M27 10 V23"/>
+        <rect class="rim" x="0" y="21" width="54" height="5" rx="2.5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+
+<script>
+const TOKEN = "{{TOKEN}}";
+const $ = id => document.getElementById(id);
+const api = (path, body) => fetch(path, {
+  method: body === undefined ? "GET" : "POST",
+  headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+const FIELDS = ["hostname", "relay", "room", "secret", "createKey", "port", "pport", "addrs", "mpv", "mpvFlags", "cooldown"];
+const SAVE_KEY = "watchparty-gui";
+
+function mode() { return document.querySelector("input[name=mode]:checked").value; }
+function setMode(m) {
+  document.querySelector(`input[name=mode][value=${m}]`).checked = true;
+  $("relay-fields").hidden = m !== "relay";
+  $("direct-fields").hidden = m !== "direct";
+}
+document.querySelectorAll("input[name=mode]").forEach(r => r.addEventListener("change", () => setMode(mode())));
+
+function collect() {
+  const f = { mode: mode(), file: $("file").value, local: $("local").checked };
+  for (const k of FIELDS) f[k] = $(k).value;
+  return f;
+}
+function save() {
+  const f = collect();
+  delete f.file;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(f)); } catch {}
+}
+function load() {
+  let f = null;
+  try { f = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch {}
+  if (!f) return;
+  for (const k of FIELDS) if (typeof f[k] === "string") $(k).value = f[k];
+  $("local").checked = f.local !== false;
+  setMode(f.mode === "direct" ? "direct" : "relay");
+}
+
+$("invite").addEventListener("input", () => {
+  const text = $("invite").value.replace(/^[\s\S]*your address to share is/, "").trim();
+  const t = text.split(/\s+/);
+  let filled = false;
+  if (t.includes("-relay")) {
+    const map = { "-relay": "relay", "-room": "room", "-secret": "secret" };
+    for (let i = 0; i < t.length - 1; i++) if (map[t[i]]) { $(map[t[i]]).value = t[i + 1]; filled = true; }
+    setMode("relay");
+  } else if (/^\S+:\d+$/.test(text)) {
+    $("addrs").value = text;
+    setMode("direct");
+    filled = true;
+  }
+  $("invite-hint").hidden = !filled;
+});
+
+document.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click", async () => {
+  const target = $(b.dataset.pick);
+  b.disabled = true;
+  try {
+    const res = await api("/pick", {});
+    const path = (await res.text()).trim();
+    if (!res.ok) throw new Error(path);
+    if (path) target.value = path;
+  } catch {
+    showError("No file picker found on this computer. Type or paste the full path instead.");
+  }
+  b.disabled = false;
+  target.focus();
+}));
+
+function showError(text) {
+  $("error").textContent = text;
+  $("error").hidden = !text;
+}
+
+let running = false;
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (running) {
+    if (confirm("End the party? mpv closes for you, and everyone else keeps watching.")) {
+      await api("/stop", {});
+    }
+    return;
+  }
+  showError("");
+  if (!$("file").value.trim()) { showError("Pick a movie first."); $("file").focus(); return; }
+  save();
+  const res = await api("/start", collect());
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    showError(/not found|no such file|cannot find/i.test(text)
+      ? "Diagnosis: the watchparty program is missing. Put it in the same folder as this app."
+      : "Diagnosis: " + text);
+  }
+});
+
+let run = 0, from = 0, state = {};
+function reset() {
+  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false };
+  $("log").textContent = "";
+  $("feed").innerHTML = '<li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li>';
+  $("share").hidden = true;
+}
+reset();
+
+function addFeed(text) {
+  const feed = $("feed");
+  feed.querySelector(".empty")?.remove();
+  const li = document.createElement("li");
+  const time = document.createElement("time");
+  time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  li.append(time, text);
+  feed.prepend(li);
+  while (feed.children.length > 20) feed.lastChild.remove();
+}
+
+function handle(line) {
+  const log = $("log");
+  log.textContent += line + "\n";
+  if (log.textContent.length > 200000) log.textContent = log.textContent.slice(-150000);
+
+  let m;
+  if ((m = line.match(/your address to share is (.*)$/))) {
+    $("share-text").textContent = m[1].trim();
+  }
+  if (/relay: connected/.test(line)) Object.assign(state, { connected: true, reconnecting: false, waiting: false });
+  if (/relay: (dial|disconnected)/.test(line)) {
+    state.reconnecting = true;
+    state.waiting = /is not open yet/.test(line);
+  }
+  if (/rejected by relay/.test(line)) state.rejected = true;
+  if (/init done/.test(line)) state.ready = true;
+  if ((m = line.match(/do: sent request: (\{"command":\["show-text".*)$/))) {
+    try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
+  }
+}
+
+function render(exitErr) {
+  let text, bad = false, mood = "awake", walking = false;
+  if (state.rejected) {
+    text = "Diagnosis: the relay rejected this room or secret. Check the invite and start again."; bad = true; mood = "worried";
+  } else if (running && state.waiting) {
+    text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;
+  } else if (running && state.reconnecting) {
+    text = "Lost the relay. Reconnecting…"; walking = true; mood = "worried";
+  } else if (running && !state.ready) {
+    text = "Opening mpv. This takes a few seconds…"; walking = true;
+  } else if (running) {
+    text = "You're in. Pause or seek in mpv and everyone follows.";
+  } else if (exitErr) {
+    text = `Diagnosis: watchparty stopped (${exitErr}). The patient chart below has the details.`; bad = true; mood = "worried";
+    $("chart").open = true;
+  } else {
+    text = "The party has ended."; mood = "sleep";
+  }
+  $("status").textContent = text;
+  $("status").classList.toggle("bad", bad);
+  document.body.dataset.mood = mood;
+  document.body.classList.toggle("walking", walking);
+  $("fields").hidden = running;
+  $("share").hidden = !running || !$("share-text").textContent;
+  $("go-label").textContent = running ? "End the party" : "Start the party";
+  document.body.classList.toggle("alive", running && state.ready);
+  $("go").classList.toggle("stop", running);
+}
+
+async function poll() {
+  try {
+    const res = await api(`/log?from=${from}&run=${run}`);
+    const j = await res.json();
+    if (j.run !== run) { run = j.run; reset(); }
+    const lines = j.lines || [];
+    lines.forEach(handle);
+    from = j.from + lines.length;
+    running = j.running;
+    if (run > 0) {
+      $("vitals").hidden = false;
+      render(j.exitErr);
+    }
+  } catch {
+    showError("The app closed in the background. Close this window and open it again.");
+    document.body.dataset.mood = "sleep";
+  }
+  setTimeout(poll, 1000);
+}
+
+$("copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("share-text").textContent);
+    $("copy").textContent = "Copied";
+  } catch {
+    getSelection().selectAllChildren($("share-text"));
+    $("copy").textContent = "Press Ctrl+C to copy";
+  }
+  setTimeout(() => $("copy").textContent = "Copy invite", 2000);
+});
+
+document.querySelector(".cat").addEventListener("click", () => {
+  const heart = document.createElement("span");
+  heart.className = "heart";
+  heart.textContent = "♥";
+  heart.style.left = 40 + Math.random() * 20 + "%";
+  heart.addEventListener("animationend", () => heart.remove());
+  document.querySelector("main").append(heart);
+});
+
+load();
+poll();
+</script>
+</body>
+</html>

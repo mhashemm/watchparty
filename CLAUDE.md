@@ -11,6 +11,7 @@ go test -race ./...                        # the invariants below are all concur
 go test ./mpv -run '^TestName$' -v         # single test
 go mod tidy                                # run it yourself; CI only does go mod download
 go build ./relay                           # the relay server, a separate binary
+go build -o watchparty-gui ./gui           # the GUI; `-o` because ./gui is a directory
 docker build -f relay/Dockerfile -t watchparty-relay .   # from the REPO ROOT
 ./e2e.py                                   # both suites, real mpv, ~12 min
 ./e2e.py --mode p2p | --mode relay         # one phase only
@@ -178,6 +179,15 @@ by this feature.
   open yet, and you sent no `-createKey`". After a relay restart, whichever node
   redials first recreates the room. If that's a guest, they have to wait for the
   host, not exit.
+
+### `gui/` (desktop launcher)
+
+A separate `package main` that runs the `watchparty` binary as a subprocess and
+imports nothing from the repo. **Details are in `gui/CLAUDE.md`.** One thing reaches
+outside it: the GUI's status display matches these log lines, so **if you change any
+of them, update `handle()` in `gui/index.html` in the same commit**: `your address to
+share is`, `relay: connected`, `relay: dial:`, `relay: disconnected`, `is not open
+yet`, `rejected by relay`, `init done`, and `do: sent request:` (for `show-text`).
 
 ### Relay hardening (it runs on a public VPS)
 

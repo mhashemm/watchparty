@@ -17,11 +17,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - { goos: linux, goarch: amd64, out: watchparty_amd64 }
-          - { goos: linux, goarch: arm64, out: watchparty_arm64 }
-          - { goos: windows, goarch: amd64, out: watchparty.exe }
-          - { goos: darwin, goarch: amd64, out: watchparty_mac_amd64 }
-          - { goos: darwin, goarch: arm64, out: watchparty_mac_arm64 }
+          - { goos: linux, goarch: amd64, out: watchparty_amd64, gui: watchparty-gui_amd64 }
+          - { goos: linux, goarch: arm64, out: watchparty_arm64, gui: watchparty-gui_arm64 }
+          - { goos: windows, goarch: amd64, out: watchparty.exe, gui: watchparty-gui.exe }
+          - { goos: darwin, goarch: amd64, out: watchparty_mac_amd64, gui: watchparty-gui_mac_amd64 }
+          - { goos: darwin, goarch: arm64, out: watchparty_mac_arm64, gui: watchparty-gui_mac_arm64 }
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +36,10 @@ jobs:
       - name: Build
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o ${{ matrix.out }} .
 
+      - name: Build gui
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
+
       - name: Publish
-        run: gh release create "$GITHUB_REF_NAME" ${{ matrix.out }} --generate-notes || gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }}
+        run: gh release create "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} --generate-notes || gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
