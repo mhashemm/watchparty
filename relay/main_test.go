@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +22,13 @@ func newRelay(perHour, maxRooms int, maxConns int64) *relay {
 		perHour:  perHour,
 		maxRooms: maxRooms,
 		maxConns: maxConns,
+		ping:     pingInterval,
+		timeout:  writeTimeout,
 	}
 }
+
+// relays maps each served url to its relay, so join can wait for registration
+var relays sync.Map
 
 func serve(t *testing.T, r *relay) string {
 	t.Helper()
@@ -29,11 +36,27 @@ func serve(t *testing.T, r *relay) string {
 	mux.HandleFunc("/ws", r.handle)
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
-	return "ws" + s.URL[len("http"):]
+	url := "ws" + s.URL[len("http"):]
+	relays.Store(url, r)
+	return url
 }
 
+func members(r *relay, roomName string) []*member {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rm, ok := r.rooms[roomName]; ok {
+		return slices.Collect(maps.Keys(rm.members))
+	}
+	return nil
+}
+
+// join returns once the relay has registered the member, not just once the
+// handshake is done: add runs after Accept, so a frame sent in between misses it.
 func join(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, int) {
 	t.Helper()
+	v, _ := relays.Load(url)
+	r := v.(*relay)
+	before := members(r, roomName)
 	conn, res, err := websocket.Dial(context.Background(),
 		url+"/ws?room="+roomName+"&hostname="+hostname,
 		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}, createHeaderKey: createKey}})
@@ -44,7 +67,55 @@ func join(t *testing.T, url, roomName, secret, hostname string, createKey ...str
 		t.Fatalf("dial %s: %s", roomName, err)
 	}
 	t.Cleanup(func() { conn.CloseNow() })
+	eventually(t, "the relay never registered "+hostname, func() bool {
+		return slices.ContainsFunc(members(r, roomName), func(m *member) bool { return !slices.Contains(before, m) })
+	})
 	return conn, http.StatusSwitchingProtocols
+}
+
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal(what)
+		}
+	}
+}
+
+// mark sends a playback frame. Each member's queue is FIFO, so whatever the relay
+// sent a member before the mark arrives before it: reading up to the mark proves
+// an absence without waiting out a timeout.
+func mark(t *testing.T, conn *websocket.Conn, from string) {
+	t.Helper()
+	b, _ := json.Marshal(message{Hostname: from, Event: json.RawMessage(`{"name":"mark"}`)})
+	if err := conn.Write(context.Background(), websocket.MessageText, b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// noticesBefore returns the notices that arrive ahead of the next playback frame.
+func noticesBefore(t *testing.T, conn *websocket.Conn) []string {
+	t.Helper()
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got := []string{}
+	for {
+		_, b, err := conn.Read(c)
+		if err != nil {
+			t.Fatalf("no playback frame after %v: %s", got, err)
+		}
+		m := message{}
+		json.Unmarshal(b, &m)
+		e := struct {
+			Name string `json:"name"`
+			Data string `json:"data"`
+		}{}
+		json.Unmarshal(m.Event, &e)
+		if e.Name != "show-text" {
+			return got
+		}
+		got = append(got, e.Data)
+	}
 }
 
 // recvEvent reads until it sees a real playback frame, skipping the join/leave
@@ -77,6 +148,7 @@ func recvEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration) (messa
 // counter/staleness machinery unnecessary in relay mode; if it regresses, every
 // event loops forever.
 func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
+	t.Parallel()
 	url := serve(t, newRelay(10, 10, 10))
 	a, _ := join(t, url, "movie", "s3cret", "a")
 	b, _ := join(t, url, "movie", "s3cret", "b")
@@ -97,46 +169,26 @@ func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
 		}
 	}
 
-	// a still gets b's and c's join notices, so only a playback frame counts
-	if got, ok := recvEvent(t, a, 500*time.Millisecond); ok {
-		t.Fatalf("the sender received its own event back: %+v", got)
+	mark(t, b, "b")
+	if got, ok := recvEvent(t, a, 2*time.Second); !ok || got.Hostname != "b" {
+		t.Fatalf("the sender received %+v before b's mark, want its own event never to come back", got)
 	}
-}
-
-// recvNotices collects the show-text payloads a member is sent.
-func recvNotices(t *testing.T, conn *websocket.Conn, want int) []string {
-	t.Helper()
-	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	got := []string{}
-	for len(got) < want {
-		_, b, err := conn.Read(c)
-		if err != nil {
-			return got
-		}
-		m := message{}
-		json.Unmarshal(b, &m)
-		e := struct {
-			Name string `json:"name"`
-			Data string `json:"data"`
-		}{}
-		json.Unmarshal(m.Event, &e)
-		if e.Name == "show-text" {
-			got = append(got, e.Data)
-		}
-	}
-	return got
 }
 
 // The room hears about the joiner, and the joiner hears about the room. Without
 // the second half the last node in would believe it was alone.
 func TestJoinerLearnsWhoIsAlreadyThere(t *testing.T) {
+	t.Parallel()
 	url := serve(t, newRelay(10, 10, 10))
-	join(t, url, "movie", "s", "a")
+	a, _ := join(t, url, "movie", "s", "a")
 	join(t, url, "movie", "s", "b")
 	c, _ := join(t, url, "movie", "s", "c")
 
-	got := recvNotices(t, c, 2)
+	// c's mark reaches a only from c's read loop, which starts after c's notices are queued
+	mark(t, c, "c")
+	noticesBefore(t, a)
+	mark(t, a, "a")
+	got := noticesBefore(t, c)
 	for _, want := range []string{"connected to a", "connected to b"} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("last joiner was not told about the room: got %v, want %q", got, want)
@@ -148,7 +200,9 @@ func TestJoinerLearnsWhoIsAlreadyThere(t *testing.T) {
 // same session. The relay must swap it in silently rather than keep the stale
 // member until the ping reaps it and tell the room it joined twice.
 func TestReconnectReplacesStaleMember(t *testing.T) {
-	url := serve(t, newRelay(10, 10, 10))
+	t.Parallel()
+	r := newRelay(10, 10, 10)
+	url := serve(t, r)
 	a, _ := join(t, url, "movie", "s", "a")
 	stale, _ := join(t, url, "movie", "s", "b&session=x")
 	fresh, _ := join(t, url, "movie", "s", "b&session=x")
@@ -163,16 +217,20 @@ func TestReconnectReplacesStaleMember(t *testing.T) {
 			break
 		}
 	}
-	// a timed-out Read closes the conn, so check a before its leave reaches fresh
-	if got := recvNotices(t, a, 2); !slices.Equal(got, []string{"b has joined"}) {
+	// the stale handler's leave runs before it releases its conn slot
+	eventually(t, "the stale handler never finished", func() bool { return r.conns.Load() == 2 })
+	mark(t, fresh, "b")
+	if got := noticesBefore(t, a); !slices.Equal(got, []string{"b has joined"}) {
 		t.Fatalf("room was told %v, want one join and no leave", got)
 	}
-	if got := recvNotices(t, fresh, 2); !slices.Contains(got, "connected to a") || slices.Contains(got, "connected to b") {
+	mark(t, a, "a")
+	if got := noticesBefore(t, fresh); !slices.Contains(got, "connected to a") || slices.Contains(got, "connected to b") {
 		t.Fatalf("reconnected node was told %v, want a and not itself", got)
 	}
 }
 
 func TestWrongSecretIsRejected(t *testing.T) {
+	t.Parallel()
 	url := serve(t, newRelay(100, 10, 10))
 	join(t, url, "movie", "right", "a")
 
@@ -187,6 +245,7 @@ func TestWrongSecretIsRejected(t *testing.T) {
 // Joining an existing room must not cost quota, or a party of eight would lock
 // itself out.
 func TestOnlyRoomCreationIsRateLimited(t *testing.T) {
+	t.Parallel()
 	url := serve(t, newRelay(2, 100, 100))
 
 	for i := range 2 {
@@ -205,6 +264,7 @@ func TestOnlyRoomCreationIsRateLimited(t *testing.T) {
 }
 
 func TestSecretGrindingIsRateLimited(t *testing.T) {
+	t.Parallel()
 	url := serve(t, newRelay(3, 100, 100))
 	join(t, url, "movie", "right", "a")
 
@@ -222,6 +282,7 @@ func TestSecretGrindingIsRateLimited(t *testing.T) {
 // A keyless join before the room exists is a member early for the party, so it
 // must not cost quota, but a wrong key is a guess and must.
 func TestCreateKey(t *testing.T) {
+	t.Parallel()
 	r := newRelay(2, 100, 100)
 	r.createKey = []byte("k")
 	url := serve(t, r)
@@ -246,6 +307,7 @@ func TestCreateKey(t *testing.T) {
 }
 
 func TestMaxRoomsAndMaxConns(t *testing.T) {
+	t.Parallel()
 	r := newRelay(100, 1, 100)
 	url := serve(t, r)
 	join(t, url, "first", "s", "a")
@@ -277,6 +339,7 @@ func TestLimiterDoesNotAllocatePerIP(t *testing.T) {
 // A sketch may over-count on collisions but must never under-count, or an
 // attacker could collide their way past the cap.
 func TestLimiterNeverUnderCounts(t *testing.T) {
+	t.Parallel()
 	l := newLimiter()
 	const want = 50
 	for i := range want {
@@ -293,6 +356,7 @@ func TestLimiterNeverUnderCounts(t *testing.T) {
 // The accepted cost of fixed memory is occasional false rejection, so keep the
 // sketch wide enough that it does not happen at realistic load.
 func TestLimiterDoesNotFalselyRejectAtRealisticLoad(t *testing.T) {
+	t.Parallel()
 	l := newLimiter()
 	for i := range 10_000 {
 		l.allow("172.16."+strconv.Itoa(i/256)+"."+strconv.Itoa(i%256), 10)
@@ -303,6 +367,7 @@ func TestLimiterDoesNotFalselyRejectAtRealisticLoad(t *testing.T) {
 }
 
 func TestLimiterResetsOnWindowRollover(t *testing.T) {
+	t.Parallel()
 	l := newLimiter()
 	for range 20 {
 		l.allow("203.0.113.1", 5)
@@ -317,20 +382,14 @@ func TestLimiterResetsOnWindowRollover(t *testing.T) {
 }
 
 func TestMemberThatStopsAnsweringPingsIsRemoved(t *testing.T) {
-	pingInterval, writeTimeout = 50*time.Millisecond, 50*time.Millisecond
-	t.Cleanup(func() { pingInterval, writeTimeout = 30*time.Second, 10*time.Second })
+	t.Parallel()
 	r := newRelay(10, 10, 10)
+	r.ping, r.timeout = 50*time.Millisecond, 50*time.Millisecond
 	join(t, serve(t, r), "deaf", "s", "a")
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	eventually(t, "a member that never answers a ping still holds its room", func() bool {
 		r.mu.Lock()
-		n := len(r.rooms)
-		r.mu.Unlock()
-		if n == 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("a member that never answers a ping still holds its room")
+		defer r.mu.Unlock()
+		return len(r.rooms) == 0
+	})
 }

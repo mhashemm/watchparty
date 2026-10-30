@@ -6,7 +6,8 @@ drives them by writing to one node's mpv IPC socket, then asserts the result on
 the other nodes' mpv. OSD notices are read back out of each node's log, since
 every show-text command appears there verbatim.
 
-Two phases, both run by default:
+Three phases, run by default at the same time as three copies of this script,
+each on its own ports and in its own run directory:
 
   p2p    the direct HTTP mesh. Nobody is given the full peer list: each node
          bootstraps off one earlier node (A <- B,C; B <- D,E), so most of the
@@ -14,10 +15,11 @@ Two phases, both run by default:
          to end up knowing all four others.
   relay  the same nodes against one ./relay websocket server, which is what
          people behind carrier NAT use when UPNP cannot work. Covers fan-out,
-         room isolation, the secret, every abuse cap, and reconnect after the
-         relay dies.
+         room isolation, the secret, and reconnect after the relay dies.
+  caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
+         client that never answers pings.
 
-    ./e2e.py                    # both phases, ~12 minutes
+    ./e2e.py                    # all three phases in parallel, ~45 seconds
     ./e2e.py --mode relay       # one phase
     ./e2e.py --file movie.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
@@ -31,10 +33,11 @@ import sys, tempfile, threading, time, urllib.error, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --resume-playback=yes"
-BOOT = 4             # mpv loading the file, plus the handshake
-STAGGER = 1.6        # lets a node's listener come up before the next one
-                     # bootstraps off it
-SETTLE = 2.5
+# Waits poll until their condition holds, so these are ceilings, not delays. Only a
+# check that something did NOT happen sleeps, for QUIET, after the positive part is in.
+BOOT = 20            # mpv loading the file, plus the handshake
+SETTLE = 10          # an event reaching every node
+QUIET = 1.0
 STUB_HOST = "slowpeer"
 
 
@@ -88,8 +91,20 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--file", help="media file to play (default: generate one with ffmpeg)")
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
-ap.add_argument("--mode", choices=("p2p", "relay", "both"), default="both")
+ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
 args = ap.parse_args()
+
+# relay-mode nodes open no ports, so the phases only need disjoint port bases
+if args.mode == "all":
+    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else [])
+    procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+             for i, m in enumerate(("p2p", "relay", "caps"))]
+    for m, p in procs:
+        print(f"\n######## {m} ########\n" + p.communicate()[0], end="")
+    bad = [m for m, p in procs if p.returncode]
+    print("\n" + ("ALL PASS" if not bad else "FAILED: " + ", ".join(bad)))
+    sys.exit(1 if bad else 0)
 
 NODES = ["node" + chr(ord("A") + i) for i in range(args.nodes)]
 # Nobody gets the full list: A is the root, then each node bootstraps off an
@@ -155,6 +170,36 @@ def get(n, prop):
 
 def setp(n, prop, val):
     ipc(nodes[n]["sock"], "set_property", prop, val)
+
+
+def until(cond, timeout=SETTLE):
+    """Poll cond until it holds or timeout passes, and return whether it held."""
+    deadline = time.time() + timeout
+    while not cond():
+        if time.time() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def listening(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+        return True
+    except OSError:
+        return False
+
+
+def near(v, x, tol=1.5):
+    return v is not None and abs(v - x) < tol
+
+
+def booted(n):
+    return "init done" in log(n)
+
+
+def connected(n, times=1):
+    return log(n).count("relay: connected") >= times
 
 
 def toggle(n=None, settle=0.9):
@@ -375,23 +420,23 @@ def p2p_suite():
     chain = ", ".join(f"{n}->{BOOTSTRAP[n]}" for n in NODES[1:])
     print(f"\n=== setup: {len(NODES)} nodes, bootstrap chain {chain} ===")
     launch(A, None)
-    time.sleep(BOOT)
+    until(lambda: booted(A), BOOT)
     resolve(A)
     IP = nodes[A]["addr"].rsplit(":", 1)[0]
     STUB_ADDR = f"{IP}:{PORTS['stub']}"
     addr_of = {n: f"{IP}:{PORTS[n]}" for n in NODES}
 
     for n in NODES[1:]:
-        launch(n, addr_of[BOOTSTRAP[n]])  # its bootstrap target is already listening
-        time.sleep(STAGGER)
-    time.sleep(BOOT)
+        launch(n, addr_of[BOOTSTRAP[n]])
+        until(lambda: listening(PORTS[n]), BOOT)  # a later node may bootstrap off this one
+    until(lambda: all(booted(n) for n in NODES), BOOT)
     for n in NODES[1:]:
         resolve(n)
     for n in NODES:
         ok(f"{n} advertised the expected address", nodes[n]["addr"] == addr_of[n], nodes[n]["addr"])
-    time.sleep(SETTLE)
 
     print(f"\n[1] mesh closes transitively: every node learns all {len(NODES) - 1} others")
+    until(lambda: all(set(others(n)) <= known(n) for n in NODES))
     for n in NODES:
         missing = set(others(n)) - known(n)
         ok(f"{n} knows the whole mesh", not missing, f"missing {sorted(missing)}" if missing else "")
@@ -409,7 +454,8 @@ def p2p_suite():
 
     print(f"\n[3] resume on {A} propagates to all {len(NODES) - 1} others")
     setp(A, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES)
+          and all(f"resumed by {A}" in osd(n) for n in others(A)))
     for n in NODES:
         ok(f"{n} playing", get(n, "pause") is False)
     for n in others(A):
@@ -418,47 +464,50 @@ def p2p_suite():
     print(f"\n[4] pause on {LAST} propagates back to everyone (no central host)")
     time.sleep(1.5)
     setp(LAST, "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is True for n in NODES) and f"paused by {LAST}" in osd(A))
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
     ok(f"{A} credited {LAST}", f"paused by {LAST}" in osd(A))
 
     print(f"\n[5] seek while paused syncs everyone (from {LAST}, which drove the pause)")
     setp(LAST, "time-pos", 77.0)
-    time.sleep(SETTLE)
+    until(lambda: all(near(get(n, "time-pos"), 77.0) for n in others(LAST)) and f"synced by {LAST}" in osd(A))
     for n in others(LAST):
         v = get(n, "time-pos")
-        ok(f"{n} followed to 77s", v is not None and abs(v - 77.0) < 1.5, f"time-pos={v}")
+        ok(f"{n} followed to 77s", near(v, 77.0), f"time-pos={v}")
     ok(f"{A} credited {LAST} for sync", f"synced by {LAST}" in osd(A))
 
     print("\n[5b] any paused peer can seek for everyone, not just whoever drove the pause")
     b = NODES[1]  # applied LAST's pause in [4]; under the old slave hack this was muted
     setp(b, "time-pos", 12.0)
-    time.sleep(SETTLE)
+    until(lambda: all(near(get(n, "time-pos"), 12.0) for n in others(b)))
     for n in others(b):
         v = get(n, "time-pos")
-        ok(f"{n} followed {b}'s seek", v is not None and abs(v - 12.0) < 1.5, f"time-pos={v}")
+        ok(f"{n} followed {b}'s seek", near(v, 12.0), f"time-pos={v}")
 
     print("\n[5d] an arrow-key (relative) seek lands exactly, and goes out once")
     sent = lambda: sum("broadcasted event" in l and '"time-pos"' in l for l in log(b).splitlines())
     before = sent()
     ipc(nodes[b]["sock"], "seek", 7, "relative")
-    time.sleep(SETTLE)
+    until(lambda: all(near(get(n, "time-pos"), 19.0, 0.15) for n in NODES))
+    time.sleep(QUIET)  # a second broadcast would come right behind the first
     for n in NODES:
         v = get(n, "time-pos")
-        ok(f"{n} at exactly 19s, not a keyframe", v is not None and abs(v - 19.0) < 0.15, f"time-pos={v}")
+        ok(f"{n} at exactly 19s, not a keyframe", near(v, 19.0, 0.15), f"time-pos={v}")
     ok(f"{b} broadcast one position for one seek", sent() - before == 1, f"{sent() - before} sent")
 
     print("\n[5c] an applied event is not echoed back (the a->b->a rebound)")
     # start from a known state: everyone playing, so the pause below is a real change
     setp(A, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
     for n in NODES:
         ok(f"{n} playing before the echo check", get(n, "pause") is False)
     before = {n: pauses(n) for n in NODES}
 
     setp(A, "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is True for n in NODES)
+          and all(pauses(n) > before[n] for n in others(A)))
+    time.sleep(QUIET)  # an echo would be right behind the pause
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
     # if any peer rebroadcast the echo, the originator would be told it was paused
@@ -472,7 +521,7 @@ def p2p_suite():
 
     print("\n[6] time-pos is NOT forwarded while playing (sync semantics stay narrow)")
     setp(A, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
     counts = {n: osd(n).count(f"synced by {A}") for n in others(A)}
     time.sleep(4)  # A is playing, mpv emits time-pos ~10x/sec
     for n in others(A):
@@ -482,10 +531,10 @@ def p2p_suite():
     print("\n[7] a peer that only ever followed can still drive the party")
     b = NODES[1]
     setp(b, "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: get(A, "pause") is True)
     ok(f"{b}'s pause reached {A}", get(A, "pause") is True)
     setp(b, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in others(b)))
     for n in others(b):
         ok(f"{b} (ex-slave) resume reached {n}", get(n, "pause") is False)
 
@@ -493,13 +542,10 @@ def p2p_suite():
     rounds = 0
     for i in range(5):
         setp(A, "pause", True)
-        time.sleep(1.0)
-        mid = {n: get(n, "pause") for n in others(A)}
+        mid = until(lambda: all(get(n, "pause") is True for n in others(A)), 5)
         setp(A, "pause", False)
-        time.sleep(1.0)
-        end = {n: get(n, "pause") for n in others(A)}
-        if all(mid.values()) and not any(end.values()):
-            rounds += 1
+        end = until(lambda: all(get(n, "pause") is False for n in others(A)), 5)
+        rounds += mid and end
     ok(f"5/5 round trips landed on all {len(NODES) - 1} peers", rounds == 5, f"{rounds}/5")
     for n in others(A):
         ok(f"{n} skipped no events", "skipped event from" not in log(n))
@@ -515,18 +561,17 @@ def p2p_suite():
 
     print("\n[11] /bye with a stale counter cannot evict a live peer")
     code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": nodes[b]["addr"], "counter": "1", "hostname": b})
-    time.sleep(1)
+    until(lambda: "skipped bye from" in log(A), 5)
     ok(f"{A} skipped the stale bye", code == 204, f"HTTP {code}")
     ok(f"{A} logged it as skipped", "skipped bye from" in log(A))
     setp(LAST, "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: get(b, "pause") is True)
     ok(f"{b} is still in the mesh", get(b, "pause") is True, "still receives events after the forged bye")
     setp(LAST, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
 
     print(f"\n[12] SIGKILL {LAST}: every survivor evicts it after 3 strikes and stays synced")
     stop(LAST, signal.SIGKILL)
-    time.sleep(1)
     dead = addr_of[LAST]
     survivors = others(LAST)
     t0 = time.time()
@@ -538,20 +583,19 @@ def p2p_suite():
             toggle(n)
             tries += 1
     elapsed = time.time() - t0
-    time.sleep(SETTLE)
+    until(lambda: all(dropped(n, dead) for n in survivors))
     for n in survivors:
         ok(f"{n} evicted {LAST}", dropped(n, dead), f"{strikes(n, dead, LAST)} strikes")
     ok("no survivor stalled on the dead peer", elapsed < 90, f"{elapsed:.1f}s for {len(survivors)} nodes")
-    setp(A, "pause", True)
-    time.sleep(SETTLE)
+    setp(A, "pause", not get(A, "pause"))
+    want = get(A, "pause")
+    until(lambda: all(get(n, "pause") is want for n in survivors[1:]))
     for n in survivors[1:]:
-        ok(f"{A} still drives {n} after the eviction", get(n, "pause") is True)
-    setp(A, "pause", False)
-    time.sleep(SETTLE)
+        ok(f"{A} still drives {n} after the eviction", get(n, "pause") is want)
 
     print("\n[13] one success resets the strike count (a flaky peer must not be evicted)")
     s1 = stub(nodes[A]["addr"])
-    time.sleep(1)
+    until(lambda: f"{STUB_HOST} has joined" in osd(A), 5)
     ok("stub peer joined the mesh", f"{STUB_HOST} has joined" in osd(A))
 
     stub_stop(s1)
@@ -578,13 +622,13 @@ def p2p_suite():
 
     while strikes(A, STUB_ADDR, STUB_HOST) < base2 + 3:
         toggle()
-    time.sleep(SETTLE)
+    until(lambda: dropped(A, STUB_ADDR), 5)
     ok("3rd consecutive strike evicts", dropped(A, STUB_ADDR))
 
     print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor")
     clean = stop(A)
     ok(f"{A} exited cleanly", clean and nodes[A]["proc"].returncode == 0, f"rc={nodes[A]['proc'].returncode}")
-    time.sleep(SETTLE)
+    until(lambda: all(f"{A} has left" in osd(n) for n in survivors[1:]))
     for n in survivors[1:]:
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n),
            "Shutdown must not derive its timeout from the cancelled signal context")
@@ -592,27 +636,27 @@ def p2p_suite():
 
     print("\n[15] the remaining mesh keeps working without the node that bootstrapped it")
     rest = survivors[1:]
-    setp(rest[0], "pause", True)
-    time.sleep(SETTLE)
+    setp(rest[0], "pause", not get(rest[0], "pause"))
+    want = get(rest[0], "pause")
+    until(lambda: all(get(n, "pause") is want for n in rest))
     for n in rest:
-        ok(f"{n} still in sync after {A} left", get(n, "pause") is True)
+        ok(f"{n} still in sync after {A} left", get(n, "pause") is want)
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
 def relay_suite():
     print(f"\n=== relay setup: {len(NODES)} nodes through one websocket server ===")
     relay = launch_relay()
-    time.sleep(1.5)
+    until(lambda: listening(PORTS["relay"]))
 
-    for i, n in enumerate(NODES):
-        launch(n, room=ROOM)
-        time.sleep(STAGGER if i < len(NODES) - 1 else 0)
-    time.sleep(BOOT)
+    for n in NODES:
+        launch(n, room=ROOM)  # no listener to wait for, so no stagger
+    until(lambda: all(booted(n) and connected(n) for n in NODES), BOOT)
     for n in NODES:
         resolve(n)
-    time.sleep(SETTLE)
 
     print(f"\n[R1] every node learns all {len(NODES) - 1} others through the relay")
+    until(lambda: all(set(others(n)) <= known(n) for n in NODES))
     for n in NODES:
         missing = set(others(n)) - known(n)
         ok(f"{n} knows the room", not missing, f"missing {sorted(missing)}" if missing else "")
@@ -624,7 +668,8 @@ def relay_suite():
 
     print(f"\n[R3] resume on {A} fans out to everyone")
     setp(A, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES)
+          and all(f"resumed by {A}" in osd(n) for n in others(A)))
     for n in NODES:
         ok(f"{n} playing", get(n, "pause") is False)
     for n in others(A):
@@ -633,21 +678,21 @@ def relay_suite():
     print(f"\n[R4] pause on {LAST} propagates back (the relay is not a host)")
     time.sleep(1.5)
     setp(LAST, "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is True for n in NODES) and f"paused by {LAST}" in osd(A))
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
     ok(f"{A} credited {LAST}", f"paused by {LAST}" in osd(A))
 
     print(f"\n[R5] seek while paused syncs everyone")
     setp(LAST, "time-pos", 77.0)
-    time.sleep(SETTLE)
+    until(lambda: all(near(get(n, "time-pos"), 77.0) for n in others(LAST)))
     for n in others(LAST):
         v = get(n, "time-pos")
-        ok(f"{n} followed to 77s", v is not None and abs(v - 77.0) < 1.5, f"time-pos={v}")
+        ok(f"{n} followed to 77s", near(v, 77.0), f"time-pos={v}")
 
     print("\n[R6] time-pos is NOT forwarded while playing")
     setp(A, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
     counts = {n: osd(n).count(f"synced by {A}") for n in others(A)}
     time.sleep(4)
     for n in others(A):
@@ -657,13 +702,15 @@ def relay_suite():
     print("\n[R7] no a->b->a rebound (relay has no counters; this is the only guard)")
     # start from a known state: everyone playing, so the pause below is a real change
     setp(A, "pause", False)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
     for n in NODES:
         ok(f"{n} playing before the echo check", get(n, "pause") is False)
     before = {n: pauses(n) for n in NODES}
 
     setp(A, "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is True for n in NODES)
+          and all(pauses(n) > before[n] for n in others(A)))
+    time.sleep(QUIET)  # an echo would be right behind the pause
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
     # if any peer rebroadcast the echo, the originator would be told it was paused
@@ -678,29 +725,30 @@ def relay_suite():
     print("\n[R8] any paused peer can seek for everyone")
     b = NODES[1]
     setp(b, "time-pos", 33.0)
-    time.sleep(SETTLE)
+    until(lambda: all(near(get(n, "time-pos"), 33.0) for n in others(b)))
     for n in others(b):
         v = get(n, "time-pos")
-        ok(f"{n} followed {b}'s seek", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
+        ok(f"{n} followed {b}'s seek", near(v, 33.0), f"time-pos={v}")
 
     print("\n[R9] a late joiner does not rewind the party to 0")
     launch("nodeLate", room=ROOM, tag="late", relay=RELAY_URL + "/")
-    time.sleep(BOOT + SETTLE)
-    ok("a trailing slash on the relay address still connects", "relay: connected" in log("late"))
+    until(lambda: booted("late") and connected("late"), BOOT)
+    time.sleep(QUIET)  # a rewind would go out as soon as its file loaded
+    ok("a trailing slash on the relay address still connects", connected("late"))
     for n in NODES:
         v = get(n, "time-pos")
-        ok(f"{n} still at 33s after a late join", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
+        ok(f"{n} still at 33s after a late join", near(v, 33.0), f"time-pos={v}")
     stop("late")
 
     print("\n[R10] a different room is isolated")
     launch("nodeOther", room="otherroom", tag="other")
-    time.sleep(BOOT)
+    until(lambda: booted("other") and connected("other"), BOOT)
     resolve("other")
     setp("other", "time-pos", 5.0)
-    time.sleep(SETTLE)
+    time.sleep(QUIET)  # what we wait for is something NOT arriving
     for n in NODES:
         v = get(n, "time-pos")
-        ok(f"{n} ignored the other room's seek", v is not None and abs(v - 33.0) < 1.5, f"time-pos={v}")
+        ok(f"{n} ignored the other room's seek", near(v, 33.0), f"time-pos={v}")
     ok("nobody in the main room saw the other room's node", not any("nodeOther" in known(n) for n in NODES))
     stop("other")
 
@@ -715,9 +763,10 @@ def relay_suite():
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])
     launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
-    time.sleep(BOOT)
+    until(lambda: all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
     proxy.cut()
-    time.sleep(SETTLE + 2)  # 1s backoff, then the redial
+    until(lambda: connected("flaky", 2))  # 1s backoff, then the redial
+    time.sleep(QUIET)  # a second join or a false leave would follow the swap at once
     ok("nodeFlaky redialled", log("flaky").count("relay: connected") == 2, "reconnect never happened")
     for n in NODES:
         ok(f"{n} was told nodeFlaky joined once", osd(n).count("nodeFlaky has joined") == 1,
@@ -725,7 +774,7 @@ def relay_suite():
         ok(f"{n} was not told the stale nodeFlaky left", "nodeFlaky has left" not in osd(n))
     ok("nodeFlaky was not told it is in the room", "connected to nodeFlaky" not in osd("flaky"))
     stop("flaky")
-    time.sleep(SETTLE)
+    until(lambda: all("nodeFlaky has left" in osd(n) for n in NODES))
     for n in NODES:
         ok(f"{n} was told nodeFlaky left", "nodeFlaky has left" in osd(n))
 
@@ -735,12 +784,11 @@ def relay_suite():
     time.sleep(3)
     ok("no node died with the relay", len(live()) == len(NODES), f"{len(live())}/{len(NODES)} alive")
     relay = launch_relay()
-    time.sleep(15)  # backoff is 1,2,4,8s
+    until(lambda: all(connected(n, 2) for n in NODES), 30)  # backoff is 1,2,4,8s
     for n in NODES:
-        ok(f"{n} redialled", "relay: connected" in log(n) and log(n).count("relay: connected") > 1,
-           "reconnect never happened")
+        ok(f"{n} redialled", connected(n, 2), "reconnect never happened")
     setp(A, "pause", False)
-    time.sleep(SETTLE + 2)
+    until(lambda: all(get(n, "pause") is False for n in others(A)))
     for n in others(A):
         ok(f"{A} drives {n} again after the relay came back", get(n, "pause") is False)
 
@@ -748,13 +796,13 @@ def relay_suite():
     survivors = others(A)
     ok(f"{A} exited cleanly", stop(A) and nodes[A]["proc"].returncode == 0,
        f"rc={nodes[A]['proc'].returncode}")
-    time.sleep(SETTLE)
+    until(lambda: all(f"{A} has left" in osd(n) for n in survivors))
     for n in survivors:
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n))
 
     print("\n[R15] the room keeps working without the node that opened it")
     setp(survivors[0], "pause", True)
-    time.sleep(SETTLE)
+    until(lambda: all(get(n, "pause") is True for n in survivors))
     for n in survivors:
         ok(f"{n} still in sync after {A} left", get(n, "pause") is True)
 
@@ -767,7 +815,7 @@ def relay_suite():
         pass
     ok(f"{quitter} exits 0 when its mpv is closed", nodes[quitter]["proc"].returncode == 0,
        f"rc={nodes[quitter]['proc'].returncode}")
-    time.sleep(SETTLE)
+    until(lambda: all(f"{quitter} has left" in osd(n) for n in rest))
     for n in rest:
         ok(f"{n} was told {quitter} left", f"{quitter} has left" in osd(n))
     for n in rest:
@@ -783,15 +831,15 @@ def caps_suite():
 
     print("\n[R16] only room CREATION is rate limited, joining is free")
     relay = launch_relay({"ROOMS_PER_HOUR": "1"})
-    time.sleep(1.5)
+    until(lambda: listening(PORTS["relay"]))
     launch(A, room="capA", tag="c1")
-    time.sleep(BOOT)
+    until(lambda: connected("c1"), BOOT)
     launch("nodeB", room="capB", tag="c2")
-    time.sleep(BOOT)
+    until(lambda: "429" in log("c2"), BOOT)
     ok("the second NEW room was refused", "429" in log("c2"), "ROOMS_PER_HOUR=1 must bite")
     launch("nodeC", room="capA", tag="c3")
-    time.sleep(BOOT)
-    ok("joining the EXISTING room still works", "relay: connected" in log("c3"),
+    until(lambda: connected("c3"), BOOT)
+    ok("joining the EXISTING room still works", connected("c3"),
        "a party of eight must not exhaust one person's quota")
     for t in ("c1", "c2", "c3"):
         stop(t)
@@ -799,12 +847,12 @@ def caps_suite():
 
     print("\n[R17] MAX_ROOMS refuses a second room with 503")
     relay = launch_relay({"MAX_ROOMS": "1"})
-    time.sleep(1.5)
+    until(lambda: listening(PORTS["relay"]))
     launch(A, room="roomOne", tag="m1")
-    time.sleep(BOOT)
+    until(lambda: connected("m1"), BOOT)
     launch("nodeB", room="roomTwo", tag="m2")
-    time.sleep(BOOT)
-    ok("the first room connected", "relay: connected" in log("m1"))
+    until(lambda: "503" in log("m2"), BOOT)
+    ok("the first room connected", connected("m1"))
     ok("the second room got 503", "503" in log("m2"), "MAX_ROOMS=1 must bite")
     for t in ("m1", "m2"):
         stop(t)
@@ -812,12 +860,13 @@ def caps_suite():
 
     print("\n[R18] MAX_CONNS refuses the third connection with 503")
     relay = launch_relay({"MAX_CONNS": "2"})
-    time.sleep(1.5)
-    for i, t in enumerate(("n1", "n2", "n3")):
+    until(lambda: listening(PORTS["relay"]))
+    for i, t in enumerate(("n1", "n2")):
         launch(NODES[i], room="connroom", tag=t)
-        time.sleep(STAGGER)
-    time.sleep(BOOT)
-    ok("the first two connected", "relay: connected" in log("n1") and "relay: connected" in log("n2"))
+        until(lambda: connected(t), BOOT)
+    launch(NODES[2], room="connroom", tag="n3")
+    until(lambda: "503" in log("n3"), BOOT)
+    ok("the first two connected", connected("n1") and connected("n2"))
     ok("the third got 503", "503" in log("n3"), "MAX_CONNS=2 must bite")
     for t in ("n1", "n2", "n3"):
         stop(t)
@@ -825,40 +874,36 @@ def caps_suite():
 
     print("\n[R19] -createKey: only the key holder opens a room, the rest just join")
     relay = launch_relay({"CREATE_KEY": "k"})
-    time.sleep(1.5)
+    until(lambda: listening(PORTS["relay"]))
     launch("nodeB", room="keyroom", tag="k1")
-    time.sleep(BOOT)
+    until(lambda: "not open yet" in log("k1"), BOOT)
     ok("a keyless node waits for the room instead of giving up",
        "not open yet" in log("k1") and nodes["k1"]["proc"].poll() is None)
     launch("nodeC", room="keyroom", tag="k2", create_key="wrong")
     nodes["k2"]["proc"].wait(timeout=30)
     ok("a wrong key is refused and the node exits", "403" in log("k2"))
     launch(A, room="keyroom", tag="k3", create_key="k")
-    time.sleep(BOOT)
-    ok("the key holder opened the room", "relay: connected" in log("k3"))
-    deadline = time.time() + 35  # the keyless node's backoff may be up to 16s by now
-    while time.time() < deadline and "relay: connected" not in log("k1"):
-        time.sleep(1)
-    ok("the waiting node got in once the room was open", "relay: connected" in log("k1"))
+    until(lambda: connected("k3"), BOOT)
+    ok("the key holder opened the room", connected("k3"))
+    until(lambda: connected("k1"), 35)  # the keyless node's backoff may be up to 16s by now
+    ok("the waiting node got in once the room was open", connected("k1"))
     for t in ("k1", "k2", "k3"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
     print("\n[R20] a member that stops answering pings is dropped and the room hears it left")
     relay = launch_relay()
-    time.sleep(1.5)
+    until(lambda: listening(PORTS["relay"]))
     launch(A, room="deafroom", tag="d1")
-    time.sleep(BOOT)
+    until(lambda: connected("d1"), BOOT)
     deaf = socket.create_connection(("127.0.0.1", PORTS["relay"]))
     deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                   f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                   f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nroom-secret: {SECRET}\r\n\r\n").encode())
     ok("the deaf client got in", deaf.recv(4096).startswith(b"HTTP/1.1 101"))
-    time.sleep(SETTLE)
+    until(lambda: "deaf has joined" in osd("d1"))
     ok(f"{A} was told deaf joined", "deaf has joined" in osd("d1"))
-    deadline = time.time() + 50  # one 30s ping interval plus the 10s pong wait
-    while time.time() < deadline and "deaf has left" not in osd("d1"):
-        time.sleep(1)
+    until(lambda: "deaf has left" in osd("d1"), 50)  # one 30s ping interval plus the 10s pong wait
     ok(f"{A} was told deaf left", "deaf has left" in osd("d1"), "the relay kept a member that never answers pings")
     deaf.close()
     stop("d1")
@@ -866,17 +911,7 @@ def caps_suite():
 
 
 try:
-    if args.mode in ("p2p", "both"):
-        p2p_suite()
-        for name in list(nodes):
-            stop(name, signal.SIGKILL, timeout=5)
-        nodes.clear()
-    if args.mode in ("relay", "both"):
-        relay_suite()
-        for name in list(nodes):
-            stop(name, signal.SIGKILL, timeout=5)
-        nodes.clear()
-        caps_suite()
+    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite}[args.mode]()
 finally:
     for name in list(nodes):
         stop(name, signal.SIGKILL, timeout=5)

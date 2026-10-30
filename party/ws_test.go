@@ -37,7 +37,7 @@ func accept(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Con
 }
 
 func newRelayConn(addr string, incoming chan mpv.IncomingMessage) *relayConn {
-	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming}
+	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond}
 }
 
 func waitDone(t *testing.T, done <-chan struct{}, what string) {
@@ -52,6 +52,7 @@ func waitDone(t *testing.T, done <-chan struct{}, what string) {
 // A wrong secret never becomes right, and retrying it only burns the relay's rate
 // limiter, so 403 and 400 must end the party instead of looping.
 func TestRejectionEndsTheParty(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{http.StatusForbidden, http.StatusBadRequest} {
 		addr := stub(t, func(_ int, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 		r := newRelayConn(addr, nil)
@@ -77,6 +78,7 @@ func TestRejectionEndsTheParty(t *testing.T) {
 // 401 is a guest who arrived before the host opened the room. They must wait, not
 // exit, and get in once the room exists.
 func TestNotOpenYetKeepsRetrying(t *testing.T) {
+	t.Parallel()
 	joined := make(chan struct{})
 	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
 		if n == 1 {
@@ -102,6 +104,7 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 // what lets the relay swap it in silently, and frames from both connections
 // reach mpv. The secret travels in a header, never the query string.
 func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
+	t.Parallel()
 	sessions := make(chan string, 2)
 	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(secretHeaderKey) != "secret" || r.URL.Query().Has("secret") {
@@ -145,6 +148,7 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 // Broadcast wraps each raw mpv event in the envelope the relay forwards, and stops
 // when the party does.
 func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
+	t.Parallel()
 	got := make(chan []byte, 1)
 	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
 		conn := accept(t, w, r)
@@ -189,6 +193,7 @@ func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
 // An invite pasted as wss://host/ must not dial //ws, which the relay's mux
 // redirects instead of upgrading.
 func TestTrailingSlashOnRelayAddress(t *testing.T) {
+	t.Parallel()
 	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ws" {
 			http.NotFound(w, r)

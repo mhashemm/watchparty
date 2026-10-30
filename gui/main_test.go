@@ -12,6 +12,7 @@ import (
 )
 
 func TestConfig(t *testing.T) {
+	t.Parallel()
 	relay := form{Mode: "relay", File: " /m.mkv ", Mpv: "/bin/mpv", Relay: " ws://r ", Room: "a b", Secret: "s", Local: true, Port: "1", Addrs: "x:1"}
 	got, err := relay.config()
 	want := party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Room: "a b", Secret: "s"}
@@ -38,6 +39,7 @@ func TestConfig(t *testing.T) {
 }
 
 func TestGuard(t *testing.T) {
+	t.Parallel()
 	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
 	cases := []struct {
 		method, path, host, token string
@@ -65,6 +67,7 @@ func TestGuard(t *testing.T) {
 }
 
 func TestNewer(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		latest, current string
 		want            bool
@@ -84,6 +87,7 @@ func TestNewer(t *testing.T) {
 }
 
 func TestAssetName(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ goos, goarch, want string }{
 		{"windows", "amd64", "watchparty-gui.exe"},
 		{"windows", "arm64", ""},
@@ -103,6 +107,7 @@ func TestAssetName(t *testing.T) {
 // on the Go side notices. vm.Script parses it the way a browser parses a classic
 // <script>: no top-level await, no top-level return.
 func TestPageScriptParses(t *testing.T) {
+	t.Parallel()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

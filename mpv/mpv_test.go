@@ -73,6 +73,7 @@ func propertyChangeLine(name, data string, pad int) string {
 // watch() must not hand the scanner's internal buffer to the outgoing channel:
 // the consumer reads it after Scan() has already overwritten it.
 func TestWatchDoesNotAliasScannerBuffer(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	lines := 6
 	for i := range lines {
@@ -103,6 +104,7 @@ func TestWatchDoesNotAliasScannerBuffer(t *testing.T) {
 // registered. A fresh node is paused, so an unswallowed initial time-pos would be
 // broadcast as time-pos=0 and rewind the whole party.
 func TestInitialPropertyChangeIsNotBroadcast(t *testing.T) {
+	t.Parallel()
 	outgoing := make(chan []byte, 4)
 	c := newTestClient(outgoing, nil)
 	c.paused = true
@@ -123,6 +125,7 @@ func TestInitialPropertyChangeIsNotBroadcast(t *testing.T) {
 // or the real 0 is broadcast and rewinds the party. Quitting while paused also
 // sends an empty one, which must not go out either.
 func TestDatalessPropertyChangeIsIgnored(t *testing.T) {
+	t.Parallel()
 	outgoing := make(chan []byte, 4)
 	c := newTestClient(outgoing, nil)
 	c.paused = true
@@ -142,6 +145,7 @@ func TestDatalessPropertyChangeIsIgnored(t *testing.T) {
 // b applies a's seek, mpv echoes the change back, and b must not rebroadcast it
 // to a. Without this the event ping-pongs; relay mode has no counters to stop it.
 func TestAppliedValueIsNotRebroadcast(t *testing.T) {
+	t.Parallel()
 	outgoing := make(chan []byte, 4)
 	c := newTestClient(outgoing, nil)
 	c.paused = true
@@ -169,6 +173,7 @@ func TestAppliedValueIsNotRebroadcast(t *testing.T) {
 }
 
 func TestAppliedPauseIsNotRebroadcast(t *testing.T) {
+	t.Parallel()
 	outgoing := make(chan []byte, 4)
 	c := newTestClient(outgoing, nil)
 	c.paused = false
@@ -195,6 +200,7 @@ func TestAppliedPauseIsNotRebroadcast(t *testing.T) {
 // them out of order. A shared response channel let one steal the other's reply
 // and leave it to time out.
 func TestConcurrentRequestsGetTheirOwnResponse(t *testing.T) {
+	t.Parallel()
 	ours, theirs := net.Pipe()
 	defer ours.Close()
 	defer theirs.Close()
@@ -227,6 +233,7 @@ func TestConcurrentRequestsGetTheirOwnResponse(t *testing.T) {
 }
 
 func TestProcessIncomingEventsStopsWithTheParty(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	c := newTestClient(nil, nil)
 	c.ctx = ctx
@@ -266,6 +273,7 @@ func fakeMpv(conn net.Conn, closeAfter int, events ...string) {
 // New returns only once the file is loaded, which is the first time-pos that has
 // data. The empty one mpv sends before that doesn't count.
 func TestNewWaitsForTheFileToLoad(t *testing.T) {
+	t.Parallel()
 	ours, theirs := net.Pipe()
 	defer ours.Close()
 	loaded := make(chan struct{})
@@ -293,6 +301,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 // New must return ErrClosed at once, not after do()'s 5s timeout, and must not
 // cancel the party: that would kill mpv and hide its real exit status.
 func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
+	t.Parallel()
 	ours, theirs := net.Pipe()
 	defer ours.Close()
 	go fakeMpv(theirs, 2)

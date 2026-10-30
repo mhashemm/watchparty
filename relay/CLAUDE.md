@@ -96,7 +96,8 @@ allocated:
     bot) only lost its writer. Its read loop blocked forever on a socket that was
     still open, so the member and its room stayed until the TCP connection died, if
     it ever did.
-  - `pingInterval` and `writeTimeout` are `var`s only so the test can shorten them.
+  - The 30s/10s are `r.ping`/`r.timeout`, set from the `pingInterval`/`writeTimeout`
+    consts in `main`, so a test can shorten them on its own relay.
 - **`leave`** deletes the member, deletes the room once it is empty (rooms are
   memory-only), and announces "has left" only for a member it actually removed.
 
@@ -172,8 +173,16 @@ docker compose -f relay/compose.yaml up -d --build
 
 ## Tests (`main_test.go`)
 
-The tests use real websockets against an `httptest` server (`serve`, `join`,
-`recvEvent` skips the synthesized notices):
+The tests use real websockets against an `httptest` server, all in parallel:
+
+- **`join` returns only once the relay has registered the member**, not when the
+  handshake completes: `add` runs after `Accept`, so a frame sent in between misses
+  the newcomer. `serve` records each URL's relay in `relays` for this.
+- **`mark` + `noticesBefore`** prove that something didn't happen without a timeout. A
+  member's queue is FIFO, so whatever the relay sent before the marker arrives before
+  it. A joiner's own notices are queued *after* `add`, so mark **from** the joiner first
+  (its handler forwards that only from its read loop, after the notices), then **to** it.
+- `recvEvent` skips the synthesized notices; `eventually` polls a condition for 2s.
 
 | Test | Covers |
 |---|---|
@@ -191,11 +200,18 @@ The tests use real websockets against an `httptest` server (`serve`, `join`,
 | `TestLimiterResetsOnWindowRollover` | the window |
 | `TestMemberThatStopsAnsweringPingsIsRemoved` | a failed ping drops the member and reaps its room |
 
-The end-to-end versions (fan-out, room isolation, every cap, reconnect through a TCP
-proxy, `CREATE_KEY`, a raw socket that never answers pings in `[R20]`) are `e2e.py --mode relay`.
+The end-to-end versions are `e2e.py --mode relay` (fan-out, room isolation, reconnect
+through a TCP proxy) and `e2e.py --mode caps` (every cap, `CREATE_KEY`, a raw socket
+that never answers pings in `[R20]`).
 
 ## Known issues
 
+- **A join notice can arrive late, and twice.** `add` registers the member, then the
+  handler broadcasts "X has joined" to whoever is in the room *by then*. Someone who
+  joins in between sees X in its "connected to" list and gets the late "has joined" as
+  well, and after a reconnect the new connection can be told that it joined itself.
+  It needs two joins within the same millisecond or so, and the cost is a duplicate
+  notice. The fix is to send "has joined" to the members `add` saw, not a later room.
 - **Identity is only as strong as the room secret.** `hostname` is whatever the joiner
   claims, so anyone who knows the secret can pose as a member.
 - **A narrow race between `admit` and `add`.** If the last member leaves after a

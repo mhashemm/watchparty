@@ -8,30 +8,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 go build ./...
 go test ./...
 go test -race ./...                        # the invariants below are all concurrency ones
+GORACE=atexit_sleep_ms=0 go test -race ./...   # same, minus the race runtime's 1s sleep per package at exit
 go test ./mpv -run '^TestName$' -v         # single test
 go mod tidy                                # run it yourself; CI only does go mod download
 go build ./relay                           # the relay server, a separate binary
 go build -o watchparty-gui ./gui           # the GUI; `-o` because ./gui is a directory
 docker build -f relay/Dockerfile -t watchparty-relay .   # from the REPO ROOT
-./e2e.py                                   # both suites, real mpv, ~12 min
-./e2e.py --mode p2p | --mode relay         # one phase only
+./e2e.py                                   # all three phases at once, real mpv, ~45s
+./e2e.py --mode p2p | relay | caps         # one phase only
 ./e2e.py --file movie.mkv                  # ...against a real file
 ./e2e.py --nodes 3                         # fewer nodes, faster
 ```
 
 `e2e.py` builds both binaries, generates a test file with ffmpeg and runs five
-headless nodes on this machine, driving them through mpv's IPC socket. It has two
-phases:
+headless nodes on this machine, driving them through mpv's IPC socket. It has three
+phases. By default it runs them at the same time as three copies of itself, each with
+its own ports (`--port-base` + 0, 20, 40) and run directory, and prints each one's
+output when it ends. That works because relay-mode nodes open no ports. The slowest
+phase sets the total, so a new slow case belongs in whichever phase is shortest.
 
 - **`p2p`** — no node is given the full peer list (A is the root, the rest
   bootstrap off an earlier node), so the mesh has to close itself through `/hi`
   peer lists. Covers mesh formation, propagation from any node, echo suppression,
   peer eviction and strike reset, `/bye`, and the header checks.
 - **`relay`** — the same nodes against one `./relay` process. Covers fan-out,
-  room isolation, the shared secret, every abuse cap, reconnect after the
-  relay is killed mid-party, dropping a client that never answers pings (`[R20]`, ~45s), and `[R15b]`: closing a node's mpv is a normal end
-  (exit 0, the room hears "has left"). Every other case ends nodes with a signal,
-  which is how a regression there once slipped through.
+  room isolation, the shared secret, reconnect after the relay is killed
+  mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room
+  hears "has left"). Every other case ends nodes with a signal, which is how a
+  regression there once slipped through.
+- **`caps`** — one fresh relay per case: every abuse cap, `CREATE_KEY`, and
+  dropping a client that never answers pings (`[R20]`, ~40s: it waits out the real 30s ping and 10s pong timeout, and sets the total).
 
 `e2e.py` does not drive the GUI. The GUI is covered by `go test ./gui` (the form →
 `Config` mapping and the request guard) and by the headless-Chrome checks described
@@ -44,8 +50,15 @@ Needs `mpv` on PATH and a `-local`-reachable interface.
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.
 
-Nodes are staggered ~1.6s apart on startup, so a node's listener is up before the
-next one bootstraps off it.
+**No fixed sleeps for things that happen.** Every wait is `until(cond, ceiling)`, which
+polls and returns as soon as the condition holds; `BOOT` and `SETTLE` are ceilings, not
+delays. A P2P node is launched once the previous one's port accepts (`listening()`),
+since it may bootstrap off it; relay nodes open no port and start together. Only a
+check that something did **not** happen sleeps: `QUIET` (1s) after its positive half
+holds (no echo, one broadcast per seek, no rewind from a late joiner, the other room
+ignored), plus the 4s `time-pos` storm windows. `toggle()` keeps its 0.9s because
+"no new strike while healthy" needs the broadcast to have finished. A new check that
+asserts an absence needs its own fixed window; anything else polls.
 
 Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. The GUI build also gets `-X main.version=<tag>`, which is what its self-update compares against (see `gui/CLAUDE.md`). Releases up to v0.0.11 lack it and report `dev`. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
 
@@ -179,6 +192,21 @@ have the full story.
 The code carries almost no comments — match that. Explanatory comments get removed in review; put the reasoning in the commit message or here instead.
 
 Tests: `server/server_test.go` drives `broadcast` directly with a stub `f` — no HTTP server, no fixtures. `party/ws_test.go` points a `relayConn` at a stub `httptest` websocket handler, not the real relay. `mpv/mpv_test.go` feeds `watch()` through a `dripReader` that returns ~7 bytes per `Read` with a small `sc.Buffer`, because the scanner-aliasing bug does **not** reproduce when the whole input fits one buffer fill. When fixing a concurrency/buffer bug here, reintroduce it and confirm the test fails before trusting it.
+
+Every Go test calls `t.Parallel()` and finishes in milliseconds; the whole suite is bounded by
+compile time. Keep it that way:
+
+- **No real-time waits.** A delay the code under test owns is a struct field that the test
+  shortens (`relay.ping`/`relay.timeout`, `relayConn.retry`), never a package `var` the test
+  reassigns, which races with every other parallel test.
+- **Prove an absence with an ordering, not a timeout.** Send a marker after the thing that
+  must not happen; a FIFO delivers anything that did happen first (`mark`/`noticesBefore` in
+  `relay/main_test.go`). The one exception is `mpv`'s `TestNewWaitsForTheFileToLoad`, whose
+  300ms window has nothing to order against.
+- **The only serial test is `TestLimiterDoesNotAllocatePerIP`**: `testing.AllocsPerRun`
+  panics in a parallel test.
+- Stress a changed test before trusting it: `GORACE=atexit_sleep_ms=0 go test -race -count=30
+  -cpu=1,4,16 ./...`. Running in parallel exposed two races the serial suite had hidden.
 
 mpv emits no `property-change` for a no-op set, so `set_property pause yes` when already paused produces nothing. Tests that count events must strictly alternate rather than repeat a value.
 

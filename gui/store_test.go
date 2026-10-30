@@ -11,6 +11,7 @@ func noticeLine(text string) string {
 }
 
 func TestStoreRecordsAParty(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "watchparty", "gui.json")
 	s := openStore(path)
 	i := s.begin(form{Mode: "relay", File: " /m/movie.mkv ", Hostname: "Mohamed", Relay: "ws://r"})
@@ -41,6 +42,7 @@ func TestStoreRecordsAParty(t *testing.T) {
 }
 
 func TestStoreCapsHistory(t *testing.T) {
+	t.Parallel()
 	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
 	for range maxHistory + 5 {
 		s.begin(form{Mode: "direct", File: "/m.mkv"})
@@ -51,6 +53,7 @@ func TestStoreCapsHistory(t *testing.T) {
 }
 
 func TestNotice(t *testing.T) {
+	t.Parallel()
 	if text, ok := notice(noticeLine("Sam has joined")); !ok || text != "Sam has joined" {
 		t.Fatalf("notice = %q, %v", text, ok)
 	}
