@@ -257,9 +257,9 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
 
 def launch_relay(extra=None):
     path = f"{RUN}/relay.log"
-    cmd = [RELAY_BIN, "-addr", f"127.0.0.1:{PORTS['relay']}"] + (extra or [])
+    env = {**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}", **(extra or {})}
     # append: a restart in [R13] must not lose the first run's lines
-    p = subprocess.Popen(cmd, stdout=open(path, "ab"), stderr=subprocess.STDOUT)
+    p = subprocess.Popen([RELAY_BIN], env=env, stdout=open(path, "ab"), stderr=subprocess.STDOUT)
     relays.append(p)
     return p
 
@@ -782,13 +782,13 @@ def caps_suite():
     print("\n=== relay caps ===")
 
     print("\n[R16] only room CREATION is rate limited, joining is free")
-    relay = launch_relay(["-roomsPerHour", "1"])
+    relay = launch_relay({"ROOMS_PER_HOUR": "1"})
     time.sleep(1.5)
     launch(A, room="capA", tag="c1")
     time.sleep(BOOT)
     launch("nodeB", room="capB", tag="c2")
     time.sleep(BOOT)
-    ok("the second NEW room was refused", "429" in log("c2"), "roomsPerHour=1 must bite")
+    ok("the second NEW room was refused", "429" in log("c2"), "ROOMS_PER_HOUR=1 must bite")
     launch("nodeC", room="capA", tag="c3")
     time.sleep(BOOT)
     ok("joining the EXISTING room still works", "relay: connected" in log("c3"),
@@ -797,34 +797,34 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    print("\n[R17] -maxRooms refuses a second room with 503")
-    relay = launch_relay(["-maxRooms", "1"])
+    print("\n[R17] MAX_ROOMS refuses a second room with 503")
+    relay = launch_relay({"MAX_ROOMS": "1"})
     time.sleep(1.5)
     launch(A, room="roomOne", tag="m1")
     time.sleep(BOOT)
     launch("nodeB", room="roomTwo", tag="m2")
     time.sleep(BOOT)
     ok("the first room connected", "relay: connected" in log("m1"))
-    ok("the second room got 503", "503" in log("m2"), "maxRooms=1 must bite")
+    ok("the second room got 503", "503" in log("m2"), "MAX_ROOMS=1 must bite")
     for t in ("m1", "m2"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    print("\n[R18] -maxConns refuses the third connection with 503")
-    relay = launch_relay(["-maxConns", "2"])
+    print("\n[R18] MAX_CONNS refuses the third connection with 503")
+    relay = launch_relay({"MAX_CONNS": "2"})
     time.sleep(1.5)
     for i, t in enumerate(("n1", "n2", "n3")):
         launch(NODES[i], room="connroom", tag=t)
         time.sleep(STAGGER)
     time.sleep(BOOT)
     ok("the first two connected", "relay: connected" in log("n1") and "relay: connected" in log("n2"))
-    ok("the third got 503", "503" in log("n3"), "maxConns=2 must bite")
+    ok("the third got 503", "503" in log("n3"), "MAX_CONNS=2 must bite")
     for t in ("n1", "n2", "n3"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
     print("\n[R19] -createKey: only the key holder opens a room, the rest just join")
-    relay = launch_relay(["-createKey", "k"])
+    relay = launch_relay({"CREATE_KEY": "k"})
     time.sleep(1.5)
     launch("nodeB", room="keyroom", tag="k1")
     time.sleep(BOOT)

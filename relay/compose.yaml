@@ -4,9 +4,6 @@ services:
       context: ..
       dockerfile: relay/Dockerfile
     restart: unless-stopped
+    env_file: .env
     ports:
       - "${PORT:-80}:80"
-    command:
-      - -addr=:80
-      - -createKey=${CREATE_KEY:-}
-      - -trustProxy=${TRUST_PROXY:-false}

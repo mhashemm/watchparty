@@ -344,10 +344,10 @@ Both → **429**, no upgrade:
 
 ### The other caps
 
-- **`-maxRooms` (10000)** → 503. The per-IP limiter does not bound the *global*
+- **`MAX_ROOMS` (10000)** → 503. The per-IP limiter does not bound the *global*
   total: 100k botnet addresses × 10 rooms/hour is a million rooms an hour, all
   within quota.
-- **`-maxConns` (5000)** → 503. Bounds goroutines and buffers, and covers the bot
+- **`MAX_CONNS` (5000)** → 503. Bounds goroutines and buffers, and covers the bot
   that creates a room and just holds the socket open answering pongs, which the
   ping reaper will never catch.
 - **`conn.SetReadLimit(4096)`.** mpv event lines are tiny; the 32KB default lets a
@@ -362,7 +362,7 @@ Both → **429**, no upgrade:
 `Accept`. The cheapest, most brutal rejection first, so a flood is refused before
 anything is allocated and nobody who fails gets upgraded.
 
-### `-trustProxy` takes the *last* `X-Forwarded-For`, not the first
+### `TRUST_PROXY` takes the *last* `X-Forwarded-For`, not the first
 
 Behind the reverse proxy that terminates TLS, `r.RemoteAddr` is always the proxy,
 so **every user lands in one bucket and the relay bricks itself at room 11**. Hence
@@ -416,7 +416,7 @@ Build flags, measured on this binary:
 **Open item: the container runs as root.** `USER 65534:65534` was dropped, seemingly
 on the assumption that binding `:80` requires privilege. It does not under Docker
 20.10+, which sets `net.ipv4.ip_unprivileged_port_start=0` inside containers —
-verified directly (`--user 65534:65534 -addr :80` binds fine, `docker top` shows
+verified directly (`--user 65534:65534` with `ADDR=:80` binds fine, `docker top` shows
 uid 65534). Adding the line back is free on this platform. Under podman or a
 hardened host where that sysctl differs, listen on `:8080` and publish
 `-p 80:8080` instead.

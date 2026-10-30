@@ -65,7 +65,7 @@ go build -o watchparty-gui ./gui && ./watchparty-gui
 Or through a relay, which is what people behind carrier NAT need:
 
 ```sh
-./relay -addr :8080 -createKey k                # omit -createKey to let anyone open rooms
+CREATE_KEY=k ./relay                            # listens on :8080; omit CREATE_KEY to let anyone open rooms
 ./watchparty -relay ws://host:8080 -room test -secret hunter2 -createKey k -file movie.mkv   # host
 ./watchparty -relay ws://host:8080 -room test -secret hunter2 -file movie.mkv                # guests
 ```

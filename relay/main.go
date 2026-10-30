@@ -4,15 +4,16 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"hash/maphash"
 	"log"
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -332,34 +333,41 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func str(s string) (string, error) { return s, nil }
+
+func env[T any](key string, def T, parse func(string) (T, error)) T {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	t, err := parse(v)
+	if err != nil {
+		log.Fatalf("%s=%q: %v", key, v, err)
+	}
+	return t
+}
+
 func main() {
 	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	addr := flag.String("addr", ":8080", "listen address")
-	roomsPerHour := flag.Int("roomsPerHour", 10, "new rooms one ip may create per hour")
-	maxRooms := flag.Int("maxRooms", 10000, "rooms held at once before new ones are refused")
-	maxConns := flag.Int64("maxConns", 5000, "connections held at once before new ones are refused")
-	trustProxy := flag.Bool("trustProxy", false, "take the client ip from the last X-Forwarded-For element")
-	createKey := flag.String("createKey", "", "key required to create a room; empty lets anyone create one")
-	flag.Parse()
-
+	addr := env("ADDR", ":8080", str)
 	r := &relay{
 		rooms:    map[string]*room{},
 		limiter:  newLimiter(),
-		perHour:  *roomsPerHour,
-		maxRooms: *maxRooms,
-		maxConns: *maxConns,
-		trusted:  *trustProxy,
+		perHour:  env("ROOMS_PER_HOUR", 10, strconv.Atoi),
+		maxRooms: env("MAX_ROOMS", 10000, strconv.Atoi),
+		maxConns: int64(env("MAX_CONNS", 5000, strconv.Atoi)),
+		trusted:  env("TRUST_PROXY", false, strconv.ParseBool),
 	}
-	if *createKey != "" {
-		r.createKey = []byte(*createKey)
+	if k := env("CREATE_KEY", "", str); k != "" {
+		r.createKey = []byte(k)
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", r.handle)
 	s := &http.Server{
-		Addr:    *addr,
+		Addr:    addr,
 		Handler: mux,
 		// no ReadTimeout on purpose: it would put an absolute deadline on the
 		// hijacked conn and kill every long-lived websocket
@@ -375,6 +383,6 @@ func main() {
 		s.Shutdown(shutdown)
 	}()
 
-	log.Printf("relay listening on %s\n", *addr)
+	log.Printf("relay listening on %s\n", addr)
 	log.Println(s.ListenAndServe())
 }

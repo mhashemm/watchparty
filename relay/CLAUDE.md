@@ -11,8 +11,12 @@ The client side is `party/ws.go`. This package never imports `party`.
 go build ./relay
 go test -race ./relay
 docker build -f relay/Dockerfile -t watchparty-relay .     # from the REPO ROOT
-./relay -addr :8080 [-createKey k] [-trustProxy] [-roomsPerHour 10] [-maxRooms 10000] [-maxConns 5000]
+[ADDR=:8080] [CREATE_KEY=k] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [MAX_ROOMS=10000] [MAX_CONNS=5000] ./relay
 ```
+
+It takes **no flags, only env vars**, read by `env()` in `main.go`. An empty value
+means the default, and a value that doesn't parse is fatal at startup. The
+`Dockerfile` lists every one of them in its `ENV`, so a new variable goes there too.
 
 It is **not** in `publisher.yml`'s release matrix. It is deployed by hand or as the
 Docker image.
@@ -50,7 +54,7 @@ allocated:
 3. **`admit`**, under `r.mu`:
    - **Existing room:** a constant-time secret compare. If it's wrong, the attempt
      costs rate-limit quota (429 once over the limit), otherwise 403.
-   - **New room, `-createKey` set and no key sent** → 401, which costs no quota. This
+   - **New room, `CREATE_KEY` set and no key sent** → 401, which costs no quota. This
      is a guest who arrived before the host; the node keeps retrying.
    - **New room:** rate limit (429) → create-key compare (403, after the quota was
      spent, so guessing keys costs) → `maxRooms` (503) → create the room with this
@@ -103,17 +107,17 @@ allocated:
   in the safe direction: the cost is an occasional false rejection for a busy shared
   NAT (`ponytail:` on `limiter`, bump `cols` if that shows up).
 - Saturating `uint16` counters can't wrap around to 0.
-- What counts against `-roomsPerHour`:
+- What counts against `ROOMS_PER_HOUR`:
   - room creations
   - failed secret attempts
   - any create that sends a key, right or wrong
 - What is free:
   - joining an existing room (or a party of eight would exhaust one person's quota)
-  - a keyless create while `-createKey` is set (a guest waiting for the host)
+  - a keyless create while `CREATE_KEY` is set (a guest waiting for the host)
 
-## Client IP: `-trustProxy`
+## Client IP: `TRUST_PROXY`
 
-- Without the flag, the client IP is `r.RemoteAddr`.
+- Without it, the client IP is `r.RemoteAddr`.
 - With it, it is the **last** `X-Forwarded-For` element. With one proxy appending, the
   last entry is the proxy's own view of the direct peer, and the client can't forge
   it.
@@ -129,8 +133,8 @@ allocated:
 - On SIGINT/SIGTERM, `Shutdown` gets 5s. Websockets are hijacked, so `Shutdown` doesn't
   track them. They end because `BaseContext` is the signal context, which cancels each
   handler's `req.Context()`.
-- There is no TLS. For `wss://`, put a TLS-terminating proxy in front and pass
-  `-trustProxy`.
+- There is no TLS. For `wss://`, put a TLS-terminating proxy in front and set
+  `TRUST_PROXY=true`.
 
 ## Docker (`Dockerfile`)
 
@@ -143,7 +147,7 @@ allocated:
   would be dead weight.
 - It listens on **:80** as root. Docker 20.10+ sets
   `net.ipv4.ip_unprivileged_port_start=0` in containers, so `USER 65534:65534` would
-  also bind :80 (verified). Under podman or a hardened host, listen on :8080 inside the
+  also bind :80 (verified). Under podman or a hardened host, set `ADDR=:8080` inside the
   container and publish `-p 80:8080`.
 
 ## Compose (`compose.yaml`)
@@ -153,12 +157,12 @@ printf 'CREATE_KEY=%s\n' "$(openssl rand -hex 16)" > relay/.env   # also PORT, T
 docker compose -f relay/compose.yaml up -d --build
 ```
 
-- Compose reads `.env` from the compose file's directory, so it is `relay/.env`. It
-  is in `.gitignore` and `.dockerignore`.
+- `env_file: .env` resolves next to the compose file, so it is `relay/.env`, and it
+  must exist. It is in `.gitignore` and `.dockerignore`.
+- `PORT` is the host port and is read by compose, not the relay. Leave `ADDR` alone
+  under compose: the container side of the mapping is fixed at `:80`.
 - `context: ..` because the build needs the repo root, same as the plain
   `docker build`.
-- Flags are written `-name=value`, so an unset `CREATE_KEY` becomes `-createKey=`
-  (anyone can create rooms) and `TRUST_PROXY` parses as a Go bool.
 
 ## Tests (`main_test.go`)
 
@@ -181,7 +185,7 @@ The tests use real websockets against an `httptest` server (`serve`, `join`,
 | `TestLimiterResetsOnWindowRollover` | the window |
 
 The end-to-end versions (fan-out, room isolation, every cap, reconnect through a TCP
-proxy, `-createKey`) are `e2e.py --mode relay`.
+proxy, `CREATE_KEY`) are `e2e.py --mode relay`.
 
 ## Known issues
 
