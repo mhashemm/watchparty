@@ -93,6 +93,7 @@ type gui struct {
 	page        []byte
 	mux         *http.ServeMux
 	ctx         context.Context
+	quit        func()
 	wg          sync.WaitGroup
 
 	mu       sync.Mutex
@@ -114,6 +115,8 @@ func newGUI(ctx context.Context, host string) *gui {
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
 	g.mux.HandleFunc("GET /log", g.log)
+	g.mux.HandleFunc("GET /update", g.checkUpdate)
+	g.mux.HandleFunc("POST /update", g.update)
 	return g
 }
 
@@ -263,6 +266,10 @@ func main() {
 		panic(err)
 	}
 	g := newGUI(c, ln.Addr().String())
+	g.quit = stop
+	if exe, err := os.Executable(); err == nil {
+		os.Remove(exe + ".old")
+	}
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)

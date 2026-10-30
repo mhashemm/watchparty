@@ -221,6 +221,8 @@ details { border-top: 2px dashed var(--line); padding-top: 12px; margin: 6px 0 1
 summary { cursor: pointer; font-weight: 700; color: var(--bark); }
 details[open] summary { margin-bottom: 14px; }
 
+.version { margin: 20px 0 0; text-align: center; font-size: .875rem; color: var(--ink-soft); }
+button.small { font-size: .875rem; padding: 4px 10px; border-radius: 10px; margin-left: 6px; }
 .msg { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: #eef3df; }
 .msg.bad { background: #f6e4e0; color: var(--berry); }
 
@@ -502,6 +504,8 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
       <button class="go" id="go" type="submit"><svg class="paw-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="16" rx="5.5" ry="4.5"/><circle cx="5" cy="10" r="2.3"/><circle cx="9.3" cy="5.5" r="2.3"/><circle cx="14.7" cy="5.5" r="2.3"/><circle cx="19" cy="10" r="2.3"/></svg><span id="go-label">Start the party</span></button>
     </form>
 
+    <p class="version"><span id="version-text"></span> <button type="button" class="small" id="update" hidden></button></p>
+
   </div>
 </main>
 
@@ -737,6 +741,7 @@ function render(exitErr) {
   $("go-label").textContent = running ? "End the party" : "Start the party";
   document.body.classList.toggle("alive", running && state.ready);
   $("go").classList.toggle("stop", running);
+  $("update").disabled = running;
 }
 
 async function poll() {
@@ -753,6 +758,7 @@ async function poll() {
       render(j.exitErr);
     }
   } catch {
+    if (updated) return;
     showError("The app closed in the background. Close this window and open it again.");
     document.body.dataset.mood = "sleep";
   }
@@ -779,8 +785,38 @@ document.querySelector(".cat").addEventListener("click", () => {
   document.querySelector("main").append(heart);
 });
 
+let updated = false, latest = "";
+async function checkUpdate() {
+  try {
+    const j = await (await api("/update")).json();
+    $("version-text").textContent = j.current === "dev" ? "Development build" : `Version ${j.current}`;
+    if (j.available) {
+      latest = j.latest;
+      $("update").textContent = `Update to ${j.latest}`;
+      $("update").hidden = false;
+    }
+  } catch {}
+}
+$("update").addEventListener("click", async () => {
+  const b = $("update");
+  b.disabled = true;
+  b.textContent = "Updating…";
+  const res = await api("/update", {});
+  const text = (await res.text()).trim();
+  if (!res.ok) {
+    $("version-text").textContent = `Update failed: ${text}.`;
+    b.textContent = `Update to ${latest}`;
+    b.disabled = running;
+    return;
+  }
+  updated = true;
+  b.hidden = true;
+  $("version-text").textContent = `Updated to ${text}. The new version is opening in its own window, so you can close this one.`;
+});
+
 load();
 poll();
+checkUpdate();
 </script>
 </body>
 </html>
