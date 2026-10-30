@@ -44,8 +44,8 @@ Needs `mpv` on PATH and a `-local`-reachable interface.
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.
 
-Nodes are staggered ~1.6s apart on startup: the socket is named
-`/tmp/mpv<unixtime>`, so two started in the same second would collide on one path.
+Nodes are staggered ~1.6s apart on startup, so a node's listener is up before the
+next one bootstraps off it.
 
 Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. The GUI build also gets `-X main.version=<tag>`, which is what its self-update compares against (see `gui/CLAUDE.md`). Releases up to v0.0.11 lack it and report `dev`. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
 
@@ -362,8 +362,6 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 - **Clean up:** kill every started process (`pgrep -x watchparty-gui`, `relay`,
   leftover mpv), and delete temp folders and downloads by their **literal** path. The
   safety check refuses `rm -rf "$(…)"`.
-- **mpv sockets are named by the second.** Never run GUI parties while `e2e.py` is
-  running, or the two collide on `/tmp/mpv<unixtime>`.
 - **Say what was not verified.** Windows-only behaviour compiles in CI but has never
   been run on Windows. Every summary and PR lists it.
 

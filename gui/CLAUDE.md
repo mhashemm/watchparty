@@ -63,7 +63,8 @@ More recipes that have been used and work:
   ones out of `/log` (`grep -o 'room [A-Z0-9]* -secret [A-Z0-9]*'`), and start the
   guest with them. The guest's `/log` then shows the host's "has joined", "paused by"
   and "has left" notices.
-- **Drive mpv directly:** each party's IPC socket is the newest `/tmp/mpv<unixtime>`.
+- **Drive mpv directly:** each party's IPC socket is the `--input-ipc-server=` argument
+  of its mpv (`pgrep -a mpv`).
   Writing `{"command":["set_property","pause",false]}` or `{"command":["quit"]}` to
   it simulates the user, and `get_property` checks the other side followed.
 - **The window lifecycle:** put a stand-in `chromium` script first on `PATH` that

@@ -135,7 +135,7 @@ and `sync()` lock, mutate, unlock, and only then do IPC.
 
 ## Windows
 
-- The pipe name is `\\.\pipe\mpv<unix seconds>`, dialed with `go-winio`.
+- The pipe name is `\\.\pipe\mpv<random>`, dialed with `go-winio`.
 - `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group. mpv's
   video window is a normal window and is unaffected. Whether that holds when the
   parent is the `-H=windowsgui` GUI has not been verified on Windows yet.

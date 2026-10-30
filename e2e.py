@@ -32,8 +32,8 @@ import sys, tempfile, threading, time, urllib.error, urllib.request
 MPVFLAGS = "--vo=null --ao=null --no-resume-playback --msg-level=all=error"
 COOLDOWN = 3
 BOOT = COOLDOWN + 4  # cooldown, plus mpv creating its socket, plus the handshake
-STAGGER = 1.6        # nodes name their socket /tmp/mpv<unixtime>, so two started
-                     # within the same second would collide on one socket path
+STAGGER = 1.6        # lets a node's listener come up before the next one
+                     # bootstraps off it
 SETTLE = 2.5
 STUB_HOST = "slowpeer"
 

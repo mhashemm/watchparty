@@ -26,9 +26,8 @@ There are no unit tests in this package. It is wiring, and it is covered end to 
 1. `c, cancel := context.WithCancel(parent)`. **`parent` belongs to the caller**: the
    CLI's `signal.NotifyContext`, or the GUI's per-party context. **`c` is Run's own.**
    Everything inside is handed `c` and `cancel`, never `parent`.
-2. The mpv socket name is `mpv.SocketPrefix + "mpv" + <unix seconds>`. Two `Run`s
-   started in the same second on one machine collide on that path. `e2e.py` staggers
-   its nodes for this reason.
+2. The mpv socket name is `mpv.SocketPrefix + "mpv" + rand.Text()`, unique per `Run`,
+   so parties started in the same second (e2e nodes, two GUIs) never share one.
 3. Two channels are created, each with a 1024 buffer:
    - `outgoing`: mpv → the transport
    - `incoming`: the transport → mpv
