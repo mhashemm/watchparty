@@ -740,7 +740,20 @@ def relay_suite():
     time.sleep(SETTLE)
     for n in survivors:
         ok(f"{n} still in sync after {A} left", get(n, "pause") is True)
-    for n in survivors:
+
+    print("\n[R15b] closing mpv is a normal end, not an unexpected stop")
+    quitter, rest = survivors[0], survivors[1:]
+    ipc(nodes[quitter]["sock"], "quit")
+    try:
+        nodes[quitter]["proc"].wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        pass
+    ok(f"{quitter} exits 0 when its mpv is closed", nodes[quitter]["proc"].returncode == 0,
+       f"rc={nodes[quitter]['proc'].returncode}")
+    time.sleep(SETTLE)
+    for n in rest:
+        ok(f"{n} was told {quitter} left", f"{quitter} has left" in osd(n))
+    for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
     relay.kill()

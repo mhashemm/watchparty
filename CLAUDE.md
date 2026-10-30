@@ -59,6 +59,9 @@ Or through a relay, which is what people behind carrier NAT need:
 
 ## Architecture
 
+Each package has its own CLAUDE.md with the details: `party/`, `mpv/`, `server/`,
+`relay/` and `gui/`. This file keeps the overview and the cross-cutting rules.
+
 Peer-to-peer mpv sync. Every node is both an HTTP server and a client to every other node — no central host. `party.Run` (`party/party.go`) wires three pieces together. Two
 front ends call it, and each does everything on its own: `main.go`, the CLI, which only
 turns flags into a `party.Config`, and `gui/`, which builds the same `Config` from a form.
@@ -252,7 +255,7 @@ Each of these has already caused a real bug — they are easy to reintroduce bec
 - **Exactly one write pump for the whole process, spanning reconnects.** Restarting it per connection means two goroutines briefly both `range outgoing`, stealing frames from each other.
 - **`broadcast()` must not hold `s.mu` across the fan-out.** It snapshots the peers under the lock, releases, then waits — an earlier version held `RLock` until `wg.Wait()` returned, so one blocking send wedged every handler behind the next writer. Eviction re-takes the lock afterwards and re-checks `s.addresses[p.address] == p`, so a peer that reconnected via `/hi` in the meantime isn't dropped.
 - **Synthetic OSD events go through `Server.notify`, which is `select`/`default`.** Notices are cosmetic and nothing drains `incoming` until `ProcessIncomingEvents` starts, so dropping them is correct. Real playback events in `Server.Event` keep a blocking send, bounded by `req.Context()`.
-- **Never `panic`, `log.Fatal` or `os.Exit` in `party/`, `mpv/` or `server/`.** They skip `Run`'s defers, which leaks the UPNP port mapping on the router and skips the `/bye` broadcast. The GUI also runs `party.Run` in-process, so a panic would take the window down with it. Setup failures are returned as errors. Failing goroutines call the `cancel` that `Run` passes down instead (same pattern as the `ListenAndServe` goroutine). `Run` returns `nil` when its caller cancelled it, and `errStopped` when something inside cancelled it. Only `main.go` calls `os.Exit`, and only after `Run` has returned.
+- **Never `panic`, `log.Fatal` or `os.Exit` in `party/`, `mpv/` or `server/`.** They skip `Run`'s defers, which leaks the UPNP port mapping on the router and skips the `/bye` broadcast. The GUI also runs `party.Run` in-process, so a panic would take the window down with it. Setup failures are returned as errors. Failing goroutines call the `cancel` that `Run` passes down instead (same pattern as the `ListenAndServe` goroutine). `Run` returns `nil` when its caller cancelled it or the user quit mpv, and `errStopped` when something inside cancelled it. Telling the mpv quit apart is subtle, because mpv closing its socket is itself what cancels the context (see `party/CLAUDE.md`). Only `main.go` calls `os.Exit`, and only after `Run` has returned.
 - **`defer cmd.Cancel()` only after `cmd.Start()` succeeds.** The default `Cancel` calls `Process.Kill()`, which nil-panics if `Start` failed, and that path is now an ordinary returned error.
 - **`bytes.Clone` anything from `scanner.Bytes()`** before putting it on a channel; `Scan()` overwrites that buffer and the consumer reads it later.
 

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mhashemm/upnp"
@@ -103,7 +104,13 @@ func Run(parent context.Context, cfg Config) error {
 
 	defer os.Remove(mpvSocket)
 
-	client, err := mpv.New(c, cancel, mpvSocket, outgoing)
+	mpvQuit := atomic.Bool{}
+	client, err := mpv.New(c, func() {
+		if c.Err() == nil {
+			mpvQuit.Store(true)
+		}
+		cancel()
+	}, mpvSocket, outgoing)
 	if err != nil {
 		return err
 	}
@@ -115,6 +122,9 @@ func Run(parent context.Context, cfg Config) error {
 	err = cmd.Wait()
 	if err != nil {
 		log.Println(err)
+	}
+	if mpvQuit.Load() {
+		return nil
 	}
 	if c.Err() != nil {
 		return stopReason(parent)
