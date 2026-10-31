@@ -6,7 +6,7 @@ of the product, so keep it when you change things:
 - a forest-floor palette of greens and browns
 - mushrooms and a family of turtles along the bottom
 - a fluffy tabby mascot named **Fosdo2**
-- light medical touches in the wording (Clinic, Vitals, Patient chart, Diagnosis)
+- light medical touches in the wording (Vitals, Patient chart, Diagnosis)
 
 ## Commands
 
@@ -381,9 +381,10 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 - The **Vitals** section sits above the form and is hidden until the first `/start`.
 - While a party runs, the form fieldset is `hidden` (not just disabled), so Vitals and
   the End button sit right under the title.
-- **Voice:** plain, active, sentence case. The medical theme lives in the names only:
-  "Fosdo2's Movie Clinic" (with a small mushroom before it), "Vitals", "Patient chart" (the raw log), and every error
-  starts with "Diagnosis:" followed by what happened and what to do.
+- **Voice:** plain, active, sentence case. The title is "Hahas and
+  Hehes Watch Party", with a small mushroom before it. The medical theme lives in the
+  names only: "Vitals", "Patient chart" (the raw log), and every error starts with
+  "Diagnosis:" followed by what happened and what to do.
 - Avoid the generic AI-page tells: no all-caps labels, no small "eyebrow" labels above
   headings, no `→` on buttons, no middle-dot meta strings.
 
