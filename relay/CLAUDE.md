@@ -72,8 +72,15 @@ allocated:
    - This is keyed on session, not hostname: two machines that share a hostname would
      otherwise keep kicking each other out. An empty session (an old client) is never
      deduped.
-6. The writer goroutine starts, the notices go out, then it reads in a loop. Each
-   frame (read limit **4096 bytes**) is passed to `broadcast`.
+   - **The notices are queued inside `add`, under the same `r.mu`:** "X has joined"
+     to every member it found (not on a reconnect), and "connected to Y" to the
+     joiner for each of them. Both lists are the same room at the same instant. When
+     the handler broadcast "has joined" after `add` returned, a member that joined in
+     between got it on top of finding X in its "connected to" list, and after a
+     reconnect the new connection could be told it had joined itself. The sends are
+     non-blocking and a full buffer drops the notice, so nothing under the lock waits.
+6. The writer goroutine starts, then it reads in a loop. Each frame (read limit
+   **4096 bytes**) is passed to `broadcast`.
 
 | Status | Meaning | Node reaction (`party/ws.go`) |
 |---|---|---|
@@ -193,6 +200,7 @@ The tests use real websockets against an `httptest` server, all in parallel:
 | `TestBroadcastReachesEveryoneButTheSender` | no echo to the sender (the reason relay mode needs no counters) |
 | `TestJoinerLearnsWhoIsAlreadyThere` | the "connected to" half of the notices |
 | `TestReconnectReplacesStaleMember` | session dedupe, with no second join and no false leave |
+| `TestJoinNoticesGoToTheRoomAddSaw` | "has joined" and "connected to" describe the same room; a reconnect never hears of itself |
 | `TestWrongSecretIsRejected` | wrong secrets |
 | `TestDifferentFileIsRejected` | another or no `file` is 409, the room's own is let in |
 | `TestSecretGrindingIsRateLimited` | grinding secrets costs quota |
@@ -211,12 +219,6 @@ that never answers pings in `[R20]`).
 
 ## Known issues
 
-- **A join notice can arrive late, and twice.** `add` registers the member, then the
-  handler broadcasts "X has joined" to whoever is in the room *by then*. Someone who
-  joins in between sees X in its "connected to" list and gets the late "has joined" as
-  well, and after a reconnect the new connection can be told that it joined itself.
-  It needs two joins within the same millisecond or so, and the cost is a duplicate
-  notice. The fix is to send "has joined" to the members `add` saw, not a later room.
 - **A narrow race between `admit` and `add`.** If the last member leaves after a
   joiner's `admit` but before its `add`, the room is reaped and `add` finds no room.
   The joiner then stays connected without being registered: it hears nothing, and

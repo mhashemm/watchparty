@@ -198,27 +198,42 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, er
 }
 
 // add registers the member only once its conn is set, so broadcast can never
-// reach a member whose conn is still nil. It returns who was already in the room,
-// and the stale member m replaced if this is the same node reconnecting.
-func (r *relay) add(name string, m *member) ([]string, *member) {
+// reach a member whose conn is still nil. It returns the stale member m replaced
+// if this is the same node reconnecting. The notices are queued under the same
+// lock, so "has joined" reaches exactly the members m found, and they are the
+// ones m is told it is connected to.
+func (r *relay) add(name string, m *member) *member {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rm, ok := r.rooms[name]
 	if !ok {
-		return nil, nil
+		return nil
 	}
 	var stale *member
-	present := make([]string, 0, len(rm.members))
 	for other := range rm.members {
 		if m.session != "" && other.session == m.session {
 			delete(rm.members, other)
 			stale = other
-			continue
 		}
-		present = append(present, other.hostname)
+	}
+	// a reconnect is not news to the room, which never heard it leave
+	joined := notice(m.hostname, fmt.Sprintf("%s has joined", m.hostname))
+	for other := range rm.members {
+		if stale == nil {
+			queue(other, joined)
+		}
+		queue(m, notice(other.hostname, fmt.Sprintf("connected to %s", other.hostname)))
 	}
 	rm.members[m] = struct{}{}
-	return present, stale
+	return stale
+}
+
+// queue drops a notice rather than block under r.mu; notices are cosmetic
+func queue(m *member, b []byte) {
+	select {
+	case m.ch <- b:
+	default:
+	}
 }
 
 // leave removes m and reaps the room once it is empty. A nil m only reaps, and so
@@ -304,7 +319,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	conn.SetReadLimit(readLimit)
 	m.conn = conn
-	present, stale := r.add(name, m)
+	stale := r.add(name, m)
 	if stale != nil {
 		stale.conn.CloseNow()
 	}
@@ -318,18 +333,6 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 
 	go r.write(c, m)
 	log.Printf("%s joined %s from %s\n", hostname, name, ip)
-	// the room learns about the joiner, and the joiner learns about the room --
-	// without the second half the last one in would think it was alone. A
-	// reconnect is not news to the room, which never heard it leave.
-	if stale == nil {
-		r.broadcast(name, m, notice(hostname, fmt.Sprintf("%s has joined", hostname)))
-	}
-	for _, other := range present {
-		select {
-		case m.ch <- notice(other, fmt.Sprintf("connected to %s", other)):
-		default:
-		}
-	}
 
 	for {
 		_, b, err := conn.Read(c)
