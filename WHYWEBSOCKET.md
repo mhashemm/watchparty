@@ -517,8 +517,7 @@ Two existing cases changed meaning because the behaviour did:
 - A reconnect re-announces "X has joined" and leaves a stale member until the ping
   reaps it.
 - The ±0.5s `time-pos` tolerance also swallows a deliberate sub-second seek.
-  Marked with a `ponytail:` comment; tighten only if frame-stepping ever needs to
-  sync.
+  Since tightened to 0.1s, with every applied seek remembered (`mpv/CLAUDE.md`).
 - Count-min collisions could rate-limit a busy shared NAT early at 128KB. The sketch
   is now 8MB, which makes that negligible.
 

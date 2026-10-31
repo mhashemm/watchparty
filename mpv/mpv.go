@@ -25,9 +25,8 @@ const (
 	showText       = "show-text"
 
 	showTextDurationSeconds = 5
-	// ponytail: ±0.5s swallows a deliberate sub-second seek too; tighten only if
-	// frame-stepping ever needs to sync
-	timePosTolerance = 0.5
+	timePosTolerance        = 0.1
+	maxSeeks                = 16
 )
 
 var (
@@ -141,31 +140,31 @@ type Client struct {
 	mu       sync.Mutex
 	paused   bool
 	applied  map[string]string
+	seeks    []float64
 	seen     map[string]bool
 }
 
 func (c *Client) isEcho(event Event) bool {
+	if event.Name == timePos {
+		got, err := strconv.ParseFloat(event.Data, 64)
+		if err != nil {
+			return false
+		}
+		for i, want := range c.seeks {
+			if math.Abs(got-want) <= timePosTolerance {
+				c.seeks = c.seeks[i:]
+				c.seeks[0] = got
+				return true
+			}
+		}
+		return false
+	}
 	applied, ok := c.applied[event.Name]
 	if !ok {
 		return false
 	}
-	if event.Name != timePos {
-		delete(c.applied, event.Name)
-		return applied == event.Data
-	}
-	got, err := strconv.ParseFloat(event.Data, 64)
-	if err != nil {
-		return false
-	}
-	want, err := strconv.ParseFloat(applied, 64)
-	if err != nil {
-		return false
-	}
-	if math.Abs(got-want) > timePosTolerance {
-		return false
-	}
-	c.applied[timePos] = event.Data
-	return true
+	delete(c.applied, event.Name)
+	return applied == event.Data
 }
 
 func (c *Client) handleEvent(event Event) error {
@@ -199,7 +198,7 @@ func (c *Client) handleEvent(event Event) error {
 			}
 			c.paused = event.paused()
 			if !c.paused {
-				delete(c.applied, timePos)
+				c.seeks = nil
 			}
 		case timePos:
 			if !c.paused {
@@ -354,12 +353,17 @@ func (c *Client) sync(event Event, hostname string) error {
 	if event.Data == "" {
 		return nil
 	}
+	pos, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return err
+	}
 
 	c.mu.Lock()
-	c.applied[timePos] = event.Data
+	c.seeks = append(c.seeks, pos)
+	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
 	c.mu.Unlock()
 
-	err := c.conn.do(setProperty, timePos, event.Data)
+	err = c.conn.do(setProperty, timePos, event.Data)
 	if err != nil {
 		return err
 	}

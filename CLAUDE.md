@@ -142,10 +142,12 @@ onto `incoming` themselves.
 swallowed that peer's own seeks. Don't bring it back.) Three mechanisms keep events
 from looping; details in `mpv/CLAUDE.md` and `server/CLAUDE.md`:
 
-- **`applied`** (`mpv/`, both transports): the value last applied from a peer. mpv
-  echoes it back as a `property-change`, and `handleEvent` drops it instead of
-  rebroadcasting. `time-pos` matches within ±0.5s because a seek's echo can
-  land a frame off and come twice (see `mpv/MPV.md`).
+- **`applied`/`seeks`** (`mpv/`, both transports): the pause last applied from a peer,
+  and every seek applied since the last unpause. mpv echoes them back as a
+  `property-change`, and `handleEvent` drops it instead of rebroadcasting. `time-pos`
+  matches within ±0.1s because a seek's echo can land a frame off and come twice
+  (see `mpv/MPV.md`), and against every applied seek, not just the last, because
+  mpv's echo of an earlier one can arrive late.
 - **`seen`** (`mpv/`, both transports): the first `property-change` per property is
   mpv's reply to `observe_property_string`, and is never broadcast. Otherwise a fresh
   node broadcasts `time-pos=0` and rewinds the party.
@@ -212,7 +214,7 @@ have the full story.
 - **Never hold a lock across a blocking call that needs the same lock to finish.**
   `c.mu` across `conn.do()` (mpv), `relayConn.mu` across `conn.Write` (party), `s.mu`
   across `broadcast`'s fan-out (server).
-- **In `pause()` and `sync()`, set `applied` before the IPC call**, or the echo can
+- **In `pause()` and `sync()`, set `applied`/`seeks` before the IPC call**, or the echo can
   arrive before the marker does.
 - **Exactly one relay write pump per party, spanning reconnects.** Two goroutines
   ranging over `outgoing` steal frames from each other.
@@ -371,12 +373,6 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
-- [ ] **Quick paused seeks can bounce back.** `applied` holds only the last value
-  received. A node that applies 30 and then 40 can see mpv's late echo of 30 after
-  the marker has moved to 40. It no longer counts as an echo, so it goes out as that
-  node's own seek and everyone jumps back to 30. Seen in CI in `[R11d]`, which now
-  waits out each seek. Fix it together with drift and the ±0.5s `time-pos`
-  tolerance, all in `mpv/`'s `applied`/`isEcho`.
 
 ## Reference
 

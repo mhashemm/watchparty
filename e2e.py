@@ -898,9 +898,12 @@ def relay_suite():
     until(lambda: "nodeUrl4 has joined" in osd("nodeUrl1"), BOOT)
     for pos in (10, 20, 30, 40, 50):
         setp("nodeUrl1", "time-pos", pos)
-        # nodeUrl2 too: a late echo of its previous seek would go out as its own
-        until(lambda: all(near(get(n, "time-pos"), pos) for n in ("nodeUrl1", "nodeUrl2")))
+        until(lambda: near(get("nodeUrl1", "time-pos"), pos))
     ok("the seeks landed while nodeUrl4 was loading", not booted("nodeUrl4"))
+    until(lambda: near(get("nodeUrl2", "time-pos"), 50))
+    time.sleep(QUIET)  # a late echo would go out right behind the last seek
+    ok("quick seeks don't bounce back", all(near(get(n, "time-pos"), 50) for n in ("nodeUrl1", "nodeUrl2")),
+       f"at {get('nodeUrl1', 'time-pos')} and {get('nodeUrl2', 'time-pos')}")
     until(lambda: booted("nodeUrl4"), BOOT)
     Quiet.delay = 0
     resolve("nodeUrl4")

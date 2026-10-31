@@ -122,8 +122,8 @@ Every event goes through `handleEvent`; anything but `property-change` is
   (exact even under mpv's default `--hr-seek=default`, and we pin `yes`). `"77.000000"` echoed `77.000000`. A
   position between frames echoes the target first, then the landed frame after
   `playback-restart`: `123.456` → `123.456000`, then `123.458000`. So **an echo can
-  come twice and be up to one frame off**. That's why the `time-pos` marker in
-  `applied` matches within ±0.5s and is kept, not deleted, on the first match.
+  come twice and be up to one frame off**. That's why an applied seek in
+  `seeks` matches within ±0.1s and is kept, not deleted, on the first match.
 - **A relative seek** (arrow keys, `seek N relative`) **is exact too, because we pin
   `--hr-seek=yes`**: +7 from 12 sent exactly one position, `19.000000`. Under mpv's
   default it would snap to a keyframe instead: +10 from 123.458 sent `133.458000`

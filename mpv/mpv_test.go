@@ -152,14 +152,14 @@ func TestAppliedValueIsNotRebroadcast(t *testing.T) {
 	c.seen[timePos] = true
 
 	// sync() marks the value before the IPC call; this is the echo coming back
-	c.applied[timePos] = "77.000000"
+	c.seeks = []float64{77}
 	got := feed(t, c, outgoing, propertyChangeLine(timePos, "77.000000", 0))
 	if len(got) != 0 {
 		t.Fatalf("rebroadcast the event it had just applied: %+v", got)
 	}
 
 	// a seek's echo can land a frame off the applied value
-	c.applied[timePos] = "12.000000"
+	c.seeks = []float64{12}
 	got = feed(t, c, outgoing, propertyChangeLine(timePos, "12.041000", 1))
 	if len(got) != 0 {
 		t.Fatalf("a frame-off echo escaped the tolerance: %+v", got)
@@ -169,6 +169,44 @@ func TestAppliedValueIsNotRebroadcast(t *testing.T) {
 	got = feed(t, c, outgoing, propertyChangeLine(timePos, "42.000000", 2))
 	if len(got) != 1 {
 		t.Fatalf("swallowed a genuine seek, want 1 broadcast: %+v", got)
+	}
+}
+
+// b applies 30 and then 40 before mpv's echo of 30 is back. That late echo must
+// not go out as b's own seek, or the whole party jumps back to 30.
+func TestLateEchoOfAnEarlierSeekIsNotRebroadcast(t *testing.T) {
+	t.Parallel()
+	outgoing := make(chan []byte, 4)
+	c := newTestClient(outgoing, nil)
+	c.paused = true
+	c.seen[timePos] = true
+
+	c.seeks = []float64{30, 40}
+	got := feed(t, c, outgoing, propertyChangeLine(timePos, "30.000000", 0)+propertyChangeLine(timePos, "40.000000", 1))
+	if len(got) != 0 {
+		t.Fatalf("rebroadcast an echo: %+v", got)
+	}
+
+	// 40's echo means mpv is done with 30, so seeking back there is the user's own
+	got = feed(t, c, outgoing, propertyChangeLine(timePos, "30.000000", 2))
+	if len(got) != 1 {
+		t.Fatalf("swallowed a genuine seek back to an old position: %+v", got)
+	}
+}
+
+// --hr-seek=yes is pinned, so an echo is at most a frame off. A deliberate seek
+// a fraction of a second away is still the user's own.
+func TestSmallSeekIsNotAnEcho(t *testing.T) {
+	t.Parallel()
+	outgoing := make(chan []byte, 4)
+	c := newTestClient(outgoing, nil)
+	c.paused = true
+	c.seen[timePos] = true
+
+	c.seeks = []float64{12}
+	got := feed(t, c, outgoing, propertyChangeLine(timePos, "12.300000", 0))
+	if len(got) != 1 {
+		t.Fatalf("swallowed a 0.3s seek as an echo: %+v", got)
 	}
 }
 

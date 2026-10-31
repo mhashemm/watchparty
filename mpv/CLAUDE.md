@@ -83,7 +83,7 @@ three sentinels.
 | A `property-change` with no `data` (property unavailable: before the file loads, while quitting) | `errDoNotSend`, and it does **not** count as the first change for `seen` |
 | `isEcho`: the value is one this node just applied from a peer | `errEcho` |
 | `pause` with the same value as the current state | `errNoChange` |
-| `pause` that changed | state updated (and the `time-pos` marker cleared on unpause), then broadcast |
+| `pause` that changed | state updated (and `seeks` cleared on unpause), then broadcast |
 | `time-pos` while **playing** | `errDoNotSend`. Positions only sync while paused |
 | `time-pos` while paused | broadcast. This is a seek |
 | any other property | `errDoNotSend` |
@@ -108,17 +108,25 @@ When a peer's change is applied, mpv reports it back as a `property-change`. Wit
 suppression, b would rebroadcast a's pause to a, and in relay mode, which has no
 counters, that loops forever.
 
-- **`pause()` and `sync()` set `applied[prop] = value` before the IPC call.** mpv's
-  echo can arrive before `do()` returns, so setting the marker afterwards is a race.
+- **`pause()` sets `applied[pause]` and `sync()` appends to `seeks` before the IPC
+  call.** mpv's echo can arrive before `do()` returns, so marking afterwards is a race.
 - `pause` matches exactly and **deletes** the marker on match.
-- `time-pos` matches as a float within **±0.5s** and **keeps** the marker, updating it
-  to the echoed value. A seek's echo comes back once or twice and up to a frame off
-  (`123.456` → `123.456000`, then `123.458000`), and further off under a user's
-  `hr-seek=no` (see `MPV.md`). The marker is cleared when the node unpauses.
-  - Known limit (`ponytail:` on `timePosTolerance`): a deliberate seek of under 0.5s
-    from the applied position is also swallowed.
-- `TestAppliedValueIsNotRebroadcast` and `TestAppliedPauseIsNotRebroadcast` cover
-  both halves, including that a genuine seek and a later genuine pause still go out.
+- `time-pos` is checked against **`seeks`, every seek applied since the last unpause**,
+  oldest first, as floats within **±0.1s** (`timePosTolerance`).
+  - On a match at entry *i*, the entries before it are dropped and entry *i* becomes
+    the echoed value. mpv handles seeks in order, so a later echo means it is done
+    with the earlier ones. A user's own seek back to one of them still goes out.
+  - It used to be a single marker. A node that applied 30 and then 40 saw mpv's late
+    echo of 30 after the marker had moved, and broadcast it as its own seek: the party
+    jumped back to 30 (seen in CI in `[R11d]`).
+  - A seek's echo comes back once or twice and up to a frame off (`123.456` →
+    `123.456000`, then `123.458000`, see `MPV.md`), which is why the entry is kept and
+    updated. `--hr-seek=yes` is pinned, so a frame is the most it can be off, and 0.1s
+    covers anything from 10fps up. A deliberate seek of 0.1s or more is not an echo.
+  - Cleared when the node unpauses, capped at `maxSeeks` (16).
+- `TestAppliedValueIsNotRebroadcast`, `TestLateEchoOfAnEarlierSeekIsNotRebroadcast`,
+  `TestSmallSeekIsNotAnEcho` and `TestAppliedPauseIsNotRebroadcast` cover it,
+  including that a genuine seek and a later genuine pause still go out.
 
 ### `seek` is commented out on purpose
 
