@@ -371,6 +371,12 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
+- [ ] **Quick paused seeks can bounce back.** `applied` holds only the last value
+  received. A node that applies 30 and then 40 can see mpv's late echo of 30 after
+  the marker has moved to 40. It no longer counts as an echo, so it goes out as that
+  node's own seek and everyone jumps back to 30. Seen in CI in `[R11d]`, which now
+  waits out each seek. Fix it together with drift and the ±0.5s `time-pos`
+  tolerance, all in `mpv/`'s `applied`/`isEcho`.
 
 ## Reference
 
