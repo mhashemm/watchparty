@@ -136,7 +136,8 @@ print.
   - It does **not** check the file's type. Whatever is typed or pasted goes to mpv,
     so a URL or a video with an unusual extension works. Only the picker filters
     (see "OS helpers"). A typed file that isn't a video ends in mpv's "exited before
-    the movie was ready".
+    the movie was ready", and the log shows mpv's reason on `mpv: ` lines
+    ("Failed to recognize file format.").
   - Relay mode ignores the direct fields and vice versa.
 - **The log:** `main` calls `log.SetOutput(io.MultiWriter(g, os.Stderr))`, and
   `gui.Write` appends each line to `g.lines`.

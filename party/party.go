@@ -1,6 +1,7 @@
 package party
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -103,6 +104,8 @@ func Run(parent context.Context, cfg Config) error {
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
+	out := &lineLog{l: log.Default()}
+	cmd.Stdout, cmd.Stderr = out, out
 
 	err = cmd.Start()
 	if err != nil {
@@ -158,6 +161,26 @@ func Run(parent context.Context, cfg Config) error {
 		return stopReason(parent)
 	}
 	return err
+}
+
+// lineLog logs mpv's output a line at a time, so the reason a file won't play
+// reaches the CLI's log and the GUI's chart. exec gives one writer shared by
+// stdout and stderr a single goroutine, so Write needs no lock.
+type lineLog struct {
+	l   *log.Logger
+	buf []byte
+}
+
+func (w *lineLog) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		line, rest, ok := bytes.Cut(w.buf, []byte("\n"))
+		if !ok {
+			return len(p), nil
+		}
+		w.l.Printf("mpv: %s\n", line)
+		w.buf = rest
+	}
 }
 
 // notReady reports mpv exiting before the movie was loaded. Exit 0 is the user

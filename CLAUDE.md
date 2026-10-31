@@ -191,7 +191,8 @@ HTTP by real mpv.
   `gui/index.html`), its party history (`gui/store.go`) and `e2e.py` all parse
   them. Change any of these and update every reader in the same commit: `your address
   to share is`, `relay: connected`, `relay: dial:`, `relay: disconnected`, `is not
-  open yet`, `rejected by relay`, `not the same file`, `file fingerprint:` (e2e), `init done`, and `do: sent request:` (for
+  open yet`, `rejected by relay`, `not the same file`, `file fingerprint:` (e2e), `mpv: `
+  (mpv's own output, e2e `[R11e]`), `init done`, and `do: sent request:` (for
   `show-text`). The table is in `gui/CLAUDE.md`.
 - **Notice texts are parsed too.** "X has joined" and "connected to X" are how the
   GUI history records who was there. `server/` and `relay/` send the same texts, so

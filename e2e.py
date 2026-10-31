@@ -898,6 +898,15 @@ def relay_suite():
         stop(n)
     web.shutdown()
 
+    print("\n[R11e] a file mpv can't play: the node fails, and its log says why")
+    notvideo = f"{RUN}/notavideo.txt"
+    open(notvideo, "w").write("not a video\n")
+    launch("nodeNotVideo", room="notvideo", media=notvideo)
+    until(lambda: nodes["nodeNotVideo"]["proc"].poll() is not None, BOOT)
+    rc = nodes["nodeNotVideo"]["proc"].returncode
+    ok("it exited with an error", rc not in (None, 0), f"rc={rc}")
+    ok("mpv's own reason is in its log", "mpv: Failed to recognize file format." in log("nodeNotVideo"))
+
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])
     launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
