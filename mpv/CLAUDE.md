@@ -93,6 +93,7 @@ or on their own when the event itself isn't sent.
 | `time-pos` while paused | broadcast. This is a seek |
 | any other property | `errDoNotSend` |
 | **the first** `property-change` per property | state updated, but `errDoNotSend` |
+| `pause` → `yes`, not an echo, with no `reason` | state updated, `pausedBy` cleared, then broadcast followed by `paused-at` with `c.pos` |
 | `pause` → `yes`, echo or not | `extra` from `pauseExtras`: if `pauseParty` set a `reason`, a `time-pos` of `c.pos` (also appended to `seeks`, so mpv's second value of the same seek is an echo), then the `pause-reason` |
 
 Every `time-pos` with data also updates `c.pos`, echo or not.
@@ -206,6 +207,12 @@ dispatched by `Name`:
   - Ignored unless this node is paused, and ignored for an empty value.
   - Otherwise it appends to `seeks`, sends `set_property time-pos`, and shows `synced
     by <host>`.
+- **`paused-at`** → `align(event, host)`. It seeks there with `seekTo` (no notice) only
+  if this node is paused, its last applied pause came from `host` (`pausedBy`, set in
+  `pause()`), and it isn't already within 0.1s of that position or of an applied seek
+  (`at`). The `pausedBy` check stops two nodes that pause at once from swapping
+  positions. `TestOwnPauseSendsWhereItStopped` and `TestPausedAtFollowsOnlyWhoPausedUs`
+  cover it, and `e2e.py` `[R11g]` covers it over a slow network.
 - **`pause-reason`** → shows `paused for <host>: <reason>`.
 - **`joined`** → `welcome(host)`, see below.
 - **`start-pos`** → `arrive(event, host)`, see below.

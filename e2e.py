@@ -31,7 +31,7 @@ Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
 import argparse, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
-import sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
@@ -123,6 +123,8 @@ PORTS["nodeSame"] = args.port_base + len(NODES) + 2
 PORTS["nodeDiff"] = args.port_base + len(NODES) + 3
 PORTS["http"] = args.port_base + len(NODES) + 4
 PORTS["nodeKeep"] = args.port_base + len(NODES) + 5
+PORTS["lagA"] = args.port_base + len(NODES) + 6
+PORTS["lagB"] = args.port_base + len(NODES) + 7
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -312,6 +314,51 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
     p = subprocess.Popen(cmd, stdout=open(path, "wb"), stderr=subprocess.STDOUT)
     nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None}
     return key
+
+
+def lag(port, target, delay):
+    """A TCP proxy on port that delivers every chunk to target delay seconds late, in
+    order, both ways: a network with that much one-way latency."""
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", port))
+    srv.listen()
+
+    def pipe(src, dst):
+        q = queue.Queue()
+
+        def read():
+            while True:
+                try:
+                    b = src.recv(65536)
+                except OSError:
+                    b = b""
+                q.put((time.time() + delay, b))
+                if not b:
+                    return
+        threading.Thread(target=read, daemon=True).start()
+        while True:
+            at, b = q.get()
+            time.sleep(max(0, at - time.time()))
+            try:
+                if not b:
+                    dst.shutdown(socket.SHUT_WR)
+                    return
+                dst.sendall(b)
+            except OSError:
+                return
+
+    def accept():
+        while True:
+            try:
+                c, _ = srv.accept()
+                u = socket.create_connection(("127.0.0.1", target))
+            except OSError:
+                return
+            threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+            threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+    threading.Thread(target=accept, daemon=True).start()
+    return srv
 
 
 def launch_relay(extra=None):
@@ -1013,6 +1060,39 @@ def relay_suite():
     Quiet.slow = 0
     for n in ("nodeFast", "nodeSlow"):
         stop(n)
+
+    print("\n[R11g] over a slow network, pausing and resuming from different nodes keeps them in step")
+    # nodeLagA is 20ms from the relay and nodeLagB 250ms, and the stream answers each
+    # request 200ms late. A resume reaches B late and B stops late, which cancels, but
+    # when B pauses what A resumed, A stops a whole round trip after B did.
+    proxies = [lag(PORTS["lagA"], PORTS["relay"], 0.02), lag(PORTS["lagB"], PORTS["relay"], 0.25)]
+    Quiet.delay = 0.2
+    launch("nodeLagA", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagA']}")
+    until(lambda: booted("nodeLagA") and connected("nodeLagA"), BOOT)
+    resolve("nodeLagA")
+    launch("nodeLagB", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagB']}")
+    until(lambda: booted("nodeLagB") and "nodeLagB has joined" in osd("nodeLagA"), BOOT)
+    resolve("nodeLagB")
+    lagged = ("nodeLagA", "nodeLagB")
+    gap = lambda: abs((get("nodeLagA", "time-pos") or 0) - (get("nodeLagB", "time-pos") or 0))
+    for i, (resumer, pauser) in enumerate([("nodeLagA", "nodeLagB"), ("nodeLagB", "nodeLagA")] * 2):
+        setp(resumer, "pause", False)
+        until(lambda: all(get(n, "pause") is False for n in lagged))
+        time.sleep(1)
+        setp(pauser, "pause", True)
+        until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 3)
+        ok(f"round {i + 1}: {resumer} resumed, {pauser} paused, both stopped together", gap() < 0.05,
+           f"{gap():.3f}s apart")
+    setp("nodeLagA", "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in lagged))
+    ipc(nodes["nodeLagB"]["sock"], "seek", 15, "relative")
+    until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 5)
+    ok("a seek while playing on the far node also stops both together", gap() < 0.05, f"{gap():.3f}s apart")
+    Quiet.delay = 0
+    for n in lagged:
+        stop(n)
+    for p in proxies:
+        p.close()
     web.shutdown()
 
     print("\n[R11e] a file mpv can't play: the node fails, and its log says why")

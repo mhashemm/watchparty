@@ -40,6 +40,10 @@ phase sets the total, so a new slow case belongs in whichever phase is shortest.
   mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room
   hears "has left"). Every other case ends nodes with a signal, which is how a
   regression there once slipped through.
+  Slow networks come from `lag(port, target, delay)`, a TCP proxy that delivers every
+  chunk `delay` seconds late in both directions. `[R11g]` puts one in front of the relay
+  per node (20ms and 250ms) and holds each stream request 200ms. P2P has no such case:
+  peers dial the address each node advertises, so a proxy can't sit in between.
 - **`caps`** — one fresh relay per case: every abuse cap, `CREATE_KEY`, and
   dropping a client that never answers pings (`[R20]`, ~40s: it waits out the real 30s ping and 10s pong timeout, and sets the total).
 
@@ -181,6 +185,13 @@ positions.
   node already there pauses ("paused for X: joining") and answers with `start-pos`,
   its position. The joiner takes the first answer and seeks there. Details:
   `mpv/CLAUDE.md`.
+- **Every pause carries where it stopped.** A node's own pause is followed by
+  `paused-at`, its position. A peer seeks there, with no notice, but only if it applied
+  that same node's pause. Otherwise two nodes pausing at once would swap positions.
+  Without it, latency left nodes apart. A resume reaches a peer late and the pause does
+  too, which cancels only when the same node does both. When B pauses what A resumed,
+  A stops a whole round trip after B, and nothing realigned them. `e2e.py` `[R11g]`
+  measured 0.6s per such pair over a 20ms and a 250ms link.
 - **A seek while paused** goes out as it always has. Any paused peer can seek for the
   party.
 
@@ -386,8 +397,9 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 ## Known issues
 
 None open. Drift was fixed by preventing it at the source (see Sync semantics):
-stalls, seeks while playing and mid-party joins all pause the party. Resume and
-pause latency cancel out. Sound card clocks still differ, by an estimated 20–50 ppm
+stalls, seeks while playing and mid-party joins all pause the party, and every pause
+carries the pauser's position, so network latency can't leave nodes apart either.
+Sound card clocks still differ, by an estimated 20–50 ppm
 (~0.1–0.4s over two hours, not measured), and the next pause or seek resets it.
 
 ## Reference

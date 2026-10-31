@@ -84,19 +84,24 @@ func TestWatchDoesNotAliasScannerBuffer(t *testing.T) {
 		b.WriteString(propertyChangeLine(pause, data, i))
 	}
 
-	outgoing := make(chan []byte, lines)
+	outgoing := make(chan []byte, 2*lines)
 	c := newTestClient(outgoing, nil)
 	got := feed(t, c, outgoing, b.String())
 
+	pauses := 0
 	for _, e := range got {
-		if e.Name != pause {
+		switch e.Name {
+		case pause:
+			pauses++
+		case pausedAt:
+		default:
 			t.Fatalf("garbled event: %+v", e)
 		}
 	}
 	// the first property-change per property is the observe_property echo, so
 	// only 5 of the 6 alternating pauses are broadcast
-	if len(got) != lines-1 {
-		t.Fatalf("broadcast %d events, want %d", len(got), lines-1)
+	if pauses != lines-1 {
+		t.Fatalf("broadcast %d pauses, want %d", pauses, lines-1)
 	}
 }
 
@@ -229,7 +234,7 @@ func TestAppliedPauseIsNotRebroadcast(t *testing.T) {
 	// the echo consumed the marker, so pausing again later is a real event
 	c.paused = false
 	got = feed(t, c, outgoing, propertyChangeLine(pause, "yes", 1))
-	if len(got) != 1 {
+	if len(got) != 2 || got[0].Name != pause || got[1].Name != pausedAt {
 		t.Fatalf("stale marker swallowed a genuine pause: %+v", got)
 	}
 }
@@ -631,11 +636,11 @@ func TestJoinPausesThePartyAndSendsThePosition(t *testing.T) {
 	}
 	send(propertyChangeLine(pause, "yes", 0))
 	got := map[string]bool{}
-	for range 2 {
+	for range 3 {
 		e := nextEvent(t, outgoing)
 		got[e.Name+"="+e.Data] = true
 	}
-	if !got[pause+"=yes"] || !got[startPos+"=33.500000"] {
+	if !got[pause+"=yes"] || !got[pausedAt+"=33.500000"] || !got[startPos+"=33.500000"] {
 		t.Fatalf("broadcast %v, want the pause and the position", got)
 	}
 	if got := next(t, requests); got != "show-text paused for j: joining 5000" {
@@ -672,5 +677,41 @@ func TestStartPosAlreadyThereStillCounts(t *testing.T) {
 	c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want neither answer to seek", got)
+	}
+}
+
+// A pause carries where the pauser stopped. Over a slow link the others stop a
+// round trip later; without this they resume that far apart and stay so.
+func TestOwnPauseSendsWhereItStopped(t *testing.T) {
+	t.Parallel()
+	_, send, outgoing, _ := liveClient(t)
+	send(propertyChangeLine(timePos, "61.250000", 0))
+	send(propertyChangeLine(pause, "yes", 0))
+	for _, want := range []string{pause + "=yes", pausedAt + "=61.250000"} {
+		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
+			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		}
+	}
+}
+
+// A node follows the position of the peer whose pause it applied, and nobody
+// else's: two peers pausing at once must not each jump to the other's spot.
+func TestPausedAtFollowsOnlyWhoPausedUs(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.pos = 60
+
+	c.pause(Event{Name: pause, Data: "yes"}, "a")
+	next(t, requests)
+	next(t, requests)
+	c.apply(peer("b", `{"event":"property-change","name":"paused-at","data":"59.000000"}`))
+	c.apply(peer("a", `{"event":"property-change","name":"paused-at","data":"60.400000"}`))
+	if got := next(t, requests); got != "set_property time-pos 60.400000" {
+		t.Fatalf("sent %q, want only a's position followed", got)
+	}
+	c.apply(peer("a", `{"event":"property-change","name":"paused-at","data":"60.420000"}`))
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want a position already within a frame skipped", got)
 	}
 }
