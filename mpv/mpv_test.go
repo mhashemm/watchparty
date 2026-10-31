@@ -379,7 +379,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 			if n == 2 {
 				<-load
 				fmt.Fprint(theirs, `{"event":"property-change","id":2,"name":"time-pos","data":"0.000000"}`+"\n")
-			} else if n > 2 {
+			} else if n > 3 {
 				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
 			}
 		}
@@ -483,7 +483,7 @@ func TestSeekWhilePlayingPausesTheParty(t *testing.T) {
 
 	send(propertyChangeLine(timePos, "10.000000", 0))
 	send(propertyChangeLine(timePos, "10.041000", 0))
-	send(`{"event":"seek"}`+"\n")
+	send(`{"event":"seek"}` + "\n")
 	send(propertyChangeLine(timePos, "40.000000", 0))
 	if got := next(t, requests); got != "set_property pause true" {
 		t.Fatalf("sent %q, want the node to pause itself", got)
@@ -528,5 +528,54 @@ func TestPlaybackIsNotASeek(t *testing.T) {
 	case r := <-requests:
 		t.Fatalf("sent %q during playback", r)
 	default:
+	}
+}
+
+// A node waiting on its cache falls behind everyone still playing. It pauses the
+// party instead, and stays paused for a manual resume once the cache refills.
+func TestBufferingPausesTheParty(t *testing.T) {
+	t.Parallel()
+	_, send, outgoing, requests := liveClient(t)
+
+	send(propertyChangeLine(timePos, "20.000000", 0))
+	send(propertyChangeLine(pausedForCache, "yes", 0))
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the node to pause itself", got)
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	for _, want := range []string{pause + "=yes", timePos + "=20.000000", pauseReason + "=buffering"} {
+		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
+			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		}
+	}
+	next(t, requests)
+
+	// a resume while still stalled is not passed on, and pauses again
+	send(propertyChangeLine(pause, "no", 0))
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the node to pause itself again", got)
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	for _, want := range []string{timePos + "=20.000000", pauseReason + "=still buffering"} {
+		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
+			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		}
+	}
+}
+
+// A peer's resume reaching a node that is still stalled is undone at once, so the
+// party doesn't play on without it.
+func TestRemoteResumeWhileBufferingPausesAgain(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.stalled = true, true
+
+	go c.pause(Event{Name: pause, Data: "no"}, "a")
+	got := map[string]bool{}
+	for range 3 {
+		got[next(t, requests)] = true
+	}
+	if !got["set_property pause false"] || !got["set_property pause true"] {
+		t.Fatalf("sent %v, want the resume applied and then undone", got)
 	}
 }

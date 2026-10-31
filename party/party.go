@@ -100,7 +100,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)

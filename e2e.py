@@ -34,7 +34,7 @@ import argparse, functools, glob, http.server, json, os, shutil, signal, socket,
 import sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
-MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --resume-playback=yes"
+MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
 # Waits poll until their condition holds, so these are ceilings, not delays. Only a
 # check that something did NOT happen sleeps, for QUIET, after the positive part is in.
 BOOT = 20            # mpv loading the file, plus the handshake
@@ -293,12 +293,12 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms"):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", mpvflags=""):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"]
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -486,6 +486,7 @@ def p2p_suite():
         ok(f"{n} plays at normal speed", get(n, "speed") == 1, f"speed={get(n, 'speed')}")
         ok(f"{n} seeks precisely", get(n, "hr-seek") in (True, "yes"), f"hr-seek={get(n, 'hr-seek')}")
         ok(f"{n} ignores saved positions", get(n, "resume-playback") is False)
+        ok(f"{n} waits for its cache", get(n, "cache-pause") is True)
 
     print(f"\n[3] resume on {A} propagates to all {len(NODES) - 1} others")
     setp(A, "pause", False)
@@ -868,6 +869,7 @@ def relay_suite():
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
         delay = 0
+        slow = 0  # bytes/s for a client whose User-Agent is "slow"
 
         def log_message(self, *a):
             pass
@@ -887,7 +889,16 @@ def relay_suite():
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
-            self.wfile.write(data[start:end + 1])
+            body = data[start:end + 1]
+            if not (Quiet.slow and self.headers.get("User-Agent") == "slow"):
+                return self.wfile.write(body)
+            step = Quiet.slow // 10
+            try:
+                for i in range(0, len(body), step):
+                    self.wfile.write(body[i:i + step])
+                    time.sleep(0.1)
+            except OSError:
+                pass
 
     web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
                                           functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
@@ -926,6 +937,30 @@ def relay_suite():
     ok("one seek, not five", osd("nodeUrl4").count("synced by nodeUrl1") == 1,
        f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
     for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4"):
+        stop(n)
+
+    print("\n[R11f] a node that runs out of cache pauses the party, and so does a resume while it waits")
+    Quiet.slow = 6000  # about half the test file's bitrate
+    launch("nodeFast", room="bufroom", media=url)
+    until(lambda: booted("nodeFast") and connected("nodeFast"), BOOT)
+    resolve("nodeFast")
+    launch("nodeSlow", room="bufroom", media=url, mpvflags="--user-agent=slow")
+    until(lambda: booted("nodeSlow"), BOOT)
+    resolve("nodeSlow")
+    reasons = lambda: [s for s in osd("nodeFast") if s.startswith("paused for nodeSlow: ")]
+    both_paused = lambda: all(get(n, "pause") is True for n in ("nodeFast", "nodeSlow"))
+    setp("nodeFast", "pause", False)
+    until(lambda: reasons() and both_paused(), 30)
+    ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
+    gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
+    ok("both stopped where the slow node did", gap < 0.15, f"{gap:.2f}s apart")
+    setp("nodeFast", "pause", False)
+    until(lambda: len(reasons()) > 1 and both_paused(), 30)
+    ok("resuming paused the party again", both_paused() and len(reasons()) > 1, f"{reasons()}")
+    gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
+    ok("and both stopped together again", gap < 0.15, f"{gap:.2f}s apart")
+    Quiet.slow = 0
+    for n in ("nodeFast", "nodeSlow"):
         stop(n)
     web.shutdown()
 

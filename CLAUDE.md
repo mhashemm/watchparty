@@ -169,8 +169,13 @@ positions.
 
 - **A seek while playing** (arrow keys, chapter skip, anything mpv sends a `seek` event
   for): the node pauses itself, and that pause goes out as its own. Then it sends where
-  it stopped, then a `pause-reason` event. Peers show "paused for X: seek". A
+  it stopped, so everyone lines up on it, then a `pause-reason` event. Peers show "paused for X: seek". A
   `--loop-file` wrap is a seek too, so a looping file pauses the party at each wrap.
+- **A node runs out of cache** (`paused-for-cache`, a stream or a slow disk): it
+  pauses the party the same way, with the reason "buffering". mpv stays paused once
+  its cache refills. A resume that reaches it while it is still stalled, local or
+  from a peer, is undone at once ("still buffering"). `--cache-pause=yes` is pinned,
+  so a user's config can't make mpv play through stalls instead.
 - **A seek while paused** goes out as it always has. Any paused peer can seek for the
   party.
 

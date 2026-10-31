@@ -24,7 +24,8 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
 - `Dial(ctx, socket) (net.Conn, error)` opens the unix socket or the Windows pipe. It
   starts nothing, so `party.Run` retries it until mpv has created the socket.
 - `New(ctx, cancel, conn, outgoing, incoming) (*Client, error)` starts
-  `ProcessIncomingEvents(incoming)` and the `watch()` goroutine, sends `observe_property_string` for `pause` (id 1) and `time-pos` (id 2), then
+  `ProcessIncomingEvents(incoming)` and the `watch()` goroutine, sends `observe_property_string` for `pause` (id 1), `time-pos` (id 2) and
+  `paused-for-cache` (id 3), then
   **waits for `ready`**: closed by `handleEvent` on the first `time-pos` that has
   data, i.e. once the file is loaded.
   - **`watch` must be running before those `do()` calls**, because only `watch`
@@ -86,11 +87,13 @@ or on their own when the event itself isn't sent.
 | `isEcho`: the value is one this node just applied from a peer | `errEcho` |
 | `pause` with the same value as the current state | `errNoChange` |
 | `pause` that changed | state updated (and `seeks` cleared on unpause), then broadcast |
-| `time-pos` while **playing** | `errDoNotSend`. If `seeking`, it is where the seek landed: `landed` set and `pauseParty("seek")` |
+| `time-pos` while **playing** | `errDoNotSend`. If `seeking`, it is where the seek landed: `pauseParty("seek")` |
+| `paused-for-cache` | `stalled` updated; `yes` while playing calls `pauseParty("buffering")`. `errDoNotSend` |
+| `pause` → `no` (not an echo) while `stalled` | `pauseParty("still buffering")`, `errDoNotSend`, and `c.paused` stays true: the resume is not passed on |
 | `time-pos` while paused | broadcast. This is a seek |
 | any other property | `errDoNotSend` |
 | **the first** `property-change` per property | state updated, but `errDoNotSend` |
-| `pause` → `yes`, echo or not | `extra` from `pauseExtras`: a `time-pos` of `c.pos` if `landed` (also appended to `seeks`, so mpv's second value of the same seek is an echo), then the `pause-reason` if one is set |
+| `pause` → `yes`, echo or not | `extra` from `pauseExtras`: if `pauseParty` set a `reason`, a `time-pos` of `c.pos` (also appended to `seeks`, so mpv's second value of the same seek is an echo), then the `pause-reason` |
 
 Every `time-pos` with data also updates `c.pos`, echo or not.
 
@@ -133,20 +136,25 @@ counters, that loops forever.
   `TestSmallSeekIsNotAnEcho` and `TestAppliedPauseIsNotRebroadcast` cover it,
   including that a genuine seek and a later genuine pause still go out.
 
-### A seek while playing pauses the party (`pauseParty`)
+### Seeking and buffering while playing pause the party (`pauseParty`)
 
 Positions only sync while paused, so a seek while playing would leave every peer
-behind. Instead:
+behind, and so would a node waiting on its cache. Instead the node pauses the party:
 
-1. The `seek` event sets `seeking`. `sync()` only seeks while paused, so a `seek` while
-   playing is always this node's own.
-2. The next `time-pos` is where it landed. It sets `landed` and calls
-   `pauseParty("seek")`.
+1. A trigger calls `pauseParty(reason)` under `c.mu`:
+   - **`"seek"`**: the `seek` event sets `seeking`, and the next `time-pos` is where
+     it landed. `sync()` only seeks while paused, so a `seek` while playing is always
+     this node's own.
+   - **`"buffering"`**: `paused-for-cache` (observe id 3) changes to `yes` while
+     playing.
+   - **`"still buffering"`**: a resume while `stalled`. A local one is caught in
+     `handleEvent` and not broadcast. A peer's is caught in `pause()` after it has
+     applied it, since its `pause=no` is an echo that `handleEvent` drops.
 3. `pauseParty` sets `reason` and sends `set_property pause true` **in a goroutine**,
    without marking `applied`. `do()` waits for a reply that only `watch()` reads, so
    calling it from `handleEvent` deadlocks. The old commented-out `case seek:
    s.pauseReq(true)` did exactly that. On success it shows "paused for everyone:
-   <reason>". On failure it clears `reason` and `landed`.
+   <reason>". On failure it clears `reason`.
 4. mpv reports `pause=yes`, broadcast as this node's own pause, followed by
    `pauseExtras`: the position (`c.pos`, so any frames played before the pause took
    effect count), then `{"name":"pause-reason","data":"seek"}`. Peers get pause first,
@@ -156,9 +164,11 @@ behind. Instead:
 5. If a peer's pause lands first, that `pause=yes` is an echo, and the extras still go
    out on their own, so the seek isn't lost.
 
-`TestSeekWhilePlayingPausesTheParty` and `TestPlaybackIsNotASeek` cover it, through
-`liveClient`, a `watch()` over a `net.Pipe` with a fake mpv. `e2e.py` `[R6b]` covers it
-against real mpv.
+`TestSeekWhilePlayingPausesTheParty`, `TestPlaybackIsNotASeek`,
+`TestBufferingPausesTheParty` and `TestRemoteResumeWhileBufferingPausesAgain` cover
+it, through `liveClient`, a `watch()` over a `net.Pipe` with a fake mpv. `e2e.py`
+`[R6b]` and `[R11f]` (a stream served at half its bitrate to one node) cover it against
+real mpv.
 
 ## Applying remote events: `ProcessIncomingEvents`
 

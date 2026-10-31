@@ -16,7 +16,7 @@ runs; re-probe after an mpv upgrade (recipe at the end).
 ## How `party.Run` starts mpv
 
 ```
-mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --no-resume-playback --input-ipc-server=<sock> <file>
+mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --input-ipc-server=<sock> <file>
 ```
 
 | Flag | Why |
@@ -24,17 +24,18 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --no-resume-playback --in
 | `--pause` | Every node starts paused, so nobody plays ahead before the party is wired up. |
 | `--speed=1` | **Pinned.** A `speed=1.1` in someone's config would make their player drift away steadily. |
 | `--hr-seek=yes` | **Pinned.** Every seek is exact, arrow keys included. Without it, relative seeks snap to a keyframe (see "Seeking"). |
+| `--cache-pause=yes` | **Pinned.** When the cache runs dry, mpv waits and reports `paused-for-cache`, which pauses the party. With `no` it plays through stalls with no signal, and the node falls behind: `[R11f]` measured 16.9s without the pin. |
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
 | `--vo=null --ao=null` | Tests only (e2e, GUI checks): no window, no sound. |
 
 **We don't pass `--no-config`, on purpose:** people keep their subtitle languages,
-audio device, key bindings and volume. Instead, **the three options that change sync
+audio device, key bindings and volume. Instead, **the four options that change sync
 are pinned on the command line, after the user's `MpvFlags`**. The command line beats
 `mpv.conf`, and a later flag beats an earlier one, so the pins win over both.
 Verified: a node started with `--speed=2 --hr-seek=no --resume-playback=yes` and a
 saved `start=50, speed=1.5` entry came up at 0, speed 1, `hr-seek` yes. e2e runs
-every node with those hostile flags (`[2b]`, `[5d]`). Anything else in a user's
+every node with those hostile flags plus `--cache-pause=no` (`[2b]`, `[5d]`, `[R11f]`). Anything else in a user's
 config still applies, for example `keep-open` (see "Ending").
 
 ## The connection
@@ -84,6 +85,10 @@ Useful when testing by hand (not used by the code): `["get_property", name]`,
 
 - **`pause`** (option-property, RW): `"yes"`/`"no"` via `observe_property_string`.
   `core-idle` differs (also true while buffering or seeking). We don't use it.
+- **`paused-for-cache`** (RO): `"yes"` while mpv is waiting on its cache, with
+  `pause` still `"no"`. At load it comes first with no data, then `"no"`. Under
+  `--cache-pause-wait` (default 1s) it clears once that much is cached again, and mpv
+  then resumes by itself unless `pause` is set, which is why the node pauses itself.
 - **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet,
   or quitting) **the `property-change` event has no `data` field at all**, which
   unmarshals to `Data == ""`. `playback-time` is the same, clamped to the file's

@@ -19,6 +19,7 @@ import (
 const (
 	pause          = "pause"
 	timePos        = "time-pos"
+	pausedForCache = "paused-for-cache"
 	propertyChange = "property-change"
 	seek           = "seek"
 	setProperty    = "set_property"
@@ -145,7 +146,7 @@ type Client struct {
 	seen     map[string]bool
 	pos      float64
 	seeking  bool
-	landed   bool
+	stalled  bool
 	reason   string
 }
 
@@ -210,19 +211,29 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if c.paused == event.paused() {
 				return extra, errNoChange
 			}
+			if !event.paused() && c.stalled {
+				c.pauseParty("still buffering")
+				return nil, errDoNotSend
+			}
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking, c.landed = false, false
+				c.seeking = false
 			}
 		case timePos:
 			if !c.paused {
 				if c.seeking {
-					c.seeking, c.landed = false, true
+					c.seeking = false
 					c.pauseParty("seek")
 				}
 				return nil, errDoNotSend
 			}
+		case pausedForCache:
+			c.stalled = event.paused()
+			if c.stalled && !c.paused {
+				c.pauseParty("buffering")
+			}
+			return nil, errDoNotSend
 		default:
 			return nil, errDoNotSend
 		}
@@ -235,20 +246,14 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 }
 
 func (c *Client) pauseExtras() [][]byte {
-	var extra [][]byte
-	if c.landed {
-		c.landed = false
-		c.seeks = append(c.seeks, c.pos)
-		pos := strconv.FormatFloat(c.pos, 'f', 6, 64)
-		b, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: pos})
-		extra = append(extra, b)
+	if c.reason == "" {
+		return nil
 	}
-	if c.reason != "" {
-		b, _ := json.Marshal(Event{Name: pauseReason, Data: c.reason})
-		extra = append(extra, b)
-		c.reason = ""
-	}
-	return extra
+	c.seeks = append(c.seeks, c.pos)
+	pos, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(c.pos, 'f', 6, 64)})
+	reason, _ := json.Marshal(Event{Name: pauseReason, Data: c.reason})
+	c.reason = ""
+	return [][]byte{pos, reason}
 }
 
 func (c *Client) pauseParty(reason string) {
@@ -258,7 +263,7 @@ func (c *Client) pauseParty(reason string) {
 		if err != nil {
 			log.Println("pauseParty:", err)
 			c.mu.Lock()
-			c.reason, c.landed = "", false
+			c.reason = ""
 			c.mu.Unlock()
 			return
 		}
@@ -382,6 +387,9 @@ func (c *Client) pause(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	c.paused = paused
+	if !paused && c.stalled {
+		c.pauseParty("still buffering")
+	}
 	c.mu.Unlock()
 
 	actionText := "resumed"
@@ -458,7 +466,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		}
 	}()
 
-	events := []string{pause, timePos}
+	events := []string{pause, timePos, pausedForCache}
 	for i, event := range events {
 		err := conn.do("observe_property_string", i+1, event)
 		if err != nil {
