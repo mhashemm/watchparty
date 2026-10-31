@@ -229,6 +229,79 @@ func TestReconnectReplacesStaleMember(t *testing.T) {
 	}
 }
 
+func queued(m *member) []string {
+	got := []string{}
+	for {
+		select {
+		case b := <-m.ch:
+			msg := message{}
+			json.Unmarshal(b, &msg)
+			e := struct {
+				Data string `json:"data"`
+			}{}
+			json.Unmarshal(msg.Event, &e)
+			got = append(got, e.Data)
+		default:
+			slices.Sort(got)
+			return got
+		}
+	}
+}
+
+// "has joined" goes to the members add saw, so a later joiner is never told about
+// someone it already found in the room, and a reconnect never hears of itself.
+func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
+	t.Parallel()
+	r := newRelay(10, 10, 10)
+	r.rooms["movie"] = &room{members: map[*member]struct{}{}}
+	mk := func(hostname, session string) *member {
+		return &member{hostname: hostname, session: session, ch: make(chan []byte, sendBuffer)}
+	}
+	b, a, c := mk("b", ""), mk("a", "x"), mk("c", "")
+	r.add("movie", b)
+	r.add("movie", a)
+	r.add("movie", c)
+	if got := queued(b); !slices.Equal(got, []string{"a has joined", "c has joined"}) {
+		t.Fatalf("b got %v", got)
+	}
+	if got := queued(a); !slices.Equal(got, []string{"c has joined", "connected to b"}) {
+		t.Fatalf("a got %v", got)
+	}
+	if got := queued(c); !slices.Equal(got, []string{"connected to a", "connected to b"}) {
+		t.Fatalf("c got %v, want no join for someone already there", got)
+	}
+
+	fresh := mk("a", "x")
+	if stale, _ := r.add("movie", fresh); stale != a {
+		t.Fatal("the reconnect did not replace the stale member")
+	}
+	if got := queued(fresh); !slices.Equal(got, []string{"connected to b", "connected to c"}) {
+		t.Fatalf("reconnect got %v, want the room and not itself", got)
+	}
+	for _, m := range []*member{b, c} {
+		if got := queued(m); len(got) != 0 {
+			t.Fatalf("%s was told %v about a reconnect", m.hostname, got)
+		}
+	}
+}
+
+// The last member can leave between a joiner's admit and its add. The joiner must
+// not be left connected to a room that no longer exists.
+func TestAddToAReapedRoomFails(t *testing.T) {
+	t.Parallel()
+	r := newRelay(10, 10, 10)
+	if _, err := r.admit("movie", []byte("s"), nil, "f", "ip"); err != nil {
+		t.Fatal(err)
+	}
+	r.leave("movie", nil)
+	if _, ok := r.add("movie", &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
+		t.Fatal("add succeeded on a reaped room")
+	}
+	if _, exists := r.rooms["movie"]; exists {
+		t.Fatal("add recreated the room behind admit's back")
+	}
+}
+
 func TestWrongSecretIsRejected(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(100, 10, 10))

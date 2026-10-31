@@ -58,16 +58,32 @@ The counter check only guards `/event` and `/bye`.
 - The relay has no counters and doesn't need them: it never echoes a frame back to
   its sender.
 
-## Fan-out: `broadcast(parent, f)`
+## Fan-out: `broadcast(parent, detach, f)`
 
 1. Under `s.mu`, bump the counter and **snapshot** the peer list, then release the
    lock.
-2. Fan out `f(ctx, peer, counter)` to every peer in parallel, under a 10s timeout
-   derived from `parent`, and `wg.Wait()`.
-3. Per peer, under `p.mu`: a success resets `fails`; a failure increments it. At
-   `maxFails` (3) the peer is evicted, but **only if `s.addresses[p.address]` is still
-   that same `*peer`**. A peer that reconnected through `/hi` meanwhile has a new entry
-   and must not be dropped. Eviction shows "dropped X".
+2. Fan out `f(ctx, peer, counter)` to every peer in parallel, each under its own 10s
+   timeout derived from `parent`, and `wg.Wait()`. With `detach` (`BroadcastEvents`),
+   a peer already at `maxFails` is sent to in a goroutine nobody waits for. Its
+   context comes from `s.c`, so it ends with the party. `Shutdown` doesn't detach, so
+   every `/bye` is waited for.
+3. `record`, per peer, under `p.mu`:
+   - A success resets `fails` and clears `failingSince`.
+   - A failure increments `fails`, and the first one in a row sets `failingSince`.
+   - The peer is evicted at `maxFails` (3) **and** once it has been failing for
+     `evictAfter`, **only if `s.addresses[p.address]` is still that same `*peer`**. A
+     peer that reconnected through `/hi` meanwhile has a new entry and must not be
+     dropped. Eviction shows "dropped X", once.
+
+Why both conditions: three strikes alone dropped people on flaky Wi-Fi, because a
+burst of pauses fails three sends within seconds. `evictAfter` is
+`party.DefaultEvictAfter` (5 minutes, the `-evictAfter` flag), and `e2e.py` passes
+`1ms` so its strike cases don't wait. Why `detach`: a dead peer behind a 10s timeout
+held up this node's *next* event by 10s. That used to stop after 3 events, and with
+the 5-minute rule it would last 5 minutes. A detached send still records its strike
+or its success, and the counters drop anything it delivers late. Eviction is checked
+only when a send fails, so a dead peer goes on the first event this node sends
+after the 5 minutes.
 
 Invariants, each of which has caused a real bug:
 
@@ -75,8 +91,10 @@ Invariants, each of which has caused a real bug:
   one blocking send wedge every handler behind the next writer.
 - **Synthetic notices go through `notify`, which is `select`/`default`.** Notices are
   cosmetic, and nothing drains `incoming` until `ProcessIncomingEvents` starts once
-  mpv has loaded the file, so dropping them is correct. Real events in `Event` keep the blocking
-  send.
+  mpv's socket answers (`AddAddress` runs before mpv has even started), so dropping
+  them is correct. Real events in `Event` keep the blocking send, bounded by
+  `req.Context()`. From then on `incoming` is drained at once, even while mpv is
+  still loading the file (see `mpv/CLAUDE.md`).
 - **`Shutdown` must use `context.WithoutCancel(s.c)`.** `s.c` is the party's context,
   which is already cancelled when the deferred `Shutdown` runs. A timeout derived from
   it makes every `/bye` fail instantly, and peers only lose the leaver through the
@@ -91,9 +109,13 @@ Invariants, each of which has caused a real bug:
 for the joiner. Only the bootstrap's answer counts: every peer the mesh gossips
 already passed the same check against the same fingerprint.
 
+`request` closes the body of every non-2xx response before returning its error, and
+`post` (used by `/event` and `/bye`) closes it on success too; only `hi` reads one. An
+open body keeps its connection out of the pool, one per event.
+
 ## Construction
 
-`New(ctx, incoming, myAddress, hostname, file)`:
+`New(ctx, incoming, myAddress, hostname, file, evictAfter)`:
 
 - An empty hostname falls back to `os.Hostname()`.
 - The `http.Client` has no timeout of its own. Every call is bounded by a context:
@@ -108,29 +130,19 @@ fixtures.
 
 - `TestBroadcastDoesNotBlockOnFullIncoming`: an unbuffered, undrained `incoming` plus
   a failing peer must not block `broadcast` (`notify` must not block).
-- `TestBroadcastEvictsPeerAfterMaxFails`: exactly `maxFails` consecutive failures
-  evict, and any success in between resets the count.
+- `TestBroadcastEvictsPeerAfterMaxFails`: with a negligible `evictAfter`, exactly
+  `maxFails` consecutive failures evict, and any success in between resets the count.
+- `TestFailingPeerIsKeptUntilEvictAfter`: with an hour, `maxFails + 2` failures keep
+  the peer; moving `failingSince` back two hours, the next failure evicts.
+- `TestSuspectPeerDoesNotHoldUpBroadcast`: with `detach`, a peer at `maxFails` whose
+  send blocks doesn't hold `broadcast` up, and a healthy peer is still waited for.
 - `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
   `BroadcastEvents`.
+- `TestResponseBodiesAreClosed`: a stub `RoundTripper` records `Close` on 204, 500
+  and 409 answers to `post`.
 - `TestHiRefusesADifferentFile`: `Hi` called directly with an `httptest` recorder; a
   different or missing `file` gets 409 and never becomes a peer.
 
 Mesh formation, propagation, `/bye`, eviction and the header checks are covered for
 real by `e2e.py --mode p2p`.
 
-## Known issues
-
-- **Spoofable identity.** `/event` and `/bye` trust `hit-me-up` and `counter`. The
-  counter stops replays and unknown addresses, but a peer can still claim another
-  peer's address. Fixing that needs signing, which is more than a LAN tool wants
-  (`ponytail:` in `Bye`).
-- **Response bodies.** `request()` never closes the response body on a non-2xx status,
-  and `broadcast`'s callers discard the `*http.Response` without closing it. A 2xx
-  `/event` or `/bye` answers 204 with an empty body, so in practice this only leaks
-  on error responses.
-- **Events before mpv is ready.** Real playback events wait on `incoming` until mpv
-  has loaded the file and `ProcessIncomingEvents` starts (well under a second for a
-  local file). The 1024 buffer carries that gap, and `Event` gives up on
-  `req.Context()` rather than wedging.
-- **Fixed strike count.** `maxFails` is a constant (`ponytail:`). Make it a flag if
-  flaky Wi-Fi starts evicting people mid-movie.

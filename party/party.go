@@ -1,6 +1,8 @@
 package party
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,7 +26,8 @@ import (
 )
 
 const (
-	DefaultPort = 6969
+	DefaultPort       = 6969
+	DefaultEvictAfter = 5 * time.Minute
 
 	sampleSize  = 1 << 20
 	sampleCount = 8
@@ -43,6 +46,7 @@ type Config struct {
 	Port       int
 	PublicPort int
 	Addrs      string
+	EvictAfter time.Duration
 }
 
 var errStopped = errors.New("the party stopped unexpectedly")
@@ -100,6 +104,8 @@ func Run(parent context.Context, cfg Config) error {
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
+	out := &lineLog{l: log.Default()}
+	cmd.Stdout, cmd.Stderr = out, out
 
 	err = cmd.Start()
 	if err != nil {
@@ -124,12 +130,12 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	mpvQuit := atomic.Bool{}
-	client, err := mpv.New(c, func() {
+	_, err = mpv.New(c, func() {
 		if c.Err() == nil {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing)
+	}, conn, outgoing, incoming)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():
@@ -141,8 +147,6 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return err
 	}
-
-	go client.ProcessIncomingEvents(incoming)
 
 	log.Println("init done. now you can start watching")
 
@@ -157,6 +161,26 @@ func Run(parent context.Context, cfg Config) error {
 		return stopReason(parent)
 	}
 	return err
+}
+
+// lineLog logs mpv's output a line at a time, so the reason a file won't play
+// reaches the CLI's log and the GUI's chart. exec gives one writer shared by
+// stdout and stderr a single goroutine, so Write needs no lock.
+type lineLog struct {
+	l   *log.Logger
+	buf []byte
+}
+
+func (w *lineLog) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		line, rest, ok := bytes.Cut(w.buf, []byte("\n"))
+		if !ok {
+			return len(p), nil
+		}
+		w.l.Printf("mpv: %s\n", line)
+		w.buf = rest
+	}
 }
 
 // notReady reports mpv exiting before the movie was loaded. Exit 0 is the user
@@ -177,8 +201,6 @@ func stopReason(parent context.Context) error {
 
 // fingerprint identifies a video by its content alone, so the same file under
 // another name, path or timestamp matches. A URL is identified by itself.
-// ponytail: the size and 8 samples of 1MB, not every byte; read it all if an edit
-// that keeps the size and misses every sample ever matters
 func fingerprint(path string) (string, error) {
 	if strings.Contains(path, "://") {
 		sum := sha256.Sum256([]byte(path))
@@ -261,7 +283,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		address = fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort)
 	}
 
-	ser := server.New(c, incoming, address, cfg.Hostname, file)
+	ser := server.New(c, incoming, address, cfg.Hostname, file, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)

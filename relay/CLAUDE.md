@@ -66,14 +66,27 @@ allocated:
    have just created.
 5. **`add`** registers the member only now, once `m.conn` is set, so `broadcast` can
    never reach a nil conn.
+   - If the room is gone, `add` returns false and the handler closes the websocket
+     with `StatusTryAgainLater`. That happens when the last member left (or another
+     joiner's `Accept` failed) between this caller's `admit` and its `add`, which
+     reaps the room. Without it the joiner stayed connected to nothing: it heard
+     nothing and nobody heard it. The node sees a disconnect, redials at once, and
+     goes through `admit` again: it recreates the room if it may, or waits with 401.
    - If a member with the same non-empty `session` is already there, it is swapped
      out and `CloseNow`ed. The room gets no new "has joined", and the stale member's
      `leave` sends no "has left", because it is no longer present.
    - This is keyed on session, not hostname: two machines that share a hostname would
      otherwise keep kicking each other out. An empty session (an old client) is never
      deduped.
-6. The writer goroutine starts, the notices go out, then it reads in a loop. Each
-   frame (read limit **4096 bytes**) is passed to `broadcast`.
+   - **The notices are queued inside `add`, under the same `r.mu`:** "X has joined"
+     to every member it found (not on a reconnect), and "connected to Y" to the
+     joiner for each of them. Both lists are the same room at the same instant. When
+     the handler broadcast "has joined" after `add` returned, a member that joined in
+     between got it on top of finding X in its "connected to" list, and after a
+     reconnect the new connection could be told it had joined itself. The sends are
+     non-blocking and a full buffer drops the notice, so nothing under the lock waits.
+6. The writer goroutine starts, then it reads in a loop. Each frame (read limit
+   **4096 bytes**) is passed to `broadcast`.
 
 | Status | Meaning | Node reaction (`party/ws.go`) |
 |---|---|---|
@@ -107,7 +120,7 @@ allocated:
 
 ## Rate limiter: a count-min sketch. Do not turn it back into a map
 
-- `limiter` is `[4][16384]uint16` with 4 `maphash` seeds: **128KB, allocated once**,
+- `limiter` is `[4][1 << 20]uint16` with 4 `maphash` seeds: **8MB, allocated once**,
   with zero allocation per check. On window rollover (1 hour) the whole thing is
   `clear()`ed; nothing is evicted per key.
 - **Why not a map:** a `map[ip]int` allocates one entry per distinct source address.
@@ -115,8 +128,11 @@ allocated:
   become the memory-exhaustion attack it exists to prevent. Capping the map only
   chooses between failing open and failing closed.
 - A sketch over-counts on collisions and never under-counts. The error is one-sided
-  in the safe direction: the cost is an occasional false rejection for a busy shared
-  NAT (`ponytail:` on `limiter`, bump `cols` if that shows up).
+  in the safe direction: the cost is a false rejection when all 4 of an address's
+  slots also hold someone else's counts. At 128KB (16384 columns) that was about a
+  4% chance for someone at their 10th room once 10k addresses had been seen in the
+  hour. At 8MB the noise per slot is ~0.01 at that load, and the chance is about
+  1e-8. The hourly `clear()` of 8MB is negligible.
 - Saturating `uint16` counters can't wrap around to 0.
 - What counts against `ROOMS_PER_HOUR`:
   - room creations
@@ -193,6 +209,8 @@ The tests use real websockets against an `httptest` server, all in parallel:
 | `TestBroadcastReachesEveryoneButTheSender` | no echo to the sender (the reason relay mode needs no counters) |
 | `TestJoinerLearnsWhoIsAlreadyThere` | the "connected to" half of the notices |
 | `TestReconnectReplacesStaleMember` | session dedupe, with no second join and no false leave |
+| `TestAddToAReapedRoomFails` | a room reaped between `admit` and `add` is neither joined nor recreated |
+| `TestJoinNoticesGoToTheRoomAddSaw` | "has joined" and "connected to" describe the same room; a reconnect never hears of itself |
 | `TestWrongSecretIsRejected` | wrong secrets |
 | `TestDifferentFileIsRejected` | another or no `file` is 409, the room's own is let in |
 | `TestSecretGrindingIsRateLimited` | grinding secrets costs quota |
@@ -209,17 +227,3 @@ The end-to-end versions are `e2e.py --mode relay` (fan-out, room isolation, reco
 through a TCP proxy) and `e2e.py --mode caps` (every cap, `CREATE_KEY`, a raw socket
 that never answers pings in `[R20]`).
 
-## Known issues
-
-- **A join notice can arrive late, and twice.** `add` registers the member, then the
-  handler broadcasts "X has joined" to whoever is in the room *by then*. Someone who
-  joins in between sees X in its "connected to" list and gets the late "has joined" as
-  well, and after a reconnect the new connection can be told that it joined itself.
-  It needs two joins within the same millisecond or so, and the cost is a duplicate
-  notice. The fix is to send "has joined" to the members `add` saw, not a later room.
-- **Identity is only as strong as the room secret.** `hostname` is whatever the joiner
-  claims, so anyone who knows the secret can pose as a member.
-- **A narrow race between `admit` and `add`.** If the last member leaves after a
-  joiner's `admit` but before its `add`, the room is reaped and `add` finds no room.
-  The joiner then stays connected without being registered: it hears nothing, and
-  nobody hears it. Its next reconnect would recreate the room.

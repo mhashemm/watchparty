@@ -122,6 +122,7 @@ PORTS["relay"] = args.port_base + len(NODES) + 1
 PORTS["nodeSame"] = args.port_base + len(NODES) + 2
 PORTS["nodeDiff"] = args.port_base + len(NODES) + 3
 PORTS["http"] = args.port_base + len(NODES) + 4
+PORTS["nodeKeep"] = args.port_base + len(NODES) + 5
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -292,8 +293,9 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None):
-    """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms"):
+    """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
+    -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
     cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
@@ -303,6 +305,8 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
             cmd += ["-createKey", create_key]
     else:
         cmd += ["-local", "-port", str(PORTS[name])]
+        if evict:
+            cmd += ["-evictAfter", evict]
         if addrs:
             cmd += ["-addrs", addrs]
     p = subprocess.Popen(cmd, stdout=open(path, "wb"), stderr=subprocess.STDOUT)
@@ -676,6 +680,22 @@ def p2p_suite():
     until(lambda: dropped(A, STUB_ADDR), 5)
     ok("3rd consecutive strike evicts", dropped(A, STUB_ADDR))
 
+    print("\n[13b] with the default -evictAfter, a burst of strikes does not evict a peer")
+    launch("nodeKeep", evict=None)
+    until(lambda: booted("nodeKeep"), BOOT)
+    resolve("nodeKeep")
+    s3 = stub(nodes["nodeKeep"]["addr"])
+    until(lambda: f"{STUB_HOST} has joined" in osd("nodeKeep"), 5)
+    stub_stop(s3)
+    tries = 0  # an evicted peer is never sent to again, so its strikes stop at 3
+    while strikes("nodeKeep", STUB_ADDR, STUB_HOST) < 4 and tries < 8:
+        toggle("nodeKeep")
+        tries += 1
+    ok("4 strikes within seconds: still in the mesh",
+       strikes("nodeKeep", STUB_ADDR, STUB_HOST) >= 4 and not dropped("nodeKeep", STUB_ADDR),
+       f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
+    stop("nodeKeep")
+
     print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor")
     clean = stop(A)
     ok(f"{A} exited cleanly", clean and nodes[A]["proc"].returncode == 0, f"rc={nodes[A]['proc'].returncode}")
@@ -833,8 +853,27 @@ def relay_suite():
     print("\n[R11c] a URL plays too: the same URL gets in, another URL is refused")
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
+        delay = 0
+
         def log_message(self, *a):
             pass
+
+        # Range support: without it mpv calls the stream unseekable and refuses
+        # any seek past what it has buffered, so [R11d] failed on a busy runner
+        def do_GET(self):
+            time.sleep(Quiet.delay)
+            r = self.headers.get("Range", "")
+            if not r.startswith("bytes="):
+                return super().do_GET()
+            with open(self.translate_path(self.path), "rb") as f:
+                data = f.read()
+            start, _, end = r[6:].partition("-")
+            start, end = int(start), int(end or len(data) - 1)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            self.wfile.write(data[start:end + 1])
 
     web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
                                           functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
@@ -852,9 +891,35 @@ def relay_suite():
     nodes["nodeUrl3"]["sock"] = child_mpv_socket(nodes["nodeUrl3"]["proc"].pid)  # only if it wrongly got in
     ok("another URL was refused", "409" in log("nodeUrl3") and "not the same file" in log("nodeUrl3"))
     ok("nobody saw it join", "nodeUrl3" not in known("nodeUrl1"))
-    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3"):
+
+    print("\n[R11d] a joiner still loading a slow stream applies only the last of what it missed")
+    Quiet.delay = 3
+    launch("nodeUrl4", room="urlroom", media=url)
+    until(lambda: "nodeUrl4 has joined" in osd("nodeUrl1"), BOOT)
+    for pos in (10, 20, 30, 40, 50):
+        setp("nodeUrl1", "time-pos", pos)
+        # nodeUrl2 too: a late echo of its previous seek would go out as its own
+        until(lambda: all(near(get(n, "time-pos"), pos) for n in ("nodeUrl1", "nodeUrl2")))
+    ok("the seeks landed while nodeUrl4 was loading", not booted("nodeUrl4"))
+    until(lambda: booted("nodeUrl4"), BOOT)
+    Quiet.delay = 0
+    resolve("nodeUrl4")
+    until(lambda: near(get("nodeUrl4", "time-pos"), 50))
+    ok("nodeUrl4 is where nodeUrl1 stopped", near(get("nodeUrl4", "time-pos"), 50), f"at {get('nodeUrl4', 'time-pos')}")
+    ok("one seek, not five", osd("nodeUrl4").count("synced by nodeUrl1") == 1,
+       f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
+    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4"):
         stop(n)
     web.shutdown()
+
+    print("\n[R11e] a file mpv can't play: the node fails, and its log says why")
+    notvideo = f"{RUN}/notavideo.txt"
+    open(notvideo, "w").write("not a video\n")
+    launch("nodeNotVideo", room="notvideo", media=notvideo)
+    until(lambda: nodes["nodeNotVideo"]["proc"].poll() is not None, BOOT)
+    rc = nodes["nodeNotVideo"]["proc"].returncode
+    ok("it exited with an error", rc not in (None, 0), f"rc={rc}")
+    ok("mpv's own reason is in its log", "mpv: Failed to recognize file format." in log("nodeNotVideo"))
 
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])

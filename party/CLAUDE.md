@@ -15,7 +15,7 @@ times in one GUI process, so it must not leave state behind.
 | File | Contents |
 |---|---|
 | `party.go` | `Config`, `Run`, `fingerprint`, `runMesh` (P2P setup), `DefaultPort`, `errStopped`, `notReady` |
-| `party_test.go` | `fingerprint`: a renamed, moved, re-dated copy matches; a changed first or last byte or size doesn't; a URL is its own text |
+| `party_test.go` | `fingerprint`: a renamed, moved, re-dated copy matches; a changed first or last byte or size doesn't; a URL is its own text. `lineLog` logs each line of chunked output once, whole |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
 | `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 
@@ -60,19 +60,29 @@ them in-process (see `gui/CLAUDE.md`).
    `mpv/MPV.md`). `mpv.Init(cmd)` sets the Windows process
    attributes. **`defer cmd.Cancel()` only after `Start` succeeds.** The default
    `Cancel` is `Process.Kill()`, which nil-panics on a process that never started.
+   - mpv's stdout and stderr both go to one `lineLog`, which logs each line as `mpv:
+     …`. That is the only place mpv says *why* it failed ("Failed to recognize file
+     format.", "Error parsing option …"); the exit status alone says only "exit
+     status 2". They used to go to /dev/null. One writer for both means exec copies
+     them in a single goroutine, so `Write` needs no lock, and `Wait` finishes that
+     copy before `exited` fires.
+   - The reason is **not** put into the returned error. The GUI's diagnosis
+     (`gui/index.html`) reads "no such file" next to "mpv" as "mpv isn't installed",
+     and mpv's "Cannot open file …: No such file or directory" would match it. It
+     reaches the GUI's log instead, where the diagnosis points.
 7. `cmd.Wait()` runs in a goroutine that reports on `exited`. `mpv.Dial` is retried
    every 50ms until the socket answers (~40ms after start). If mpv exits first, `Run`
    returns `notReady`: mpv's real exit status ("exit status 2" for a bad file, 1 for
    a bad flag), or `nil` for exit 0 (the user closed it). If `c` ends, `stopReason`.
-8. `mpv.New(c, onWatchEnd, conn, outgoing)` registers the two observers, starts the
+8. `mpv.New(c, onWatchEnd, conn, outgoing, incoming)` starts draining `incoming`
+   (see `mpv/CLAUDE.md`: it keeps only the latest pause and position until the file is
+   loaded, so no peer waits on a slow load), registers the two observers, starts the
    reader, and **waits until the file is loaded** (the first `time-pos` with data).
    If mpv hangs up before that, `New` returns `mpv.ErrClosed` at once and `Run`
    returns `notReady(<-exited)`. The reader doesn't cancel the party before the
    movie is ready: cancelling would kill the exiting mpv, and its real exit status
-   would read as `signal: killed`. Then `ProcessIncomingEvents(incoming)` starts in
-   a goroutine (events that arrived meanwhile wait in the 1024 buffer), and `init
-   done. now you can start watching` is logged. That line is
-   also load-bearing for the GUI.
+   would read as `signal: killed`. Then `init done. now you can start watching` is
+   logged. That line is also load-bearing for the GUI.
 9. Wait on `exited`, then pick a return value (see the next section).
 
 Deferred cleanup runs in LIFO order:
@@ -92,7 +102,7 @@ Deferred cleanup runs in LIFO order:
 | Something inside cancelled `c` (relay rejection, including another file; mesh listener failed to bind) | `errStopped` ("the party stopped unexpectedly") |
 | Setup failed (unreadable file, mpv binary missing, UPNP, no LAN IP) | that error |
 | P2P: the bootstrap peer plays another file | `<addr>/hi: your video is not the same file as the party's` (`server.ErrDifferentFile`) |
-| mpv exited before the movie was ready (bad file, bad flag) | `mpv exited before the movie was ready: exit status N` |
+| mpv exited before the movie was ready (bad file, bad flag) | `mpv exited before the movie was ready: exit status N`, with mpv's reason in the `mpv: ` log lines just before it |
 | mpv's own `Wait` error with nothing cancelled | that error |
 
 **The mpv-quit case is subtle, and it was a real bug.** When mpv quits, it closes its
@@ -131,8 +141,10 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
      Then `GetExternalIPAddress`.
    - Every failure is returned. A failure after the mapping was added runs the cleanup
      collected so far, so a half-done setup never leaks a mapping on the router.
-2. `server.New(c, incoming, address, hostname, file)`, with `/hi`, `/bye` and `/event` on a
-   plain `http.Server` at `0.0.0.0:Port`. `BaseContext` is `c`, so the handlers'
+2. `server.New(c, incoming, address, hostname, file, evictAfter)`, with `/hi`, `/bye`
+   and `/event` on a plain `http.Server` at `0.0.0.0:Port`. `evictAfter` is
+   `cfg.EvictAfter`, or `DefaultEvictAfter` (5 minutes) when that is zero, as it is
+   from the GUI. `BaseContext` is `c`, so the handlers'
    request contexts die with the party.
 3. `ListenAndServe` runs in a goroutine. **Any** error, including `ErrServerClosed` at
    shutdown, calls `cancel()`. At shutdown that is a harmless no-op. On a bind failure
@@ -195,7 +207,3 @@ closed**: their writers (`watch`, `read`, the server's handlers, `notify`) can s
 be running when the readers stop, and a send on a closed channel panics. A GUI that
 ran three parties is back to its baseline goroutine count.
 
-## Known issues
-
-- mpv's stdout/stderr are not captured, so a failed start reports only mpv's exit
-  status, not its message.

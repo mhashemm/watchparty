@@ -27,18 +27,18 @@ const (
 	hostnameHeaderKey = "hostname"
 	fileHeaderKey     = "file"
 
-	// ponytail: 3 strikes then drop, make it a flag if flaky wifi evicts people mid-movie
 	maxFails = 3
 )
 
 var ErrDifferentFile = errors.New("your video is not the same file as the party's")
 
 type peer struct {
-	Counter  uint64     `json:"counter,string"`
-	Hostname string     `json:"hostname"`
-	mu       sync.Mutex `json:"-"`
-	address  string     `json:"-"`
-	fails    int        `json:"-"`
+	Counter      uint64     `json:"counter,string"`
+	Hostname     string     `json:"hostname"`
+	mu           sync.Mutex `json:"-"`
+	address      string     `json:"-"`
+	fails        int        `json:"-"`
+	failingSince time.Time  `json:"-"`
 }
 
 func (p *peer) String() string {
@@ -46,15 +46,16 @@ func (p *peer) String() string {
 }
 
 type Server struct {
-	c         context.Context
-	addresses map[string]*peer
-	mu        sync.RWMutex
-	incoming  chan<- mpv.IncomingMessage
-	client    *http.Client
-	myAddress string
-	counter   uint64
-	hostname  string
-	file      string
+	c          context.Context
+	addresses  map[string]*peer
+	mu         sync.RWMutex
+	incoming   chan<- mpv.IncomingMessage
+	client     *http.Client
+	myAddress  string
+	counter    uint64
+	hostname   string
+	file       string
+	evictAfter time.Duration
 }
 
 func (s *Server) notify(hostname string, text string) {
@@ -136,7 +137,6 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	addr := req.Header.Get(addressHeaderKey)
 	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
-	// ponytail: identity is whatever the headers claim, add signing if this ever leaves trusted peers
 	s.mu.Lock()
 	peer, exists := s.addresses[addr]
 	if !exists {
@@ -230,9 +230,8 @@ func (s *Server) AddAddress(addr string) error {
 }
 
 func (s *Server) Shutdown() {
-	s.broadcast(context.WithoutCancel(s.c), func(c context.Context, p *peer, _ uint64) error {
-		_, err := s.request(c, p.address, "/bye", nil, math.MaxUint64)
-		return err
+	s.broadcast(context.WithoutCancel(s.c), false, func(c context.Context, p *peer, _ uint64) error {
+		return s.post(c, p.address, "/bye", nil, math.MaxUint64)
 	})
 }
 
@@ -244,53 +243,67 @@ func (s *Server) BroadcastEvents(outgoing chan []byte) {
 		case <-s.c.Done():
 			return
 		}
-		s.broadcast(s.c, func(c context.Context, p *peer, counter uint64) error {
-			_, err := s.request(c, p.address, "/event", event, counter)
-			return err
+		s.broadcast(s.c, true, func(c context.Context, p *peer, counter uint64) error {
+			return s.post(c, p.address, "/event", event, counter)
 		})
 	}
 }
 
-func (s *Server) broadcast(parent context.Context, f func(context.Context, *peer, uint64) error) {
+// broadcast waits for every peer, except that with detach it does not wait for a
+// peer already at maxFails: it may be kept for evictAfter, and the next event must
+// not queue behind its timeout for that long.
+func (s *Server) broadcast(parent context.Context, detach bool, f func(context.Context, *peer, uint64) error) {
 	s.mu.Lock()
 	s.counter += 1
 	counter := s.counter
 	peers := slices.Collect(maps.Values(s.addresses))
 	s.mu.Unlock()
 
-	c, cancel := context.WithTimeout(parent, 10*time.Second)
-	defer cancel()
-	errs := make([]error, len(peers))
 	wg := sync.WaitGroup{}
-	wg.Add(len(peers))
-	for i, p := range peers {
-		go func() {
-			defer wg.Done()
-			errs[i] = f(c, p, counter)
-		}()
+	for _, p := range peers {
+		send := func() {
+			c, cancel := context.WithTimeout(parent, 10*time.Second)
+			defer cancel()
+			s.record(p, f(c, p, counter))
+		}
+		p.mu.Lock()
+		suspect := p.fails >= maxFails
+		p.mu.Unlock()
+		if detach && suspect {
+			go send()
+			continue
+		}
+		wg.Go(send)
 	}
 	wg.Wait()
+}
 
-	for i, p := range peers {
-		p.mu.Lock()
-		if errs[i] == nil {
-			p.fails = 0
-			p.mu.Unlock()
-			continue
-		}
-		p.fails += 1
-		dropped := p.fails >= maxFails
+func (s *Server) record(p *peer, err error) {
+	p.mu.Lock()
+	if err == nil {
+		p.fails = 0
+		p.failingSince = time.Time{}
 		p.mu.Unlock()
+		return
+	}
+	if p.fails == 0 {
+		p.failingSince = time.Now()
+	}
+	p.fails += 1
+	dropped := p.fails >= maxFails && time.Since(p.failingSince) >= s.evictAfter
+	p.mu.Unlock()
 
-		log.Printf("%s: %s\n", p, errs[i])
-		if !dropped {
-			continue
-		}
-		s.mu.Lock()
-		if s.addresses[p.address] == p {
-			delete(s.addresses, p.address)
-		}
-		s.mu.Unlock()
+	log.Printf("%s: %s\n", p, err)
+	if !dropped {
+		return
+	}
+	s.mu.Lock()
+	evicted := s.addresses[p.address] == p
+	if evicted {
+		delete(s.addresses, p.address)
+	}
+	s.mu.Unlock()
+	if evicted {
 		s.notify(p.Hostname, fmt.Sprintf("dropped %s", p))
 	}
 }
@@ -309,25 +322,36 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 		return nil, err
 	}
 	if res.StatusCode == http.StatusConflict {
+		res.Body.Close()
 		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, ErrDifferentFile)
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
+		res.Body.Close()
 		return nil, fmt.Errorf("%s%s: %s", addr, endpoint, res.Status)
 	}
 	return res, nil
 }
 
-func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string) *Server {
+func (s *Server) post(c context.Context, addr string, endpoint string, data []byte, counter uint64) error {
+	res, err := s.request(c, addr, endpoint, data, counter)
+	if err != nil {
+		return err
+	}
+	return res.Body.Close()
+}
+
+func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, evictAfter time.Duration) *Server {
 	if hostname == "" {
 		hostname, _ = os.Hostname()
 	}
 	return &Server{
-		c:         c,
-		incoming:  incoming,
-		client:    &http.Client{},
-		addresses: map[string]*peer{},
-		myAddress: myAddress,
-		hostname:  hostname,
-		file:      file,
+		c:          c,
+		incoming:   incoming,
+		client:     &http.Client{},
+		addresses:  map[string]*peer{},
+		myAddress:  myAddress,
+		hostname:   hostname,
+		file:       file,
+		evictAfter: evictAfter,
 	}
 }

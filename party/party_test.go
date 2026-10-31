@@ -1,6 +1,8 @@
 package party
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,5 +73,21 @@ func TestFingerprintOfAURLIsTheURL(t *testing.T) {
 	c, _ := fingerprint("https://example.com/other.mkv")
 	if a != b || a == c {
 		t.Errorf("same URL matched: %v, different URL matched: %v", a == b, a == c)
+	}
+}
+
+// mpv's output arrives in arbitrary chunks; each line is logged once, whole.
+func TestLineLogSplitsLines(t *testing.T) {
+	t.Parallel()
+	out := bytes.Buffer{}
+	w := &lineLog{l: log.New(&out, "", 0)}
+	for _, chunk := range []string{"Failed to rec", "ognize file format.\nExiting... (Err", "ors when loading file)\n", "partial"} {
+		if n, err := w.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	want := "mpv: Failed to recognize file format.\nmpv: Exiting... (Errors when loading file)\n"
+	if out.String() != want {
+		t.Fatalf("logged %q, want %q", out.String(), want)
 	}
 }

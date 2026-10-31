@@ -32,7 +32,9 @@ phase sets the total, so a new slow case belongs in whichever phase is shortest.
 - **`p2p`** — no node is given the full peer list (A is the root, the rest
   bootstrap off an earlier node), so the mesh has to close itself through `/hi`
   peer lists. Covers mesh formation, propagation from any node, echo suppression,
-  peer eviction and strike reset, `/bye`, and the header checks.
+  peer eviction and strike reset, `/bye`, and the header checks. Its nodes run with
+  `-evictAfter 1ms`; `[13b]` runs one on the 5-minute default and checks that a
+  burst of strikes doesn't evict.
 - **`relay`** — the same nodes against one `./relay` process. Covers fan-out,
   room isolation, the shared secret, reconnect after the relay is killed
   mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room
@@ -170,7 +172,7 @@ last. Only content counts, so a copy under another name, folder or timestamp
 matches. Reading samples rather than every byte keeps a 20GB file instant on a hard
 drive. A different encode, cut or release changes the size or the container header
 at the start, and either one changes the fingerprint. An edit that keeps the size
-and misses every sample would slip through (`ponytail:`). The duration isn't hashed
+and misses every sample would slip through, which is accepted. The duration isn't hashed
 separately: it lives in the sampled header, and reading it on its own would mean
 loading mpv before joining.
 
@@ -189,7 +191,8 @@ HTTP by real mpv.
   `gui/index.html`), its party history (`gui/store.go`) and `e2e.py` all parse
   them. Change any of these and update every reader in the same commit: `your address
   to share is`, `relay: connected`, `relay: dial:`, `relay: disconnected`, `is not
-  open yet`, `rejected by relay`, `not the same file`, `file fingerprint:` (e2e), `init done`, and `do: sent request:` (for
+  open yet`, `rejected by relay`, `not the same file`, `file fingerprint:` (e2e), `mpv: `
+  (mpv's own output, e2e `[R11e]`), `init done`, and `do: sent request:` (for
   `show-text`). The table is in `gui/CLAUDE.md`.
 - **Notice texts are parsed too.** "X has joined" and "connected to X" are how the
   GUI history records who was there. `server/` and `relay/` send the same texts, so
@@ -214,7 +217,8 @@ have the full story.
 - **Exactly one relay write pump per party, spanning reconnects.** Two goroutines
   ranging over `outgoing` steal frames from each other.
 - **Synthetic notices go through a non-blocking send** (`Server.notify`). Nothing
-  drains `incoming` until mpv is up.
+  drains `incoming` until mpv's socket answers, and `runMesh` joins the mesh before
+  mpv has even started.
 - **`Shutdown` uses `context.WithoutCancel`**, because the party's context is already
   cancelled when the deferred `/bye` runs.
 - **Every per-party goroutine selects on the party context**, so it ends with `Run`.
@@ -329,6 +333,12 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 - **Clean up:** kill every started process (`pgrep -x watchparty-gui`, `relay`,
   leftover mpv), and delete temp folders and downloads by their **literal** path. The
   safety check refuses `rm -rf "$(…)"`.
+  - **Never `pkill -f <pattern>`.** The pattern is also in the command line of the
+    shell running it, so it kills that shell (exit 144) and the rest of the command
+    never runs. This happened twice. Kill by name with `pkill -x watchparty-gui`, or
+    by the PID you saved at launch (`cmd & echo $! > pid`, later `kill $(cat pid)`). If
+    only the arguments tell processes apart, look first with `pgrep -af` and then
+    `kill` the PIDs it printed.
 - **Say what was not verified.** Windows-only behaviour compiles in CI but has never
   been run on Windows. Every summary and PR lists it.
 
@@ -357,8 +367,6 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
-- [ ] `/bye` and `/event` trust the `hit-me-up`/`counter` headers (P2P only). The counter check stops replays and unknown addresses, but a peer can still spoof another peer's address. Needs signing to go further, which is more than a LAN tool wants. Accepted: P2P is for friends and LANs.
-- [ ] Relay identity is only as strong as the room secret: the `hostname` is whatever the joiner claims, so anyone who knows the secret can impersonate a member. Same trade as above.
 
 ## Reference
 

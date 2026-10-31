@@ -441,6 +441,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
       <details id="chart">
         <summary>Patient chart</summary>
         <pre id="log"></pre>
+        <p><button type="button" class="small" id="save-chart">Save chart</button></p>
       </details>
     </section>
 
@@ -905,6 +906,14 @@ $("copy").addEventListener("click", async () => {
     $("copy").textContent = "Press Ctrl+C to copy";
   }
   setTimeout(() => $("copy").textContent = "Copy invite", 2000);
+});
+
+$("save-chart").addEventListener("click", async () => {
+  const j = await (await api(`/log?from=0&run=${run}`)).json();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([(j.lines || []).map(l => l + "\n").join("")], { type: "text/plain" }));
+  a.download = `watchparty-${new Date().toLocaleString("sv").slice(0, 16).replace(/[ :]/g, "-")}.log`;
+  a.click();
 });
 
 document.querySelector(".cat").addEventListener("click", () => {
