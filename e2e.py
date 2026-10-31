@@ -711,6 +711,7 @@ def p2p_suite():
     until(lambda: booted("mid"), BOOT)
     resolve("mid")
     until(lambda: all(get(n, "pause") is True for n in NODES + ["mid"])
+          and all("paused for nodeMid: joining" in osd(n) for n in NODES)
           and near(get("mid", "time-pos"), get(A, "time-pos"), 0.3))
     at = get(A, "time-pos")
     for n in NODES:
@@ -942,6 +943,7 @@ def relay_suite():
     until(lambda: booted("mid"), BOOT)
     resolve("mid")
     until(lambda: all(get(n, "pause") is True for n in NODES + ["mid"])
+          and all("paused for nodeMid: joining" in osd(n) for n in NODES)
           and near(get("mid", "time-pos"), get(A, "time-pos"), 0.3))
     at = get(A, "time-pos")
     for n in NODES:
@@ -1059,7 +1061,7 @@ def relay_suite():
     until(lambda: booted("nodeUrl5"), BOOT)
     Quiet.delay = 0
     resolve("nodeUrl5")
-    until(lambda: get("nodeUrl1", "pause") is True and near(get("nodeUrl5", "time-pos"), get("nodeUrl1", "time-pos"), 0.3))
+    until(lambda: get("nodeUrl1", "pause") is True and "paused for nodeUrl5: joining" in osd("nodeUrl1") and near(get("nodeUrl5", "time-pos"), get("nodeUrl1", "time-pos"), 0.3))
     at = get("nodeUrl1", "time-pos")
     ok("then it paused the party", get("nodeUrl1", "pause") is True and "paused for nodeUrl5: joining" in osd("nodeUrl1"))
     ok(f"and starts at {at:.2f}s", near(get("nodeUrl5", "time-pos"), at, 0.3) and at > 51,
