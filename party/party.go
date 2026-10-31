@@ -66,6 +66,9 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 	log.Printf("file fingerprint: %s\n", file)
+	if cfg.Secret == "" {
+		cfg.Secret = rand.Text()
+	}
 
 	if strings.TrimSpace(cfg.Relay) != "" {
 		if cfg.Hostname == "" {
@@ -73,9 +76,6 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		if cfg.Room == "" {
 			cfg.Room = rand.Text()
-		}
-		if cfg.Secret == "" {
-			cfg.Secret = rand.Text()
 		}
 		conn := &relayConn{
 			addr:      strings.TrimSpace(cfg.Relay),
@@ -283,14 +283,14 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		address = fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort)
 	}
 
-	ser := server.New(c, incoming, address, cfg.Hostname, file, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
+	ser := server.New(c, incoming, address, cfg.Hostname, file, cfg.Secret, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)
 	mux.HandleFunc("/event", ser.Event)
 	s := &http.Server{
 		Addr:        fmt.Sprintf("0.0.0.0:%d", cfg.Port),
-		Handler:     mux,
+		Handler:     ser.Guard(mux),
 		BaseContext: func(_ net.Listener) context.Context { return c },
 	}
 	cleanup = append(cleanup, func() {
@@ -315,7 +315,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 			continue
 		}
 		err := ser.AddAddress(addr)
-		if errors.Is(err, server.ErrDifferentFile) {
+		if errors.Is(err, server.ErrDifferentFile) || errors.Is(err, server.ErrWrongSecret) {
 			runCleanup()
 			return nil, err
 		}
@@ -324,7 +324,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 	}
 
-	log.Printf("your address to share is %s\n", address)
+	log.Printf("your address to share is -addrs %s -secret %s\n", address, cfg.Secret)
 
 	// callers defer this, so it runs in Run and keeps the original LIFO order:
 	// /bye first, then the http server, then the upnp mapping

@@ -20,9 +20,9 @@ func TestConfig(t *testing.T) {
 		t.Fatalf("relay config = %+v, %v; want %+v", got, err, want)
 	}
 
-	direct := form{Mode: "direct", File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969"}
+	direct := form{Mode: "direct", File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969", Room: "r", Secret: " s "}
 	got, err = direct.config()
-	want = party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Local: true, Port: 6970, PublicPort: party.DefaultPort, Addrs: "1.2.3.4:6969"}
+	want = party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Local: true, Port: 6970, PublicPort: party.DefaultPort, Addrs: "1.2.3.4:6969", Secret: "s"}
 	if err != nil || got != want {
 		t.Fatalf("direct config = %+v, %v; want %+v", got, err, want)
 	}

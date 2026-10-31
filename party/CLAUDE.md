@@ -46,12 +46,15 @@ them in-process (see `gui/CLAUDE.md`).
    and anything else is the P2P mesh. An empty `Relay` therefore silently means "try
    UPNP". That is why the GUI refuses an empty relay address in relay mode instead of
    passing it through.
-   - **Relay:** fill in a missing hostname, room or secret (`rand.Text()`), build a
+   A missing `Secret` is generated (`rand.Text()`) for both transports.
+   - **Relay:** fill in a missing hostname or room (`rand.Text()`), build a
      `relayConn` with a fresh `session`, then start `Connect` and `Broadcast`.
      `defer conn.Close()`.
    - **Mesh:** `runMesh` returns a cleanup closure, and `Run` defers it. On error,
      `runMesh` has already undone everything it did.
-5. Both transports log `your address to share is …`. **This exact string is
+5. Both transports log `your address to share is …`, followed by `-relay … -room …
+   -secret …` or `-addrs <ip:port> -secret …`: an invite is the flags a guest passes.
+   **This exact string is
    load-bearing:** the GUI's invite box, the GUI's history (`gui/store.go`, which takes
    the real room and secret from it) and `e2e.py` all parse it.
 6. Start mpv: `--pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback
@@ -141,8 +144,8 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
      Then `GetExternalIPAddress`.
    - Every failure is returned. A failure after the mapping was added runs the cleanup
      collected so far, so a half-done setup never leaks a mapping on the router.
-2. `server.New(c, incoming, address, hostname, file, evictAfter)`, with `/hi`, `/bye`
-   and `/event` on a plain `http.Server` at `0.0.0.0:Port`. `evictAfter` is
+2. `server.New(c, incoming, address, hostname, file, secret, evictAfter)`, with `/hi`,
+   `/bye` and `/event` behind `ser.Guard` on a plain `http.Server` at `0.0.0.0:Port`. `evictAfter` is
    `cfg.EvictAfter`, or `DefaultEvictAfter` (5 minutes) when that is zero, as it is
    from the GUI. `BaseContext` is `c`, so the handlers'
    request contexts die with the party.
@@ -152,8 +155,8 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
 4. `ser.BroadcastEvents(outgoing)` runs in a goroutine until `c` ends.
 5. `AddAddress` is called for each comma-separated `Addrs` entry. A failure is logged,
    not fatal, so one dead bootstrap peer doesn't stop the node. The exception is
-   `server.ErrDifferentFile`: `runMesh` runs its cleanup and returns it, since this
-   node is playing another file.
+   `server.ErrDifferentFile` or `server.ErrWrongSecret`: `runMesh` runs its cleanup and
+   returns it, since this node plays another file or has the wrong secret.
 6. The returned closure runs the cleanup LIFO: `ser.Shutdown` (`/bye` to everyone) →
    `http.Server.Shutdown` → `DeletePortMapping`.
 

@@ -14,6 +14,15 @@ Every endpoint is `POST`, and identity travels in headers:
 | `counter` | the sender's monotonic broadcast counter (decimal `uint64`) |
 | `hostname` | the display name, shown in "paused by X" |
 | `file` | the sender's file fingerprint (see the root `CLAUDE.md`); only `/hi` checks it |
+| `secret` | the party's secret. `Guard` checks it on every endpoint |
+
+**`Guard` wraps the whole mux.** A missing or wrong `secret` (constant-time compare) is
+403 and logs `refused <addr>: wrong secret`, before any handler runs. It also caps every
+body at `maxBody` (64KB; an mpv event is under 200 bytes), and `/event` answers 413 past
+it. Without the secret, `hit-me-up` is just a claim: anyone reaching the port could send
+`/event` or `/bye` as a known peer with a high counter. Members, who hold the secret,
+are trusted as much as relay members are. The peer map has no size cap, since only a
+member can grow it.
 
 | Endpoint | Body | Handler |
 |---|---|---|
@@ -111,8 +120,8 @@ Invariants, each of which has caused a real bug:
   never re-emits it, so a node discovers a dead peer only when it drives something
   itself. Eviction is therefore per-node and not simultaneous across the mesh.
 
-`request` turns a 409 into `ErrDifferentFile`, which `party.runMesh` treats as fatal
-for the joiner. Only the bootstrap's answer counts: every peer the mesh gossips
+`request` turns a 409 into `ErrDifferentFile` and a 403 into `ErrWrongSecret`, which
+`party.runMesh` treats as fatal for the joiner. Only the bootstrap's answer counts: every peer the mesh gossips
 already passed the same check against the same fingerprint.
 
 `request` closes the body of every non-2xx response before returning its error, and
@@ -121,7 +130,7 @@ open body keeps its connection out of the pool, one per event.
 
 ## Construction
 
-`New(ctx, incoming, myAddress, hostname, file, evictAfter)`:
+`New(ctx, incoming, myAddress, hostname, file, secret, evictAfter)`:
 
 - An empty hostname falls back to `os.Hostname()`.
 - The `http.Client` has no timeout of its own. Every call is bounded by a context:
@@ -144,8 +153,11 @@ fixtures.
   send blocks doesn't hold `broadcast` up, and a healthy peer is still waited for.
 - `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
   `BroadcastEvents`.
-- `TestResponseBodiesAreClosed`: a stub `RoundTripper` records `Close` on 204, 500
-  and 409 answers to `post`.
+- `TestResponseBodiesAreClosed`: a stub `RoundTripper` records `Close` on 204, 500,
+  409 and 403 answers to `post`.
+- `TestGuardNeedsTheSecretAndCapsTheBody`: through `Guard`, no or a wrong secret is 403
+  on all three endpoints and reaches no handler, an oversized event is 413, and the
+  right secret gets through. `TestWrongSecretIsItsOwnError`: a 403 is `ErrWrongSecret`.
 - `TestHiRefusesADifferentFile`: `Hi` called directly with an `httptest` recorder; a
   different or missing `file` gets 409 and never becomes a peer.
 

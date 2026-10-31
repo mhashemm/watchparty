@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,11 +27,16 @@ const (
 	counterHeaderKey  = "counter"
 	hostnameHeaderKey = "hostname"
 	fileHeaderKey     = "file"
+	secretHeaderKey   = "secret"
 
 	maxFails = 3
+	maxBody  = 64 << 10
 )
 
-var ErrDifferentFile = errors.New("your video is not the same file as the party's")
+var (
+	ErrDifferentFile = errors.New("your video is not the same file as the party's")
+	ErrWrongSecret   = errors.New("the party refused your secret")
+)
 
 type peer struct {
 	Counter      uint64     `json:"counter,string"`
@@ -55,7 +61,20 @@ type Server struct {
 	counter    uint64
 	hostname   string
 	file       string
+	secret     string
 	evictAfter time.Duration
+}
+
+func (s *Server) Guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(req.Header.Get(secretHeaderKey)), []byte(s.secret)) != 1 {
+			log.Printf("refused %s: wrong secret\n", req.Header.Get(addressHeaderKey))
+			res.WriteHeader(http.StatusForbidden)
+			return
+		}
+		req.Body = http.MaxBytesReader(res, req.Body, maxBody)
+		next.ServeHTTP(res, req)
+	})
 }
 
 func (s *Server) notify(hostname string, text string) {
@@ -102,6 +121,10 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Printf("%s: %s\n", addr, err)
+		if _, tooBig := errors.AsType[*http.MaxBytesError](err); tooBig {
+			res.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -314,6 +337,7 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 	req.Header.Add(counterHeaderKey, strconv.FormatUint(counter, 10))
 	req.Header.Add(hostnameHeaderKey, s.hostname)
 	req.Header.Add(fileHeaderKey, s.file)
+	req.Header.Add(secretHeaderKey, s.secret)
 	res, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -321,6 +345,10 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 	if res.StatusCode == http.StatusConflict {
 		res.Body.Close()
 		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, ErrDifferentFile)
+	}
+	if res.StatusCode == http.StatusForbidden {
+		res.Body.Close()
+		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, ErrWrongSecret)
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		res.Body.Close()
@@ -337,7 +365,7 @@ func (s *Server) post(c context.Context, addr string, endpoint string, data []by
 	return res.Body.Close()
 }
 
-func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, evictAfter time.Duration) *Server {
+func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, secret string, evictAfter time.Duration) *Server {
 	if hostname == "" {
 		hostname, _ = os.Hostname()
 	}
@@ -349,6 +377,7 @@ func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string,
 		myAddress:  myAddress,
 		hostname:   hostname,
 		file:       file,
+		secret:     secret,
 		evictAfter: evictAfter,
 	}
 }

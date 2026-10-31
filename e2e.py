@@ -74,7 +74,7 @@ def run_stub(addr, peer, register):
     if register:
         req = urllib.request.Request("http://" + peer + "/hi", data=b"", method="POST",
                                      headers={"hit-me-up": addr, "counter": "0", "hostname": STUB_HOST,
-                                              "file": os.environ["E2E_FILE"]})
+                                              "file": os.environ["E2E_FILE"], "secret": os.environ["E2E_SECRET"]})
         urllib.request.urlopen(req, timeout=10).read()
     print("ready", flush=True)
     try:
@@ -309,7 +309,7 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
         if create_key:
             cmd += ["-createKey", create_key]
     else:
-        cmd += ["-local", "-port", str(port or PORTS[name])]
+        cmd += ["-local", "-port", str(port or PORTS[name]), "-secret", secret or SECRET]
         if evict:
             cmd += ["-evictAfter", evict]
         if addrs:
@@ -417,6 +417,8 @@ def resolve(name):
         sys.exit(f"{name} never spawned mpv; see {n['log']}")
     # not the first line: in relay mode Connect starts first and can log before it
     n["addr"] = log(name).split("share is ", 1)[1].split("\n", 1)[0].strip()
+    if n["addr"].startswith("-addrs "):
+        n["addr"] = n["addr"].split()[1]
     print(f"  {name} on {n['addr']}")
 
 
@@ -467,7 +469,7 @@ def stub(peer, register=True):
     cmd = [sys.executable, __file__, "--stub", STUB_ADDR, peer]
     if not register:
         cmd.append("noregister")
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={**os.environ, "E2E_FILE": fingerprint(A)})
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={**os.environ, "E2E_FILE": fingerprint(A), "E2E_SECRET": SECRET})
     stubs.append(p)
     # blocks until the stub is listening and registered; a stale stub left on the
     # port would answer for it and the strike loops in [13] would never end
@@ -638,16 +640,34 @@ def p2p_suite():
         ok(f"{n} skipped no events", "skipped event from" not in log(n))
 
     print("\n[9] /event from an unknown address is rejected")
-    code = raw(nodes[A]["addr"], "/event", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger"},
+    code = raw(nodes[A]["addr"], "/event", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger", "secret": SECRET},
                b'{"event":"property-change","name":"pause","data":"yes"}')
     ok(f"{A} rejects unknown peer's event", code == 400, f"HTTP {code}")
 
     print("\n[10] /bye from an unknown address is rejected")
-    code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger"})
+    code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger", "secret": SECRET})
     ok(f"{A} rejects unknown peer's bye", code == 400, f"HTTP {code}")
 
+    print("\n[10b] without the secret, a peer's own address forges nothing")
+    pause = b'{"event":"property-change","name":"pause","data":"yes"}'
+    for secret in (None, "wrongsecret"):
+        h = {"hit-me-up": nodes[b]["addr"], "counter": "999999", "hostname": b, "file": fingerprint(A)}
+        if secret:
+            h["secret"] = secret
+        for endpoint in ("/hi", "/event", "/bye"):
+            code = raw(nodes[A]["addr"], endpoint, h, pause if endpoint == "/event" else b"")
+            ok(f"{A} refuses {endpoint} with {'no' if secret is None else 'a wrong'} secret", code == 403, f"HTTP {code}")
+    code = raw(nodes[A]["addr"], "/event", {"hit-me-up": nodes[b]["addr"], "counter": "999999", "hostname": b,
+                                           "secret": SECRET}, b"x" * ((64 << 10) + 1))
+    ok(f"{A} refuses an oversized event", code == 413, f"HTTP {code}")
+    setp(LAST, "pause", True)
+    until(lambda: get(b, "pause") is True)
+    ok(f"{b} is still in the mesh", get(b, "pause") is True, "the forged /bye was refused")
+    setp(LAST, "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
+
     print("\n[11] /bye with a stale counter cannot evict a live peer")
-    code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": nodes[b]["addr"], "counter": "1", "hostname": b})
+    code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": nodes[b]["addr"], "counter": "1", "hostname": b, "secret": SECRET})
     until(lambda: "skipped bye from" in log(A), 5)
     ok(f"{A} skipped the stale bye", code == 204, f"HTTP {code}")
     ok(f"{A} logged it as skipped", "skipped bye from" in log(A))
@@ -674,6 +694,13 @@ def p2p_suite():
     ok(f"{A} logged the refusal", "refused nodeDiff" in log(A))
     ok("nobody saw it join", not any("nodeDiff" in known(n) for n in NODES))
     stop("nodeDiff")
+    launch("nodeBad", addr_of[A], secret="wrongsecret", tag="bad", port=PORTS["nodeDiff"])
+    until(lambda: nodes["bad"]["proc"].poll() is not None, BOOT)
+    ok("a joiner with the wrong secret exited with an error", nodes["bad"]["proc"].poll() not in (None, 0),
+       f"rc={nodes['bad']['proc'].returncode}")
+    ok("it was told why", "the party refused your secret" in log("bad"))
+    ok("nobody saw it join", not any("nodeBad" in known(n) for n in NODES))
+    stop("bad")
     stop("nodeSame")
     until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
 

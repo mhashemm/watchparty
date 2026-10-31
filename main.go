@@ -24,7 +24,7 @@ func main() {
 	flag.StringVar(&cfg.Hostname, "hostname", "", "set your hostname")
 	flag.StringVar(&cfg.Relay, "relay", "", "relay websocket url to use instead of a direct peer mesh")
 	flag.StringVar(&cfg.Room, "room", "", "relay room code (generated if empty)")
-	flag.StringVar(&cfg.Secret, "secret", "", "relay room secret (generated if empty)")
+	flag.StringVar(&cfg.Secret, "secret", "", "party secret, for the relay room or the direct mesh (generated if empty)")
 	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
 	flag.Parse()
 

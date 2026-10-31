@@ -85,6 +85,7 @@ func (f form) config() (party.Config, error) {
 	cfg.Port = number("your port", f.Port, party.DefaultPort)
 	cfg.PublicPort = number("public port", f.PPort, party.DefaultPort)
 	cfg.Addrs = strings.TrimSpace(f.Addrs)
+	cfg.Secret = strings.TrimSpace(f.Secret)
 	return cfg, err
 }
 
