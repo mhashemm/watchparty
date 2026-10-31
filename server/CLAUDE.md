@@ -75,8 +75,10 @@ Invariants, each of which has caused a real bug:
   one blocking send wedge every handler behind the next writer.
 - **Synthetic notices go through `notify`, which is `select`/`default`.** Notices are
   cosmetic, and nothing drains `incoming` until `ProcessIncomingEvents` starts once
-  mpv has loaded the file, so dropping them is correct. Real events in `Event` keep the blocking
-  send.
+  mpv's socket answers (`AddAddress` runs before mpv has even started), so dropping
+  them is correct. Real events in `Event` keep the blocking send, bounded by
+  `req.Context()`. From then on `incoming` is drained at once, even while mpv is
+  still loading the file (see `mpv/CLAUDE.md`).
 - **`Shutdown` must use `context.WithoutCancel(s.c)`.** `s.c` is the party's context,
   which is already cancelled when the deferred `Shutdown` runs. A timeout derived from
   it makes every `/bye` fail instantly, and peers only lose the leaver through the
@@ -126,9 +128,5 @@ real by `e2e.py --mode p2p`.
 
 ## Known issues
 
-- **Events before mpv is ready.** Real playback events wait on `incoming` until mpv
-  has loaded the file and `ProcessIncomingEvents` starts (well under a second for a
-  local file). The 1024 buffer carries that gap, and `Event` gives up on
-  `req.Context()` rather than wedging.
 - **Fixed strike count.** `maxFails` is a constant (`ponytail:`). Make it a flag if
   flaky Wi-Fi starts evicting people mid-movie.

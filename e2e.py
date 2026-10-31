@@ -833,8 +833,14 @@ def relay_suite():
     print("\n[R11c] a URL plays too: the same URL gets in, another URL is refused")
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
+        delay = 0
+
         def log_message(self, *a):
             pass
+
+        def do_GET(self):
+            time.sleep(Quiet.delay)
+            super().do_GET()
 
     web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
                                           functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
@@ -852,7 +858,23 @@ def relay_suite():
     nodes["nodeUrl3"]["sock"] = child_mpv_socket(nodes["nodeUrl3"]["proc"].pid)  # only if it wrongly got in
     ok("another URL was refused", "409" in log("nodeUrl3") and "not the same file" in log("nodeUrl3"))
     ok("nobody saw it join", "nodeUrl3" not in known("nodeUrl1"))
-    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3"):
+
+    print("\n[R11d] a joiner still loading a slow stream applies only the last of what it missed")
+    Quiet.delay = 3
+    launch("nodeUrl4", room="urlroom", media=url)
+    until(lambda: "nodeUrl4 has joined" in osd("nodeUrl1"), BOOT)
+    for pos in (10, 20, 30, 40, 50):
+        setp("nodeUrl1", "time-pos", pos)
+        until(lambda: near(get("nodeUrl1", "time-pos"), pos))
+    ok("the seeks landed while nodeUrl4 was loading", not booted("nodeUrl4"))
+    until(lambda: booted("nodeUrl4"), BOOT)
+    Quiet.delay = 0
+    resolve("nodeUrl4")
+    until(lambda: near(get("nodeUrl4", "time-pos"), 50))
+    ok("nodeUrl4 is where nodeUrl1 stopped", near(get("nodeUrl4", "time-pos"), 50), f"at {get('nodeUrl4', 'time-pos')}")
+    ok("one seek, not five", osd("nodeUrl4").count("synced by nodeUrl1") == 1,
+       f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
+    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4"):
         stop(n)
     web.shutdown()
 

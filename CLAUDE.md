@@ -214,7 +214,8 @@ have the full story.
 - **Exactly one relay write pump per party, spanning reconnects.** Two goroutines
   ranging over `outgoing` steal frames from each other.
 - **Synthetic notices go through a non-blocking send** (`Server.notify`). Nothing
-  drains `incoming` until mpv is up.
+  drains `incoming` until mpv's socket answers, and `runMesh` joins the mesh before
+  mpv has even started.
 - **`Shutdown` uses `context.WithoutCancel`**, because the party's context is already
   cancelled when the deferred `/bye` runs.
 - **Every per-party goroutine selects on the party context**, so it ends with `Run`.

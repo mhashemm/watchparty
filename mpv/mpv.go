@@ -256,21 +256,49 @@ func (c *Client) watch() error {
 	return scanner.Err()
 }
 
+// ProcessIncomingEvents drains incoming from the start, so peers never wait on a
+// file that is slow to load. Until it has loaded, only the latest pause and
+// time-pos are kept; position goes first because mpv starts paused.
 func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
-	for {
-		var e IncomingMessage
+	latest := map[string]IncomingMessage{}
+	notices := []IncomingMessage{}
+	for loading := true; loading; {
 		select {
-		case e = <-incoming:
+		case e := <-incoming:
+			event := Event{}
+			if json.Unmarshal(e.Event, &event) == nil && (event.Name == pause || event.Name == timePos) {
+				latest[event.Name] = e
+			} else {
+				notices = append(notices, e)
+			}
+		case <-c.ready:
+			loading = false
 		case <-c.ctx.Done():
 			return
 		}
-		event := Event{}
-		err := json.Unmarshal(e.Event, &event)
-		if err != nil {
-			log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
-			continue
+	}
+	for _, name := range []string{timePos, pause} {
+		if e, ok := latest[name]; ok {
+			c.apply(e)
 		}
+	}
+	for _, e := range notices {
+		c.apply(e)
+	}
+	for {
+		select {
+		case e := <-incoming:
+			c.apply(e)
+		case <-c.ctx.Done():
+			return
+		}
+	}
+}
 
+func (c *Client) apply(e IncomingMessage) {
+	event := Event{}
+	err := json.Unmarshal(e.Event, &event)
+	if err == nil {
 		switch event.Name {
 		case pause:
 			err = c.pause(event, e.HostName)
@@ -279,11 +307,9 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 		case showText:
 			err = c.showText(event.Data)
 		}
-
-		if err != nil {
-			log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
-			continue
-		}
+	}
+	if err != nil {
+		log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 	}
 }
 
@@ -346,7 +372,7 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte) (*Client, error) {
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -363,6 +389,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		seen:     map[string]bool{},
 	}
 
+	go client.ProcessIncomingEvents(incoming)
 	go func() {
 		err := client.watch()
 		if err != nil {

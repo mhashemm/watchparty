@@ -280,8 +280,10 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	go fakeMpv(theirs, 0, `{"event":"property-change","id":1,"name":"pause","data":"yes"}`,
 		`{"event":"property-change","id":2,"name":"time-pos"}`)
 
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
-		New(context.Background(), func() {}, ours, make(chan []byte, 1))
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage))
 		close(loaded)
 	}()
 	select {
@@ -307,12 +309,80 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 	go fakeMpv(theirs, 2)
 	cancelled := atomic.Bool{}
 	start := time.Now()
-	_, err := New(context.Background(), func() { cancelled.Store(true) }, ours, make(chan []byte, 1))
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage))
 	if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 		t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 	}
 	time.Sleep(50 * time.Millisecond)
 	if cancelled.Load() {
 		t.Fatal("cancelled the party before the movie was ready")
+	}
+}
+
+// A peer must never wait on a file that is slow to load (a stream): every send
+// lands while mpv is still loading, and only the last position and pause are
+// applied once it has, position first.
+func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
+	t.Parallel()
+	ours, theirs := net.Pipe()
+	defer ours.Close()
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	load := make(chan struct{})
+	sent := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for n := 1; sc.Scan(); n++ {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			if n == 2 {
+				<-load
+				fmt.Fprint(theirs, `{"event":"property-change","id":2,"name":"time-pos","data":"0.000000"}`+"\n")
+			} else if n > 2 {
+				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+			}
+		}
+	}()
+
+	incoming := make(chan IncomingMessage)
+	loaded := make(chan error, 1)
+	go func() {
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming)
+		loaded <- err
+	}()
+	send := func(name, data string) {
+		t.Helper()
+		select {
+		case incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"name":"` + name + `","data":"` + data + `"}`)}:
+		case <-time.After(time.Second):
+			t.Fatalf("a peer blocked on %s=%s", name, data)
+		}
+	}
+	for i := range 1000 {
+		send(timePos, fmt.Sprint(i))
+		send(pause, map[bool]string{true: "yes", false: "no"}[i%2 == 0])
+	}
+	close(load)
+	if err := <-loaded; err != nil {
+		t.Fatal(err)
+	}
+	send(showText, "mark")
+
+	got := []string{}
+	for s := ""; s != "show-text mark 5000"; {
+		select {
+		case s = <-sent:
+			got = append(got, s)
+		case <-time.After(time.Second):
+			t.Fatalf("the mark never reached mpv, applied %q", got)
+		}
+	}
+	want := []string{"set_property time-pos 999", "show-text synced by a 5000",
+		"set_property pause false", "show-text resumed by a 5000", "show-text mark 5000"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("applied %q, want %q", got, want)
 	}
 }

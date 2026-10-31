@@ -17,14 +17,14 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
 | `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, `Dial` (unix socket), no-op `Init` |
 | `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `Dial` (`go-winio` pipe), and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
 | `MPV.md` | the slice of mpv we use, and its observed behaviour |
-| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown |
+| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown, what is applied after a slow load (`TestIncomingWhileLoadingKeepsOnlyTheLatest`) |
 
 ## Public surface
 
 - `Dial(ctx, socket) (net.Conn, error)` opens the unix socket or the Windows pipe. It
   starts nothing, so `party.Run` retries it until mpv has created the socket.
-- `New(ctx, cancel, conn, outgoing) (*Client, error)` starts the `watch()` goroutine,
-  sends `observe_property_string` for `pause` (id 1) and `time-pos` (id 2), then
+- `New(ctx, cancel, conn, outgoing, incoming) (*Client, error)` starts
+  `ProcessIncomingEvents(incoming)` and the `watch()` goroutine, sends `observe_property_string` for `pause` (id 1) and `time-pos` (id 2), then
   **waits for `ready`**: closed by `handleEvent` on the first `time-pos` that has
   data, i.e. once the file is loaded.
   - **`watch` must be running before those `do()` calls**, because only `watch`
@@ -41,8 +41,8 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
   - `ctx` is the party's context, kept on the `Client`. `watch`'s send to `outgoing`
     and `ProcessIncomingEvents`' receive both select on it, so neither outlives the
     party. The channels are never closed.
-- `(*Client).ProcessIncomingEvents(incoming)` is the only consumer of remote events. It
-  runs in one goroutine until the party ends.
+- `(*Client).ProcessIncomingEvents(incoming)` is the only consumer of remote events.
+  `New` starts it, and it runs in one goroutine until the party ends.
 - `Init(cmd)` must be called on the mpv `exec.Cmd` before `Start`.
 - `SocketPrefix` is used to build the socket or pipe name.
 - `IncomingMessage{HostName, Event}` is what both transports push. `Event` is raw mpv
@@ -128,7 +128,24 @@ changes that interaction. The `seek` const then looks unused; leave it.
 
 ## Applying remote events: `ProcessIncomingEvents`
 
-Each `IncomingMessage.Event` is unmarshalled and dispatched by `Name`:
+**It drains `incoming` from the moment `New` is called, not from `ready`.** A file can
+take a long time to load (a URL stream, a slow disk), and a peer must never wait on
+it. A P2P `/event` blocks on `incoming` and the sender counts the timeout as a strike.
+A relay `read` that blocks stops reading the websocket, and the relay drops the
+member once its 64-frame buffer fills. Until `ready`:
+
+- only the latest `pause` and the latest `time-pos` are kept; the steps a later one
+  overrides are discarded
+- everything else (the notices) is kept in order
+
+On `ready` it applies `time-pos` first, then `pause`, then the notices, and then
+carries on applying each event as it arrives. Position goes first because mpv starts
+`--pause`d, so the seek lands before any resume. Five seeks during a load become one
+seek and one "synced by", where the old replay showed all five. `e2e.py` `[R11d]` covers this
+against a stream whose HTTP server holds each request for 3s.
+
+Each event, then, is `apply`d: its `IncomingMessage.Event` is unmarshalled and
+dispatched by `Name`:
 
 - **`pause`** → `pause(event, host)`.
   - A no-op if the node is already in that state. mpv emits no `property-change` for

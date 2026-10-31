@@ -124,12 +124,12 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	mpvQuit := atomic.Bool{}
-	client, err := mpv.New(c, func() {
+	_, err = mpv.New(c, func() {
 		if c.Err() == nil {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing)
+	}, conn, outgoing, incoming)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():
@@ -141,8 +141,6 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return err
 	}
-
-	go client.ProcessIncomingEvents(incoming)
 
 	log.Println("init done. now you can start watching")
 

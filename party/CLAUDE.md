@@ -64,15 +64,15 @@ them in-process (see `gui/CLAUDE.md`).
    every 50ms until the socket answers (~40ms after start). If mpv exits first, `Run`
    returns `notReady`: mpv's real exit status ("exit status 2" for a bad file, 1 for
    a bad flag), or `nil` for exit 0 (the user closed it). If `c` ends, `stopReason`.
-8. `mpv.New(c, onWatchEnd, conn, outgoing)` registers the two observers, starts the
+8. `mpv.New(c, onWatchEnd, conn, outgoing, incoming)` starts draining `incoming`
+   (see `mpv/CLAUDE.md`: it keeps only the latest pause and position until the file is
+   loaded, so no peer waits on a slow load), registers the two observers, starts the
    reader, and **waits until the file is loaded** (the first `time-pos` with data).
    If mpv hangs up before that, `New` returns `mpv.ErrClosed` at once and `Run`
    returns `notReady(<-exited)`. The reader doesn't cancel the party before the
    movie is ready: cancelling would kill the exiting mpv, and its real exit status
-   would read as `signal: killed`. Then `ProcessIncomingEvents(incoming)` starts in
-   a goroutine (events that arrived meanwhile wait in the 1024 buffer), and `init
-   done. now you can start watching` is logged. That line is
-   also load-bearing for the GUI.
+   would read as `signal: killed`. Then `init done. now you can start watching` is
+   logged. That line is also load-bearing for the GUI.
 9. Wait on `exited`, then pick a return value (see the next section).
 
 Deferred cleanup runs in LIFO order:
