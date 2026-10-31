@@ -5,10 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
+make -j                                    # cli, gui and relay for this machine, into .bin/
+make -j gui linux                          # components × OSes: any of cli gui relay, linux darwin windows
+make -j test                               # unit tests (-race) and e2e.py together, ~45s
 go build ./...
 go test ./...
 go test -race ./...                        # the invariants below are all concurrency ones
-GORACE=atexit_sleep_ms=0 go test -race ./...   # same, minus the race runtime's 1s sleep per package at exit
 go test ./mpv -run '^TestName$' -v         # single test
 go mod tidy                                # run it yourself; CI only does go mod download
 go build ./relay                           # the relay server, a separate binary
@@ -46,6 +48,12 @@ everything underneath it.
 
 Needs `mpv` on PATH and a `-local`-reachable interface.
 
+`e2e.py` points its own stdin at `/dev/null` before starting anything, so no child
+inherits the terminal. An mpv that sees a tty puts it in raw, no-echo mode for its key
+bindings, and the ones killed with SIGKILL never restore it, which left the shell
+unable to show typing after `make test`. If a terminal is ever left like that, `stty
+sane` (typed blind) fixes it.
+
 `osd()` returns a **list**, so `.count(x)` is an exact element match, never a
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.
@@ -61,6 +69,11 @@ ignored), plus the 4s `time-pos` storm windows. `toggle()` keeps its 0.9s becaus
 asserts an absence needs its own fixed window; anything else polls.
 
 Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. The GUI build also gets `-X main.version=<tag>`, which is what its self-update compares against (see `gui/CLAUDE.md`). Releases up to v0.0.11 lack it and report `dev`. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
+
+Every pull request runs `.github/workflows/pr.yml`, with the same Go setup as the release:
+a matrix job per OS runs `make -j4 <os>` (all three binaries, every release arch), and a
+`test` job installs mpv and ffmpeg and runs `make -j test`. It passed locally pinned to 4
+cores (`taskset -c 0-3`), the size of a GitHub runner, in 45s.
 
 Manual run (two terminals / two machines):
 
@@ -205,7 +218,7 @@ compile time. Keep it that way:
   300ms window has nothing to order against.
 - **The only serial test is `TestLimiterDoesNotAllocatePerIP`**: `testing.AllocsPerRun`
   panics in a parallel test.
-- Stress a changed test before trusting it: `GORACE=atexit_sleep_ms=0 go test -race -count=30
+- Stress a changed test before trusting it: `go test -race -count=30
   -cpu=1,4,16 ./...`. Running in parallel exposed two races the serial suite had hidden.
 
 mpv emits no `property-change` for a no-op set, so `set_property pause yes` when already paused produces nothing. Tests that count events must strictly alternate rather than repeat a value.

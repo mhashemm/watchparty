@@ -93,6 +93,9 @@ ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
 ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
 args = ap.parse_args()
+# every child inherits this; an mpv that sees a tty sets it raw and no-echo, and a
+# SIGKILLed one never restores it, leaving the user's terminal unusable
+os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
@@ -351,7 +354,8 @@ def resolve(name):
     n["sock"] = child_mpv_socket(n["proc"].pid)
     if not n["sock"]:
         sys.exit(f"{name} never spawned mpv; see {n['log']}")
-    n["addr"] = open(n["log"]).readline().split("share is ")[1].strip()
+    # not the first line: in relay mode Connect starts first and can log before it
+    n["addr"] = log(name).split("share is ", 1)[1].split("\n", 1)[0].strip()
     print(f"  {name} on {n['addr']}")
 
 
