@@ -35,7 +35,7 @@ const (
 	limiterWindow = time.Hour
 
 	rows = 4
-	cols = 16384
+	cols = 1 << 20
 )
 
 // declared again in party/ws.go; importing party would drag upnp, server and mpv into
@@ -45,8 +45,7 @@ type message struct {
 	Event    json.RawMessage `json:"event"`
 }
 
-// ponytail: count-min sketch, fixed 128KB; collisions over-count so a busy shared NAT
-// may hit the cap early. Bump cols if that shows up in practice.
+// count-min sketch, a fixed 8MB however many addresses it sees
 type limiter struct {
 	mu     sync.Mutex
 	seeds  [rows]maphash.Seed

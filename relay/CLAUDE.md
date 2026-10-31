@@ -120,7 +120,7 @@ allocated:
 
 ## Rate limiter: a count-min sketch. Do not turn it back into a map
 
-- `limiter` is `[4][16384]uint16` with 4 `maphash` seeds: **128KB, allocated once**,
+- `limiter` is `[4][1 << 20]uint16` with 4 `maphash` seeds: **8MB, allocated once**,
   with zero allocation per check. On window rollover (1 hour) the whole thing is
   `clear()`ed; nothing is evicted per key.
 - **Why not a map:** a `map[ip]int` allocates one entry per distinct source address.
@@ -128,8 +128,11 @@ allocated:
   become the memory-exhaustion attack it exists to prevent. Capping the map only
   chooses between failing open and failing closed.
 - A sketch over-counts on collisions and never under-counts. The error is one-sided
-  in the safe direction: the cost is an occasional false rejection for a busy shared
-  NAT (`ponytail:` on `limiter`, bump `cols` if that shows up).
+  in the safe direction: the cost is a false rejection when all 4 of an address's
+  slots also hold someone else's counts. At 128KB (16384 columns) that was about a
+  4% chance for someone at their 10th room once 10k addresses had been seen in the
+  hour. At 8MB the noise per slot is ~0.01 at that load, and the chance is about
+  1e-8. The hourly `clear()` of 8MB is negligible.
 - Saturating `uint16` counters can't wrap around to 0.
 - What counts against `ROOMS_PER_HOUR`:
   - room creations

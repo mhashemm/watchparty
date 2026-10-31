@@ -303,7 +303,7 @@ So:
 ```go
 const (
 	rows = 4
-	cols = 16384
+	cols = 1 << 20
 )
 
 type limiter struct {
@@ -314,7 +314,7 @@ type limiter struct {
 }
 ```
 
-- **128KB, allocated once at startup, forever.** No per-key entries, no TTL, no
+- **8MB, allocated once at startup, forever.** No per-key entries, no TTL, no
   eviction pass, no sweeper goroutine, and **zero allocation per check** — so no GC
   pressure at exactly the moment the server is under load.
 - The whole thing is `clear()`ed on window rollover rather than evicted per key.
@@ -519,8 +519,8 @@ Two existing cases changed meaning because the behaviour did:
 - The ±0.5s `time-pos` tolerance also swallows a deliberate sub-second seek.
   Marked with a `ponytail:` comment; tighten only if frame-stepping ever needs to
   sync.
-- Count-min collisions can rate-limit a busy shared NAT early. Bump `cols` if it
-  shows up in practice.
+- Count-min collisions could rate-limit a busy shared NAT early at 128KB. The sketch
+  is now 8MB, which makes that negligible.
 
 ---
 
