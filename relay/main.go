@@ -199,15 +199,16 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, er
 
 // add registers the member only once its conn is set, so broadcast can never
 // reach a member whose conn is still nil. It returns the stale member m replaced
-// if this is the same node reconnecting. The notices are queued under the same
+// if this is the same node reconnecting, and false if the room was reaped after
+// m's admit. The notices are queued under the same
 // lock, so "has joined" reaches exactly the members m found, and they are the
 // ones m is told it is connected to.
-func (r *relay) add(name string, m *member) *member {
+func (r *relay) add(name string, m *member) (*member, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rm, ok := r.rooms[name]
 	if !ok {
-		return nil
+		return nil, false
 	}
 	var stale *member
 	for other := range rm.members {
@@ -225,7 +226,7 @@ func (r *relay) add(name string, m *member) *member {
 		queue(m, notice(other.hostname, fmt.Sprintf("connected to %s", other.hostname)))
 	}
 	rm.members[m] = struct{}{}
-	return stale
+	return stale, true
 }
 
 // queue drops a notice rather than block under r.mu; notices are cosmetic
@@ -319,7 +320,12 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	conn.SetReadLimit(readLimit)
 	m.conn = conn
-	stale := r.add(name, m)
+	stale, ok := r.add(name, m)
+	if !ok {
+		// the redial goes through admit again, which recreates the room or waits
+		conn.Close(websocket.StatusTryAgainLater, "room closed")
+		return
+	}
 	if stale != nil {
 		stale.conn.CloseNow()
 	}

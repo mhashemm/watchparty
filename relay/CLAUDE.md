@@ -66,6 +66,12 @@ allocated:
    have just created.
 5. **`add`** registers the member only now, once `m.conn` is set, so `broadcast` can
    never reach a nil conn.
+   - If the room is gone, `add` returns false and the handler closes the websocket
+     with `StatusTryAgainLater`. That happens when the last member left (or another
+     joiner's `Accept` failed) between this caller's `admit` and its `add`, which
+     reaps the room. Without it the joiner stayed connected to nothing: it heard
+     nothing and nobody heard it. The node sees a disconnect, redials at once, and
+     goes through `admit` again: it recreates the room if it may, or waits with 401.
    - If a member with the same non-empty `session` is already there, it is swapped
      out and `CloseNow`ed. The room gets no new "has joined", and the stale member's
      `leave` sends no "has left", because it is no longer present.
@@ -200,6 +206,7 @@ The tests use real websockets against an `httptest` server, all in parallel:
 | `TestBroadcastReachesEveryoneButTheSender` | no echo to the sender (the reason relay mode needs no counters) |
 | `TestJoinerLearnsWhoIsAlreadyThere` | the "connected to" half of the notices |
 | `TestReconnectReplacesStaleMember` | session dedupe, with no second join and no false leave |
+| `TestAddToAReapedRoomFails` | a room reaped between `admit` and `add` is neither joined nor recreated |
 | `TestJoinNoticesGoToTheRoomAddSaw` | "has joined" and "connected to" describe the same room; a reconnect never hears of itself |
 | `TestWrongSecretIsRejected` | wrong secrets |
 | `TestDifferentFileIsRejected` | another or no `file` is 409, the room's own is let in |
@@ -217,9 +224,3 @@ The end-to-end versions are `e2e.py --mode relay` (fan-out, room isolation, reco
 through a TCP proxy) and `e2e.py --mode caps` (every cap, `CREATE_KEY`, a raw socket
 that never answers pings in `[R20]`).
 
-## Known issues
-
-- **A narrow race between `admit` and `add`.** If the last member leaves after a
-  joiner's `admit` but before its `add`, the room is reaped and `add` finds no room.
-  The joiner then stays connected without being registered: it hears nothing, and
-  nobody hears it. Its next reconnect would recreate the room.

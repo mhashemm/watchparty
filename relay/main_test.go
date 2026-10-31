@@ -272,7 +272,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	}
 
 	fresh := mk("a", "x")
-	if stale := r.add("movie", fresh); stale != a {
+	if stale, _ := r.add("movie", fresh); stale != a {
 		t.Fatal("the reconnect did not replace the stale member")
 	}
 	if got := queued(fresh); !slices.Equal(got, []string{"connected to b", "connected to c"}) {
@@ -282,6 +282,23 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 		if got := queued(m); len(got) != 0 {
 			t.Fatalf("%s was told %v about a reconnect", m.hostname, got)
 		}
+	}
+}
+
+// The last member can leave between a joiner's admit and its add. The joiner must
+// not be left connected to a room that no longer exists.
+func TestAddToAReapedRoomFails(t *testing.T) {
+	t.Parallel()
+	r := newRelay(10, 10, 10)
+	if _, err := r.admit("movie", []byte("s"), nil, "f", "ip"); err != nil {
+		t.Fatal(err)
+	}
+	r.leave("movie", nil)
+	if _, ok := r.add("movie", &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
+		t.Fatal("add succeeded on a reaped room")
+	}
+	if _, exists := r.rooms["movie"]; exists {
+		t.Fatal("add recreated the room behind admit's back")
 	}
 }
 
