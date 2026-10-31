@@ -20,6 +20,7 @@ docker build -f relay/Dockerfile -t watchparty-relay .   # from the REPO ROOT
 ./e2e.py --mode p2p | relay | caps         # one phase only
 ./e2e.py --file movie.mkv                  # ...against a real file
 ./e2e.py --nodes 3                         # fewer nodes, faster
+./e2e.py --audio                           # real audio output, muted, instead of --ao=null
 ```
 
 `e2e.py` builds both binaries, generates a test file with ffmpeg and runs five
@@ -40,6 +41,10 @@ phase sets the total, so a new slow case belongs in whichever phase is shortest.
   mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room
   hears "has left"). Every other case ends nodes with a signal, which is how a
   regression there once slipped through.
+  Slow networks come from `lag(port, target, delay)`, a TCP proxy that delivers every
+  chunk `delay` seconds late in both directions. `[R11g]` puts one in front of the relay
+  per node (20ms and 250ms) and holds each stream request 200ms. P2P has no such case:
+  peers dial the address each node advertises, so a proxy can't sit in between.
 - **`caps`** — one fresh relay per case: every abuse cap, `CREATE_KEY`, and
   dropping a client that never answers pings (`[R20]`, ~40s: it waits out the real 30s ping and 10s pong timeout, and sets the total).
 
@@ -49,6 +54,12 @@ in `gui/CLAUDE.md`. Since it calls the same `party.Run`, the e2e suites cover
 everything underneath it.
 
 Needs `mpv` on PATH and a `-local`-reachable interface.
+
+`--audio` swaps `--ao=null` for the default output with `--mute=yes`, so mpv is timed
+by a real audio device. It needs a sound server, so CI doesn't run it (a runner has
+none, and mpv would fall back to no audio). It also can't show drift between two sound
+cards, since every node here shares one. Passed twice locally on PulseAudio over
+PipeWire.
 
 `e2e.py` points its own stdin at `/dev/null` before starting anything, so no child
 inherits the terminal. An mpv that sees a tty puts it in raw, no-echo mode for its key
@@ -142,10 +153,12 @@ onto `incoming` themselves.
 swallowed that peer's own seeks. Don't bring it back.) Three mechanisms keep events
 from looping; details in `mpv/CLAUDE.md` and `server/CLAUDE.md`:
 
-- **`applied`** (`mpv/`, both transports): the value last applied from a peer. mpv
-  echoes it back as a `property-change`, and `handleEvent` drops it instead of
-  rebroadcasting. `time-pos` matches within ±0.5s because a seek's echo can
-  land a frame off and come twice (see `mpv/MPV.md`).
+- **`applied`/`seeks`** (`mpv/`, both transports): the pause last applied from a peer,
+  and every seek applied since the last unpause. mpv echoes them back as a
+  `property-change`, and `handleEvent` drops it instead of rebroadcasting. `time-pos`
+  matches within ±0.1s because a seek's echo can land a frame off and come twice
+  (see `mpv/MPV.md`), and against every applied seek, not just the last, because
+  mpv's echo of an earlier one can arrive late.
 - **`seen`** (`mpv/`, both transports): the first `property-change` per property is
   mpv's reply to `observe_property_string`, and is never broadcast. Otherwise a fresh
   node broadcasts `time-pos=0` and rewinds the party.
@@ -159,10 +172,35 @@ re-emits it.
 ### Sync semantics (deliberately narrow)
 
 Only `pause` and `time-pos` are observed, and only `property-change` events are
-forwarded. `time-pos` is only forwarded and only applied **while paused**, so seeking
-works as: pause → seek → peers sync position → resume. Any paused peer can seek for
-the party. The `seek` case in `handleEvent` is commented out on purpose, which makes
-the `seek` const look unused; leave it.
+forwarded. `time-pos` is only forwarded and only applied **while paused**. Normal
+playback is never synced: no periodic position check, no heartbeat. Drift is prevented
+where it starts instead: **anything that would put nodes out of step pauses the whole
+party, and someone resumes it by hand.** Every resume then starts from aligned, paused
+positions.
+
+- **A seek while playing** (arrow keys, chapter skip, anything mpv sends a `seek` event
+  for): the node pauses itself, and that pause goes out as its own. Then it sends where
+  it stopped, so everyone lines up on it, then a `pause-reason` event. Peers show "paused for X: seek". A
+  `--loop-file` wrap is a seek too, so a looping file pauses the party at each wrap.
+- **A node runs out of cache** (`paused-for-cache`, a stream or a slow disk): it
+  pauses the party the same way, with the reason "buffering". mpv stays paused once
+  its cache refills. A resume that reaches it while it is still stalled, local or
+  from a peer, is refused, and the party is told it is paused again ("still
+  buffering"). `--cache-pause=yes` is pinned,
+  so a user's config can't make mpv play through stalls instead.
+- **A node joins mid-party:** once its file has loaded it broadcasts `joined`. Every
+  node already there pauses ("paused for X: joining") and answers with `start-pos`,
+  its position. The joiner takes the first answer and seeks there. Details:
+  `mpv/CLAUDE.md`.
+- **Every pause carries where it stopped.** A node's own pause is followed by
+  `paused-at`, its position. A peer seeks there, with no notice, but only if it applied
+  that same node's pause. Otherwise two nodes pausing at once would swap positions.
+  Without it, latency left nodes apart. A resume reaches a peer late and the pause does
+  too, which cancels only when the same node does both. When B pauses what A resumed,
+  A stops a whole round trip after B, and nothing realigned them. `e2e.py` `[R11g]`
+  measured 0.6s per such pair over a 20ms and a 250ms link.
+- **A seek while paused** goes out as it always has. Any paused peer can seek for the
+  party.
 
 ### Same file, or no party
 
@@ -212,7 +250,7 @@ have the full story.
 - **Never hold a lock across a blocking call that needs the same lock to finish.**
   `c.mu` across `conn.do()` (mpv), `relayConn.mu` across `conn.Write` (party), `s.mu`
   across `broadcast`'s fan-out (server).
-- **In `pause()` and `sync()`, set `applied` before the IPC call**, or the echo can
+- **In `pause()` and `sync()`, set `applied`/`seeks` before the IPC call**, or the echo can
   arrive before the marker does.
 - **Exactly one relay write pump per party, spanning reconnects.** Two goroutines
   ranging over `outgoing` steal frames from each other.
@@ -365,18 +403,11 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 
 ## Known issues
 
-Confirmed by reading the code, not yet fixed:
-
-- [ ] **Playback drifts apart and nothing corrects it.** `time-pos` only syncs while
-  paused, so different start latency and buffering pull the nodes apart over a long
-  film, and they stay apart until someone pauses. Planned fix: a periodic position
-  check that corrects only drift past ~2s.
-- [ ] **Quick paused seeks can bounce back.** `applied` holds only the last value
-  received. A node that applies 30 and then 40 can see mpv's late echo of 30 after
-  the marker has moved to 40. It no longer counts as an echo, so it goes out as that
-  node's own seek and everyone jumps back to 30. Seen in CI in `[R11d]`, which now
-  waits out each seek. Fix it together with drift and the ±0.5s `time-pos`
-  tolerance, all in `mpv/`'s `applied`/`isEcho`.
+None open. Drift was fixed by preventing it at the source (see Sync semantics):
+stalls, seeks while playing and mid-party joins all pause the party, and every pause
+carries the pauser's position, so network latency can't leave nodes apart either.
+Sound card clocks still differ, by an estimated 20–50 ppm
+(~0.1–0.4s over two hours, not measured), and the next pause or seek resets it.
 
 ## Reference
 

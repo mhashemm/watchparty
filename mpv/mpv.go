@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -19,15 +20,19 @@ import (
 const (
 	pause          = "pause"
 	timePos        = "time-pos"
+	pausedForCache = "paused-for-cache"
 	propertyChange = "property-change"
 	seek           = "seek"
 	setProperty    = "set_property"
 	showText       = "show-text"
+	pauseReason    = "pause-reason"
+	joined         = "joined"
+	startPos       = "start-pos"
+	pausedAt       = "paused-at"
 
 	showTextDurationSeconds = 5
-	// ponytail: ±0.5s swallows a deliberate sub-second seek too; tighten only if
-	// frame-stepping ever needs to sync
-	timePosTolerance = 0.5
+	timePosTolerance        = 0.1
+	maxSeeks                = 16
 )
 
 var (
@@ -141,51 +146,66 @@ type Client struct {
 	mu       sync.Mutex
 	paused   bool
 	applied  map[string]string
+	seeks    []float64
 	seen     map[string]bool
+	pos      float64
+	seeking  bool
+	stalled  bool
+	reason   string
+	joining  bool
+	pausedBy string
 }
 
 func (c *Client) isEcho(event Event) bool {
+	if event.Name == timePos {
+		got, err := strconv.ParseFloat(event.Data, 64)
+		if err != nil {
+			return false
+		}
+		for i, want := range c.seeks {
+			if math.Abs(got-want) <= timePosTolerance {
+				c.seeks = c.seeks[i:]
+				c.seeks[0] = got
+				return true
+			}
+		}
+		return false
+	}
 	applied, ok := c.applied[event.Name]
 	if !ok {
 		return false
 	}
-	if event.Name != timePos {
-		delete(c.applied, event.Name)
-		return applied == event.Data
-	}
-	got, err := strconv.ParseFloat(event.Data, 64)
-	if err != nil {
-		return false
-	}
-	want, err := strconv.ParseFloat(applied, 64)
-	if err != nil {
-		return false
-	}
-	if math.Abs(got-want) > timePosTolerance {
-		return false
-	}
-	c.applied[timePos] = event.Data
-	return true
+	delete(c.applied, event.Name)
+	return applied == event.Data
 }
 
-func (c *Client) handleEvent(event Event) error {
+func (c *Client) handleEvent(event Event) ([][]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch event.EventType {
-	// case seek:
-	// 	err := s.pauseReq(true)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	s.paused = true
-	// 	return errDoNotSend
+	case seek:
+		if !c.paused {
+			c.seeking = true
+		}
+		return nil, errDoNotSend
 
 	case propertyChange:
 		if event.Data == "" {
-			return errDoNotSend
+			return nil, errDoNotSend
+		}
+		var extra [][]byte
+		switch event.Name {
+		case timePos:
+			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
+				c.pos = pos
+			}
+		case pause:
+			if event.paused() {
+				extra = c.pauseExtras()
+			}
 		}
 		if c.isEcho(event) {
-			return errEcho
+			return extra, errEcho
 		}
 		first := !c.seen[event.Name]
 		c.seen[event.Name] = true
@@ -195,27 +215,70 @@ func (c *Client) handleEvent(event Event) error {
 		switch event.Name {
 		case pause:
 			if c.paused == event.paused() {
-				return errNoChange
+				return extra, errNoChange
+			}
+			if !event.paused() && c.stalled {
+				c.pauseParty("still buffering")
+				return nil, errDoNotSend
 			}
 			c.paused = event.paused()
 			if !c.paused {
-				delete(c.applied, timePos)
+				c.seeks = nil
+				c.seeking, c.joining = false, false
+			} else if c.pausedBy = ""; len(extra) == 0 {
+				at, _ := json.Marshal(Event{EventType: propertyChange, Name: pausedAt, Data: strconv.FormatFloat(c.pos, 'f', 6, 64)})
+				extra = [][]byte{at}
 			}
 		case timePos:
 			if !c.paused {
-				return errDoNotSend
+				if c.seeking {
+					c.seeking = false
+					c.pauseParty("seek")
+				}
+				return nil, errDoNotSend
 			}
+			c.joining = false
+		case pausedForCache:
+			c.stalled = event.paused()
+			if c.stalled && !c.paused {
+				c.pauseParty("buffering")
+			}
+			return nil, errDoNotSend
 		default:
-			return errDoNotSend
+			return nil, errDoNotSend
 		}
 		if first {
-			return errDoNotSend
+			return nil, errDoNotSend
 		}
-	default:
-		return errDoNotSend
+		return extra, nil
 	}
+	return nil, errDoNotSend
+}
 
-	return nil
+func (c *Client) pauseExtras() [][]byte {
+	if c.reason == "" {
+		return nil
+	}
+	c.seeks = append(c.seeks, c.pos)
+	pos, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(c.pos, 'f', 6, 64)})
+	reason, _ := json.Marshal(Event{Name: pauseReason, Data: c.reason})
+	c.reason = ""
+	return [][]byte{pos, reason}
+}
+
+func (c *Client) pauseParty(reason string) {
+	c.reason = reason
+	go func() {
+		err := c.pauseReq(true)
+		if err != nil {
+			log.Println("pauseParty:", err)
+			c.mu.Lock()
+			c.reason = ""
+			c.mu.Unlock()
+			return
+		}
+		c.showText("paused for everyone: " + reason)
+	}()
 }
 
 func (c *Client) watch() error {
@@ -237,19 +300,18 @@ func (c *Client) watch() error {
 		if event.EventType == "" {
 			continue
 		}
-		switch err = c.handleEvent(event); err {
-		case nil:
-		case errNoChange, errDoNotSend, errEcho:
-			continue
-		default:
-			log.Println("Watch:", err)
-			continue
+		extra, err := c.handleEvent(event)
+		out := extra
+		if err == nil {
+			out = append([][]byte{bytes.Clone(scanner.Bytes())}, extra...)
 		}
-		select {
-		case c.outgoing <- bytes.Clone(scanner.Bytes()):
-			log.Println("Watch: broadcasted event:", scanner.Text())
-		case <-c.ctx.Done():
-			return c.ctx.Err()
+		for _, b := range out {
+			select {
+			case c.outgoing <- b:
+				log.Printf("Watch: broadcasted event: %s\n", b)
+			case <-c.ctx.Done():
+				return c.ctx.Err()
+			}
 		}
 	}
 
@@ -282,6 +344,15 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			c.apply(e)
 		}
 	}
+	c.mu.Lock()
+	c.joining = true
+	c.mu.Unlock()
+	hello, _ := json.Marshal(Event{Name: joined})
+	select {
+	case c.outgoing <- hello:
+	case <-c.ctx.Done():
+		return
+	}
 	for _, e := range notices {
 		c.apply(e)
 	}
@@ -306,11 +377,64 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
+		case pauseReason:
+			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
+		case joined:
+			err = c.welcome(e.HostName)
+		case startPos:
+			err = c.arrive(event, e.HostName)
+		case pausedAt:
+			err = c.align(event, e.HostName)
 		}
 	}
 	if err != nil {
 		log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 	}
+}
+
+func (c *Client) welcome(hostname string) error {
+	c.mu.Lock()
+	joining, playing := c.joining, !c.paused
+	c.mu.Unlock()
+	if joining {
+		return nil
+	}
+	if playing {
+		err := c.pauseReq(true)
+		if err != nil {
+			return err
+		}
+		c.showText(fmt.Sprintf("paused for %s: joining", hostname))
+	}
+	c.mu.Lock()
+	pos := strconv.FormatFloat(c.pos, 'f', 6, 64)
+	c.mu.Unlock()
+	b, _ := json.Marshal(Event{EventType: propertyChange, Name: startPos, Data: pos})
+	select {
+	case c.outgoing <- b:
+	case <-c.ctx.Done():
+	}
+	return nil
+}
+
+func (c *Client) arrive(event Event, hostname string) error {
+	pos, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	joining := c.joining
+	c.joining = false
+	there := c.at(pos)
+	c.mu.Unlock()
+	if !joining || there {
+		return nil
+	}
+	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
+	if err != nil {
+		return err
+	}
+	return c.sync(Event{Name: timePos, Data: event.Data}, hostname)
 }
 
 func (c *Client) pauseReq(paused bool) error {
@@ -324,6 +448,20 @@ func (c *Client) pause(event Event, hostname string) error {
 		c.mu.Unlock()
 		return nil
 	}
+	if !paused && c.stalled {
+		c.reason = "still buffering"
+		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
+		out := append([][]byte{again}, c.pauseExtras()...)
+		c.mu.Unlock()
+		for _, b := range out {
+			select {
+			case c.outgoing <- b:
+			case <-c.ctx.Done():
+				return nil
+			}
+		}
+		return c.showText("paused for everyone: still buffering")
+	}
 	c.applied[pause] = event.Data
 	c.mu.Unlock()
 
@@ -333,6 +471,11 @@ func (c *Client) pause(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	c.paused = paused
+	if paused {
+		c.pausedBy = hostname
+	} else {
+		c.joining = false
+	}
 	c.mu.Unlock()
 
 	actionText := "resumed"
@@ -354,18 +497,44 @@ func (c *Client) sync(event Event, hostname string) error {
 	if event.Data == "" {
 		return nil
 	}
-
-	c.mu.Lock()
-	c.applied[timePos] = event.Data
-	c.mu.Unlock()
-
-	err := c.conn.do(setProperty, timePos, event.Data)
+	err := c.seekTo(event.Data)
 	if err != nil {
 		return err
 	}
-
 	c.showText(fmt.Sprintf("synced by %s", hostname))
 	return nil
+}
+
+func (c *Client) seekTo(data string) error {
+	pos, err := strconv.ParseFloat(data, 64)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.seeks = append(c.seeks, pos)
+	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
+	c.joining = false
+	c.mu.Unlock()
+	return c.conn.do(setProperty, timePos, data)
+}
+
+func (c *Client) align(event Event, hostname string) error {
+	pos, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	follow := c.paused && c.pausedBy == hostname && !c.at(pos)
+	c.mu.Unlock()
+	if !follow {
+		return nil
+	}
+	return c.seekTo(event.Data)
+}
+
+func (c *Client) at(pos float64) bool {
+	near := func(x float64) bool { return math.Abs(pos-x) <= timePosTolerance }
+	return near(c.pos) || slices.ContainsFunc(c.seeks, near)
 }
 
 func (c *Client) showText(text string) error {
@@ -404,7 +573,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		}
 	}()
 
-	events := []string{pause, timePos}
+	events := []string{pause, timePos, pausedForCache}
 	for i, event := range events {
 		err := conn.do("observe_property_string", i+1, event)
 		if err != nil {

@@ -54,7 +54,7 @@ them in-process (see `gui/CLAUDE.md`).
 5. Both transports log `your address to share is …`. **This exact string is
    load-bearing:** the GUI's invite box, the GUI's history (`gui/store.go`, which takes
    the real room and secret from it) and `e2e.py` all parse it.
-6. Start mpv: `--pause --speed=1 --hr-seek=yes --no-resume-playback
+6. Start mpv: `--pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback
    --input-ipc-server=<sock> <file>`, with the user's `MpvFlags`
    first, so the pins win over them and over `mpv.conf` (why each is pinned:
    `mpv/MPV.md`). `mpv.Init(cmd)` sets the Windows process

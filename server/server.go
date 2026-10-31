@@ -196,7 +196,7 @@ func (s *Server) AddAddress(addr string) error {
 	if hostname != "" {
 		p.Hostname = hostname
 	}
-	added := []*peer{p}
+	s.add(p)
 
 	s.mu.RLock()
 	for a := range addresses {
@@ -214,19 +214,16 @@ func (s *Server) AddAddress(addr string) error {
 			continue
 		}
 		p.address = a
-		added = append(added, p)
-	}
-
-	s.mu.Lock()
-	for _, p := range added {
-		s.addresses[p.address] = p
-	}
-	s.mu.Unlock()
-
-	for _, p := range added {
-		s.notify(p.Hostname, fmt.Sprintf("connected to %s", p.Hostname))
+		s.add(p)
 	}
 	return nil
+}
+
+func (s *Server) add(p *peer) {
+	s.mu.Lock()
+	s.addresses[p.address] = p
+	s.mu.Unlock()
+	s.notify(p.Hostname, fmt.Sprintf("connected to %s", p.Hostname))
 }
 
 func (s *Server) Shutdown() {

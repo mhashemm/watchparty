@@ -194,3 +194,43 @@ func TestResponseBodiesAreClosed(t *testing.T) {
 		}
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A peer that has answered our /hi already counts us in, and can send an event
+// while we are still greeting the rest of the mesh. Peers were only added once
+// every /hi was done, so that event was refused with 400 and counted as a strike.
+func TestPeerIsKnownAsSoonAsItAnswersHi(t *testing.T) {
+	t.Parallel()
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc", time.Nanosecond)
+	greeting, release := make(chan struct{}), make(chan struct{})
+	s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		if r.URL.Host == "127.0.0.1:2" {
+			body = `{"127.0.0.1:3":{"counter":"0","hostname":"c"}}`
+		} else {
+			close(greeting)
+			<-release
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Hostname": {"b"}},
+			Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	done := make(chan error, 1)
+	go func() { done <- s.AddAddress("127.0.0.1:2") }()
+	<-greeting
+
+	req := httptest.NewRequest(http.MethodPost, "/event", strings.NewReader(`{"name":"joined"}`))
+	req.Header.Set(addressHeaderKey, "127.0.0.1:2")
+	req.Header.Set(counterHeaderKey, "1")
+	res := httptest.NewRecorder()
+	s.Event(res, req)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("b's event while c was being greeted: %d, want 204", res.Code)
+	}
+}

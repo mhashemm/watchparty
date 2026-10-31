@@ -31,10 +31,10 @@ Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
 import argparse, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
-import sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
-MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --resume-playback=yes"
+MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
 # Waits poll until their condition holds, so these are ceilings, not delays. Only a
 # check that something did NOT happen sleeps, for QUIET, after the positive part is in.
 BOOT = 20            # mpv loading the file, plus the handshake
@@ -95,14 +95,17 @@ ap.add_argument("--file", help="media file to play (default: generate one with f
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
 ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
+ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
 args = ap.parse_args()
+if args.audio:
+    MPVFLAGS = MPVFLAGS.replace("--ao=null", "--mute=yes")
 # every child inherits this; an mpv that sees a tty sets it raw and no-echo, and a
 # SIGKILLed one never restores it, leaving the user's terminal unusable
 os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
-    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else [])
+    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else [])
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
              for i, m in enumerate(("p2p", "relay", "caps"))]
@@ -123,6 +126,8 @@ PORTS["nodeSame"] = args.port_base + len(NODES) + 2
 PORTS["nodeDiff"] = args.port_base + len(NODES) + 3
 PORTS["http"] = args.port_base + len(NODES) + 4
 PORTS["nodeKeep"] = args.port_base + len(NODES) + 5
+PORTS["lagA"] = args.port_base + len(NODES) + 6
+PORTS["lagB"] = args.port_base + len(NODES) + 7
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -293,18 +298,18 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms"):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", mpvflags="", port=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"]
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
             cmd += ["-createKey", create_key]
     else:
-        cmd += ["-local", "-port", str(PORTS[name])]
+        cmd += ["-local", "-port", str(port or PORTS[name])]
         if evict:
             cmd += ["-evictAfter", evict]
         if addrs:
@@ -312,6 +317,51 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
     p = subprocess.Popen(cmd, stdout=open(path, "wb"), stderr=subprocess.STDOUT)
     nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None}
     return key
+
+
+def lag(port, target, delay):
+    """A TCP proxy on port that delivers every chunk to target delay seconds late, in
+    order, both ways: a network with that much one-way latency."""
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", port))
+    srv.listen()
+
+    def pipe(src, dst):
+        q = queue.Queue()
+
+        def read():
+            while True:
+                try:
+                    b = src.recv(65536)
+                except OSError:
+                    b = b""
+                q.put((time.time() + delay, b))
+                if not b:
+                    return
+        threading.Thread(target=read, daemon=True).start()
+        while True:
+            at, b = q.get()
+            time.sleep(max(0, at - time.time()))
+            try:
+                if not b:
+                    dst.shutdown(socket.SHUT_WR)
+                    return
+                dst.sendall(b)
+            except OSError:
+                return
+
+    def accept():
+        while True:
+            try:
+                c, _ = srv.accept()
+                u = socket.create_connection(("127.0.0.1", target))
+            except OSError:
+                return
+            threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+            threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+    threading.Thread(target=accept, daemon=True).start()
+    return srv
 
 
 def launch_relay(extra=None):
@@ -374,6 +424,7 @@ def stop(name, sig=signal.SIGTERM, timeout=20):
     n = nodes[name]
     if n["proc"].poll() is not None:
         return True
+    n["sock"] = n["sock"] or child_mpv_socket(n["proc"].pid)  # a crash can come before resolve()
     n["proc"].send_signal(sig)
     try:
         n["proc"].wait(timeout=timeout)
@@ -486,6 +537,7 @@ def p2p_suite():
         ok(f"{n} plays at normal speed", get(n, "speed") == 1, f"speed={get(n, 'speed')}")
         ok(f"{n} seeks precisely", get(n, "hr-seek") in (True, "yes"), f"hr-seek={get(n, 'hr-seek')}")
         ok(f"{n} ignores saved positions", get(n, "resume-playback") is False)
+        ok(f"{n} waits for its cache", get(n, "cache-pause") is True)
 
     print(f"\n[3] resume on {A} propagates to all {len(NODES) - 1} others")
     setp(A, "pause", False)
@@ -624,6 +676,22 @@ def p2p_suite():
     stop("nodeDiff")
     stop("nodeSame")
     until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
+
+    print("\n[11c] a mid-party joiner pauses the party once loaded, and starts where it stopped")
+    setp(A, "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
+    launch("nodeMid", addr_of[A], tag="mid", port=PORTS["nodeSame"])
+    until(lambda: booted("mid"), BOOT)
+    resolve("mid")
+    until(lambda: all(get(n, "pause") is True for n in NODES + ["mid"])
+          and near(get("mid", "time-pos"), get(A, "time-pos"), 0.3))
+    at = get(A, "time-pos")
+    for n in NODES:
+        ok(f"{n} paused for the joiner", get(n, "pause") is True)
+        ok(f"{n} told why", "paused for nodeMid: joining" in osd(n))
+    ok(f"the joiner starts at {at:.2f}s, not 0", near(get("mid", "time-pos"), at, 0.3) and at > 1,
+       f"time-pos={get('mid', 'time-pos')}")
+    stop("mid")
 
     print(f"\n[12] SIGKILL {LAST}: every survivor evicts it after 3 strikes and stays synced")
     stop(LAST, signal.SIGKILL)
@@ -770,6 +838,20 @@ def relay_suite():
         after = osd(n).count(f"synced by {A}")
         ok(f"no time-pos storm reached {n}", after == counts[n], f"{after - counts[n]} sync notices in 4s")
 
+    print("\n[R6b] a seek while playing pauses the party, and everyone lands where it stopped")
+    ipc(nodes[A]["sock"], "seek", 20, "relative")
+    until(lambda: all(get(n, "pause") is True for n in NODES)
+          and all(near(get(n, "time-pos"), get(A, "time-pos"), 0.15) for n in others(A))
+          and all(f"paused for {A}: seek" in osd(n) for n in others(A)))
+    at = get(A, "time-pos")
+    for n in NODES:
+        ok(f"{n} paused", get(n, "pause") is True)
+    for n in others(A):
+        v = get(n, "time-pos")
+        ok(f"{n} at {A}'s {at:.2f}s", near(v, at, 0.15), f"time-pos={v}")
+        ok(f"{n} told why", f"paused for {A}: seek" in osd(n))
+    ok(f"{A} told it paused everyone", "paused for everyone: seek" in osd(A))
+
     print("\n[R7] no a->b->a rebound (relay has no counters; this is the only guard)")
     # start from a known state: everyone playing, so the pause below is a real change
     setp(A, "pause", False)
@@ -804,11 +886,14 @@ def relay_suite():
     print("\n[R9] a late joiner does not rewind the party to 0")
     launch("nodeLate", room=ROOM, tag="late", relay=RELAY_URL + "/")
     until(lambda: booted("late") and connected("late"), BOOT)
+    resolve("late")
+    until(lambda: near(get("late", "time-pos"), 33.0, 0.15))
     time.sleep(QUIET)  # a rewind would go out as soon as its file loaded
     ok("a trailing slash on the relay address still connects", connected("late"))
     for n in NODES:
         v = get(n, "time-pos")
         ok(f"{n} still at 33s after a late join", near(v, 33.0), f"time-pos={v}")
+    ok("the late joiner starts at 33s too", near(get("late", "time-pos"), 33.0, 0.15), f"time-pos={get('late', 'time-pos')}")
     stop("late")
 
     print("\n[R10] a different room is isolated")
@@ -822,6 +907,22 @@ def relay_suite():
         ok(f"{n} ignored the other room's seek", near(v, 33.0), f"time-pos={v}")
     ok("nobody in the main room saw the other room's node", not any("nodeOther" in known(n) for n in NODES))
     stop("other")
+
+    print("\n[R10b] a mid-party joiner pauses the party once loaded, and starts where it stopped")
+    setp(A, "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
+    launch("nodeMid", room=ROOM, tag="mid")
+    until(lambda: booted("mid"), BOOT)
+    resolve("mid")
+    until(lambda: all(get(n, "pause") is True for n in NODES + ["mid"])
+          and near(get("mid", "time-pos"), get(A, "time-pos"), 0.3))
+    at = get(A, "time-pos")
+    for n in NODES:
+        ok(f"{n} paused for the joiner", get(n, "pause") is True)
+        ok(f"{n} told why", "paused for nodeMid: joining" in osd(n))
+    ok(f"the joiner starts at {at:.2f}s, not 0", near(get("mid", "time-pos"), at, 0.3) and at > 1,
+       f"time-pos={get('mid', 'time-pos')}")
+    stop("mid")
 
     print("\n[R11] a wrong secret is refused and the node gives up instead of retrying")
     launch("nodeBad", room=ROOM, secret="wrongsecret", tag="bad")
@@ -854,6 +955,7 @@ def relay_suite():
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
         delay = 0
+        slow = 0  # bytes/s for a client whose User-Agent is "slow"
 
         def log_message(self, *a):
             pass
@@ -873,7 +975,15 @@ def relay_suite():
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
-            self.wfile.write(data[start:end + 1])
+            body = data[start:end + 1]
+            slow = Quiet.slow and self.headers.get("User-Agent") == "slow"
+            step = Quiet.slow // 10 if slow else len(body)
+            try:  # mpv drops a connection when it seeks
+                for i in range(0, len(body), step):
+                    self.wfile.write(body[i:i + step])
+                    time.sleep(0.1 if slow else 0)
+            except OSError:
+                pass
 
     web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
                                           functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
@@ -898,9 +1008,12 @@ def relay_suite():
     until(lambda: "nodeUrl4 has joined" in osd("nodeUrl1"), BOOT)
     for pos in (10, 20, 30, 40, 50):
         setp("nodeUrl1", "time-pos", pos)
-        # nodeUrl2 too: a late echo of its previous seek would go out as its own
-        until(lambda: all(near(get(n, "time-pos"), pos) for n in ("nodeUrl1", "nodeUrl2")))
+        until(lambda: near(get("nodeUrl1", "time-pos"), pos))
     ok("the seeks landed while nodeUrl4 was loading", not booted("nodeUrl4"))
+    until(lambda: near(get("nodeUrl2", "time-pos"), 50))
+    time.sleep(QUIET)  # a late echo would go out right behind the last seek
+    ok("quick seeks don't bounce back", all(near(get(n, "time-pos"), 50) for n in ("nodeUrl1", "nodeUrl2")),
+       f"at {get('nodeUrl1', 'time-pos')} and {get('nodeUrl2', 'time-pos')}")
     until(lambda: booted("nodeUrl4"), BOOT)
     Quiet.delay = 0
     resolve("nodeUrl4")
@@ -908,8 +1021,81 @@ def relay_suite():
     ok("nodeUrl4 is where nodeUrl1 stopped", near(get("nodeUrl4", "time-pos"), 50), f"at {get('nodeUrl4', 'time-pos')}")
     ok("one seek, not five", osd("nodeUrl4").count("synced by nodeUrl1") == 1,
        f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
-    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4"):
+
+    print("\n[R11d2] a joiner slow to load while the party plays pauses it once loaded, not before")
+    setp("nodeUrl1", "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in ("nodeUrl1", "nodeUrl2", "nodeUrl4")))
+    Quiet.delay = 3
+    launch("nodeUrl5", room="urlroom", media=url)
+    until(lambda: "nodeUrl5 has joined" in osd("nodeUrl1"), BOOT)
+    ok("the party plays on while it loads", not booted("nodeUrl5") and get("nodeUrl1", "pause") is False)
+    until(lambda: booted("nodeUrl5"), BOOT)
+    Quiet.delay = 0
+    resolve("nodeUrl5")
+    until(lambda: get("nodeUrl1", "pause") is True and near(get("nodeUrl5", "time-pos"), get("nodeUrl1", "time-pos"), 0.3))
+    at = get("nodeUrl1", "time-pos")
+    ok("then it paused the party", get("nodeUrl1", "pause") is True and "paused for nodeUrl5: joining" in osd("nodeUrl1"))
+    ok(f"and starts at {at:.2f}s", near(get("nodeUrl5", "time-pos"), at, 0.3) and at > 51,
+       f"time-pos={get('nodeUrl5', 'time-pos')}")
+    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4", "nodeUrl5"):
         stop(n)
+
+    print("\n[R11f] a node that runs out of cache pauses the party, and so does a resume while it waits")
+    Quiet.slow = 6000  # about half the test file's bitrate
+    launch("nodeFast", room="bufroom", media=url)
+    until(lambda: booted("nodeFast") and connected("nodeFast"), BOOT)
+    resolve("nodeFast")
+    launch("nodeSlow", room="bufroom", media=url, mpvflags="--user-agent=slow")
+    until(lambda: booted("nodeSlow"), BOOT)
+    resolve("nodeSlow")
+    reasons = lambda: [s for s in osd("nodeFast") if s.startswith("paused for nodeSlow: ")]
+    both_paused = lambda: all(get(n, "pause") is True for n in ("nodeFast", "nodeSlow"))
+    setp("nodeFast", "pause", False)
+    until(lambda: reasons() and both_paused(), 30)
+    ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
+    gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
+    ok("both stopped where the slow node did", gap < 0.15, f"{gap:.2f}s apart")
+    setp("nodeFast", "pause", False)
+    until(lambda: len(reasons()) > 1 and both_paused(), 30)
+    ok("resuming paused the party again", both_paused() and len(reasons()) > 1, f"{reasons()}")
+    gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
+    ok("and both stopped together again", gap < 0.15, f"{gap:.2f}s apart")
+    Quiet.slow = 0
+    for n in ("nodeFast", "nodeSlow"):
+        stop(n)
+
+    print("\n[R11g] over a slow network, pausing and resuming from different nodes keeps them in step")
+    # nodeLagA is 20ms from the relay and nodeLagB 250ms, and the stream answers each
+    # request 200ms late. A resume reaches B late and B stops late, which cancels, but
+    # when B pauses what A resumed, A stops a whole round trip after B did.
+    proxies = [lag(PORTS["lagA"], PORTS["relay"], 0.02), lag(PORTS["lagB"], PORTS["relay"], 0.25)]
+    Quiet.delay = 0.2
+    launch("nodeLagA", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagA']}")
+    until(lambda: booted("nodeLagA") and connected("nodeLagA"), BOOT)
+    resolve("nodeLagA")
+    launch("nodeLagB", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagB']}")
+    until(lambda: booted("nodeLagB") and "nodeLagB has joined" in osd("nodeLagA"), BOOT)
+    resolve("nodeLagB")
+    lagged = ("nodeLagA", "nodeLagB")
+    gap = lambda: abs((get("nodeLagA", "time-pos") or 0) - (get("nodeLagB", "time-pos") or 0))
+    for i, (resumer, pauser) in enumerate([("nodeLagA", "nodeLagB"), ("nodeLagB", "nodeLagA")] * 2):
+        setp(resumer, "pause", False)
+        until(lambda: all(get(n, "pause") is False for n in lagged))
+        time.sleep(1)
+        setp(pauser, "pause", True)
+        until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 3)
+        ok(f"round {i + 1}: {resumer} resumed, {pauser} paused, both stopped together", gap() < 0.05,
+           f"{gap():.3f}s apart")
+    setp("nodeLagA", "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in lagged))
+    ipc(nodes["nodeLagB"]["sock"], "seek", 15, "relative")
+    until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 5)
+    ok("a seek while playing on the far node also stops both together", gap() < 0.05, f"{gap():.3f}s apart")
+    Quiet.delay = 0
+    for n in lagged:
+        stop(n)
+    for p in proxies:
+        p.close()
     web.shutdown()
 
     print("\n[R11e] a file mpv can't play: the node fails, and its log says why")
