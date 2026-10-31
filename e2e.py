@@ -374,6 +374,7 @@ def stop(name, sig=signal.SIGTERM, timeout=20):
     n = nodes[name]
     if n["proc"].poll() is not None:
         return True
+    n["sock"] = n["sock"] or child_mpv_socket(n["proc"].pid)  # a crash can come before resolve()
     n["proc"].send_signal(sig)
     try:
         n["proc"].wait(timeout=timeout)
