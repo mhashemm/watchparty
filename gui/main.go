@@ -47,6 +47,8 @@ type form struct {
 	MpvFlags  string `json:"mpvFlags"`
 }
 
+var videoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
+
 func (f form) config() (party.Config, error) {
 	cfg := party.Config{
 		File:     strings.TrimSpace(f.File),
@@ -67,7 +69,10 @@ func (f form) config() (party.Config, error) {
 		return n
 	}
 	if cfg.File == "" {
-		return cfg, errors.New("pick a movie first")
+		return cfg, errors.New("pick a video first")
+	}
+	if !slices.Contains(videoExts, strings.ToLower(filepath.Ext(cfg.File))) {
+		return cfg, fmt.Errorf("%s is not a video file", filepath.Base(cfg.File))
 	}
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)

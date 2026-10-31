@@ -6,7 +6,7 @@ of the product, so keep it when you change things:
 - a forest-floor palette of greens and browns
 - mushrooms and a family of turtles along the bottom
 - a fluffy tabby mascot named **Fosdo2**
-- light medical touches in the wording (Clinic, Vitals, Patient chart, Diagnosis)
+- light medical touches in the wording (Vitals, Patient chart, Diagnosis)
 
 ## Commands
 
@@ -131,8 +131,12 @@ print.
 - **`form.config()`** trims every field.
   - Empty port numbers fall back to `party.DefaultPort`, the same constant the CLI's
     flag default uses. A non-number is a 400.
-  - It refuses an empty movie, and an empty relay address in relay mode. Without
+  - It refuses an empty file, and an empty relay address in relay mode. Without
     that check, `party.Run` would treat an empty `Relay` as direct mode and try UPNP.
+  - It refuses a file whose extension (any case) is not in `videoExts`. The
+    extension, not the content: Go's sniffer misses `.mov` and `.ts`, and
+    `mime.TypeByExtension` depends on the OS's tables. Add an extension there when
+    someone's real video is refused.
   - Relay mode ignores the direct fields and vice versa.
 - **The log:** `main` calls `log.SetOutput(io.MultiWriter(g, os.Stderr))`, and
   `gui.Write` appends each line to `g.lines`.
@@ -167,7 +171,7 @@ print.
   (default relay, mpv, mpvFlags, createKey, pport) is saved by its Save
   button. The first relay you use becomes the default relay if none is set.
 - **History** (`session`), up to `maxHistory` (100) parties, oldest dropped:
-  - `begin` records the movie, mode, relay/room/secret or friend's address, and the
+  - `begin` records the video, mode, relay/room/secret or friend's address, and the
     start time when `/start` succeeds. `end` stamps the end time.
   - `observe` runs on **every log line during a party** (from `gui.Write`):
     - `your address to share is …` fills in `invite` and the *real* room and secret.
@@ -176,7 +180,7 @@ print.
     - on-screen notices (parsed from `do: sent request:` by `notice()`) add people:
       "X has joined" and "connected to X". "has left", "paused by" and the rest are
       ignored, and each name is listed once.
-  - "Watch again" refills the Party form from an entry: the movie, plus the relay,
+  - "Watch again" refills the Party form from an entry: the video, plus the relay,
     room and secret or the friend's address.
 
 ### Self-update (`update.go`)
@@ -377,9 +381,10 @@ address to share is`. `-createKey` is never part of an invite: guests don't need
 - The **Vitals** section sits above the form and is hidden until the first `/start`.
 - While a party runs, the form fieldset is `hidden` (not just disabled), so Vitals and
   the End button sit right under the title.
-- **Voice:** plain, active, sentence case. The medical theme lives in the names only:
-  "Fosdo2's Movie Clinic" (with a small mushroom before it), "Vitals", "Patient chart" (the raw log), and every error
-  starts with "Diagnosis:" followed by what happened and what to do.
+- **Voice:** plain, active, sentence case. The title is "Hahas and
+  Hehes Watch Party", with a small mushroom before it. The medical theme lives in the
+  names only: "Vitals", "Patient chart" (the raw log), and every error starts with
+  "Diagnosis:" followed by what happened and what to do.
 - Avoid the generic AI-page tells: no all-caps labels, no small "eyebrow" labels above
   headings, no `→` on buttons, no middle-dot meta strings.
 

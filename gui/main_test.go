@@ -29,6 +29,8 @@ func TestConfig(t *testing.T) {
 
 	for _, f := range []form{
 		{Mode: "relay", Relay: "ws://r"},
+		{Mode: "relay", File: "/notes.txt", Relay: "ws://r"},
+		{Mode: "relay", File: "/mkv", Relay: "ws://r"},
 		{Mode: "relay", File: "/m.mkv"},
 		{Mode: "direct", File: "/m.mkv", Port: "abc"},
 	} {
