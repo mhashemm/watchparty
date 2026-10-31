@@ -5,6 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
+make -j                                    # cli, gui and relay for this machine, into .bin/
+make -j gui linux                          # components × OSes: any of cli gui relay, linux darwin windows
+make -j test                               # unit tests (-race) and e2e.py together, ~45s
 go build ./...
 go test ./...
 go test -race ./...                        # the invariants below are all concurrency ones
