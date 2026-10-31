@@ -230,8 +230,7 @@ func (s *Server) AddAddress(addr string) error {
 
 func (s *Server) Shutdown() {
 	s.broadcast(context.WithoutCancel(s.c), func(c context.Context, p *peer, _ uint64) error {
-		_, err := s.request(c, p.address, "/bye", nil, math.MaxUint64)
-		return err
+		return s.post(c, p.address, "/bye", nil, math.MaxUint64)
 	})
 }
 
@@ -244,8 +243,7 @@ func (s *Server) BroadcastEvents(outgoing chan []byte) {
 			return
 		}
 		s.broadcast(s.c, func(c context.Context, p *peer, counter uint64) error {
-			_, err := s.request(c, p.address, "/event", event, counter)
-			return err
+			return s.post(c, p.address, "/event", event, counter)
 		})
 	}
 }
@@ -308,12 +306,22 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 		return nil, err
 	}
 	if res.StatusCode == http.StatusConflict {
+		res.Body.Close()
 		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, ErrDifferentFile)
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
+		res.Body.Close()
 		return nil, fmt.Errorf("%s%s: %s", addr, endpoint, res.Status)
 	}
 	return res, nil
+}
+
+func (s *Server) post(c context.Context, addr string, endpoint string, data []byte, counter uint64) error {
+	res, err := s.request(c, addr, endpoint, data, counter)
+	if err != nil {
+		return err
+	}
+	return res.Body.Close()
 }
 
 func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string) *Server {

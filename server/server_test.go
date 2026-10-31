@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,5 +102,38 @@ func TestHiRefusesADifferentFile(t *testing.T) {
 			t.Errorf("file %q: got %d and added=%v, want %d", file, res.Code, added, want)
 		}
 		delete(s.addresses, "127.0.0.1:2")
+	}
+}
+
+type trackedBody struct {
+	io.Reader
+	closed *atomic.Bool
+}
+
+func (b trackedBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+type stubTransport struct {
+	status int
+	closed *atomic.Bool
+}
+
+func (t stubTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: t.status, Body: trackedBody{strings.NewReader("x"), t.closed}}, nil
+}
+
+// An unclosed body keeps its connection out of the pool for good, one per event.
+func TestResponseBodiesAreClosed(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusNoContent, http.StatusInternalServerError, http.StatusConflict} {
+		closed := &atomic.Bool{}
+		s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "")
+		s.client = &http.Client{Transport: stubTransport{status, closed}}
+		s.post(context.Background(), "127.0.0.1:2", "/event", nil, 1)
+		if !closed.Load() {
+			t.Errorf("%d: response body left open", status)
+		}
 	}
 }

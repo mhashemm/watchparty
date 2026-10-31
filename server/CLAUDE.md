@@ -91,6 +91,10 @@ Invariants, each of which has caused a real bug:
 for the joiner. Only the bootstrap's answer counts: every peer the mesh gossips
 already passed the same check against the same fingerprint.
 
+`request` closes the body of every non-2xx response before returning its error, and
+`post` (used by `/event` and `/bye`) closes it on success too; only `hi` reads one. An
+open body keeps its connection out of the pool, one per event.
+
 ## Construction
 
 `New(ctx, incoming, myAddress, hostname, file)`:
@@ -112,6 +116,8 @@ fixtures.
   evict, and any success in between resets the count.
 - `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
   `BroadcastEvents`.
+- `TestResponseBodiesAreClosed`: a stub `RoundTripper` records `Close` on 204, 500
+  and 409 answers to `post`.
 - `TestHiRefusesADifferentFile`: `Hi` called directly with an `httptest` recorder; a
   different or missing `file` gets 409 and never becomes a peer.
 
@@ -120,10 +126,6 @@ real by `e2e.py --mode p2p`.
 
 ## Known issues
 
-- **Response bodies.** `request()` never closes the response body on a non-2xx status,
-  and `broadcast`'s callers discard the `*http.Response` without closing it. A 2xx
-  `/event` or `/bye` answers 204 with an empty body, so in practice this only leaks
-  on error responses.
 - **Events before mpv is ready.** Real playback events wait on `incoming` until mpv
   has loaded the file and `ProcessIncomingEvents` starts (well under a second for a
   local file). The 1024 buffer carries that gap, and `Event` gives up on
