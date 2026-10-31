@@ -170,7 +170,7 @@ last. Only content counts, so a copy under another name, folder or timestamp
 matches. Reading samples rather than every byte keeps a 20GB file instant on a hard
 drive. A different encode, cut or release changes the size or the container header
 at the start, and either one changes the fingerprint. An edit that keeps the size
-and misses every sample would slip through (`ponytail:`). The duration isn't hashed
+and misses every sample would slip through, which is accepted. The duration isn't hashed
 separately: it lives in the sampled header, and reading it on its own would mean
 loading mpv before joining.
 
@@ -357,8 +357,6 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
-- [ ] `/bye` and `/event` trust the `hit-me-up`/`counter` headers (P2P only). The counter check stops replays and unknown addresses, but a peer can still spoof another peer's address. Needs signing to go further, which is more than a LAN tool wants. Accepted: P2P is for friends and LANs.
-- [ ] Relay identity is only as strong as the room secret: the `hostname` is whatever the joiner claims, so anyone who knows the secret can impersonate a member. Same trade as above.
 
 ## Reference
 

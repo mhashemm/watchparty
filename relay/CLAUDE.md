@@ -217,8 +217,6 @@ that never answers pings in `[R20]`).
   well, and after a reconnect the new connection can be told that it joined itself.
   It needs two joins within the same millisecond or so, and the cost is a duplicate
   notice. The fix is to send "has joined" to the members `add` saw, not a later room.
-- **Identity is only as strong as the room secret.** `hostname` is whatever the joiner
-  claims, so anyone who knows the secret can pose as a member.
 - **A narrow race between `admit` and `add`.** If the last member leaves after a
   joiner's `admit` but before its `add`, the room is reaped and `add` finds no room.
   The joiner then stays connected without being registered: it hears nothing, and

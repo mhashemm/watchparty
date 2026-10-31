@@ -136,7 +136,6 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	addr := req.Header.Get(addressHeaderKey)
 	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
-	// ponytail: identity is whatever the headers claim, add signing if this ever leaves trusted peers
 	s.mu.Lock()
 	peer, exists := s.addresses[addr]
 	if !exists {

@@ -120,10 +120,6 @@ real by `e2e.py --mode p2p`.
 
 ## Known issues
 
-- **Spoofable identity.** `/event` and `/bye` trust `hit-me-up` and `counter`. The
-  counter stops replays and unknown addresses, but a peer can still claim another
-  peer's address. Fixing that needs signing, which is more than a LAN tool wants
-  (`ponytail:` in `Bye`).
 - **Response bodies.** `request()` never closes the response body on a non-2xx status,
   and `broadcast`'s callers discard the `*http.Response` without closing it. A 2xx
   `/event` or `/bye` answers 204 with an empty body, so in practice this only leaks
