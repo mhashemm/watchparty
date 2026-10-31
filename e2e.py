@@ -858,9 +858,22 @@ def relay_suite():
         def log_message(self, *a):
             pass
 
+        # Range support: without it mpv calls the stream unseekable and refuses
+        # any seek past what it has buffered, so [R11d] failed on a busy runner
         def do_GET(self):
             time.sleep(Quiet.delay)
-            super().do_GET()
+            r = self.headers.get("Range", "")
+            if not r.startswith("bytes="):
+                return super().do_GET()
+            with open(self.translate_path(self.path), "rb") as f:
+                data = f.read()
+            start, _, end = r[6:].partition("-")
+            start, end = int(start), int(end or len(data) - 1)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            self.wfile.write(data[start:end + 1])
 
     web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
                                           functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
@@ -885,7 +898,8 @@ def relay_suite():
     until(lambda: "nodeUrl4 has joined" in osd("nodeUrl1"), BOOT)
     for pos in (10, 20, 30, 40, 50):
         setp("nodeUrl1", "time-pos", pos)
-        until(lambda: near(get("nodeUrl1", "time-pos"), pos))
+        # nodeUrl2 too: a late echo of its previous seek would go out as its own
+        until(lambda: all(near(get(n, "time-pos"), pos) for n in ("nodeUrl1", "nodeUrl2")))
     ok("the seeks landed while nodeUrl4 was loading", not booted("nodeUrl4"))
     until(lambda: booted("nodeUrl4"), BOOT)
     Quiet.delay = 0
