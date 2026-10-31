@@ -351,7 +351,8 @@ def resolve(name):
     n["sock"] = child_mpv_socket(n["proc"].pid)
     if not n["sock"]:
         sys.exit(f"{name} never spawned mpv; see {n['log']}")
-    n["addr"] = open(n["log"]).readline().split("share is ")[1].strip()
+    # not the first line: in relay mode Connect starts first and can log before it
+    n["addr"] = log(name).split("share is ", 1)[1].split("\n", 1)[0].strip()
     print(f"  {name} on {n['addr']}")
 
 
