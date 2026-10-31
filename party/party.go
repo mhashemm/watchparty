@@ -176,10 +176,14 @@ func stopReason(parent context.Context) error {
 }
 
 // fingerprint identifies a video by its content alone, so the same file under
-// another name, path or timestamp matches.
+// another name, path or timestamp matches. A URL is identified by itself.
 // ponytail: the size and 8 samples of 1MB, not every byte; read it all if an edit
 // that keeps the size and misses every sample ever matters
 func fingerprint(path string) (string, error) {
+	if strings.Contains(path, "://") {
+		sum := sha256.Sum256([]byte(path))
+		return hex.EncodeToString(sum[:]), nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

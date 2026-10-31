@@ -15,7 +15,7 @@ times in one GUI process, so it must not leave state behind.
 | File | Contents |
 |---|---|
 | `party.go` | `Config`, `Run`, `fingerprint`, `runMesh` (P2P setup), `DefaultPort`, `errStopped`, `notReady` |
-| `party_test.go` | `fingerprint`: a renamed, moved, re-dated copy matches; a changed first or last byte or size doesn't |
+| `party_test.go` | `fingerprint`: a renamed, moved, re-dated copy matches; a changed first or last byte or size doesn't; a URL is its own text |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
 | `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 
@@ -38,8 +38,9 @@ them in-process (see `gui/CLAUDE.md`).
    - `incoming`: the transport → mpv
 
    Then `fingerprint(cfg.File)`: SHA-256 of the size and eight 1MB samples (why: the
-   root `CLAUDE.md`, "Same file, or no party"). A file it can't read (missing, a
-   folder, a URL) is returned as the error before anything starts. It logs `file
+   root `CLAUDE.md`, "Same file, or no party"), or of the text itself for a URL
+   (anything containing `://`). A file it can't read (missing, a folder) is returned
+   as the error before anything starts. It logs `file
    fingerprint: <hex>`, which `e2e.py` reads, and hands the hex to both transports.
 4. **Choosing a transport:** `strings.TrimSpace(cfg.Relay) != ""` selects the relay,
    and anything else is the P2P mesh. An empty `Relay` therefore silently means "try

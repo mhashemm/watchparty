@@ -59,3 +59,17 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 		t.Error("a folder got a fingerprint")
 	}
 }
+
+// mpv plays URLs too. Nothing is fetched: the same URL is the same video.
+func TestFingerprintOfAURLIsTheURL(t *testing.T) {
+	t.Parallel()
+	a, err := fingerprint("https://example.com/movie.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := fingerprint("https://example.com/movie.mkv")
+	c, _ := fingerprint("https://example.com/other.mkv")
+	if a != b || a == c {
+		t.Errorf("same URL matched: %v, different URL matched: %v", a == b, a == c)
+	}
+}

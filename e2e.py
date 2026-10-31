@@ -30,8 +30,8 @@ Needs go, mpv and (unless --file is given) ffmpeg. mpv runs headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, glob, http.server, json, os, shutil, signal, socket, subprocess
-import sys, tempfile, threading, time, urllib.error, urllib.request
+import argparse, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
+import sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --resume-playback=yes"
@@ -121,6 +121,7 @@ PORTS["stub"] = args.port_base + len(NODES)
 PORTS["relay"] = args.port_base + len(NODES) + 1
 PORTS["nodeSame"] = args.port_base + len(NODES) + 2
 PORTS["nodeDiff"] = args.port_base + len(NODES) + 3
+PORTS["http"] = args.port_base + len(NODES) + 4
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -828,6 +829,32 @@ def relay_suite():
     ok("it did not retry", log("nodeDiff").count("relay: dial") == 0, "409 is permanent")
     ok("nobody in the room saw it join", not any("nodeDiff" in known(n) for n in NODES))
     stop("nodeDiff")
+
+    print("\n[R11c] a URL plays too: the same URL gets in, another URL is refused")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
+                                          functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{PORTS['http']}/{urllib.parse.quote(os.path.basename(MEDIA))}"
+    launch("nodeUrl1", room="urlroom", media=url)
+    until(lambda: booted("nodeUrl1") and connected("nodeUrl1"), BOOT)
+    resolve("nodeUrl1")
+    launch("nodeUrl2", room="urlroom", media=url)
+    until(lambda: booted("nodeUrl2") and "nodeUrl2 has joined" in osd("nodeUrl1"), BOOT)
+    resolve("nodeUrl2")
+    ok("the same URL got in", "nodeUrl2 has joined" in osd("nodeUrl1"))
+    launch("nodeUrl3", room="urlroom", media=url + "?other")
+    until(lambda: nodes["nodeUrl3"]["proc"].poll() is not None, BOOT)
+    nodes["nodeUrl3"]["sock"] = child_mpv_socket(nodes["nodeUrl3"]["proc"].pid)  # only if it wrongly got in
+    ok("another URL was refused", "409" in log("nodeUrl3") and "not the same file" in log("nodeUrl3"))
+    ok("nobody saw it join", "nodeUrl3" not in known("nodeUrl1"))
+    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3"):
+        stop(n)
+    web.shutdown()
 
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])

@@ -177,8 +177,11 @@ loading mpv before joining.
 A joiner whose fingerprint differs is refused with 409 and its party ends: by the
 peer it bootstraps off (`/hi`, P2P) or by the relay (`admit`, against the room
 creator's fingerprint). There is no fallback for a missing fingerprint, so older
-versions can't join, and a `-file` that isn't a readable local file (a URL) fails
-`Run` at once. `e2e.py` `[11b]`/`[R11b]` cover both outcomes on both transports.
+versions can't join. A `-file` containing `://` is a URL for mpv to stream, and its
+fingerprint is the SHA-256 of the URL text: the same URL matches, and nothing is
+fetched. Two URLs for the same video don't match. `e2e.py` `[11b]`/`[R11b]` cover
+both outcomes for files on both transports, and `[R11c]` covers URLs, played over
+HTTP by real mpv.
 
 ### Contracts between packages
 
