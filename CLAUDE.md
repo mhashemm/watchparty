@@ -48,6 +48,12 @@ everything underneath it.
 
 Needs `mpv` on PATH and a `-local`-reachable interface.
 
+`e2e.py` points its own stdin at `/dev/null` before starting anything, so no child
+inherits the terminal. An mpv that sees a tty puts it in raw, no-echo mode for its key
+bindings, and the ones killed with SIGKILL never restore it, which left the shell
+unable to show typing after `make test`. If a terminal is ever left like that, `stty
+sane` (typed blind) fixes it.
+
 `osd()` returns a **list**, so `.count(x)` is an exact element match, never a
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.

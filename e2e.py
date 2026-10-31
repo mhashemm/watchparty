@@ -93,6 +93,9 @@ ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
 ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
 args = ap.parse_args()
+# every child inherits this; an mpv that sees a tty sets it raw and no-echo, and a
+# SIGKILLed one never restores it, leaving the user's terminal unusable
+os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
