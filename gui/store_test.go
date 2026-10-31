@@ -41,6 +41,16 @@ func TestStoreRecordsAParty(t *testing.T) {
 	}
 }
 
+func TestStoreRecordsADirectPartysSecret(t *testing.T) {
+	t.Parallel()
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "direct", File: "/m.mkv", Addrs: "1.2.3.4:6969"})
+	s.observe(i, "2026/10/30 18:00:00 your address to share is -addrs 1.2.3.5:6969 -secret SEC2")
+	if h := s.History[i]; h.Addrs != "1.2.3.4:6969" || h.Secret != "SEC2" {
+		t.Fatalf("direct party not recorded right: %+v", h)
+	}
+}
+
 func TestStoreCapsHistory(t *testing.T) {
 	t.Parallel()
 	s := openStore(filepath.Join(t.TempDir(), "gui.json"))

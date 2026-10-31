@@ -19,7 +19,7 @@ import (
 func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage) // nobody is draining this
-	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", time.Nanosecond)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", time.Nanosecond)
 	s.addresses["127.0.0.1:1"] = &peer{address: "127.0.0.1:1", Hostname: "dead"}
 
 	done := make(chan struct{})
@@ -42,7 +42,7 @@ func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage, 8)
-	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", time.Nanosecond)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", time.Nanosecond)
 	dead := &peer{address: "127.0.0.1:2", Hostname: "dead"}
 	s.addresses[dead.address] = dead
 
@@ -74,7 +74,7 @@ func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 // is evicted only once it has also been failing for evictAfter.
 func TestFailingPeerIsKeptUntilEvictAfter(t *testing.T) {
 	t.Parallel()
-	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", time.Hour)
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", "", time.Hour)
 	flaky := &peer{address: "127.0.0.1:2", Hostname: "flaky"}
 	s.addresses[flaky.address] = flaky
 	fail := func(context.Context, *peer, uint64) error { return errors.New("peer unreachable") }
@@ -96,7 +96,7 @@ func TestFailingPeerIsKeptUntilEvictAfter(t *testing.T) {
 // event must not queue behind it, but a healthy peer is still waited for.
 func TestSuspectPeerDoesNotHoldUpBroadcast(t *testing.T) {
 	t.Parallel()
-	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", time.Hour)
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", "", time.Hour)
 	suspect := &peer{address: "127.0.0.1:2", Hostname: "suspect", fails: maxFails}
 	healthy := &peer{address: "127.0.0.1:3", Hostname: "healthy"}
 	s.addresses[suspect.address] = suspect
@@ -130,7 +130,7 @@ func TestSuspectPeerDoesNotHoldUpBroadcast(t *testing.T) {
 func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 	t.Parallel()
 	c, cancel := context.WithCancel(context.Background())
-	s := New(c, make(chan mpv.IncomingMessage), "127.0.0.1:1", "me", "", time.Nanosecond)
+	s := New(c, make(chan mpv.IncomingMessage), "127.0.0.1:1", "me", "", "", time.Nanosecond)
 	done := make(chan struct{})
 	go func() {
 		s.BroadcastEvents(make(chan []byte))
@@ -147,7 +147,7 @@ func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 // /hi from a node playing another file is refused before it becomes a peer.
 func TestHiRefusesADifferentFile(t *testing.T) {
 	t.Parallel()
-	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc", time.Nanosecond)
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc", "", time.Nanosecond)
 	for file, want := range map[string]int{"xyz": http.StatusConflict, "": http.StatusConflict, "abc": http.StatusOK} {
 		req := httptest.NewRequest(http.MethodPost, "/hi", nil)
 		req.Header.Set(addressHeaderKey, "127.0.0.1:2")
@@ -184,9 +184,9 @@ func (t stubTransport) RoundTrip(*http.Request) (*http.Response, error) {
 // An unclosed body keeps its connection out of the pool for good, one per event.
 func TestResponseBodiesAreClosed(t *testing.T) {
 	t.Parallel()
-	for _, status := range []int{http.StatusNoContent, http.StatusInternalServerError, http.StatusConflict} {
+	for _, status := range []int{http.StatusNoContent, http.StatusInternalServerError, http.StatusConflict, http.StatusForbidden} {
 		closed := &atomic.Bool{}
-		s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", time.Nanosecond)
+		s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", "", time.Nanosecond)
 		s.client = &http.Client{Transport: stubTransport{status, closed}}
 		s.post(context.Background(), "127.0.0.1:2", "/event", nil, 1)
 		if !closed.Load() {
@@ -204,7 +204,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // every /hi was done, so that event was refused with 400 and counted as a strike.
 func TestPeerIsKnownAsSoonAsItAnswersHi(t *testing.T) {
 	t.Parallel()
-	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc", time.Nanosecond)
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc", "", time.Nanosecond)
 	greeting, release := make(chan struct{}), make(chan struct{})
 	s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		body := "{}"
@@ -232,5 +232,60 @@ func TestPeerIsKnownAsSoonAsItAnswersHi(t *testing.T) {
 	}
 	if res.Code != http.StatusNoContent {
 		t.Fatalf("b's event while c was being greeted: %d, want 204", res.Code)
+	}
+}
+
+func TestGuardNeedsTheSecretAndCapsTheBody(t *testing.T) {
+	t.Parallel()
+	incoming := make(chan mpv.IncomingMessage, 8)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "abc", "sesame", time.Nanosecond)
+	s.addresses["127.0.0.1:2"] = &peer{address: "127.0.0.1:2", Hostname: "friend"}
+	h := http.NewServeMux()
+	h.HandleFunc("/hi", s.Hi)
+	h.HandleFunc("/bye", s.Bye)
+	h.HandleFunc("/event", s.Event)
+	guarded := s.Guard(h)
+
+	for _, c := range []struct {
+		path, secret string
+		body         string
+		want         int
+	}{
+		{"/hi", "", "", http.StatusForbidden},
+		{"/hi", "wrong", "", http.StatusForbidden},
+		{"/event", "", "{}", http.StatusForbidden},
+		{"/bye", "sesame!", "", http.StatusForbidden},
+		{"/event", "sesame", strings.Repeat("x", maxBody+1), http.StatusRequestEntityTooLarge},
+		{"/event", "sesame", "{}", http.StatusNoContent},
+		{"/hi", "sesame", "", http.StatusOK},
+	} {
+		req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+		req.Header.Set(addressHeaderKey, "127.0.0.1:2")
+		req.Header.Set(counterHeaderKey, "1")
+		req.Header.Set(fileHeaderKey, "abc")
+		req.Header.Set(secretHeaderKey, c.secret)
+		res := httptest.NewRecorder()
+		guarded.ServeHTTP(res, req)
+		if res.Code != c.want {
+			t.Errorf("%s with secret %q and a %d-byte body: %d, want %d", c.path, c.secret, len(c.body), res.Code, c.want)
+		}
+	}
+	events := 0
+	for len(incoming) > 0 {
+		if string((<-incoming).Event) == "{}" {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Fatalf("%d events reached mpv, want only the one with the secret", events)
+	}
+}
+
+func TestWrongSecretIsItsOwnError(t *testing.T) {
+	t.Parallel()
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "", "", time.Nanosecond)
+	s.client = &http.Client{Transport: stubTransport{status: http.StatusForbidden, closed: &atomic.Bool{}}}
+	if err := s.post(context.Background(), "127.0.0.1:2", "/hi", nil, 1); !errors.Is(err, ErrWrongSecret) {
+		t.Fatalf("a 403 gave %v, want ErrWrongSecret", err)
 	}
 }

@@ -449,7 +449,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
       <fieldset id="fields">
         <div class="field">
           <label for="invite">Got an invite? Paste it here</label>
-          <textarea id="invite" rows="2" placeholder="-relay ws://… -room … -secret …   or   192.168.1.5:6969"></textarea>
+          <textarea id="invite" rows="2" placeholder="-relay ws://… -room … -secret …   or   -addrs 192.168.1.5:6969 -secret …"></textarea>
           <p class="hint" id="invite-hint" hidden>Filled in from the invite. Now pick your video.</p>
         </div>
 
@@ -497,6 +497,10 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <div class="field wide">
             <label for="addrs">Friend's address</label>
             <input type="text" id="addrs" placeholder="Leave empty if you're first">
+          </div>
+          <div class="field">
+            <label for="psecret">Secret</label>
+            <input type="password" id="psecret" placeholder="New secret if empty">
           </div>
           <div class="field">
             <label for="port">Your port</label>
@@ -659,6 +663,7 @@ document.querySelectorAll("input[name=mode]").forEach(r => r.addEventListener("c
 function collect() {
   const f = { mode: mode(), file: $("file").value, local: $("local").checked };
   for (const k of FIELDS) f[k] = $(k).value;
+  if (f.mode === "direct") f.secret = $("psecret").value;
   return f;
 }
 let saved = { settings: {}, history: [] };
@@ -716,6 +721,7 @@ function watchAgain(p) {
   if (p.mode === "direct") {
     setMode("direct");
     $("addrs").value = p.addrs || "";
+    $("psecret").value = p.secret || "";
   } else {
     setMode("relay");
     $("relay").value = p.relay || $("relay").value;
@@ -749,10 +755,10 @@ $("invite").addEventListener("input", () => {
     const map = { "-relay": "relay", "-room": "room", "-secret": "secret" };
     for (let i = 0; i < t.length - 1; i++) if (map[t[i]]) { $(map[t[i]]).value = t[i + 1]; filled = true; }
     setMode("relay");
-  } else if (/^\S+:\d+$/.test(text)) {
-    $("addrs").value = text;
+  } else if (t.includes("-addrs")) {
+    const map = { "-addrs": "addrs", "-secret": "psecret" };
+    for (let i = 0; i < t.length - 1; i++) if (map[t[i]]) { $(map[t[i]]).value = t[i + 1]; filled = true; }
     setMode("direct");
-    filled = true;
   }
   $("invite-hint").hidden = !filled;
 });

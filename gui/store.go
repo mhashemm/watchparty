@@ -98,9 +98,9 @@ func (s *store) begin(f form) int {
 			s.Settings.Port = p
 		}
 	}
-	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Mode: f.Mode, People: []string{}}
+	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Mode: f.Mode, Secret: strings.TrimSpace(f.Secret), People: []string{}}
 	if f.Mode == "relay" {
-		sess.Relay, sess.Room, sess.Secret = strings.TrimSpace(f.Relay), strings.TrimSpace(f.Room), strings.TrimSpace(f.Secret)
+		sess.Relay, sess.Room = strings.TrimSpace(f.Relay), strings.TrimSpace(f.Room)
 	} else {
 		sess.Addrs = strings.TrimSpace(f.Addrs)
 	}

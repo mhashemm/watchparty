@@ -225,9 +225,11 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if !c.paused {
 				c.seeks = nil
 				c.seeking, c.joining = false, false
-			} else if c.pausedBy = ""; len(extra) == 0 {
-				at, _ := json.Marshal(Event{EventType: propertyChange, Name: pausedAt, Data: strconv.FormatFloat(c.pos, 'f', 6, 64)})
-				extra = [][]byte{at}
+			} else {
+				c.pausedBy = ""
+				if len(extra) == 0 {
+					extra = [][]byte{position(pausedAt, c.pos)}
+				}
 			}
 		case timePos:
 			if !c.paused {
@@ -260,10 +262,14 @@ func (c *Client) pauseExtras() [][]byte {
 		return nil
 	}
 	c.seeks = append(c.seeks, c.pos)
-	pos, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(c.pos, 'f', 6, 64)})
 	reason, _ := json.Marshal(Event{Name: pauseReason, Data: c.reason})
 	c.reason = ""
-	return [][]byte{pos, reason}
+	return [][]byte{position(timePos, c.pos), reason}
+}
+
+func position(name string, pos float64) []byte {
+	b, _ := json.Marshal(Event{EventType: propertyChange, Name: name, Data: strconv.FormatFloat(pos, 'f', 6, 64)})
+	return b
 }
 
 func (c *Client) pauseParty(reason string) {
@@ -407,9 +413,8 @@ func (c *Client) welcome(hostname string) error {
 		c.showText(fmt.Sprintf("paused for %s: joining", hostname))
 	}
 	c.mu.Lock()
-	pos := strconv.FormatFloat(c.pos, 'f', 6, 64)
+	b := position(startPos, c.pos)
 	c.mu.Unlock()
-	b, _ := json.Marshal(Event{EventType: propertyChange, Name: startPos, Data: pos})
 	select {
 	case c.outgoing <- b:
 	case <-c.ctx.Done():

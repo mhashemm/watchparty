@@ -97,7 +97,7 @@ print.
 | `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile` (the XDG portal on Linux, osascript on macOS), no-op `hide` |
 | `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker and `CREATE_NO_WINDOW` |
 | `main_test.go` | `form.config()` per mode plus its errors, the host/token guard table, and `TestPageScriptParses` |
-| `store_test.go` | a party recorded and reloaded (invite → room/secret, people from notices, dedupe, "has left" ignored), the history cap, `notice()` |
+| `store_test.go` | a party recorded and reloaded (invite → room/secret, people from notices, dedupe, "has left" ignored), a direct party's secret, the history cap, `notice()` |
 | `os_unix_test.go` | `fileURIPath`: plain, percent-encoded and non-ASCII portal URIs, plus rejecting a non-`file` URI |
 
 ### Server
@@ -172,7 +172,7 @@ print.
   (default relay, mpv, mpvFlags, createKey, pport) is saved by its Save
   button. The first relay you use becomes the default relay if none is set.
 - **History** (`session`), up to `maxHistory` (100) parties, oldest dropped:
-  - `begin` records the video, mode, relay/room/secret or friend's address, and the
+  - `begin` records the video, mode, secret, relay/room or friend's address, and the
     start time when `/start` succeeds. `end` stamps the end time.
   - `observe` runs on **every log line during a party** (from `gui.Write`):
     - `your address to share is …` fills in `invite` and the *real* room and secret.
@@ -182,7 +182,7 @@ print.
       "X has joined" and "connected to X". "has left", "paused by" and the rest are
       ignored, and each name is listed once.
   - "Watch again" refills the Party form from an entry: the video, plus the relay,
-    room and secret or the friend's address.
+    room and secret, or the friend's address and secret.
 
 ### Self-update (`update.go`)
 
@@ -343,7 +343,9 @@ these strings in `party/`, `mpv/` or `server/` and the GUI silently stops reacti
 | `init done` | "You're in…", heartbeat line starts pulsing |
 | `do: sent request: {"command":["show-text",…` | party feed entry (`command[1]`) |
 
-The invite paste box parses the same `-relay … -room … -secret …` or `ip:port` text,
+The invite paste box parses the same `-relay … -room … -secret …` or `-addrs … -secret …`
+text (into `#psecret`, the Same Wi-Fi mode's own secret field, which `collect()` sends as
+`secret` in that mode),
 and also accepts a whole pasted log line, because it strips everything up to `your
 address to share is`. `-createKey` is never part of an invite: guests don't need it.
 
