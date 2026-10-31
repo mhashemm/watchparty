@@ -64,6 +64,11 @@ asserts an absence needs its own fixed window; anything else polls.
 
 Release builds (`.github/workflows/publisher.yml`, on tag push) cross-compile via a `strategy.matrix` for linux/windows/darwin, amd64+arm64. Each matrix entry builds both the CLI (`out`) and the GUI (`gui`, with `-H=windowsgui` on Windows so no console opens) and uploads both. The GUI build also gets `-X main.version=<tag>`, which is what its self-update compares against (see `gui/CLAUDE.md`). Releases up to v0.0.11 lack it and report `dev`. CI runs `go mod download`, not `go mod tidy`, so an untidy `go.mod` will not be caught there — tidy before you push. It builds `.` rather than `main.go`: naming the file works today only because `main` is a single file, and it fails outright when run from outside the module directory. No linter is configured.
 
+Every pull request runs `.github/workflows/pr.yml`, with the same Go setup as the release:
+a matrix job per OS runs `make -j4 <os>` (all three binaries, every release arch), and a
+`test` job installs mpv and ffmpeg and runs `make -j test`. It passed locally pinned to 4
+cores (`taskset -c 0-3`), the size of a GitHub runner, in 45s.
+
 Manual run (two terminals / two machines):
 
 ```sh

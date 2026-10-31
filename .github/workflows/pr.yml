@@ -1,0 +1,45 @@
+name: pr
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.27.3"
+
+      - name: Download
+        run: go mod download
+
+      - name: Build
+        run: make -j4 ${{ matrix.goos }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.27.3"
+
+      - name: Download
+        run: go mod download
+
+      - name: Install mpv and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mpv ffmpeg
+
+      - name: Test
+        run: make -j test
