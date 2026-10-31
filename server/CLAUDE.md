@@ -40,7 +40,13 @@ two, so keep the wording identical in both.
    gets a `/hi`. That is the gossip that closes the mesh: no node needs the full list.
    For these gossiped peers, the stored `Counter`/`Hostname` come from the
    **bootstrap's map**, not from the peer's own `/hi` response.
-4. All of them are stored under `s.mu`, and each gets "connected to X".
+4. Each one is stored under `s.mu` (`add`), and gets "connected to X", **as soon as
+   its own `/hi` succeeds**, not after the whole loop. A peer that has answered our
+   `/hi` already has us in its table and can send an event right away (a `joined`,
+   say), while we are still greeting the others. When peers were stored only at the
+   end, that event was refused with 400 "does not exists", dropped, and counted as a
+   strike. `e2e.py` `[14]` caught it in the startup log, and
+   `TestPeerIsKnownAsSoonAsItAnswersHi` covers it.
 
 `Hi` **replaces** an existing entry unconditionally and stores whatever `counter` the
 caller sent. That is what lets a restarted node, whose counter is back at 0, rejoin.
