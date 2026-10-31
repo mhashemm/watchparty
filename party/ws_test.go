@@ -50,10 +50,11 @@ func waitDone(t *testing.T, done <-chan struct{}, what string) {
 }
 
 // A wrong secret never becomes right, and retrying it only burns the relay's rate
-// limiter, so 403 and 400 must end the party instead of looping.
+// limiter, so 403 and 400 must end the party instead of looping. So must 409: the
+// room plays another file, and this one never becomes it.
 func TestRejectionEndsTheParty(t *testing.T) {
 	t.Parallel()
-	for _, status := range []int{http.StatusForbidden, http.StatusBadRequest} {
+	for _, status := range []int{http.StatusForbidden, http.StatusBadRequest, http.StatusConflict} {
 		addr := stub(t, func(_ int, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 		r := newRelayConn(addr, nil)
 

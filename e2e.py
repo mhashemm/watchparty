@@ -16,6 +16,8 @@ each on its own ports and in its own run directory:
   relay  the same nodes against one ./relay websocket server, which is what
          people behind carrier NAT use when UPNP cannot work. Covers fan-out,
          room isolation, the secret, and reconnect after the relay dies.
+         Both of these also check that a joiner playing a different file is
+         refused, and that the same file renamed, moved and re-dated is not.
   caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
          client that never answers pings.
 
@@ -28,8 +30,8 @@ Needs go, mpv and (unless --file is given) ffmpeg. mpv runs headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, glob, http.server, json, os, shutil, signal, socket, subprocess
-import sys, tempfile, threading, time, urllib.error, urllib.request
+import argparse, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
+import sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --resume-playback=yes"
@@ -71,7 +73,8 @@ def run_stub(addr, peer, register):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     if register:
         req = urllib.request.Request("http://" + peer + "/hi", data=b"", method="POST",
-                                     headers={"hit-me-up": addr, "counter": "0", "hostname": STUB_HOST})
+                                     headers={"hit-me-up": addr, "counter": "0", "hostname": STUB_HOST,
+                                              "file": os.environ["E2E_FILE"]})
         urllib.request.urlopen(req, timeout=10).read()
     print("ready", flush=True)
     try:
@@ -116,6 +119,9 @@ BOOTSTRAP = {n: (None if i == 0 else NODES[(i - 1) // 2]) for i, n in enumerate(
 PORTS = {n: args.port_base + i for i, n in enumerate(NODES)}
 PORTS["stub"] = args.port_base + len(NODES)
 PORTS["relay"] = args.port_base + len(NODES) + 1
+PORTS["nodeSame"] = args.port_base + len(NODES) + 2
+PORTS["nodeDiff"] = args.port_base + len(NODES) + 3
+PORTS["http"] = args.port_base + len(NODES) + 4
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -126,6 +132,7 @@ RUN = tempfile.mkdtemp(prefix="watchparty-e2e-")
 fails = []
 nodes = {}
 relays = []
+stubs = []
 
 
 def ok(name, cond, detail=""):
@@ -285,11 +292,11 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -377,6 +384,22 @@ def stop(name, sig=signal.SIGTERM, timeout=20):
     return True
 
 
+def fingerprint(n):
+    return log(n).split("file fingerprint: ", 1)[1].split("\n", 1)[0].strip()
+
+
+def variants():
+    """MEDIA copied under another name, folder and timestamp, and MEDIA one byte longer."""
+    os.makedirs(f"{RUN}/elsewhere", exist_ok=True)
+    same, diff = f"{RUN}/elsewhere/renamed copy.mkv", f"{RUN}/different.mkv"
+    shutil.copyfile(MEDIA, same)
+    os.utime(same, (0, 0))
+    shutil.copyfile(MEDIA, diff)
+    with open(diff, "ab") as f:
+        f.write(b"\0")
+    return same, diff
+
+
 def raw(addr, endpoint, headers, body=b""):
     req = urllib.request.Request("http://" + addr + endpoint, data=body, method="POST", headers=headers)
     try:
@@ -389,8 +412,12 @@ def stub(peer, register=True):
     cmd = [sys.executable, __file__, "--stub", STUB_ADDR, peer]
     if not register:
         cmd.append("noregister")
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
-    p.stdout.readline()  # blocks until the stub is listening and registered
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={**os.environ, "E2E_FILE": fingerprint(A)})
+    stubs.append(p)
+    # blocks until the stub is listening and registered; a stale stub left on the
+    # port would answer for it and the strike loops in [13] would never end
+    if p.stdout.readline() != "ready\n":
+        sys.exit(f"the stub peer could not start on {STUB_ADDR}; is the port taken?")
     return p
 
 
@@ -573,6 +600,26 @@ def p2p_suite():
     ok(f"{b} is still in the mesh", get(b, "pause") is True, "still receives events after the forged bye")
     setp(LAST, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES))
+
+    print("\n[11b] a joiner playing a different file is refused; the same file renamed is not")
+    same, diff = variants()
+    launch("nodeSame", addr_of[A], media=same)
+    until(lambda: booted("nodeSame") and all("nodeSame has joined" in osd(n) for n in NODES), BOOT)
+    resolve("nodeSame")
+    ok("the renamed, moved, re-dated copy got the same fingerprint", fingerprint("nodeSame") == fingerprint(A))
+    for n in NODES:
+        ok(f"{n} let the renamed copy in", "nodeSame has joined" in osd(n))
+    launch("nodeDiff", addr_of[A], media=diff)
+    until(lambda: nodes["nodeDiff"]["proc"].poll() is not None, BOOT)
+    nodes["nodeDiff"]["sock"] = child_mpv_socket(nodes["nodeDiff"]["proc"].pid)  # only if it wrongly got in
+    ok("the different file's node exited with an error", nodes["nodeDiff"]["proc"].poll() not in (None, 0),
+       f"rc={nodes['nodeDiff']['proc'].returncode}")
+    ok("it was told why", "not the same file as the party's" in log("nodeDiff"))
+    ok(f"{A} logged the refusal", "refused nodeDiff" in log(A))
+    ok("nobody saw it join", not any("nodeDiff" in known(n) for n in NODES))
+    stop("nodeDiff")
+    stop("nodeSame")
+    until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
 
     print(f"\n[12] SIGKILL {LAST}: every survivor evicts it after 3 strikes and stays synced")
     stop(LAST, signal.SIGKILL)
@@ -764,6 +811,51 @@ def relay_suite():
     ok("it did not retry forever", log("bad").count("relay: dial") <= 1, "403 is permanent")
     ok("nobody in the room saw it join", not any("nodeBad" in known(n) for n in NODES))
 
+    print("\n[R11b] a joiner playing a different file is refused; the same file renamed is not")
+    same, diff = variants()
+    launch("nodeSame", room=ROOM, media=same)
+    until(lambda: connected("nodeSame") and all("nodeSame has joined" in osd(n) for n in NODES), BOOT)
+    resolve("nodeSame")
+    ok("the renamed, moved, re-dated copy got the same fingerprint", fingerprint("nodeSame") == fingerprint(A))
+    for n in NODES:
+        ok(f"{n} let the renamed copy in", "nodeSame has joined" in osd(n))
+    stop("nodeSame")
+    launch("nodeDiff", room=ROOM, media=diff)
+    until(lambda: nodes["nodeDiff"]["proc"].poll() is not None, BOOT)
+    nodes["nodeDiff"]["sock"] = child_mpv_socket(nodes["nodeDiff"]["proc"].pid)  # only if it wrongly got in
+    ok("the different file's node exited with an error", nodes["nodeDiff"]["proc"].poll() not in (None, 0),
+       f"rc={nodes['nodeDiff']['proc'].returncode}")
+    ok("it was told 409 and why", "409" in log("nodeDiff") and "not the same file as the party's" in log("nodeDiff"))
+    ok("it did not retry", log("nodeDiff").count("relay: dial") == 0, "409 is permanent")
+    ok("nobody in the room saw it join", not any("nodeDiff" in known(n) for n in NODES))
+    stop("nodeDiff")
+
+    print("\n[R11c] a URL plays too: the same URL gets in, another URL is refused")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    web = http.server.ThreadingHTTPServer(("127.0.0.1", PORTS["http"]),
+                                          functools.partial(Quiet, directory=os.path.dirname(MEDIA)))
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{PORTS['http']}/{urllib.parse.quote(os.path.basename(MEDIA))}"
+    launch("nodeUrl1", room="urlroom", media=url)
+    until(lambda: booted("nodeUrl1") and connected("nodeUrl1"), BOOT)
+    resolve("nodeUrl1")
+    launch("nodeUrl2", room="urlroom", media=url)
+    until(lambda: booted("nodeUrl2") and "nodeUrl2 has joined" in osd("nodeUrl1"), BOOT)
+    resolve("nodeUrl2")
+    ok("the same URL got in", "nodeUrl2 has joined" in osd("nodeUrl1"))
+    launch("nodeUrl3", room="urlroom", media=url + "?other")
+    until(lambda: nodes["nodeUrl3"]["proc"].poll() is not None, BOOT)
+    nodes["nodeUrl3"]["sock"] = child_mpv_socket(nodes["nodeUrl3"]["proc"].pid)  # only if it wrongly got in
+    ok("another URL was refused", "409" in log("nodeUrl3") and "not the same file" in log("nodeUrl3"))
+    ok("nobody saw it join", "nodeUrl3" not in known("nodeUrl1"))
+    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3"):
+        stop(n)
+    web.shutdown()
+
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])
     launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
@@ -901,7 +993,7 @@ def caps_suite():
     launch(A, room="deafroom", tag="d1")
     until(lambda: connected("d1"), BOOT)
     deaf = socket.create_connection(("127.0.0.1", PORTS["relay"]))
-    deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+    deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf&file={fingerprint('d1')} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                   f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                   f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nroom-secret: {SECRET}\r\n\r\n").encode())
     ok("the deaf client got in", deaf.recv(4096).startswith(b"HTTP/1.1 101"))
@@ -919,7 +1011,7 @@ try:
 finally:
     for name in list(nodes):
         stop(name, signal.SIGKILL, timeout=5)
-    for p in relays:
+    for p in stubs + relays:
         if p.poll() is None:
             p.kill()
             p.wait(timeout=5)

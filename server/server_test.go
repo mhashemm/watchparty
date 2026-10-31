@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -14,7 +16,7 @@ import (
 func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage) // nobody is draining this
-	s := New(context.Background(), incoming, "127.0.0.1:1", "me")
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "")
 	s.addresses["127.0.0.1:1"] = &peer{address: "127.0.0.1:1", Hostname: "dead"}
 
 	done := make(chan struct{})
@@ -37,7 +39,7 @@ func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage, 8)
-	s := New(context.Background(), incoming, "127.0.0.1:1", "me")
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "")
 	dead := &peer{address: "127.0.0.1:2", Hostname: "dead"}
 	s.addresses[dead.address] = dead
 
@@ -68,7 +70,7 @@ func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 	t.Parallel()
 	c, cancel := context.WithCancel(context.Background())
-	s := New(c, make(chan mpv.IncomingMessage), "127.0.0.1:1", "me")
+	s := New(c, make(chan mpv.IncomingMessage), "127.0.0.1:1", "me", "")
 	done := make(chan struct{})
 	go func() {
 		s.BroadcastEvents(make(chan []byte))
@@ -79,5 +81,23 @@ func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("BroadcastEvents outlived the party")
+	}
+}
+
+// /hi from a node playing another file is refused before it becomes a peer.
+func TestHiRefusesADifferentFile(t *testing.T) {
+	t.Parallel()
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc")
+	for file, want := range map[string]int{"xyz": http.StatusConflict, "": http.StatusConflict, "abc": http.StatusOK} {
+		req := httptest.NewRequest(http.MethodPost, "/hi", nil)
+		req.Header.Set(addressHeaderKey, "127.0.0.1:2")
+		req.Header.Set(fileHeaderKey, file)
+		res := httptest.NewRecorder()
+		s.Hi(res, req)
+		_, added := s.addresses["127.0.0.1:2"]
+		if res.Code != want || added != (want == http.StatusOK) {
+			t.Errorf("file %q: got %d and added=%v, want %d", file, res.Code, added, want)
+		}
+		delete(s.addresses, "127.0.0.1:2")
 	}
 }

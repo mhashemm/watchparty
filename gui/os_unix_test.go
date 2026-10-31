@@ -2,7 +2,12 @@
 
 package main
 
-import "testing"
+import (
+	"slices"
+	"testing"
+
+	"github.com/godbus/dbus/v5"
+)
 
 func TestFileURIPath(t *testing.T) {
 	t.Parallel()
@@ -17,5 +22,20 @@ func TestFileURIPath(t *testing.T) {
 	}
 	if _, err := fileURIPath("https://example.com/movie.mkv"); err == nil {
 		t.Error("a non-file uri must be an error")
+	}
+}
+
+// The portal spec types filters as a(sa(us)); anything else and OpenFile refuses
+// the whole call, so Browse stops working.
+func TestVideoFilterIsWhatThePortalExpects(t *testing.T) {
+	t.Parallel()
+	if sig := dbus.SignatureOf([]portalFilter{videoFilter()}).String(); sig != "a(sa(us))" {
+		t.Fatalf("filters signature = %s, want a(sa(us))", sig)
+	}
+	rules := videoFilter().Rules
+	for _, want := range []portalRule{{1, "video/*"}, {0, "*.mkv"}, {0, "*.MKV"}, {0, "*.mp4"}} {
+		if !slices.Contains(rules, want) {
+			t.Errorf("video filter is missing %+v", want)
+		}
 	}
 }

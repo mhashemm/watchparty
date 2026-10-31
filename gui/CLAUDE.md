@@ -133,10 +133,10 @@ print.
     flag default uses. A non-number is a 400.
   - It refuses an empty file, and an empty relay address in relay mode. Without
     that check, `party.Run` would treat an empty `Relay` as direct mode and try UPNP.
-  - It refuses a file whose extension (any case) is not in `videoExts`. The
-    extension, not the content: Go's sniffer misses `.mov` and `.ts`, and
-    `mime.TypeByExtension` depends on the OS's tables. Add an extension there when
-    someone's real video is refused.
+  - It does **not** check the file's type. Whatever is typed or pasted goes to mpv,
+    so a URL or a video with an unusual extension works. Only the picker filters
+    (see "OS helpers"). A typed file that isn't a video ends in mpv's "exited before
+    the movie was ready".
   - Relay mode ignores the direct fields and vice versa.
 - **The log:** `main` calls `log.SetOutput(io.MultiWriter(g, os.Stderr))`, and
   `gui.Write` appends each line to `g.lines`.
@@ -262,7 +262,12 @@ install it themselves.
 
 ### OS helpers
 
-- **Windows picker:** PowerShell `-STA` with a WinForms `OpenFileDialog`.
+- **Every picker shows only videos**, from `videoExts` in `main.go`: the extension,
+  not the content, because Go's sniffer misses `.mov` and `.ts` and
+  `mime.TypeByExtension` depends on the OS's tables. Add an extension there when
+  someone's real video doesn't show up. Typing a path skips the filter entirely.
+- **Windows picker:** PowerShell `-STA` with a WinForms `OpenFileDialog`, whose
+  `Filter` is `Videos|*.mkv;*.mp4;…` (Windows matches it in any case).
   - `[Console]::OutputEncoding = UTF8` is needed or non-ASCII paths come back mangled.
   - A `TopMost` owner form keeps the dialog from opening behind the app window.
 - **`hide()` uses only `CREATE_NO_WINDOW`.** Don't add `HideWindow`: it sets SW_HIDE
@@ -279,8 +284,13 @@ install it themselves.
     1. Subscribe to `org.freedesktop.portal.Request.Response` on the predicted request
        path `/org/freedesktop/portal/desktop/request/<sender>/<token>`. The sender is
        the bus name without the `:`, with `.` replaced by `_`.
-    2. Call `FileChooser.OpenFile` with that `handle_token`. Subscribing first means
-       the reply can't be missed.
+    2. Call `FileChooser.OpenFile` with that `handle_token` and one `filters` entry,
+       "Videos": the MIME rule `video/*` plus a glob per extension, in lower and
+       upper case, since the glob's case handling depends on the backend. The spec
+       types it `a(sa(us))`, and a wrong type makes the portal refuse the whole
+       call, so `TestVideoFilterIsWhatThePortalExpects` pins the signature. Checked
+       by hand on COSMIC (Pop!_OS 24.04): the dialog shows only folders and videos.
+       Subscribing first means the reply can't be missed.
     3. Wait for the signal. Response code 0 carries `uris`, and anything else means
        cancelled.
     4. `fileURIPath` turns the `file://` URI into a path, percent-decoding spaces and
@@ -290,7 +300,9 @@ install it themselves.
   - Checking a desktop without opening a dialog: `busctl --user introspect
     org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop
     org.freedesktop.portal.FileChooser` must list `.OpenFile ssa{sv}`.
-- **macOS picker:** `osascript`.
+- **macOS picker:** `osascript` with `choose file of type {"public.movie", "mkv", …}`.
+  The extensions are there because macOS has no movie type for `.mkv` unless an app
+  declares one.
 - On macOS and Windows, a non-zero exit from the picker command (`*exec.ExitError`)
   means cancelled and returns an empty path.
 - **Window:** each browser in `browsers` is tried with `--app=URL
@@ -326,6 +338,7 @@ these strings in `party/`, `mpv/` or `server/` and the GUI silently stops reacti
 | `relay: dial:` / `relay: disconnected` | "Lost the relay. Reconnecting…", turtles hurry |
 | `is not open yet` (inside the dial line) | "Waiting for the host to open this room…" |
 | `rejected by relay` | "Diagnosis: the relay rejected this room or secret…" |
+| `rejected by relay` + `not the same file` | "Diagnosis: your video is not the same file as the party's…" (P2P shows the same text through `Run`'s error) |
 | `init done` | "You're in…", heartbeat line starts pulsing |
 | `do: sent request: {"command":["show-text",…` | party feed entry (`command[1]`) |
 

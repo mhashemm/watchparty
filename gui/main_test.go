@@ -27,10 +27,14 @@ func TestConfig(t *testing.T) {
 		t.Fatalf("direct config = %+v, %v; want %+v", got, err, want)
 	}
 
+	for _, file := range []string{"https://example.com/watch?v=x", "/films/notes.txt"} {
+		if _, err := (form{Mode: "relay", File: file, Relay: "ws://r"}).config(); err != nil {
+			t.Errorf("typed %q was refused: %v; only the picker filters by type", file, err)
+		}
+	}
+
 	for _, f := range []form{
 		{Mode: "relay", Relay: "ws://r"},
-		{Mode: "relay", File: "/notes.txt", Relay: "ws://r"},
-		{Mode: "relay", File: "/mkv", Relay: "ws://r"},
 		{Mode: "relay", File: "/m.mkv"},
 		{Mode: "direct", File: "/m.mkv", Port: "abc"},
 	} {

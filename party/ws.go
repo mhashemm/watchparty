@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/server"
 )
 
 const (
@@ -41,6 +42,7 @@ type relayConn struct {
 	createKey string
 	hostname  string
 	session   string
+	file      string
 	incoming  chan<- mpv.IncomingMessage
 	retry     time.Duration
 }
@@ -56,14 +58,16 @@ func (r *relayConn) set(conn *websocket.Conn) {
 var errRejected = errors.New("rejected by relay")
 
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
-	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}}
+	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}, "file": {r.file}}
 	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+"/ws?"+q.Encode(), &websocket.DialOptions{
 		HTTPHeader: http.Header{secretHeaderKey: {r.secret}, createHeaderKey: {r.createKey}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
 		case http.StatusForbidden, http.StatusBadRequest:
-			return nil, fmt.Errorf("%w: %s", errRejected, res.Status)
+			return nil, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
+		case http.StatusConflict:
+			return nil, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
 		case http.StatusUnauthorized:
 			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
@@ -98,7 +102,7 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 	for c.Err() == nil {
 		conn, err := r.dial(c)
 		if errors.Is(err, errRejected) {
-			log.Printf("relay: %s; check -room and -secret\n", err)
+			log.Printf("relay: %s\n", err)
 			cancel()
 			return
 		}

@@ -23,8 +23,9 @@ Docker image.
 
 ## Protocol
 
-- `GET /ws?room=<name>&hostname=<display name>&session=<random>` is upgraded to a
-  websocket.
+- `GET /ws?room=<name>&hostname=<display name>&session=<random>&file=<fingerprint>` is
+  upgraded to a websocket. `file` is the node's file fingerprint (see the root
+  `CLAUDE.md`). It is not a secret, so it rides in the query string.
 - The secret goes in the **`room-secret`** header, never the query string, which
   proxies log. The optional create key goes in **`create-key`**.
 - Frames are text messages of the form `{"hostname": "…", "event": <raw mpv JSON>}`.
@@ -53,12 +54,14 @@ allocated:
    (`errRejected`) and stops retrying.
 3. **`admit`**, under `r.mu`:
    - **Existing room:** a constant-time secret compare. If it's wrong, the attempt
-     costs rate-limit quota (429 once over the limit), otherwise 403.
+     costs rate-limit quota (429 once over the limit), otherwise 403. With the right
+     secret, a `file` other than the room's is 409. It costs no quota and comes
+     after the secret, so nobody without the secret can probe what a room plays.
    - **New room, `CREATE_KEY` set and no key sent** → 401, which costs no quota. This
      is a guest who arrived before the host; the node keeps retrying.
    - **New room:** rate limit (429) → create-key compare (403, after the quota was
      spent, so guessing keys costs) → `maxRooms` (503) → create the room with this
-     caller's secret.
+     caller's secret and `file`.
 4. **`websocket.Accept`.** If it fails, `leave(name, nil)` reaps the room `admit` may
    have just created.
 5. **`add`** registers the member only now, once `m.conn` is set, so `broadcast` can
@@ -77,6 +80,7 @@ allocated:
 | 400 | missing room or hostname | gives up |
 | 401 | room not open, no create key sent | retries |
 | 403 | wrong secret or wrong create key | gives up, logs `rejected by relay` |
+| 409 | a different file from the room creator's | gives up, logs `rejected by relay: … not the same file …` |
 | 429 | rate limit | retries with backoff |
 | 503 | `maxConns` / `maxRooms` | retries with backoff |
 
@@ -190,6 +194,7 @@ The tests use real websockets against an `httptest` server, all in parallel:
 | `TestJoinerLearnsWhoIsAlreadyThere` | the "connected to" half of the notices |
 | `TestReconnectReplacesStaleMember` | session dedupe, with no second join and no false leave |
 | `TestWrongSecretIsRejected` | wrong secrets |
+| `TestDifferentFileIsRejected` | another or no `file` is 409, the room's own is let in |
 | `TestSecretGrindingIsRateLimited` | grinding secrets costs quota |
 | `TestOnlyRoomCreationIsRateLimited` | joins are free |
 | `TestCreateKey` | keyless 401 costs no quota, a wrong key costs quota |

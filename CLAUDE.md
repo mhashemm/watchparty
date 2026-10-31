@@ -54,6 +54,11 @@ bindings, and the ones killed with SIGKILL never restore it, which left the shel
 unable to show typing after `make test`. If a terminal is ever left like that, `stty
 sane` (typed blind) fixes it.
 
+Its `finally` kills every node, relay and stub peer it started, so a suite that
+crashes midway leaves nothing behind. A leaked stub once held its port and answered
+for the next run's stub, whose bind failed silently, so the `[13]` strike loops
+waited forever for a failure. `stub()` now exits if the stub never says `ready`.
+
 `osd()` returns a **list**, so `.count(x)` is an exact element match, never a
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.
@@ -157,13 +162,34 @@ works as: pause → seek → peers sync position → resume. Any paused peer can
 the party. The `seek` case in `handleEvent` is commented out on purpose, which makes
 the `seek` const look unused; leave it.
 
+### Same file, or no party
+
+`Run` fingerprints the video before it joins (`fingerprint` in `party/party.go`): a
+SHA-256 of the byte size plus eight 1MB samples spread from the first byte to the
+last. Only content counts, so a copy under another name, folder or timestamp
+matches. Reading samples rather than every byte keeps a 20GB file instant on a hard
+drive. A different encode, cut or release changes the size or the container header
+at the start, and either one changes the fingerprint. An edit that keeps the size
+and misses every sample would slip through (`ponytail:`). The duration isn't hashed
+separately: it lives in the sampled header, and reading it on its own would mean
+loading mpv before joining.
+
+A joiner whose fingerprint differs is refused with 409 and its party ends: by the
+peer it bootstraps off (`/hi`, P2P) or by the relay (`admit`, against the room
+creator's fingerprint). There is no fallback for a missing fingerprint, so older
+versions can't join. A `-file` containing `://` is a URL for mpv to stream, and its
+fingerprint is the SHA-256 of the URL text: the same URL matches, and nothing is
+fetched. Two URLs for the same video don't match. `e2e.py` `[11b]`/`[R11b]` cover
+both outcomes for files on both transports, and `[R11c]` covers URLs, played over
+HTTP by real mpv.
+
 ### Contracts between packages
 
 - **Log lines are an API.** The GUI's status display (`handle()` in
   `gui/index.html`), its party history (`gui/store.go`) and `e2e.py` all parse
   them. Change any of these and update every reader in the same commit: `your address
   to share is`, `relay: connected`, `relay: dial:`, `relay: disconnected`, `is not
-  open yet`, `rejected by relay`, `init done`, and `do: sent request:` (for
+  open yet`, `rejected by relay`, `not the same file`, `file fingerprint:` (e2e), `init done`, and `do: sent request:` (for
   `show-text`). The table is in `gui/CLAUDE.md`.
 - **Notice texts are parsed too.** "X has joined" and "connected to X" are how the
   GUI history records who was there. `server/` and `relay/` send the same texts, so
