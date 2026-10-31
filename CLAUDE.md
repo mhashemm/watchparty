@@ -54,6 +54,11 @@ bindings, and the ones killed with SIGKILL never restore it, which left the shel
 unable to show typing after `make test`. If a terminal is ever left like that, `stty
 sane` (typed blind) fixes it.
 
+Its `finally` kills every node, relay and stub peer it started, so a suite that
+crashes midway leaves nothing behind. A leaked stub once held its port and answered
+for the next run's stub, whose bind failed silently, so the `[13]` strike loops
+waited forever for a failure. `stub()` now exits if the stub never says `ready`.
+
 `osd()` returns a **list**, so `.count(x)` is an exact element match, never a
 substring search — `osd(n).count("paused by ")` is silently always 0. Use the full
 string (`f"paused by {A}"`) or the `pauses()` helper.

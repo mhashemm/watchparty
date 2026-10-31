@@ -131,6 +131,7 @@ RUN = tempfile.mkdtemp(prefix="watchparty-e2e-")
 fails = []
 nodes = {}
 relays = []
+stubs = []
 
 
 def ok(name, cond, detail=""):
@@ -411,7 +412,11 @@ def stub(peer, register=True):
     if not register:
         cmd.append("noregister")
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={**os.environ, "E2E_FILE": fingerprint(A)})
-    p.stdout.readline()  # blocks until the stub is listening and registered
+    stubs.append(p)
+    # blocks until the stub is listening and registered; a stale stub left on the
+    # port would answer for it and the strike loops in [13] would never end
+    if p.stdout.readline() != "ready\n":
+        sys.exit(f"the stub peer could not start on {STUB_ADDR}; is the port taken?")
     return p
 
 
@@ -979,7 +984,7 @@ try:
 finally:
     for name in list(nodes):
         stop(name, signal.SIGKILL, timeout=5)
-    for p in relays:
+    for p in stubs + relays:
         if p.poll() is None:
             p.kill()
             p.wait(timeout=5)
