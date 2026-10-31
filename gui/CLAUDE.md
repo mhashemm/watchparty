@@ -288,7 +288,8 @@ install it themselves.
        "Videos": the MIME rule `video/*` plus a glob per extension, in lower and
        upper case, since the glob's case handling depends on the backend. The spec
        types it `a(sa(us))`, and a wrong type makes the portal refuse the whole
-       call, so `TestVideoFilterIsWhatThePortalExpects` pins the signature.
+       call, so `TestVideoFilterIsWhatThePortalExpects` pins the signature. Checked
+       by hand on COSMIC (Pop!_OS 24.04): the dialog shows only folders and videos.
        Subscribing first means the reply can't be missed.
     3. Wait for the signal. Response code 0 carries `uris`, and anything else means
        cancelled.
