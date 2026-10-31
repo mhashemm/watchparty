@@ -339,6 +339,10 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
     by the PID you saved at launch (`cmd & echo $! > pid`, later `kill $(cat pid)`). If
     only the arguments tell processes apart, look first with `pgrep -af` and then
     `kill` the PIDs it printed.
+  - **`-x` matches at most 15 characters of the name**, the kernel's `comm`. A longer
+    name such as a downloaded `watchparty-gui_amd64` matches nothing, with only a
+    warning, so the check reports a clean machine while the process still runs.
+    Use the saved PID for those, or `ps -eo pid,args | grep` to look.
 - **Say what was not verified.** Windows-only behaviour compiles in CI but has never
   been run on Windows. Every summary and PR lists it.
 
@@ -367,6 +371,12 @@ Confirmed by reading the code, not yet fixed:
   paused, so different start latency and buffering pull the nodes apart over a long
   film, and they stay apart until someone pauses. Planned fix: a periodic position
   check that corrects only drift past ~2s.
+- [ ] **Quick paused seeks can bounce back.** `applied` holds only the last value
+  received. A node that applies 30 and then 40 can see mpv's late echo of 30 after
+  the marker has moved to 40. It no longer counts as an echo, so it goes out as that
+  node's own seek and everyone jumps back to 30. Seen in CI in `[R11d]`, which now
+  waits out each seek. Fix it together with drift and the ±0.5s `time-pos`
+  tolerance, all in `mpv/`'s `applied`/`isEcho`.
 
 ## Reference
 
