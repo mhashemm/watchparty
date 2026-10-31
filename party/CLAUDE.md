@@ -131,8 +131,10 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
      Then `GetExternalIPAddress`.
    - Every failure is returned. A failure after the mapping was added runs the cleanup
      collected so far, so a half-done setup never leaks a mapping on the router.
-2. `server.New(c, incoming, address, hostname, file)`, with `/hi`, `/bye` and `/event` on a
-   plain `http.Server` at `0.0.0.0:Port`. `BaseContext` is `c`, so the handlers'
+2. `server.New(c, incoming, address, hostname, file, evictAfter)`, with `/hi`, `/bye`
+   and `/event` on a plain `http.Server` at `0.0.0.0:Port`. `evictAfter` is
+   `cfg.EvictAfter`, or `DefaultEvictAfter` (5 minutes) when that is zero, as it is
+   from the GUI. `BaseContext` is `c`, so the handlers'
    request contexts die with the party.
 3. `ListenAndServe` runs in a goroutine. **Any** error, including `ErrServerClosed` at
    shutdown, calls `cancel()`. At shutdown that is a harmless no-op. On a bind failure

@@ -32,7 +32,9 @@ phase sets the total, so a new slow case belongs in whichever phase is shortest.
 - **`p2p`** — no node is given the full peer list (A is the root, the rest
   bootstrap off an earlier node), so the mesh has to close itself through `/hi`
   peer lists. Covers mesh formation, propagation from any node, echo suppression,
-  peer eviction and strike reset, `/bye`, and the header checks.
+  peer eviction and strike reset, `/bye`, and the header checks. Its nodes run with
+  `-evictAfter 1ms`; `[13b]` runs one on the 5-minute default and checks that a
+  burst of strikes doesn't evict.
 - **`relay`** — the same nodes against one `./relay` process. Covers fan-out,
   room isolation, the shared secret, reconnect after the relay is killed
   mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room

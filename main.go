@@ -17,6 +17,7 @@ func main() {
 	flag.IntVar(&cfg.Port, "port", party.DefaultPort, "local port")
 	flag.IntVar(&cfg.PublicPort, "pport", party.DefaultPort, "public port")
 	flag.StringVar(&cfg.Addrs, "addrs", "", "comma separated list of addresses to connect to")
+	flag.DurationVar(&cfg.EvictAfter, "evictAfter", party.DefaultEvictAfter, "drop a peer after 3 failed sends in a row, once it has been failing this long")
 	flag.StringVar(&cfg.Mpv, "mpv", "mpv", "mpv path")
 	flag.StringVar(&cfg.MpvFlags, "mpvFlags", "", "any extra flags to pass to mpv")
 	flag.BoolVar(&cfg.Local, "local", false, "run on local network")

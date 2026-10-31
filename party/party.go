@@ -1,6 +1,7 @@
 package party
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,7 +25,8 @@ import (
 )
 
 const (
-	DefaultPort = 6969
+	DefaultPort       = 6969
+	DefaultEvictAfter = 5 * time.Minute
 
 	sampleSize  = 1 << 20
 	sampleCount = 8
@@ -43,6 +45,7 @@ type Config struct {
 	Port       int
 	PublicPort int
 	Addrs      string
+	EvictAfter time.Duration
 }
 
 var errStopped = errors.New("the party stopped unexpectedly")
@@ -257,7 +260,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		address = fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort)
 	}
 
-	ser := server.New(c, incoming, address, cfg.Hostname, file)
+	ser := server.New(c, incoming, address, cfg.Hostname, file, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)

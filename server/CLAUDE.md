@@ -58,16 +58,32 @@ The counter check only guards `/event` and `/bye`.
 - The relay has no counters and doesn't need them: it never echoes a frame back to
   its sender.
 
-## Fan-out: `broadcast(parent, f)`
+## Fan-out: `broadcast(parent, detach, f)`
 
 1. Under `s.mu`, bump the counter and **snapshot** the peer list, then release the
    lock.
-2. Fan out `f(ctx, peer, counter)` to every peer in parallel, under a 10s timeout
-   derived from `parent`, and `wg.Wait()`.
-3. Per peer, under `p.mu`: a success resets `fails`; a failure increments it. At
-   `maxFails` (3) the peer is evicted, but **only if `s.addresses[p.address]` is still
-   that same `*peer`**. A peer that reconnected through `/hi` meanwhile has a new entry
-   and must not be dropped. Eviction shows "dropped X".
+2. Fan out `f(ctx, peer, counter)` to every peer in parallel, each under its own 10s
+   timeout derived from `parent`, and `wg.Wait()`. With `detach` (`BroadcastEvents`),
+   a peer already at `maxFails` is sent to in a goroutine nobody waits for. Its
+   context comes from `s.c`, so it ends with the party. `Shutdown` doesn't detach, so
+   every `/bye` is waited for.
+3. `record`, per peer, under `p.mu`:
+   - A success resets `fails` and clears `failingSince`.
+   - A failure increments `fails`, and the first one in a row sets `failingSince`.
+   - The peer is evicted at `maxFails` (3) **and** once it has been failing for
+     `evictAfter`, **only if `s.addresses[p.address]` is still that same `*peer`**. A
+     peer that reconnected through `/hi` meanwhile has a new entry and must not be
+     dropped. Eviction shows "dropped X", once.
+
+Why both conditions: three strikes alone dropped people on flaky Wi-Fi, because a
+burst of pauses fails three sends within seconds. `evictAfter` is
+`party.DefaultEvictAfter` (5 minutes, the `-evictAfter` flag), and `e2e.py` passes
+`1ms` so its strike cases don't wait. Why `detach`: a dead peer behind a 10s timeout
+held up this node's *next* event by 10s. That used to stop after 3 events, and with
+the 5-minute rule it would last 5 minutes. A detached send still records its strike
+or its success, and the counters drop anything it delivers late. Eviction is checked
+only when a send fails, so a dead peer goes on the first event this node sends
+after the 5 minutes.
 
 Invariants, each of which has caused a real bug:
 
@@ -99,7 +115,7 @@ open body keeps its connection out of the pool, one per event.
 
 ## Construction
 
-`New(ctx, incoming, myAddress, hostname, file)`:
+`New(ctx, incoming, myAddress, hostname, file, evictAfter)`:
 
 - An empty hostname falls back to `os.Hostname()`.
 - The `http.Client` has no timeout of its own. Every call is bounded by a context:
@@ -114,8 +130,12 @@ fixtures.
 
 - `TestBroadcastDoesNotBlockOnFullIncoming`: an unbuffered, undrained `incoming` plus
   a failing peer must not block `broadcast` (`notify` must not block).
-- `TestBroadcastEvictsPeerAfterMaxFails`: exactly `maxFails` consecutive failures
-  evict, and any success in between resets the count.
+- `TestBroadcastEvictsPeerAfterMaxFails`: with a negligible `evictAfter`, exactly
+  `maxFails` consecutive failures evict, and any success in between resets the count.
+- `TestFailingPeerIsKeptUntilEvictAfter`: with an hour, `maxFails + 2` failures keep
+  the peer; moving `failingSince` back two hours, the next failure evicts.
+- `TestSuspectPeerDoesNotHoldUpBroadcast`: with `detach`, a peer at `maxFails` whose
+  send blocks doesn't hold `broadcast` up, and a healthy peer is still waited for.
 - `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
   `BroadcastEvents`.
 - `TestResponseBodiesAreClosed`: a stub `RoundTripper` records `Close` on 204, 500
@@ -126,7 +146,3 @@ fixtures.
 Mesh formation, propagation, `/bye`, eviction and the header checks are covered for
 real by `e2e.py --mode p2p`.
 
-## Known issues
-
-- **Fixed strike count.** `maxFails` is a constant (`ponytail:`). Make it a flag if
-  flaky Wi-Fi starts evicting people mid-movie.

@@ -122,6 +122,7 @@ PORTS["relay"] = args.port_base + len(NODES) + 1
 PORTS["nodeSame"] = args.port_base + len(NODES) + 2
 PORTS["nodeDiff"] = args.port_base + len(NODES) + 3
 PORTS["http"] = args.port_base + len(NODES) + 4
+PORTS["nodeKeep"] = args.port_base + len(NODES) + 5
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -292,8 +293,9 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None):
-    """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap."""
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms"):
+    """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
+    -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
     cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", MPVFLAGS]
@@ -303,6 +305,8 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
             cmd += ["-createKey", create_key]
     else:
         cmd += ["-local", "-port", str(PORTS[name])]
+        if evict:
+            cmd += ["-evictAfter", evict]
         if addrs:
             cmd += ["-addrs", addrs]
     p = subprocess.Popen(cmd, stdout=open(path, "wb"), stderr=subprocess.STDOUT)
@@ -675,6 +679,22 @@ def p2p_suite():
         toggle()
     until(lambda: dropped(A, STUB_ADDR), 5)
     ok("3rd consecutive strike evicts", dropped(A, STUB_ADDR))
+
+    print("\n[13b] with the default -evictAfter, a burst of strikes does not evict a peer")
+    launch("nodeKeep", evict=None)
+    until(lambda: booted("nodeKeep"), BOOT)
+    resolve("nodeKeep")
+    s3 = stub(nodes["nodeKeep"]["addr"])
+    until(lambda: f"{STUB_HOST} has joined" in osd("nodeKeep"), 5)
+    stub_stop(s3)
+    tries = 0  # an evicted peer is never sent to again, so its strikes stop at 3
+    while strikes("nodeKeep", STUB_ADDR, STUB_HOST) < 4 and tries < 8:
+        toggle("nodeKeep")
+        tries += 1
+    ok("4 strikes within seconds: still in the mesh",
+       strikes("nodeKeep", STUB_ADDR, STUB_HOST) >= 4 and not dropped("nodeKeep", STUB_ADDR),
+       f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
+    stop("nodeKeep")
 
     print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor")
     clean = stop(A)
