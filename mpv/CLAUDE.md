@@ -13,11 +13,11 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
 
 | File | Contents |
 |---|---|
-| `mpv.go` | `Client`, `connection.do`, `ErrClosed`, `watch`, `handleEvent`, `isEcho`, `ProcessIncomingEvents`, `pause`/`sync`/`showText`, `New` |
-| `conn_unix.go` (`!windows`) | `SocketPrefix = "/tmp/"`, `Dial` (unix socket), no-op `Init` |
-| `conn_windows.go` | `SocketPrefix = \\.\pipe\`, `Dial` (`go-winio` pipe), and `Init` setting `HideWindow` + `CREATE_NEW_PROCESS_GROUP \| CREATE_NEW_CONSOLE` on the mpv `exec.Cmd` |
+| `mpv.go` | the IPC client, what gets broadcast, and how remote events are applied |
+| `conn_unix.go` (`!windows`) | the unix socket, under `/tmp/` |
+| `conn_windows.go` | the named pipe, and the process attributes mpv gets (see "Windows") |
 | `MPV.md` | the slice of mpv we use, and its observed behaviour |
-| `mpv_test.go` | `watch()` and `handleEvent` behaviour through a byte-dripping reader, `do()` replies over a `net.Pipe`, shutdown, what is applied after a slow load (`TestIncomingWhileLoadingKeepsOnlyTheLatest`) |
+| `mpv_test.go` | see "Testing notes" |
 
 ## Public surface
 

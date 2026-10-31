@@ -406,6 +406,9 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 - **Every package has its own `CLAUDE.md`** (`party/`, `mpv/`, `server/`, `relay/`,
   `gui/`). Detail goes there, and this file keeps the overview and the cross-cutting
   rules. Check a doc against the code when you change either.
+- **Docs carry the why, not inventories.** Don't list a file's functions or a
+  package's tests: the names are in the code, and a copy of them only drifts. Name a
+  test where it proves a specific point.
 
 ## Known issues
 

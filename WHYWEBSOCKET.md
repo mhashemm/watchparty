@@ -523,24 +523,12 @@ Two existing cases changed meaning because the behaviour did:
 
 ---
 
-## 10. File map
-
-| File | Role |
-|---|---|
-| `relay/main.go` | The relay server. Rooms, fan-out, limiter, caps. 352 lines |
-| `relay/main_test.go` | Handler + limiter tests, `httptest` + raw `websocket.Dial`. 262 lines |
-| `relay/Dockerfile` | Two-stage → `scratch`. Build from the repo root |
-| `.dockerignore` | Load-bearing: `COPY . .` would otherwise ship ~10MB |
-| `ws.go` | Node-side client. Supervisor, read pump, single write pump. 158 lines |
-| `main.go` | `-relay/-room/-secret`; `runMesh()` extracted, returns a cleanup closure |
-| `mpv/mpv.go` | `applied` + `seen`; `role`/`slave`/`errSlave`/`startAsSlave` deleted |
-| `mpv/mpv_test.go` | Three new cases for echo suppression and the startup guard |
-| `e2e.py` | Three suites behind `--mode`; `[R1]`–`[R17]`; `pauses()` helper |
-| `CLAUDE.md` | Loop prevention rewritten, relay + hardening sections added |
+## 10. `runMesh` returns its cleanup
 
 `runMesh()` returns a cleanup closure rather than using `defer` internally,
 because those defers — the UPNP mapping delete and the `/bye` broadcast — have to
-fire in `main`, not when the function returns. Getting that wrong would silently
+fire in `Run` (then in `main.go`, now in `party/party.go`), not when the function
+returns. Getting that wrong would silently
 leak a port mapping on the user's router.
 
 `server/` was not touched.

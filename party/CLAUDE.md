@@ -14,8 +14,8 @@ times in one GUI process, so it must not leave state behind.
 
 | File | Contents |
 |---|---|
-| `party.go` | `Config`, `Run`, `fingerprint`, `runMesh` (P2P setup), `DefaultPort`, `errStopped`, `notReady` |
-| `party_test.go` | `fingerprint`: a renamed, moved, re-dated copy matches; a changed first or last byte or size doesn't; a URL is its own text. `lineLog` logs each line of chunked output once, whole |
+| `party.go` | `Run`, the file fingerprint, and the P2P setup (`runMesh`) |
+| `party_test.go` | the fingerprint and `lineLog` |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
 | `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 

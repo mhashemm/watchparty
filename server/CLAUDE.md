@@ -143,23 +143,9 @@ open body keeps its connection out of the pool, one per event.
 The tests drive `broadcast` directly with a stub `f`. There is no HTTP server and no
 fixtures.
 
-- `TestBroadcastDoesNotBlockOnFullIncoming`: an unbuffered, undrained `incoming` plus
-  a failing peer must not block `broadcast` (`notify` must not block).
-- `TestBroadcastEvictsPeerAfterMaxFails`: with a negligible `evictAfter`, exactly
-  `maxFails` consecutive failures evict, and any success in between resets the count.
-- `TestFailingPeerIsKeptUntilEvictAfter`: with an hour, `maxFails + 2` failures keep
-  the peer; moving `failingSince` back two hours, the next failure evicts.
-- `TestSuspectPeerDoesNotHoldUpBroadcast`: with `detach`, a peer at `maxFails` whose
-  send blocks doesn't hold `broadcast` up, and a healthy peer is still waited for.
-- `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
-  `BroadcastEvents`.
-- `TestResponseBodiesAreClosed`: a stub `RoundTripper` records `Close` on 204, 500,
-  409 and 403 answers to `post`.
-- `TestGuardNeedsTheSecretAndCapsTheBody`: through `Guard`, no or a wrong secret is 403
-  on all three endpoints and reaches no handler, an oversized event is 413, and the
-  right secret gets through. `TestWrongSecretIsItsOwnError`: a 403 is `ErrWrongSecret`.
-- `TestHiRefusesADifferentFile`: `Hi` called directly with an `httptest` recorder; a
-  different or missing `file` gets 409 and never becomes a peer.
+`TestGuardNeedsTheSecretAndCapsTheBody` and `TestHiRefusesADifferentFile` call the
+handlers through an `httptest` recorder instead. Each test is named for the behaviour
+it pins.
 
 Mesh formation, propagation, `/bye`, eviction and the header checks are covered for
 real by `e2e.py --mode p2p`.

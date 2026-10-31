@@ -204,24 +204,7 @@ The tests use real websockets against an `httptest` server, all in parallel:
   (its handler forwards that only from its read loop, after the notices), then **to** it.
 - `recvEvent` skips the synthesized notices; `eventually` polls a condition for 2s.
 
-| Test | Covers |
-|---|---|
-| `TestBroadcastReachesEveryoneButTheSender` | no echo to the sender (the reason relay mode needs no counters) |
-| `TestJoinerLearnsWhoIsAlreadyThere` | the "connected to" half of the notices |
-| `TestReconnectReplacesStaleMember` | session dedupe, with no second join and no false leave |
-| `TestAddToAReapedRoomFails` | a room reaped between `admit` and `add` is neither joined nor recreated |
-| `TestJoinNoticesGoToTheRoomAddSaw` | "has joined" and "connected to" describe the same room; a reconnect never hears of itself |
-| `TestWrongSecretIsRejected` | wrong secrets |
-| `TestDifferentFileIsRejected` | another or no `file` is 409, the room's own is let in |
-| `TestSecretGrindingIsRateLimited` | grinding secrets costs quota |
-| `TestOnlyRoomCreationIsRateLimited` | joins are free |
-| `TestCreateKey` | keyless 401 costs no quota, a wrong key costs quota |
-| `TestMaxRoomsAndMaxConns` | the global caps |
-| `TestLimiterDoesNotAllocatePerIP` | the sketch's fixed memory |
-| `TestLimiterNeverUnderCounts` | the sketch's safe-direction error |
-| `TestLimiterDoesNotFalselyRejectAtRealisticLoad` | sketch width at realistic load |
-| `TestLimiterResetsOnWindowRollover` | the window |
-| `TestMemberThatStopsAnsweringPingsIsRemoved` | a failed ping drops the member and reaps its room |
+Each test is named for the behaviour it pins.
 
 The end-to-end versions are `e2e.py --mode relay` (fan-out, room isolation, reconnect
 through a TCP proxy) and `e2e.py --mode caps` (every cap, `CREATE_KEY`, a raw socket
