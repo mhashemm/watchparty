@@ -499,6 +499,12 @@ him; change only what is asked, and show options before changing his face.**
   The page loads everything from `GET /state`.
 - **Reduced motion** stops every ambient animation and leaves the turtles parked
   mid-ground. Hearts still play, because they answer a click.
+- **Save chart**, under the Patient chart, downloads this run's log as
+  `watchparty-<local date-time>.log`. It fetches `/log?from=0` again rather than
+  saving the `<pre>`, which the page trims to its last 150k characters; the server
+  keeps the whole run. It's a plain `<a download>`, so the browser decides where the
+  file goes (Downloads, by default). Checked in headless Chromium through CDP's
+  `Browser.setDownloadBehavior`.
 - **Copy invite** uses `navigator.clipboard`. That works because `127.0.0.1` is a
   secure context. If it fails, the invite text is selected and the button says to
   press Ctrl+C.
