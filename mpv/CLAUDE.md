@@ -74,20 +74,25 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
 
 ## What gets broadcast: `handleEvent`
 
-This runs under `c.mu`, called from `watch()`, and returns `nil` (broadcast) or one of
-three sentinels.
+This runs under `c.mu`, called from `watch()`. It returns `nil` (broadcast the event)
+or one of three sentinels, plus `extra` frames that `watch` sends after the event,
+or on their own when the event itself isn't sent.
 
 | Situation | Result |
 |---|---|
-| Not a `property-change` (seek, file-loaded, …) | `errDoNotSend` |
+| `seek` while playing | `seeking` set, `errDoNotSend` |
+| Not a `property-change` (any other `seek`, file-loaded, …) | `errDoNotSend` |
 | A `property-change` with no `data` (property unavailable: before the file loads, while quitting) | `errDoNotSend`, and it does **not** count as the first change for `seen` |
 | `isEcho`: the value is one this node just applied from a peer | `errEcho` |
 | `pause` with the same value as the current state | `errNoChange` |
 | `pause` that changed | state updated (and `seeks` cleared on unpause), then broadcast |
-| `time-pos` while **playing** | `errDoNotSend`. Positions only sync while paused |
+| `time-pos` while **playing** | `errDoNotSend`. If `seeking`, it is where the seek landed: `landed` set and `pauseParty("seek")` |
 | `time-pos` while paused | broadcast. This is a seek |
 | any other property | `errDoNotSend` |
 | **the first** `property-change` per property | state updated, but `errDoNotSend` |
+| `pause` → `yes`, echo or not | `extra` from `pauseExtras`: a `time-pos` of `c.pos` if `landed` (also appended to `seeks`, so mpv's second value of the same seek is an echo), then the `pause-reason` if one is set |
+
+Every `time-pos` with data also updates `c.pos`, echo or not.
 
 On `nil`, `watch` sends **`bytes.Clone(scanner.Bytes())`** to `outgoing` and logs
 `Watch: broadcasted event: …`. The clone is mandatory: `Scan()` reuses that buffer,
@@ -128,11 +133,32 @@ counters, that loops forever.
   `TestSmallSeekIsNotAnEcho` and `TestAppliedPauseIsNotRebroadcast` cover it,
   including that a genuine seek and a later genuine pause still go out.
 
-### `seek` is commented out on purpose
+### A seek while playing pauses the party (`pauseParty`)
 
-The `case seek:` branch in `handleEvent` is disabled. Syncing works as pause → seek
-(the `time-pos` change while paused) → peers apply it → resume. Re-enabling `seek`
-changes that interaction. The `seek` const then looks unused; leave it.
+Positions only sync while paused, so a seek while playing would leave every peer
+behind. Instead:
+
+1. The `seek` event sets `seeking`. `sync()` only seeks while paused, so a `seek` while
+   playing is always this node's own.
+2. The next `time-pos` is where it landed. It sets `landed` and calls
+   `pauseParty("seek")`.
+3. `pauseParty` sets `reason` and sends `set_property pause true` **in a goroutine**,
+   without marking `applied`. `do()` waits for a reply that only `watch()` reads, so
+   calling it from `handleEvent` deadlocks. The old commented-out `case seek:
+   s.pauseReq(true)` did exactly that. On success it shows "paused for everyone:
+   <reason>". On failure it clears `reason` and `landed`.
+4. mpv reports `pause=yes`, broadcast as this node's own pause, followed by
+   `pauseExtras`: the position (`c.pos`, so any frames played before the pause took
+   effect count), then `{"name":"pause-reason","data":"seek"}`. Peers get pause first,
+   then position: P2P `broadcast` waits for each healthy peer before the next event,
+   and the relay keeps one FIFO per member. A peer's `apply` shows a `pause-reason` as
+   "paused for <host>: <reason>".
+5. If a peer's pause lands first, that `pause=yes` is an echo, and the extras still go
+   out on their own, so the seek isn't lost.
+
+`TestSeekWhilePlayingPausesTheParty` and `TestPlaybackIsNotASeek` cover it, through
+`liveClient`, a `watch()` over a `net.Pipe` with a fake mpv. `e2e.py` `[R6b]` covers it
+against real mpv.
 
 ## Applying remote events: `ProcessIncomingEvents`
 

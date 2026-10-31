@@ -161,10 +161,18 @@ re-emits it.
 ### Sync semantics (deliberately narrow)
 
 Only `pause` and `time-pos` are observed, and only `property-change` events are
-forwarded. `time-pos` is only forwarded and only applied **while paused**, so seeking
-works as: pause → seek → peers sync position → resume. Any paused peer can seek for
-the party. The `seek` case in `handleEvent` is commented out on purpose, which makes
-the `seek` const look unused; leave it.
+forwarded. `time-pos` is only forwarded and only applied **while paused**. Normal
+playback is never synced: no periodic position check, no heartbeat. Drift is prevented
+where it starts instead: **anything that would put nodes out of step pauses the whole
+party, and someone resumes it by hand.** Every resume then starts from aligned, paused
+positions.
+
+- **A seek while playing** (arrow keys, chapter skip, anything mpv sends a `seek` event
+  for): the node pauses itself, and that pause goes out as its own. Then it sends where
+  it stopped, then a `pause-reason` event. Peers show "paused for X: seek". A
+  `--loop-file` wrap is a seek too, so a looping file pauses the party at each wrap.
+- **A seek while paused** goes out as it always has. Any paused peer can seek for the
+  party.
 
 ### Same file, or no party
 

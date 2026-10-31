@@ -770,6 +770,20 @@ def relay_suite():
         after = osd(n).count(f"synced by {A}")
         ok(f"no time-pos storm reached {n}", after == counts[n], f"{after - counts[n]} sync notices in 4s")
 
+    print("\n[R6b] a seek while playing pauses the party, and everyone lands where it stopped")
+    ipc(nodes[A]["sock"], "seek", 20, "relative")
+    until(lambda: all(get(n, "pause") is True for n in NODES)
+          and all(near(get(n, "time-pos"), get(A, "time-pos"), 0.15) for n in others(A))
+          and all(f"paused for {A}: seek" in osd(n) for n in others(A)))
+    at = get(A, "time-pos")
+    for n in NODES:
+        ok(f"{n} paused", get(n, "pause") is True)
+    for n in others(A):
+        v = get(n, "time-pos")
+        ok(f"{n} at {A}'s {at:.2f}s", near(v, at, 0.15), f"time-pos={v}")
+        ok(f"{n} told why", f"paused for {A}: seek" in osd(n))
+    ok(f"{A} told it paused everyone", "paused for everyone: seek" in osd(A))
+
     print("\n[R7] no a->b->a rebound (relay has no counters; this is the only guard)")
     # start from a known state: everyone playing, so the pause below is a real change
     setp(A, "pause", False)

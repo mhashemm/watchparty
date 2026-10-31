@@ -23,6 +23,7 @@ const (
 	seek           = "seek"
 	setProperty    = "set_property"
 	showText       = "show-text"
+	pauseReason    = "pause-reason"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
@@ -142,6 +143,10 @@ type Client struct {
 	applied  map[string]string
 	seeks    []float64
 	seen     map[string]bool
+	pos      float64
+	seeking  bool
+	landed   bool
+	reason   string
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -167,24 +172,33 @@ func (c *Client) isEcho(event Event) bool {
 	return applied == event.Data
 }
 
-func (c *Client) handleEvent(event Event) error {
+func (c *Client) handleEvent(event Event) ([][]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch event.EventType {
-	// case seek:
-	// 	err := s.pauseReq(true)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	s.paused = true
-	// 	return errDoNotSend
+	case seek:
+		if !c.paused {
+			c.seeking = true
+		}
+		return nil, errDoNotSend
 
 	case propertyChange:
 		if event.Data == "" {
-			return errDoNotSend
+			return nil, errDoNotSend
+		}
+		var extra [][]byte
+		switch event.Name {
+		case timePos:
+			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
+				c.pos = pos
+			}
+		case pause:
+			if event.paused() {
+				extra = c.pauseExtras()
+			}
 		}
 		if c.isEcho(event) {
-			return errEcho
+			return extra, errEcho
 		}
 		first := !c.seen[event.Name]
 		c.seen[event.Name] = true
@@ -194,27 +208,62 @@ func (c *Client) handleEvent(event Event) error {
 		switch event.Name {
 		case pause:
 			if c.paused == event.paused() {
-				return errNoChange
+				return extra, errNoChange
 			}
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
+				c.seeking, c.landed = false, false
 			}
 		case timePos:
 			if !c.paused {
-				return errDoNotSend
+				if c.seeking {
+					c.seeking, c.landed = false, true
+					c.pauseParty("seek")
+				}
+				return nil, errDoNotSend
 			}
 		default:
-			return errDoNotSend
+			return nil, errDoNotSend
 		}
 		if first {
-			return errDoNotSend
+			return nil, errDoNotSend
 		}
-	default:
-		return errDoNotSend
+		return extra, nil
 	}
+	return nil, errDoNotSend
+}
 
-	return nil
+func (c *Client) pauseExtras() [][]byte {
+	var extra [][]byte
+	if c.landed {
+		c.landed = false
+		c.seeks = append(c.seeks, c.pos)
+		pos := strconv.FormatFloat(c.pos, 'f', 6, 64)
+		b, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: pos})
+		extra = append(extra, b)
+	}
+	if c.reason != "" {
+		b, _ := json.Marshal(Event{Name: pauseReason, Data: c.reason})
+		extra = append(extra, b)
+		c.reason = ""
+	}
+	return extra
+}
+
+func (c *Client) pauseParty(reason string) {
+	c.reason = reason
+	go func() {
+		err := c.pauseReq(true)
+		if err != nil {
+			log.Println("pauseParty:", err)
+			c.mu.Lock()
+			c.reason, c.landed = "", false
+			c.mu.Unlock()
+			return
+		}
+		c.showText("paused for everyone: " + reason)
+	}()
 }
 
 func (c *Client) watch() error {
@@ -236,19 +285,18 @@ func (c *Client) watch() error {
 		if event.EventType == "" {
 			continue
 		}
-		switch err = c.handleEvent(event); err {
-		case nil:
-		case errNoChange, errDoNotSend, errEcho:
-			continue
-		default:
-			log.Println("Watch:", err)
-			continue
+		extra, err := c.handleEvent(event)
+		out := extra
+		if err == nil {
+			out = append([][]byte{bytes.Clone(scanner.Bytes())}, extra...)
 		}
-		select {
-		case c.outgoing <- bytes.Clone(scanner.Bytes()):
-			log.Println("Watch: broadcasted event:", scanner.Text())
-		case <-c.ctx.Done():
-			return c.ctx.Err()
+		for _, b := range out {
+			select {
+			case c.outgoing <- b:
+				log.Printf("Watch: broadcasted event: %s\n", b)
+			case <-c.ctx.Done():
+				return c.ctx.Err()
+			}
 		}
 	}
 
@@ -305,6 +353,8 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
+		case pauseReason:
+			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		}
 	}
 	if err != nil {

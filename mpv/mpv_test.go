@@ -424,3 +424,109 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 		t.Fatalf("applied %q, want %q", got, want)
 	}
 }
+
+// liveClient runs watch() against a fake mpv on the other end of a pipe. The fake
+// answers every request with success and reports each command on requests; send
+// writes one of mpv's events.
+func liveClient(t *testing.T) (c *Client, send func(string), outgoing chan []byte, requests chan string) {
+	t.Helper()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	outgoing = make(chan []byte, 16)
+	requests = make(chan string, 16)
+	c = newTestClient(outgoing, bufio.NewScanner(ours))
+	c.conn.conn = ours
+	c.seen[pause], c.seen[timePos] = true, true
+	writes := make(chan string, 64)
+	go func() {
+		for line := range writes {
+			fmt.Fprint(theirs, line)
+		}
+	}()
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			requests <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+			writes <- fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		}
+	}()
+	go c.watch()
+	return c, func(line string) { writes <- line }, outgoing, requests
+}
+
+func next[T any](t *testing.T, ch chan T) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(time.Second):
+		t.Fatal("nothing arrived")
+		panic("unreachable")
+	}
+}
+
+func nextEvent(t *testing.T, outgoing chan []byte) Event {
+	t.Helper()
+	e := Event{}
+	json.Unmarshal(next(t, outgoing), &e)
+	return e
+}
+
+// A seek while playing would leave every peer where it was, since positions only
+// sync while paused. The node pauses the party first, and peers get the pause, then
+// where it landed, then why.
+func TestSeekWhilePlayingPausesTheParty(t *testing.T) {
+	t.Parallel()
+	_, send, outgoing, requests := liveClient(t)
+
+	send(propertyChangeLine(timePos, "10.000000", 0))
+	send(propertyChangeLine(timePos, "10.041000", 0))
+	send(`{"event":"seek"}`+"\n")
+	send(propertyChangeLine(timePos, "40.000000", 0))
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the node to pause itself", got)
+	}
+	send(propertyChangeLine(timePos, "40.041000", 0))
+	send(propertyChangeLine(pause, "yes", 0))
+
+	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
+		t.Fatalf("first broadcast %+v, want the pause", e)
+	}
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "40.041000" {
+		t.Fatalf("second broadcast %+v, want where it paused", e)
+	}
+	if e := nextEvent(t, outgoing); e.Name != pauseReason || e.Data != "seek" {
+		t.Fatalf("third broadcast %+v, want the reason", e)
+	}
+	if got := next(t, requests); got != "show-text paused for everyone: seek 5000" {
+		t.Fatalf("sent %q, want the local notice", got)
+	}
+
+	// mpv's frame-landing second value is the position just sent, not a new seek
+	send(propertyChangeLine(timePos, "40.042000", 0))
+	send(propertyChangeLine(timePos, "50.000000", 0))
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "50.000000" {
+		t.Fatalf("broadcast %+v, want only the next real seek", e)
+	}
+}
+
+// Playback moves time-pos on every frame, and none of it may go out or pause anyone.
+func TestPlaybackIsNotASeek(t *testing.T) {
+	t.Parallel()
+	_, send, outgoing, requests := liveClient(t)
+
+	for i := range 48 {
+		send(propertyChangeLine(timePos, fmt.Sprintf("%f", 10+float64(i)/24), 0))
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause {
+		t.Fatalf("broadcast %+v during playback, want only the later pause", e)
+	}
+	select {
+	case r := <-requests:
+		t.Fatalf("sent %q during playback", r)
+	default:
+	}
+}

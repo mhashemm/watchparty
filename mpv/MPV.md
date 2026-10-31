@@ -133,8 +133,17 @@ Every event goes through `handleEvent`; anything but `property-change` is
 ### Playing and pausing
 
 - **While playing, `time-pos` fires on every frame** (24 times a second at 24fps).
-  `handleEvent` drops all of them (`!c.paused`). Anything that wants to sync
-  during playback (drift correction) must throttle, not forward these.
+  `handleEvent` drops all of them (`!c.paused`) unless a `seek` came just before.
+- **What sends a `seek` while playing** (probed 2026-11-01 with internal and external
+  audio and subtitle tracks and two chapters):
+  - **Sends one:** relative and absolute seeks, including a −0.5s step; chapter
+    skips (forward from 9.29 landed on 10.00, so +0.7s); a `--loop-file` wrap (29.6 →
+    0).
+  - **Sends none:** switching audio or subtitle track (internal or `--audio-file` /
+    `--sub-file`), volume, `audio-delay`, `sub-delay`, `video-reload`,
+    `audio-reload`, `frame-step`.
+  - So no size threshold is needed: every `seek` while playing is the user's, except
+    a loop wrap.
 - On unpause, the `pause` → `"no"` event arrives before the first playing
   `time-pos`. On pause, only `pause` → `"yes"` arrives; the position doesn't
   re-fire.
