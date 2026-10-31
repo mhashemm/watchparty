@@ -45,7 +45,7 @@ all $(COMPONENTS) $(OSES): $(targets)
 test: unit e2e
 
 unit:
-	GORACE=atexit_sleep_ms=0 go test -race ./...
+	go test -race ./...
 
 e2e:
 	./e2e.py

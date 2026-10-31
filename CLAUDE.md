@@ -11,7 +11,6 @@ make -j test                               # unit tests (-race) and e2e.py toget
 go build ./...
 go test ./...
 go test -race ./...                        # the invariants below are all concurrency ones
-GORACE=atexit_sleep_ms=0 go test -race ./...   # same, minus the race runtime's 1s sleep per package at exit
 go test ./mpv -run '^TestName$' -v         # single test
 go mod tidy                                # run it yourself; CI only does go mod download
 go build ./relay                           # the relay server, a separate binary
@@ -208,7 +207,7 @@ compile time. Keep it that way:
   300ms window has nothing to order against.
 - **The only serial test is `TestLimiterDoesNotAllocatePerIP`**: `testing.AllocsPerRun`
   panics in a parallel test.
-- Stress a changed test before trusting it: `GORACE=atexit_sleep_ms=0 go test -race -count=30
+- Stress a changed test before trusting it: `go test -race -count=30
   -cpu=1,4,16 ./...`. Running in parallel exposed two races the serial suite had hidden.
 
 mpv emits no `property-change` for a no-op set, so `set_property pause yes` when already paused produces nothing. Tests that count events must strictly alternate rather than repeat a value.
