@@ -133,6 +133,10 @@ print.
     flag default uses. A non-number is a 400.
   - It refuses an empty file, and an empty relay address in relay mode. Without
     that check, `party.Run` would treat an empty `Relay` as direct mode and try UPNP.
+  - It refuses a file whose extension (any case) is not in `videoExts`. The
+    extension, not the content: Go's sniffer misses `.mov` and `.ts`, and
+    `mime.TypeByExtension` depends on the OS's tables. Add an extension there when
+    someone's real video is refused.
   - Relay mode ignores the direct fields and vice versa.
 - **The log:** `main` calls `log.SetOutput(io.MultiWriter(g, os.Stderr))`, and
   `gui.Write` appends each line to `g.lines`.
