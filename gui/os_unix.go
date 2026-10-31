@@ -51,7 +51,7 @@ func portalPick() (string, error) {
 	conn.Signal(signals)
 
 	err = conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop").
-		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", "Pick a movie", map[string]dbus.Variant{"handle_token": dbus.MakeVariant(token)}).Err
+		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", "Pick a video", map[string]dbus.Variant{"handle_token": dbus.MakeVariant(token)}).Err
 	if err != nil {
 		return "", err
 	}

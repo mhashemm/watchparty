@@ -67,7 +67,7 @@ func (f form) config() (party.Config, error) {
 		return n
 	}
 	if cfg.File == "" {
-		return cfg, errors.New("pick a movie first")
+		return cfg, errors.New("pick a video first")
 	}
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)

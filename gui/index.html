@@ -419,7 +419,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 
   <div class="card">
     <h1><svg class="title-mush" viewBox="0 0 32 32" aria-hidden="true"><path d="M12 18h8l1 11h-10z" fill="#f1ead6" stroke="#6e4b30" stroke-width="1.5"/><path d="M3 18C5 5 27 5 29 18z" fill="#a8642a" stroke="#4a3220" stroke-width="1.5"/><circle cx="11" cy="12" r="2" fill="#f6efdc"/><circle cx="19" cy="9.5" r="1.6" fill="#f6efdc"/></svg>Fosdo2's Movie Clinic</h1>
-    <p class="lede">Pick a movie and start the party. When anyone pauses or seeks, everyone's player follows.</p>
+    <p class="lede">Pick a video and start the party. When anyone pauses or seeks, everyone's player follows.</p>
 
     <nav class="tabs" aria-label="Sections">
       <button type="button" data-view="party" aria-current="page">Party</button>
@@ -449,7 +449,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <div class="field">
           <label for="invite">Got an invite? Paste it here</label>
           <textarea id="invite" rows="2" placeholder="-relay ws://… -room … -secret …   or   192.168.1.5:6969"></textarea>
-          <p class="hint" id="invite-hint" hidden>Filled in from the invite. Now pick your movie.</p>
+          <p class="hint" id="invite-hint" hidden>Filled in from the invite. Now pick your video.</p>
         </div>
 
         <div class="field">
@@ -460,7 +460,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <div class="field">
           <label for="file">File</label>
           <div class="row">
-            <input type="text" id="file" placeholder="Full path to the movie file" required>
+            <input type="text" id="file" placeholder="Full path to the video file" required>
             <button type="button" data-pick="file">Browse</button>
           </div>
         </div>
@@ -512,7 +512,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 
     <section id="view-history" hidden>
       <h2>Recent parties</h2>
-      <p class="hint" id="history-empty">No parties yet. Each one shows up here after you start it, with the movie and everyone who joined.</p>
+      <p class="hint" id="history-empty">No parties yet. Each one shows up here after you start it, with the video and everyone who joined.</p>
       <ul id="history-list"></ul>
       <button type="button" id="clear-history" hidden>Clear history</button>
     </section>
@@ -786,7 +786,7 @@ $("form").addEventListener("submit", async e => {
     return;
   }
   showError("");
-  if (!$("file").value.trim()) { showError("Pick a movie first."); $("file").focus(); return; }
+  if (!$("file").value.trim()) { showError("Pick a video first."); $("file").focus(); return; }
   const res = await api("/start", collect());
   if (!res.ok) {
     const text = (await res.text()).trim();
