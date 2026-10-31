@@ -147,9 +147,13 @@ behind, and so would a node waiting on its cache. Instead the node pauses the pa
      this node's own.
    - **`"buffering"`**: `paused-for-cache` (observe id 3) changes to `yes` while
      playing.
-   - **`"still buffering"`**: a resume while `stalled`. A local one is caught in
-     `handleEvent` and not broadcast. A peer's is caught in `pause()` after it has
-     applied it, since its `pause=no` is an echo that `handleEvent` drops.
+   - **`"still buffering"`**: a local resume while `stalled`, caught in `handleEvent`
+     and not broadcast.
+   - A **peer's** resume while `stalled` never reaches mpv. `pause()` refuses it and
+     sends the pause, position and reason to `outgoing` itself. Applying the resume
+     and pausing straight after doesn't work: mpv folds the two sets into no
+     `property-change` at all, so the re-pause was never broadcast, and in `[R11f]` the
+     party played on 30s ahead of the stalled node.
 3. `pauseParty` sets `reason` and sends `set_property pause true` **in a goroutine**,
    without marking `applied`. `do()` waits for a reply that only `watch()` reads, so
    calling it from `handleEvent` deadlocks. The old commented-out `case seek:

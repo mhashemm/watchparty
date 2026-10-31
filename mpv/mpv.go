@@ -378,6 +378,20 @@ func (c *Client) pause(event Event, hostname string) error {
 		c.mu.Unlock()
 		return nil
 	}
+	if !paused && c.stalled {
+		c.reason = "still buffering"
+		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
+		out := append([][]byte{again}, c.pauseExtras()...)
+		c.mu.Unlock()
+		for _, b := range out {
+			select {
+			case c.outgoing <- b:
+			case <-c.ctx.Done():
+				return nil
+			}
+		}
+		return c.showText("paused for everyone: still buffering")
+	}
 	c.applied[pause] = event.Data
 	c.mu.Unlock()
 
@@ -387,9 +401,6 @@ func (c *Client) pause(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	c.paused = paused
-	if !paused && c.stalled {
-		c.pauseParty("still buffering")
-	}
 	c.mu.Unlock()
 
 	actionText := "resumed"

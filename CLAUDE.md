@@ -174,7 +174,8 @@ positions.
 - **A node runs out of cache** (`paused-for-cache`, a stream or a slow disk): it
   pauses the party the same way, with the reason "buffering". mpv stays paused once
   its cache refills. A resume that reaches it while it is still stalled, local or
-  from a peer, is undone at once ("still buffering"). `--cache-pause=yes` is pinned,
+  from a peer, is refused, and the party is told it is paused again ("still
+  buffering"). `--cache-pause=yes` is pinned,
   so a user's config can't make mpv play through stalls instead.
 - **A seek while paused** goes out as it always has. Any paused peer can seek for the
   party.

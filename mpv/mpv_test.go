@@ -563,19 +563,21 @@ func TestBufferingPausesTheParty(t *testing.T) {
 	}
 }
 
-// A peer's resume reaching a node that is still stalled is undone at once, so the
-// party doesn't play on without it.
-func TestRemoteResumeWhileBufferingPausesAgain(t *testing.T) {
+// A peer's resume reaching a node that is still stalled is refused: the node never
+// plays, and tells the party it is paused again and where. Applying the resume and
+// pausing at once doesn't work, because mpv folds the two into no event at all.
+func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
 	t.Parallel()
-	c, _, _, requests := liveClient(t)
-	c.paused, c.stalled = true, true
+	c, _, outgoing, requests := liveClient(t)
+	c.paused, c.stalled, c.pos = true, true, 20
 
-	go c.pause(Event{Name: pause, Data: "no"}, "a")
-	got := map[string]bool{}
-	for range 3 {
-		got[next(t, requests)] = true
+	c.pause(Event{Name: pause, Data: "no"}, "a")
+	for _, want := range []string{pause + "=yes", timePos + "=20.000000", pauseReason + "=still buffering"} {
+		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
+			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		}
 	}
-	if !got["set_property pause false"] || !got["set_property pause true"] {
-		t.Fatalf("sent %v, want the resume applied and then undone", got)
+	if got := next(t, requests); got != "show-text paused for everyone: still buffering 5000" {
+		t.Fatalf("sent %q, want the resume refused", got)
 	}
 }
