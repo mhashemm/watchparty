@@ -333,6 +333,12 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 - **Clean up:** kill every started process (`pgrep -x watchparty-gui`, `relay`,
   leftover mpv), and delete temp folders and downloads by their **literal** path. The
   safety check refuses `rm -rf "$(…)"`.
+  - **Never `pkill -f <pattern>`.** The pattern is also in the command line of the
+    shell running it, so it kills that shell (exit 144) and the rest of the command
+    never runs. This happened twice. Kill by name with `pkill -x watchparty-gui`, or
+    by the PID you saved at launch (`cmd & echo $! > pid`, later `kill $(cat pid)`). If
+    only the arguments tell processes apart, look first with `pgrep -af` and then
+    `kill` the PIDs it printed.
 - **Say what was not verified.** Windows-only behaviour compiles in CI but has never
   been run on Windows. Every summary and PR lists it.
 
