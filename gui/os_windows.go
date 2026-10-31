@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -25,11 +26,12 @@ func openURL(url string) *exec.Cmd {
 const pickScript = `[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true}
-$d = New-Object System.Windows.Forms.OpenFileDialog
+$d = New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos|PATTERNS'}
 if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`
 
 func pickFile() (string, error) {
-	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickScript)
+	patterns := "*" + strings.Join(videoExts, ";*")
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", strings.Replace(pickScript, "PATTERNS", patterns, 1))
 }
 
 func hide(cmd *exec.Cmd) {

@@ -71,9 +71,6 @@ func (f form) config() (party.Config, error) {
 	if cfg.File == "" {
 		return cfg, errors.New("pick a video first")
 	}
-	if !slices.Contains(videoExts, strings.ToLower(filepath.Ext(cfg.File))) {
-		return cfg, fmt.Errorf("%s is not a video file", filepath.Base(cfg.File))
-	}
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)
 		cfg.Room = strings.TrimSpace(f.Room)

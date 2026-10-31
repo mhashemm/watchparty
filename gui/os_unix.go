@@ -28,9 +28,31 @@ func openURL(url string) *exec.Cmd {
 
 func pickFile() (string, error) {
 	if runtime.GOOS == "darwin" {
-		return dialog("osascript", "-e", "POSIX path of (choose file)")
+		types := `"public.movie"`
+		for _, ext := range videoExts {
+			types += `, "` + ext[1:] + `"`
+		}
+		return dialog("osascript", "-e", "POSIX path of (choose file of type {"+types+"})")
 	}
 	return portalPick()
+}
+
+type portalRule struct {
+	Kind    uint32
+	Pattern string
+}
+
+type portalFilter struct {
+	Name  string
+	Rules []portalRule
+}
+
+func videoFilter() portalFilter {
+	f := portalFilter{Name: "Videos", Rules: []portalRule{{1, "video/*"}}}
+	for _, ext := range videoExts {
+		f.Rules = append(f.Rules, portalRule{0, "*" + ext}, portalRule{0, "*" + strings.ToUpper(ext)})
+	}
+	return f
 }
 
 func portalPick() (string, error) {
@@ -51,7 +73,10 @@ func portalPick() (string, error) {
 	conn.Signal(signals)
 
 	err = conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop").
-		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", "Pick a video", map[string]dbus.Variant{"handle_token": dbus.MakeVariant(token)}).Err
+		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", "Pick a video", map[string]dbus.Variant{
+			"handle_token": dbus.MakeVariant(token),
+			"filters":      dbus.MakeVariant([]portalFilter{videoFilter()}),
+		}).Err
 	if err != nil {
 		return "", err
 	}
