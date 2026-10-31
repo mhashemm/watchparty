@@ -13,10 +13,11 @@ Every endpoint is `POST`, and identity travels in headers:
 | `hit-me-up` | the sender's advertised `ip:port`, which is its key in everyone's peer map |
 | `counter` | the sender's monotonic broadcast counter (decimal `uint64`) |
 | `hostname` | the display name, shown in "paused by X" |
+| `file` | the sender's file fingerprint (see the root `CLAUDE.md`); only `/hi` checks it |
 
 | Endpoint | Body | Handler |
 |---|---|---|
-| `/hi` | none → responds with a JSON map `{address: {"counter": "N", "hostname": "…"}}` of the peers this node already knows, **not including the caller**, plus its own `counter`/`hostname` in response headers | registers or replaces the caller, logs `connected to <host> with ip <addr>`, and shows "X has joined" |
+| `/hi` | none → 409 if `file` isn't this node's fingerprint (logs `refused X with ip …: not the same file`), otherwise responds with a JSON map `{address: {"counter": "N", "hostname": "…"}}` of the peers this node already knows, **not including the caller**, plus its own `counter`/`hostname` in response headers | registers or replaces the caller, logs `connected to <host> with ip <addr>`, and shows "X has joined" |
 | `/event` | raw mpv JSON | counter check, then a **blocking** push onto `incoming`, bounded by `req.Context()` (503 if that expires) |
 | `/bye` | none | counter check, removes the peer, and shows "X has left" |
 
@@ -86,9 +87,13 @@ Invariants, each of which has caused a real bug:
   never re-emits it, so a node discovers a dead peer only when it drives something
   itself. Eviction is therefore per-node and not simultaneous across the mesh.
 
+`request` turns a 409 into `ErrDifferentFile`, which `party.runMesh` treats as fatal
+for the joiner. Only the bootstrap's answer counts: every peer the mesh gossips
+already passed the same check against the same fingerprint.
+
 ## Construction
 
-`New(ctx, incoming, myAddress, hostname)`:
+`New(ctx, incoming, myAddress, hostname, file)`:
 
 - An empty hostname falls back to `os.Hostname()`.
 - The `http.Client` has no timeout of its own. Every call is bounded by a context:
@@ -107,6 +112,8 @@ fixtures.
   evict, and any success in between resets the count.
 - `TestBroadcastEventsStopsWithTheParty`: cancelling the context ends
   `BroadcastEvents`.
+- `TestHiRefusesADifferentFile`: `Hi` called directly with an `httptest` recorder; a
+  different or missing `file` gets 409 and never becomes a peer.
 
 Mesh formation, propagation, `/bye`, eviction and the header checks are covered for
 real by `e2e.py --mode p2p`.

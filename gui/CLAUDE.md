@@ -326,6 +326,7 @@ these strings in `party/`, `mpv/` or `server/` and the GUI silently stops reacti
 | `relay: dial:` / `relay: disconnected` | "Lost the relay. Reconnecting…", turtles hurry |
 | `is not open yet` (inside the dial line) | "Waiting for the host to open this room…" |
 | `rejected by relay` | "Diagnosis: the relay rejected this room or secret…" |
+| `rejected by relay` + `not the same file` | "Diagnosis: your video is not the same file as the party's…" (P2P shows the same text through `Run`'s error) |
 | `init done` | "You're in…", heartbeat line starts pulsing |
 | `do: sent request: {"command":["show-text",…` | party feed entry (`command[1]`) |
 

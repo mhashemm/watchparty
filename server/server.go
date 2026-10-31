@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,10 +25,13 @@ const (
 	addressHeaderKey  = "hit-me-up"
 	counterHeaderKey  = "counter"
 	hostnameHeaderKey = "hostname"
+	fileHeaderKey     = "file"
 
 	// ponytail: 3 strikes then drop, make it a flag if flaky wifi evicts people mid-movie
 	maxFails = 3
 )
+
+var ErrDifferentFile = errors.New("your video is not the same file as the party's")
 
 type peer struct {
 	Counter  uint64     `json:"counter,string"`
@@ -50,6 +54,7 @@ type Server struct {
 	myAddress string
 	counter   uint64
 	hostname  string
+	file      string
 }
 
 func (s *Server) notify(hostname string, text string) {
@@ -64,6 +69,11 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 	addr := req.Header.Get(addressHeaderKey)
 	counter, _ := strconv.ParseUint(req.Header.Get(counterHeaderKey), 10, 64)
 	hostname := req.Header.Get(hostnameHeaderKey)
+	if req.Header.Get(fileHeaderKey) != s.file {
+		log.Printf("refused %s with ip %s: not the same file\n", hostname, addr)
+		res.WriteHeader(http.StatusConflict)
+		return
+	}
 	s.mu.Lock()
 	myCounter := s.counter
 	resBody, _ := json.Marshal(s.addresses)
@@ -293,9 +303,13 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 	req.Header.Add(addressHeaderKey, s.myAddress)
 	req.Header.Add(counterHeaderKey, strconv.FormatUint(counter, 10))
 	req.Header.Add(hostnameHeaderKey, s.hostname)
+	req.Header.Add(fileHeaderKey, s.file)
 	res, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
+	}
+	if res.StatusCode == http.StatusConflict {
+		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, ErrDifferentFile)
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		return nil, fmt.Errorf("%s%s: %s", addr, endpoint, res.Status)
@@ -303,7 +317,7 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 	return res, nil
 }
 
-func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string) *Server {
+func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string) *Server {
 	if hostname == "" {
 		hostname, _ = os.Hostname()
 	}
@@ -314,5 +328,6 @@ func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string,
 		addresses: map[string]*peer{},
 		myAddress: myAddress,
 		hostname:  hostname,
+		file:      file,
 	}
 }

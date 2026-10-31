@@ -3,8 +3,12 @@ package party
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -21,6 +25,9 @@ import (
 
 const (
 	DefaultPort = 6969
+
+	sampleSize  = 1 << 20
+	sampleCount = 8
 )
 
 type Config struct {
@@ -50,6 +57,12 @@ func Run(parent context.Context, cfg Config) error {
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 
+	file, err := fingerprint(strings.TrimSpace(cfg.File))
+	if err != nil {
+		return err
+	}
+	log.Printf("file fingerprint: %s\n", file)
+
 	if strings.TrimSpace(cfg.Relay) != "" {
 		if cfg.Hostname == "" {
 			cfg.Hostname, _ = os.Hostname()
@@ -67,6 +80,7 @@ func Run(parent context.Context, cfg Config) error {
 			createKey: cfg.CreateKey,
 			hostname:  cfg.Hostname,
 			session:   rand.Text(),
+			file:      file,
 			incoming:  incoming,
 			retry:     minBackoff,
 		}
@@ -75,7 +89,7 @@ func Run(parent context.Context, cfg Config) error {
 		go conn.Broadcast(c, outgoing)
 		log.Printf("your address to share is -relay %s -room %s -secret %s\n", conn.addr, cfg.Room, cfg.Secret)
 	} else {
-		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg)
+		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, file)
 		if err != nil {
 			return err
 		}
@@ -87,7 +101,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	mpv.Init(cmd)
 
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
 		return err
 	}
@@ -161,7 +175,39 @@ func stopReason(parent context.Context) error {
 	return errStopped
 }
 
-func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config) (func(), error) {
+// fingerprint identifies a video by its content alone, so the same file under
+// another name, path or timestamp matches.
+// ponytail: the size and 8 samples of 1MB, not every byte; read it all if an edit
+// that keeps the size and misses every sample ever matters
+func fingerprint(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	size := st.Size()
+	h := sha256.New()
+	binary.Write(h, binary.BigEndian, size)
+	if size <= sampleSize*sampleCount {
+		_, err = io.Copy(h, f)
+	} else {
+		for i := range int64(sampleCount) {
+			if _, err = io.Copy(h, io.NewSectionReader(f, i*(size-sampleSize)/(sampleCount-1), sampleSize)); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file string) (func(), error) {
 	cleanup := []func(){}
 	runCleanup := func() {
 		for i := len(cleanup) - 1; i >= 0; i-- {
@@ -211,7 +257,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		address = fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort)
 	}
 
-	ser := server.New(c, incoming, address, cfg.Hostname)
+	ser := server.New(c, incoming, address, cfg.Hostname, file)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)
@@ -243,6 +289,10 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 			continue
 		}
 		err := ser.AddAddress(addr)
+		if errors.Is(err, server.ErrDifferentFile) {
+			runCleanup()
+			return nil, err
+		}
 		if err != nil {
 			log.Printf("%s: %s\n", addr, err)
 		}

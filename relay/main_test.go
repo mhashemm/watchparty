@@ -242,6 +242,24 @@ func TestWrongSecretIsRejected(t *testing.T) {
 	}
 }
 
+// The room keeps its creator's file fingerprint, and a joiner playing another file
+// is refused before the upgrade.
+func TestDifferentFileIsRejected(t *testing.T) {
+	t.Parallel()
+	url := serve(t, newRelay(100, 10, 10))
+	join(t, url, "movie", "s", "a&file=abc")
+
+	if _, code := join(t, url, "movie", "s", "b&file=xyz"); code != http.StatusConflict {
+		t.Fatalf("a different file got %d, want 409", code)
+	}
+	if _, code := join(t, url, "movie", "s", "b"); code != http.StatusConflict {
+		t.Fatalf("no file got %d, want 409", code)
+	}
+	if _, code := join(t, url, "movie", "s", "b&file=abc"); code != http.StatusSwitchingProtocols {
+		t.Fatalf("the same file got %d, want an upgrade", code)
+	}
+}
+
 // Joining an existing room must not cost quota, or a party of eight would lock
 // itself out.
 func TestOnlyRoomCreationIsRateLimited(t *testing.T) {

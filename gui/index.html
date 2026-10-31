@@ -829,7 +829,7 @@ function handle(line) {
     state.reconnecting = true;
     state.waiting = /is not open yet/.test(line);
   }
-  if (/rejected by relay/.test(line)) state.rejected = true;
+  if (/rejected by relay/.test(line)) state.rejected = /not the same file/.test(line) ? "file" : "secret";
   if (/init done/.test(line)) state.ready = true;
   if ((m = line.match(/do: sent request: (\{"command":\["show-text".*)$/))) {
     try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
@@ -838,7 +838,9 @@ function handle(line) {
 
 function render(exitErr) {
   let text, bad = false, mood = "awake", walking = false;
-  if (state.rejected) {
+  if (state.rejected === "file") {
+    text = "Diagnosis: your video is not the same file as the party's. Pick the same video and start again."; bad = true;
+  } else if (state.rejected) {
     text = "Diagnosis: the relay rejected this room or secret. Check the invite and start again."; bad = true;
   } else if (running && state.waiting) {
     text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;

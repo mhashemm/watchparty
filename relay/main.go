@@ -91,6 +91,7 @@ type member struct {
 
 type room struct {
 	secret  []byte
+	file    string
 	members map[*member]struct{}
 }
 
@@ -159,7 +160,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 
 // admit enforces the caps in cost order, creating the room if it is new. It runs
 // before the upgrade so a refused caller never becomes a websocket.
-func (r *relay) admit(name string, secret, key []byte, ip string) (int, error) {
+func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -172,6 +173,9 @@ func (r *relay) admit(name string, secret, key []byte, ip string) (int, error) {
 				return http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
 			}
 			return http.StatusForbidden, fmt.Errorf("bad secret")
+		}
+		if rm.file != file {
+			return http.StatusConflict, fmt.Errorf("not the same file")
 		}
 		return 0, nil
 	}
@@ -189,7 +193,7 @@ func (r *relay) admit(name string, secret, key []byte, ip string) (int, error) {
 	if len(r.rooms) >= r.maxRooms {
 		return http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
-	r.rooms[name] = &room{secret: secret, members: map[*member]struct{}{}}
+	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}}
 	return 0, nil
 }
 
@@ -283,7 +287,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	ip := r.ip(req)
 
-	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), ip)
+	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file"), ip)
 	if err != nil {
 		log.Printf("%s %s: %s\n", ip, name, err)
 		http.Error(res, err.Error(), code)

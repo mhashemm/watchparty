@@ -14,11 +14,12 @@ times in one GUI process, so it must not leave state behind.
 
 | File | Contents |
 |---|---|
-| `party.go` | `Config`, `Run`, `runMesh` (P2P setup), `DefaultPort`, `errStopped`, `notReady` |
+| `party.go` | `Config`, `Run`, `fingerprint`, `runMesh` (P2P setup), `DefaultPort`, `errStopped`, `notReady` |
+| `party_test.go` | `fingerprint`: a renamed, moved, re-dated copy matches; a changed first or last byte or size doesn't |
 | `ws.go` | `relayConn`: the relay transport (dial, reconnect loop, write pump) |
 | `ws_test.go` | `relayConn` against a stub `httptest` websocket handler |
 
-`ws_test.go` covers the relay client's decisions: 403/400 end the party, 401 keeps
+`ws_test.go` covers the relay client's decisions: 403/400/409 end the party, 401 keeps
 retrying, a dropped connection redials with the same session and both connections'
 frames reach `incoming`, the secret rides in a header, `Broadcast` sends the envelope
 and stops with the party. `Run` and `runMesh` need mpv and a network, so they are
@@ -35,6 +36,11 @@ them in-process (see `gui/CLAUDE.md`).
 3. Two channels are created, each with a 1024 buffer:
    - `outgoing`: mpv → the transport
    - `incoming`: the transport → mpv
+
+   Then `fingerprint(cfg.File)`: SHA-256 of the size and eight 1MB samples (why: the
+   root `CLAUDE.md`, "Same file, or no party"). A file it can't read (missing, a
+   folder, a URL) is returned as the error before anything starts. It logs `file
+   fingerprint: <hex>`, which `e2e.py` reads, and hands the hex to both transports.
 4. **Choosing a transport:** `strings.TrimSpace(cfg.Relay) != ""` selects the relay,
    and anything else is the P2P mesh. An empty `Relay` therefore silently means "try
    UPNP". That is why the GUI refuses an empty relay address in relay mode instead of
@@ -82,8 +88,9 @@ Deferred cleanup runs in LIFO order:
 |---|---|
 | The caller cancelled `parent` (Ctrl-C, GUI Stop, GUI exit) | `nil` |
 | **The user quit mpv** | `nil` |
-| Something inside cancelled `c` (relay rejection, mesh listener failed to bind) | `errStopped` ("the party stopped unexpectedly") |
-| Setup failed (mpv binary missing, UPNP, no LAN IP) | that error |
+| Something inside cancelled `c` (relay rejection, including another file; mesh listener failed to bind) | `errStopped` ("the party stopped unexpectedly") |
+| Setup failed (unreadable file, mpv binary missing, UPNP, no LAN IP) | that error |
+| P2P: the bootstrap peer plays another file | `<addr>/hi: your video is not the same file as the party's` (`server.ErrDifferentFile`) |
 | mpv exited before the movie was ready (bad file, bad flag) | `mpv exited before the movie was ready: exit status N` |
 | mpv's own `Wait` error with nothing cancelled | that error |
 
@@ -123,7 +130,7 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
      Then `GetExternalIPAddress`.
    - Every failure is returned. A failure after the mapping was added runs the cleanup
      collected so far, so a half-done setup never leaks a mapping on the router.
-2. `server.New(c, incoming, address, hostname)`, with `/hi`, `/bye` and `/event` on a
+2. `server.New(c, incoming, address, hostname, file)`, with `/hi`, `/bye` and `/event` on a
    plain `http.Server` at `0.0.0.0:Port`. `BaseContext` is `c`, so the handlers'
    request contexts die with the party.
 3. `ListenAndServe` runs in a goroutine. **Any** error, including `ErrServerClosed` at
@@ -131,19 +138,24 @@ gives up), so check by hand that a wrong `-secret` still exits 1.
    it ends the party, and `Run` returns `errStopped`.
 4. `ser.BroadcastEvents(outgoing)` runs in a goroutine until `c` ends.
 5. `AddAddress` is called for each comma-separated `Addrs` entry. A failure is logged,
-   not fatal, so one dead bootstrap peer doesn't stop the node.
+   not fatal, so one dead bootstrap peer doesn't stop the node. The exception is
+   `server.ErrDifferentFile`: `runMesh` runs its cleanup and returns it, since this
+   node is playing another file.
 6. The returned closure runs the cleanup LIFO: `ser.Shutdown` (`/bye` to everyone) →
    `http.Server.Shutdown` → `DeletePortMapping`.
 
 ## `ws.go`: the relay client
 
-- **`dial`** connects to `addr + "/ws?room=…&hostname=…&session=…"`, with the secret
+- **`dial`** connects to `addr + "/ws?room=…&hostname=…&session=…&file=…"`, with the secret
   and create key in the `room-secret` / `create-key` **headers**, never in the query
   string (proxies log query strings). A trailing slash on `addr` is trimmed, so an
   invite pasted as `wss://host/` still dials `/ws`.
   - 403 and 400 → `errRejected`: `Connect` logs `rejected by relay` and calls
     `cancel()`. A wrong secret never becomes right, and retrying burns the relay's
     rate limiter.
+  - 409 → `errRejected` wrapping `server.ErrDifferentFile`: the room plays another
+    file. The log line says `not the same file`, which the GUI turns into its own
+    diagnosis.
   - 401 → "room X is not open yet, waiting for someone with -createKey", and it
     retries. This is a guest who arrived before the key holder.
   - Everything else, 429 and 503 included, is retried with backoff.
