@@ -95,14 +95,17 @@ ap.add_argument("--file", help="media file to play (default: generate one with f
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
 ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
+ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
 args = ap.parse_args()
+if args.audio:
+    MPVFLAGS = MPVFLAGS.replace("--ao=null", "--mute=yes")
 # every child inherits this; an mpv that sees a tty sets it raw and no-echo, and a
 # SIGKILLed one never restores it, leaving the user's terminal unusable
 os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
-    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else [])
+    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else [])
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
              for i, m in enumerate(("p2p", "relay", "caps"))]

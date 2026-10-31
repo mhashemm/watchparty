@@ -20,6 +20,7 @@ docker build -f relay/Dockerfile -t watchparty-relay .   # from the REPO ROOT
 ./e2e.py --mode p2p | relay | caps         # one phase only
 ./e2e.py --file movie.mkv                  # ...against a real file
 ./e2e.py --nodes 3                         # fewer nodes, faster
+./e2e.py --audio                           # real audio output, muted, instead of --ao=null
 ```
 
 `e2e.py` builds both binaries, generates a test file with ffmpeg and runs five
@@ -53,6 +54,12 @@ in `gui/CLAUDE.md`. Since it calls the same `party.Run`, the e2e suites cover
 everything underneath it.
 
 Needs `mpv` on PATH and a `-local`-reachable interface.
+
+`--audio` swaps `--ao=null` for the default output with `--mute=yes`, so mpv is timed
+by a real audio device. It needs a sound server, so CI doesn't run it (a runner has
+none, and mpv would fall back to no audio). It also can't show drift between two sound
+cards, since every node here shares one. Passed twice locally on PulseAudio over
+PipeWire.
 
 `e2e.py` points its own stdin at `/dev/null` before starting anything, so no child
 inherits the terminal. An mpv that sees a tty puts it in raw, no-echo mode for its key
