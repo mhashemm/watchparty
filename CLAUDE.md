@@ -177,6 +177,10 @@ positions.
   from a peer, is refused, and the party is told it is paused again ("still
   buffering"). `--cache-pause=yes` is pinned,
   so a user's config can't make mpv play through stalls instead.
+- **A node joins mid-party:** once its file has loaded it broadcasts `joined`. Every
+  node already there pauses ("paused for X: joining") and answers with `start-pos`,
+  its position. The joiner takes the first answer and seeks there. Details:
+  `mpv/CLAUDE.md`.
 - **A seek while paused** goes out as it always has. Any paused peer can seek for the
   party.
 
@@ -381,12 +385,10 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 
 ## Known issues
 
-Confirmed by reading the code, not yet fixed:
-
-- [ ] **Playback drifts apart and nothing corrects it.** `time-pos` only syncs while
-  paused, so different start latency and buffering pull the nodes apart over a long
-  film, and they stay apart until someone pauses. Planned fix: a periodic position
-  check that corrects only drift past ~2s.
+None open. Drift was fixed by preventing it at the source (see Sync semantics):
+stalls, seeks while playing and mid-party joins all pause the party. Resume and
+pause latency cancel out. Sound card clocks still differ, by an estimated 20–50 ppm
+(~0.1–0.4s over two hours, not measured), and the next pause or seek resets it.
 
 ## Reference
 

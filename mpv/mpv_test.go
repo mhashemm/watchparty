@@ -581,3 +581,96 @@ func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
 		t.Fatalf("sent %q, want the resume refused", got)
 	}
 }
+
+func peer(host, event string) IncomingMessage {
+	return IncomingMessage{HostName: host, Event: []byte(event)}
+}
+
+// Once its file has loaded, a node says so, and from then on it takes the first
+// position the party answers with.
+func TestJoinerAnnouncesItselfOnceLoaded(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.paused = true
+	incoming := make(chan IncomingMessage)
+	close(c.ready)
+	go c.ProcessIncomingEvents(incoming)
+
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want joined", e)
+	}
+	incoming <- peer("a", `{"event":"property-change","name":"start-pos","data":"40.000000"}`)
+	if got := next(t, requests); got != "set_property time-pos 40.000000" {
+		t.Fatalf("sent %q, want the party's position", got)
+	}
+	next(t, requests)
+
+	// the first answer is the one; a later one comes from another node and is ignored
+	incoming <- peer("b", `{"event":"property-change","name":"start-pos","data":"41.000000"}`)
+	incoming <- peer("b", `{"name":"show-text","data":"mark"}`)
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want the second answer ignored", got)
+	}
+	select {
+	case e := <-outgoing:
+		t.Fatalf("broadcast %s after the first joined", e)
+	default:
+	}
+}
+
+// A node already in the party pauses it for a joiner and answers with where it
+// stopped.
+func TestJoinPausesThePartyAndSendsThePosition(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := liveClient(t)
+	send(propertyChangeLine(timePos, "33.500000", 0))
+
+	go c.apply(peer("j", `{"name":"joined"}`))
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the party paused", got)
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	got := map[string]bool{}
+	for range 2 {
+		e := nextEvent(t, outgoing)
+		got[e.Name+"="+e.Data] = true
+	}
+	if !got[pause+"=yes"] || !got[startPos+"=33.500000"] {
+		t.Fatalf("broadcast %v, want the pause and the position", got)
+	}
+	if got := next(t, requests); got != "show-text paused for j: joining 5000" {
+		t.Fatalf("sent %q, want the local notice", got)
+	}
+}
+
+// A node still waiting for its own position has none to give, so it doesn't answer.
+func TestJoiningNodeDoesNotAnswerAnotherJoiner(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.paused, c.joining = true, true
+
+	c.apply(peer("j", `{"name":"joined"}`))
+	c.apply(peer("j", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q before the mark", got)
+	}
+	select {
+	case e := <-outgoing:
+		t.Fatalf("answered another joiner with %s", e)
+	default:
+	}
+}
+
+// A joiner already where the party is skips the seek, but that still was its answer.
+func TestStartPosAlreadyThereStillCounts(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.joining, c.pos = true, true, 40
+
+	c.apply(peer("a", `{"event":"property-change","name":"start-pos","data":"40.050000"}`))
+	c.apply(peer("b", `{"event":"property-change","name":"start-pos","data":"55.000000"}`))
+	c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want neither answer to seek", got)
+	}
+}

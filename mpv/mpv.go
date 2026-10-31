@@ -25,6 +25,8 @@ const (
 	setProperty    = "set_property"
 	showText       = "show-text"
 	pauseReason    = "pause-reason"
+	joined         = "joined"
+	startPos       = "start-pos"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
@@ -148,6 +150,7 @@ type Client struct {
 	seeking  bool
 	stalled  bool
 	reason   string
+	joining  bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -218,7 +221,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking = false
+				c.seeking, c.joining = false, false
 			}
 		case timePos:
 			if !c.paused {
@@ -228,6 +231,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 				}
 				return nil, errDoNotSend
 			}
+			c.joining = false
 		case pausedForCache:
 			c.stalled = event.paused()
 			if c.stalled && !c.paused {
@@ -334,6 +338,15 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			c.apply(e)
 		}
 	}
+	c.mu.Lock()
+	c.joining = true
+	c.mu.Unlock()
+	hello, _ := json.Marshal(Event{Name: joined})
+	select {
+	case c.outgoing <- hello:
+	case <-c.ctx.Done():
+		return
+	}
 	for _, e := range notices {
 		c.apply(e)
 	}
@@ -360,11 +373,63 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.showText(event.Data)
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
+		case joined:
+			err = c.welcome(e.HostName)
+		case startPos:
+			err = c.arrive(event, e.HostName)
 		}
 	}
 	if err != nil {
 		log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 	}
+}
+
+func (c *Client) welcome(hostname string) error {
+	c.mu.Lock()
+	joining, playing := c.joining, !c.paused
+	c.mu.Unlock()
+	if joining {
+		return nil
+	}
+	if playing {
+		err := c.pauseReq(true)
+		if err != nil {
+			return err
+		}
+		c.showText(fmt.Sprintf("paused for %s: joining", hostname))
+	}
+	c.mu.Lock()
+	pos := strconv.FormatFloat(c.pos, 'f', 6, 64)
+	c.mu.Unlock()
+	b, _ := json.Marshal(Event{EventType: propertyChange, Name: startPos, Data: pos})
+	select {
+	case c.outgoing <- b:
+	case <-c.ctx.Done():
+	}
+	return nil
+}
+
+func (c *Client) arrive(event Event, hostname string) error {
+	pos, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	joining := c.joining
+	c.joining = false
+	there := math.Abs(pos-c.pos) <= timePosTolerance
+	for _, s := range c.seeks {
+		there = there || math.Abs(pos-s) <= timePosTolerance
+	}
+	c.mu.Unlock()
+	if !joining || there {
+		return nil
+	}
+	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
+	if err != nil {
+		return err
+	}
+	return c.sync(Event{Name: timePos, Data: event.Data}, hostname)
 }
 
 func (c *Client) pauseReq(paused bool) error {
@@ -401,6 +466,9 @@ func (c *Client) pause(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	c.paused = paused
+	if !paused {
+		c.joining = false
+	}
 	c.mu.Unlock()
 
 	actionText := "resumed"
@@ -430,6 +498,7 @@ func (c *Client) sync(event Event, hostname string) error {
 	c.mu.Lock()
 	c.seeks = append(c.seeks, pos)
 	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
+	c.joining = false
 	c.mu.Unlock()
 
 	err = c.conn.do(setProperty, timePos, event.Data)

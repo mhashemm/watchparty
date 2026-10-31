@@ -186,8 +186,9 @@ member once its 64-frame buffer fills. Until `ready`:
   overrides are discarded
 - everything else (the notices) is kept in order
 
-On `ready` it applies `time-pos` first, then `pause`, then the notices, and then
-carries on applying each event as it arrives. Position goes first because mpv starts
+On `ready` it applies `time-pos` first, then `pause`, then sets `joining` and
+broadcasts `{"name":"joined"}`, then applies the notices, and then carries on applying
+each event as it arrives. Position goes first because mpv starts
 `--pause`d, so the seek lands before any resume. Five seeks during a load become one
 seek and one "synced by", where the old replay showed all five. `e2e.py` `[R11d]` covers this
 against a stream whose HTTP server holds each request for 3s.
@@ -198,15 +199,51 @@ dispatched by `Name`:
 - **`pause`** → `pause(event, host)`.
   - A no-op if the node is already in that state. mpv emits no `property-change` for
     a no-op set, so no marker is left dangling.
+  - A resume while `stalled` is refused (see `pauseParty` above).
   - Otherwise it marks `applied`, sends `set_property pause`, updates `c.paused`, and
     shows `paused by <host>` / `resumed by <host>`.
 - **`time-pos`** → `sync(event, host)`.
   - Ignored unless this node is paused, and ignored for an empty value.
-  - Otherwise it marks `applied`, sends `set_property time-pos`, and shows `synced by
-    <host>`.
+  - Otherwise it appends to `seeks`, sends `set_property time-pos`, and shows `synced
+    by <host>`.
+- **`pause-reason`** → shows `paused for <host>: <reason>`.
+- **`joined`** → `welcome(host)`, see below.
+- **`start-pos`** → `arrive(event, host)`, see below.
 - **`show-text`** → `showText(event.Data)`. These are the join/leave/connect notices
   that `server` and `relay` synthesize.
 - Errors are logged as `ProcessIncomingEvents: … [event=…] [host=…]` and skipped.
+
+### Joining mid-party: `joined`, `welcome`, `start-pos`, `arrive`
+
+A node that joins a playing party opens at 0, paused. Without help it would stay
+behind until the next seek. Instead:
+
+1. **The joiner, once its file has loaded,** sets `joining` and broadcasts `joined`
+   (from `ProcessIncomingEvents`, after the held events, so a held resume can't clear
+   it). The pause therefore waits until the joiner can actually play. A joiner whose
+   mpv fails never pauses anyone, and the transports' "has joined" / "has left"
+   notices are unchanged. Sent once: a relay reconnect doesn't resend it.
+2. **Every node already in the party, in `welcome`:**
+   - if it is playing, it pauses its own mpv (`pauseReq`, not marked `applied`, so the
+     pause goes out as its own) and shows `paused for <joiner>: joining`
+   - it broadcasts `{"event":"property-change","name":"start-pos","data":<c.pos>}`
+   - a node that is itself still `joining` doesn't answer: its position isn't the
+     party's
+3. **The joiner, in `arrive`,** takes the first `start-pos` and clears `joining`:
+   - it applies a pause as from that peer, since it can arrive before the pauses do
+   - then `sync`
+   - It skips the seek if it is already within 0.1s of `c.pos` or of an applied seek.
+     `[R11d]`'s joiner has already applied the held seek by then.
+   - Every later `start-pos`, and every one at a node that isn't `joining`, is
+     ignored.
+4. `joining` is also cleared by any resume and any seek, own or applied, so the room's
+   first node stops being `joining` once the party starts.
+
+Older nodes' `apply` ignores both names. `TestJoinerAnnouncesItselfOnceLoaded`,
+`TestJoinPausesThePartyAndSendsThePosition`, `TestJoiningNodeDoesNotAnswerAnotherJoiner`
+and `TestStartPosAlreadyThereStillCounts` cover it. `e2e.py` `[11c]` (P2P), `[R9]`,
+`[R10b]` and `[R11d2]` (a joiner whose stream takes 3s to load while the party plays)
+cover it against real mpv.
 
 **Never hold `c.mu` across `do()`.** `do()` waits for `watch()`, and `watch()` needs
 `c.mu` for `handleEvent`, so holding it turns every call into a 5s timeout. `pause()`

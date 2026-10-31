@@ -293,7 +293,7 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", mpvflags=""):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", mpvflags="", port=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
@@ -304,7 +304,7 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
         if create_key:
             cmd += ["-createKey", create_key]
     else:
-        cmd += ["-local", "-port", str(PORTS[name])]
+        cmd += ["-local", "-port", str(port or PORTS[name])]
         if evict:
             cmd += ["-evictAfter", evict]
         if addrs:
@@ -626,6 +626,22 @@ def p2p_suite():
     stop("nodeSame")
     until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
 
+    print("\n[11c] a mid-party joiner pauses the party once loaded, and starts where it stopped")
+    setp(A, "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
+    launch("nodeMid", addr_of[A], tag="mid", port=PORTS["nodeSame"])
+    until(lambda: booted("mid"), BOOT)
+    resolve("mid")
+    until(lambda: all(get(n, "pause") is True for n in NODES + ["mid"])
+          and near(get("mid", "time-pos"), get(A, "time-pos"), 0.3))
+    at = get(A, "time-pos")
+    for n in NODES:
+        ok(f"{n} paused for the joiner", get(n, "pause") is True)
+        ok(f"{n} told why", "paused for nodeMid: joining" in osd(n))
+    ok(f"the joiner starts at {at:.2f}s, not 0", near(get("mid", "time-pos"), at, 0.3) and at > 1,
+       f"time-pos={get('mid', 'time-pos')}")
+    stop("mid")
+
     print(f"\n[12] SIGKILL {LAST}: every survivor evicts it after 3 strikes and stays synced")
     stop(LAST, signal.SIGKILL)
     dead = addr_of[LAST]
@@ -819,11 +835,14 @@ def relay_suite():
     print("\n[R9] a late joiner does not rewind the party to 0")
     launch("nodeLate", room=ROOM, tag="late", relay=RELAY_URL + "/")
     until(lambda: booted("late") and connected("late"), BOOT)
+    resolve("late")
+    until(lambda: near(get("late", "time-pos"), 33.0, 0.15))
     time.sleep(QUIET)  # a rewind would go out as soon as its file loaded
     ok("a trailing slash on the relay address still connects", connected("late"))
     for n in NODES:
         v = get(n, "time-pos")
         ok(f"{n} still at 33s after a late join", near(v, 33.0), f"time-pos={v}")
+    ok("the late joiner starts at 33s too", near(get("late", "time-pos"), 33.0, 0.15), f"time-pos={get('late', 'time-pos')}")
     stop("late")
 
     print("\n[R10] a different room is isolated")
@@ -837,6 +856,22 @@ def relay_suite():
         ok(f"{n} ignored the other room's seek", near(v, 33.0), f"time-pos={v}")
     ok("nobody in the main room saw the other room's node", not any("nodeOther" in known(n) for n in NODES))
     stop("other")
+
+    print("\n[R10b] a mid-party joiner pauses the party once loaded, and starts where it stopped")
+    setp(A, "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in NODES))
+    launch("nodeMid", room=ROOM, tag="mid")
+    until(lambda: booted("mid"), BOOT)
+    resolve("mid")
+    until(lambda: all(get(n, "pause") is True for n in NODES + ["mid"])
+          and near(get("mid", "time-pos"), get(A, "time-pos"), 0.3))
+    at = get(A, "time-pos")
+    for n in NODES:
+        ok(f"{n} paused for the joiner", get(n, "pause") is True)
+        ok(f"{n} told why", "paused for nodeMid: joining" in osd(n))
+    ok(f"the joiner starts at {at:.2f}s, not 0", near(get("mid", "time-pos"), at, 0.3) and at > 1,
+       f"time-pos={get('mid', 'time-pos')}")
+    stop("mid")
 
     print("\n[R11] a wrong secret is refused and the node gives up instead of retrying")
     launch("nodeBad", room=ROOM, secret="wrongsecret", tag="bad")
@@ -890,13 +925,12 @@ def relay_suite():
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
             body = data[start:end + 1]
-            if not (Quiet.slow and self.headers.get("User-Agent") == "slow"):
-                return self.wfile.write(body)
-            step = Quiet.slow // 10
-            try:
+            slow = Quiet.slow and self.headers.get("User-Agent") == "slow"
+            step = Quiet.slow // 10 if slow else len(body)
+            try:  # mpv drops a connection when it seeks
                 for i in range(0, len(body), step):
                     self.wfile.write(body[i:i + step])
-                    time.sleep(0.1)
+                    time.sleep(0.1 if slow else 0)
             except OSError:
                 pass
 
@@ -936,7 +970,23 @@ def relay_suite():
     ok("nodeUrl4 is where nodeUrl1 stopped", near(get("nodeUrl4", "time-pos"), 50), f"at {get('nodeUrl4', 'time-pos')}")
     ok("one seek, not five", osd("nodeUrl4").count("synced by nodeUrl1") == 1,
        f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
-    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4"):
+
+    print("\n[R11d2] a joiner slow to load while the party plays pauses it once loaded, not before")
+    setp("nodeUrl1", "pause", False)
+    until(lambda: all(get(n, "pause") is False for n in ("nodeUrl1", "nodeUrl2", "nodeUrl4")))
+    Quiet.delay = 3
+    launch("nodeUrl5", room="urlroom", media=url)
+    until(lambda: "nodeUrl5 has joined" in osd("nodeUrl1"), BOOT)
+    ok("the party plays on while it loads", not booted("nodeUrl5") and get("nodeUrl1", "pause") is False)
+    until(lambda: booted("nodeUrl5"), BOOT)
+    Quiet.delay = 0
+    resolve("nodeUrl5")
+    until(lambda: get("nodeUrl1", "pause") is True and near(get("nodeUrl5", "time-pos"), get("nodeUrl1", "time-pos"), 0.3))
+    at = get("nodeUrl1", "time-pos")
+    ok("then it paused the party", get("nodeUrl1", "pause") is True and "paused for nodeUrl5: joining" in osd("nodeUrl1"))
+    ok(f"and starts at {at:.2f}s", near(get("nodeUrl5", "time-pos"), at, 0.3) and at > 51,
+       f"time-pos={get('nodeUrl5', 'time-pos')}")
+    for n in ("nodeUrl1", "nodeUrl2", "nodeUrl3", "nodeUrl4", "nodeUrl5"):
         stop(n)
 
     print("\n[R11f] a node that runs out of cache pauses the party, and so does a resume while it waits")
