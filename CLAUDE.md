@@ -21,7 +21,7 @@ make -j gui linux                          # components × OSes: any of cli gui 
 make -j test                               # unit tests (-race) and e2e.py together, ~45s
 go test -race -count=30 -cpu=1,4,16 ./...  # stress a changed test before trusting it
 go mod tidy                                # run it yourself; CI only does go mod download
-./e2e.py [--mode p2p|relay|caps] [--file movie.mkv] [--nodes 3]
+./e2e.py [--mode p2p|relay|caps|gui] [--file movie.mkv] [--nodes 3]
 CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -room r -secret s [-createKey k]
 ```
 

@@ -6,7 +6,7 @@ drives them by writing to one node's mpv IPC socket, then asserts the result on
 the other nodes' mpv. OSD notices are read back out of each node's log, since
 every show-text command appears there verbatim.
 
-Three phases, run by default at the same time as three copies of this script,
+Four phases, run by default at the same time as four copies of this script,
 each on its own ports and in its own run directory:
 
   p2p    the direct HTTP mesh. Nobody is given the full peer list: each node
@@ -20,17 +20,20 @@ each on its own ports and in its own run directory:
          refused, and that the same file renamed, moved and re-dated is not.
   caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
          client that never answers pings.
+  gui    two real GUIs, each opening its own page in headless Chromium, driven
+         through the page over CDP: the form, the invite, the feed, Stop,
+         history, the tabs, and closing the window.
 
-    ./e2e.py                    # all three phases in parallel, ~45 seconds
+    ./e2e.py                    # all four phases in parallel, ~45 seconds
     ./e2e.py --mode relay       # one phase
     ./e2e.py --file movie.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
 
-Needs go, mpv and (unless --file is given) ffmpeg. mpv runs headless.
+Needs go, mpv, Chrome or Chromium and (unless --file is given) ffmpeg. All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
+import argparse, base64, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
 import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
@@ -94,7 +97,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--file", help="media file to play (default: generate one with ffmpeg)")
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
-ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
+ap.add_argument("--mode", choices=("p2p", "relay", "caps", "gui", "all"), default="all")
 ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
 args = ap.parse_args()
 if args.audio:
@@ -108,7 +111,7 @@ if args.mode == "all":
     flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else [])
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
-             for i, m in enumerate(("p2p", "relay", "caps"))]
+             for i, m in enumerate(("p2p", "relay", "caps", "gui"))]
     for m, p in procs:
         print(f"\n######## {m} ########\n" + p.communicate()[0], end="")
     bad = [m for m, p in procs if p.returncode]
@@ -128,6 +131,8 @@ PORTS["http"] = args.port_base + len(NODES) + 4
 PORTS["nodeKeep"] = args.port_base + len(NODES) + 5
 PORTS["lagA"] = args.port_base + len(NODES) + 6
 PORTS["lagB"] = args.port_base + len(NODES) + 7
+PORTS["cdpHost"] = args.port_base + len(NODES) + 8
+PORTS["cdpGuest"] = args.port_base + len(NODES) + 9
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -484,6 +489,118 @@ def stub_stop(p):
     p.stdout.close()
 
 
+class CDP:
+    """A page over the Chrome DevTools Protocol: a websocket client just big enough
+    for Runtime.evaluate, so the suite needs nothing outside the stdlib."""
+
+    def __init__(self, url):
+        u = urllib.parse.urlparse(url)
+        self.s = socket.create_connection((u.hostname, u.port), timeout=10)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.s.sendall((f"GET {u.path} HTTP/1.1\r\nHost: {u.netloc}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        self.f = self.s.makefile("rb")
+        while self.f.readline() not in (b"\r\n", b""):
+            pass
+        self.id = 0
+
+    def call(self, method, **params):
+        self.id += 1
+        data = json.dumps({"id": self.id, "method": method, "params": params}).encode()
+        n, mask = len(data), os.urandom(4)
+        size = bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + n.to_bytes(2, "big") if n < 65536 else bytes([0x80 | 127]) + n.to_bytes(8, "big")
+        self.s.sendall(b"\x81" + size + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+        while True:
+            m = json.loads(self.recv())
+            if m.get("id") == self.id:
+                if "error" in m:
+                    raise RuntimeError(m["error"])
+                return m["result"]
+
+    def recv(self):
+        out = b""
+        while True:
+            b0, b1 = self.f.read(2)
+            n = b1 & 0x7F
+            if n >= 126:
+                n = int.from_bytes(self.f.read(2 if n == 126 else 8), "big")
+            out += self.f.read(n)
+            if b0 & 0x80:
+                return out
+
+    def js(self, expr):
+        r = self.call("Runtime.evaluate", expression=expr, returnByValue=True, awaitPromise=True)
+        if "exceptionDetails" in r:
+            raise RuntimeError(r["exceptionDetails"])
+        return r["result"].get("value")
+
+
+def children(pid):
+    out = []
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            with open(d + "/status") as f:
+                if f"PPid:\t{pid}\n" in f.read():
+                    out.append(int(os.path.basename(d)))
+        except OSError:
+            pass
+    return out
+
+
+def launch_gui(name, cdp_port):
+    """A real GUI in its own HOME, XDG and TMPDIR. Its only browser is a desktop entry
+    for a wrapper that runs headless Chromium with a debugging port, so the GUI's own
+    launch path opens the window and nothing appears on screen."""
+    home = f"{RUN}/{name}"
+    for d in ("bin", "config", "data/applications", "tmp"):
+        os.makedirs(f"{home}/{d}")
+    os.symlink(shutil.which("mpv"), f"{home}/bin/mpv")
+    with open(f"{home}/bin/xdg-open", "w") as f:
+        f.write("#!/bin/sh\n")
+    with open(f"{home}/browser.sh", "w") as f:
+        f.write(f'#!/bin/sh\necho "$@" > {home}/browser.args\nPATH=/usr/bin:/bin exec {BROWSER} --headless=new '
+                f'--remote-debugging-port={cdp_port} "$@"\n')
+    for p in (f"{home}/bin/xdg-open", f"{home}/browser.sh"):
+        os.chmod(p, 0o755)
+    with open(f"{home}/data/applications/e2e-chromium.desktop", "w") as f:
+        f.write(f"[Desktop Entry]\nType=Application\nName=e2e\nExec={home}/browser.sh %U\nMimeType=x-scheme-handler/https;\n")
+    with open(f"{home}/config/mimeapps.list", "w") as f:
+        f.write("[Default Applications]\nx-scheme-handler/https=e2e-chromium.desktop\n")
+    env = {"HOME": home, "PATH": f"{home}/bin", "TMPDIR": f"{home}/tmp", "XDG_CONFIG_HOME": f"{home}/config",
+           "XDG_DATA_HOME": f"{home}/data", "XDG_DATA_DIRS": f"{home}/data"}
+    path = f"{RUN}/{name}.log"
+    # its own process group, so cleanup takes the browser and mpv with it
+    p = subprocess.Popen([GUI_BIN], env=env, stdout=open(path, "wb"), stderr=subprocess.STDOUT, start_new_session=True)
+    nodes[name] = {"proc": p, "log": path, "sock": None, "addr": None, "home": home, "gui": True}
+    until(lambda: "gui: http" in log(name), BOOT)
+    url = log(name).split("gui: ", 1)[1].split("\n", 1)[0].strip()
+
+    def page():
+        try:
+            tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{cdp_port}/json/list", timeout=1))
+        except OSError:
+            return None
+        return next((t["webSocketDebuggerUrl"] for t in tabs if t["type"] == "page" and t["url"].startswith(url)), None)
+    until(page, BOOT)
+    nodes[name].update(url=url, page=CDP(page()))
+    # the first loadState fills the form; filling it before then would be overwritten
+    until(lambda: js(name, 'document.getElementById("store-path")?.textContent') not in (None, ""), BOOT)
+    return name
+
+
+def js(n, expr):
+    return nodes[n]["page"].js(expr)
+
+
+def feed(n):
+    """The page's party feed, newest first."""
+    return js(n, '[...$("feed").children].filter(li => !li.classList.contains("empty")).map(li => li.lastChild.textContent)')
+
+
+def status(n):
+    return js(n, '$("status").textContent')
+
+
 need("go")
 need("mpv")
 print(f"run directory: {RUN}")
@@ -492,6 +609,12 @@ subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=
 subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
 BIN = RUN + "/watchparty"
 RELAY_BIN = RUN + "/relay"
+GUI_BIN = RUN + "/watchparty-gui"
+if args.mode == "gui":
+    BROWSER = next(filter(None, map(shutil.which, ("google-chrome", "chromium", "google-chrome-stable"))), None)
+    if not BROWSER:
+        sys.exit("the gui phase needs Chrome or Chromium on PATH")
+    subprocess.run(["go", "build", "-o", GUI_BIN, "./gui"], cwd=REPO, check=True)
 
 if args.file:
     MEDIA = os.path.abspath(args.file)
@@ -1290,10 +1413,126 @@ def caps_suite():
     relay.kill(); relay.wait(timeout=10)
 
 
+def gui_suite():
+    H, G = "guiHost", "guiGuest"
+    print("\n=== gui setup: two real GUIs, each in headless Chromium, through one relay ===")
+    launch_relay()
+    until(lambda: listening(PORTS["relay"]))
+    for n, port in ((H, PORTS["cdpHost"]), (G, PORTS["cdpGuest"])):
+        launch_gui(n, port)
+
+    print("\n[G1] the GUI opens its own app window at the phone-sized window")
+    for n in (H, G):
+        argv = open(f"{nodes[n]['home']}/browser.args").read()
+        ok(f"{n} opened {nodes[n]['url']} as an app", f"--app={nodes[n]['url']} " in argv, argv.strip())
+        ok(f"{n} asked for 560x940", "--window-size=560,940" in argv)
+
+    print("\n[G2] the tabs switch views and the address remembers which")
+    for view in ("history", "settings", "party"):
+        js(H, f'document.querySelector(".tabs button[data-view={view}]").click()')
+        shown = js(H, '["party", "history", "settings"].filter(v => !$("view-" + v).hidden)')
+        ok(f"{view} tab shows only its view", shown == [view], str(shown))
+        ok(f"{view} tab sets the address", js(H, "location.hash") == ("" if view == "party" else "#" + view))
+
+    def fill(n, **fields):
+        js(n, f'for (const [k, v] of Object.entries({json.dumps(fields)})) $(k).value = v')
+
+    print("\n[G3] the host starts a relay party from the form and gets an invite")
+    fill(H, hostname=H, file=MEDIA, mpvFlags=MPVFLAGS)
+    js(H, f'setMode("relay"); $("relay").value = {json.dumps(RELAY_URL)}; $("go").click()')
+    until(lambda: status(H).startswith("You're in"), BOOT)
+    ok(f"{H} is in", status(H).startswith("You're in"), status(H))
+    invite = js(H, '$("share-text").textContent')
+    ok(f"{H} shows an invite", invite.startswith(f"-relay {RELAY_URL} -room "), invite)
+    ok(f"{H} shows the invite box", js(H, '!$("share").hidden'))
+    ok(f"{H} hides the form", js(H, '$("fields").hidden'))
+    nodes[H]["sock"] = child_mpv_socket(nodes[H]["proc"].pid)
+
+    print("\n[G4] the guest pastes the whole invite line and joins")
+    fill(G, hostname=G, file=MEDIA, mpvFlags=MPVFLAGS)
+    js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '
+          '$("invite").dispatchEvent(new Event("input"))')
+    ok(f"{G} filled the room from the invite", js(G, '$("room").value') in invite and js(G, '$("room").value') != "")
+    js(G, '$("go").click()')
+    until(lambda: status(G).startswith("You're in") and f"{G} has joined" in feed(H), BOOT)
+    ok(f"{G} is in", status(G).startswith("You're in"), status(G))
+    ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
+    nodes[G]["sock"] = child_mpv_socket(nodes[G]["proc"].pid)
+
+    print(f"\n[G5] a resume in {G}'s mpv: the feeds say who did it")
+    setp(G, "pause", False)
+    until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
+    ok(f"{H}'s mpv resumed", get(H, "pause") is False)
+    ok(f"{H}'s feed credits {G}", f"resumed by {G}" in feed(H), str(feed(H)))
+    ok(f"{G}'s feed says you", feed(G)[:1] == ["resumed by you"], str(feed(G)))
+
+    print(f"\n[G6] a seek while playing pauses everyone, and the feeds say why")
+    ipc(nodes[G]["sock"], "seek", 30)
+    until(lambda: get(H, "pause") is True and f"paused for {G}: seek" in feed(H) and "paused for everyone: seek" in feed(G))
+    ok(f"{H}'s feed says why", f"paused for {G}: seek" in feed(H), str(feed(H)))
+    ok(f"{G}'s feed says why", "paused for everyone: seek" in feed(G), str(feed(G)))
+    ok(f"{G}'s feed doesn't also say paused by you", "paused by you" not in feed(G), str(feed(G)))
+
+    print(f"\n[G7] resuming after the seek shows up in {G}'s feed")
+    setp(G, "pause", False)
+    until(lambda: get(H, "pause") is False and feed(G)[:1] == ["resumed by you"])
+    ok(f"{G}'s feed moved on from the seek", feed(G)[:1] == ["resumed by you"], str(feed(G)))
+
+    print(f"\n[G8] a pause in {H}'s mpv")
+    setp(H, "pause", True)
+    until(lambda: get(G, "pause") is True and feed(H)[:1] == ["paused by you"] and f"paused by {H}" in feed(G))
+    ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
+    ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
+
+    print(f"\n[G9] {G} ends the party from the page")
+    js(G, 'window.confirm = () => true; $("go").click()')
+    until(lambda: status(G) == "The party has ended." and f"{G} has left" in feed(H))
+    ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
+    ok(f"{G} shows the form again", js(G, '!$("fields").hidden && $("go-label").textContent == "Start the party"'))
+    ok(f"{G}'s mpv closed", until(lambda: not child_mpv_socket(nodes[G]["proc"].pid)))
+    ok(f"{H}'s feed says {G} left", f"{G} has left" in feed(H), str(feed(H)))
+
+    print(f"\n[G10] {G}'s history has the party, and Watch again fills the form")
+    js(G, 'document.querySelector(".tabs button[data-view=history]").click()')
+    until(lambda: js(G, '$("history-list").children.length') == 1)
+    item = js(G, '$("history-list").textContent')
+    ok("one party, with the host, over the internet", f"with {H}" in item and "over the internet" in item, item)
+    js(G, '$("history-list").querySelector(".again").click()')
+    room = invite.split("-room ", 1)[1].split()[0]
+    ok("Watch again filled the room and file", js(G, f'$("room").value == {json.dumps(room)} && $("file").value == {json.dumps(MEDIA)}'))
+    ok("Watch again went back to the party", js(G, '!$("view-party").hidden'))
+
+    print(f"\n[G11] closing {H}'s window ends its GUI and its party")
+    browser = next(c for c in children(nodes[H]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
+    os.kill(browser, signal.SIGTERM)
+    ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None))
+    ok(f"{H} logged it", "gui: window closed" in log(H))
+    ok(f"{H}'s mpv closed", until(lambda: not listening_unix(nodes[H]["sock"])))
+    stop(G)
+
+
+def listening_unix(path):
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 try:
-    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite}[args.mode]()
+    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite, "gui": gui_suite}[args.mode]()
 finally:
     for name in list(nodes):
+        if nodes[name].get("gui"):
+            try:
+                os.killpg(nodes[name]["proc"].pid, signal.SIGKILL)
+            except OSError:
+                pass
+            nodes[name]["proc"].wait(timeout=5)
+            continue
         stop(name, signal.SIGKILL, timeout=5)
     for p in stubs + relays:
         if p.poll() is None:

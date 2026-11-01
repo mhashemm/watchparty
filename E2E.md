@@ -1,13 +1,13 @@
 # E2E.md
 
 Notes for working on `e2e.py`. What each phase covers is in its docstring; this file
-has the rules for writing and running cases. Needs `mpv` and `ffmpeg` on PATH and a
-`-local`-reachable interface.
+has the rules for writing and running cases. Needs `mpv`, `ffmpeg` and Chrome or
+Chromium on PATH and a `-local`-reachable interface.
 
 ## Phases
 
-The three phases run at once as three copies of the script, on `--port-base` + 0, 20
-and 40, which works because relay-mode nodes open no ports. The slowest phase sets the
+The four phases run at once as four copies of the script, on `--port-base` + 0, 20,
+40 and 60, which works because relay-mode nodes open no ports. The slowest phase sets the
 total, so a new slow case goes in whichever phase is shortest. `caps` is the longest
 today: `[R20]` waits out the real 30s ping and 10s pong timeout.
 
@@ -15,6 +15,13 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
   one on the 5-minute default.
 - **`relay`**: every case ends nodes with a signal except `[R15b]`, which quits mpv.
   Keep it: the mpv-quit bug passed every other case.
+- **`gui`**: each GUI gets its own HOME, XDG folders, TMPDIR and a `PATH` with only
+  `mpv` and a no-op `xdg-open`. Its one browser is a desktop entry, set as the `mimeapps.list` default, for a
+  wrapper that adds `--headless=new --remote-debugging-port`, so the GUI's own launch
+  path opens the page. Drive it with `js(n, expr)`, read it with `feed()`/`status()`.
+  A real `confirm()` waits for a click forever: replace it in the page before
+  clicking End the party.
+  Cleanup kills each GUI's process group, which takes its browser and mpv.
 - URL cases share one HTTP server (`Quiet`). To slow one client only, use `late` and
   `--user-agent=late`; `delay` holds every client, which made `[R11d2]` flaky.
 - Slow networks come from `lag(port, target, delay)`, a TCP proxy. P2P can't use it,
