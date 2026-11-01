@@ -398,7 +398,8 @@ def cli_suite():
         ok("its child is mpv.exe", bool(nodes[M]["pipe"]))
         pipe = nodes[M]["pipe"]
         ctrl_break(M)
-        ok("the party ended", until(lambda: nodes[M]["proc"].poll() is not None, 20), "Run never returned: mpv.exe kept the pipe open")
+        ended = until(lambda: nodes[M]["proc"].poll() is not None, 20)
+        ok("the party ended", ended, "" if ended else "Run never returned: mpv.exe kept the pipe open")
         ok("and took mpv.exe with it", until(lambda: not exists(pipe)))
     relay.kill()
 
