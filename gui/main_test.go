@@ -139,6 +139,8 @@ func TestOnlyEdgeGetsTheEdgeFlag(t *testing.T) {
 		"brave-browser": false,
 		`C:\Program Files\Google\Chrome\Application\chrome.exe`: false,
 		"microsoft-edge": true,
+		"/var/lib/flatpak/exports/bin/com.microsoft.Edge":              true,
+		"/var/lib/flatpak/exports/bin/org.chromium.Chromium":           false,
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`: true,
 	} {
 		if got := slices.Contains(browserArgs(browser, "u", "p"), "--disable-features=msImplicitSignin"); got != want {

@@ -337,9 +337,15 @@ func openWindow(url string) (<-chan struct{}, *os.Process) {
 		os.RemoveAll(profile)
 	}
 	cmd := openURL(url)
-	if cmd.Start() == nil {
-		go cmd.Wait()
-	}
+	go func() {
+		err := cmd.Start()
+		if err == nil {
+			err = cmd.Wait()
+		}
+		if err != nil {
+			log.Printf("gui: no browser could be opened (%v), open %s yourself\n", err, url)
+		}
+	}()
 	return nil, nil
 }
 

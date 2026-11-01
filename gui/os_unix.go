@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -17,7 +18,20 @@ import (
 
 const exeSuffix = ""
 
-var browsers = []string{"google-chrome", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"}
+var browsers = append([]string{"google-chrome", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"}, flatpaks(os.Getenv("XDG_DATA_HOME"), os.Getenv("HOME"))...)
+
+func flatpaks(dataHome, home string) []string {
+	if dataHome == "" {
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	var paths []string
+	for _, dir := range []string{filepath.Join(dataHome, "flatpak"), "/var/lib/flatpak"} {
+		for _, id := range []string{"com.google.Chrome", "org.chromium.Chromium", "com.microsoft.Edge", "com.brave.Browser"} {
+			paths = append(paths, filepath.Join(dir, "exports", "bin", id))
+		}
+	}
+	return paths
+}
 
 func openURL(url string) *exec.Cmd {
 	if runtime.GOOS == "darwin" {

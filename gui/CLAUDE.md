@@ -329,7 +329,23 @@ install it themselves.
     - The feature name comes from Edge's binary, not from docs, so a later Edge
       may rename it. Each browser gets only the flags that are its own.
   - **Only Chromium-family browsers are in the list**, because only they have an
-    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name.
+    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name, then the
+    same four as Flatpaks.
+    - A Flatpak browser is never on `PATH`. Flatpak exports a launcher script per
+      app at `<installation>/exports/bin/<app id>`, for the user installation
+      (`$XDG_DATA_HOME/flatpak`, default `~/.local/share/flatpak`) and the system
+      one (`/var/lib/flatpak`), and that path is what's run. `flatpak run <id>` would
+      be wrong: it starts even when the app isn't installed and exits at once, so the
+      loop would stop on a browser that never opened.
+    - Missing from the list, a Flatpak Chromium left no window: the `xdg-open`
+      fallback failed without a word.
+    - Checked only with a stand-in launcher at the exported path. Not run against a
+      real Flatpak: whether its sandbox sees the seeded profile in the host's `/tmp`,
+      and whether `Kill` (on `bwrap`, which `flatpak run` execs into) closes the
+      window.
+  - **When the fallback fails too**, `openURL` not starting or exiting non-zero (no
+    `xdg-open`, no default browser), the log says `gui: no browser could be opened`
+    with the URL to open by hand.
   - Windows lists absolute paths, **Chrome first, then Edge**. Edge ships with every
     Windows 10/11, so the app window always works there. Chrome goes first because
     Edge's startup boost can hand windows off. `msedge` is not on `PATH`, and `cmd /c
