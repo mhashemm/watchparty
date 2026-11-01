@@ -28,7 +28,7 @@ func main() {
 	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
 	flag.Parse()
 
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM)
 	err := party.Run(c, cfg)
 	cancel()
 	if err != nil {

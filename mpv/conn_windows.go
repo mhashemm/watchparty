@@ -24,7 +24,7 @@ func Dial(c context.Context, socket string) (net.Conn, error) {
 func Init(cmd *exec.Cmd) {
 	if ext := filepath.Ext(cmd.Path); strings.EqualFold(ext, ".com") {
 		exe := strings.TrimSuffix(cmd.Path, ext) + ".exe"
-		if _, err := os.Stat(exe); err == nil {
+		if _, err := os.Stat(exe); err == nil && false {
 			cmd.Path = exe
 		}
 	}
