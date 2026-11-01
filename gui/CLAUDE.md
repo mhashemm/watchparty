@@ -316,6 +316,18 @@ install it themselves.
   --window-size=560,940 --user-data-dir=<temp> --no-first-run
   --no-default-browser-check`, then `openURL` (`rundll32` / `xdg-open` / `open`)
   opens the default browser as a plain tab.
+  - **The fresh profile is seeded and Edge's sign-in is off.** Before launch,
+    `Default/Preferences` gets `credentials_enable_service: false` and
+    `profile.password_manager_enabled: false`, because Chrome offered to save the
+    `type="password"` secret fields. Edge alone also gets
+    `--disable-features=msImplicitSignin`, because Edge signs every new profile into
+    the Windows Microsoft account, turns on sync and shows "We are now syncing your
+    browsing data" on each launch.
+    - The `signin.allowed` preferences, `--inprivate` and `--guest` don't stop that
+      sign-in (tested against headless Edge 156). Machine-wide Edge policies would,
+      but they change the user's own browser.
+    - The feature name comes from Edge's binary, not from docs, so a later Edge
+      may rename it. Each browser gets only the flags that are its own.
   - **Only Chromium-family browsers are in the list**, because only they have an
     app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name.
   - Windows lists absolute paths, **Chrome first, then Edge**. Edge ships with every

@@ -305,11 +305,21 @@ func dialog(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+func browserArgs(browser, url, profile string) []string {
+	args := []string{"--app=" + url, "--window-size=560,940", "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check"}
+	if strings.Contains(strings.ToLower(filepath.Base(browser)), "edge") {
+		args = append(args, "--disable-features=msImplicitSignin")
+	}
+	return args
+}
+
 func openWindow(url string) (<-chan struct{}, *os.Process) {
 	profile, err := os.MkdirTemp("", "watchparty-gui-browser-")
 	if err == nil {
+		os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
+		os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
 		for _, browser := range browsers {
-			cmd := exec.Command(browser, "--app="+url, "--window-size=560,940", "--user-data-dir="+profile, "--no-first-run", "--no-default-browser-check")
+			cmd := exec.Command(browser, browserArgs(browser, url, profile)...)
 			if cmd.Start() != nil {
 				continue
 			}
