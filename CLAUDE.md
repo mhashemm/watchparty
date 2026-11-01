@@ -43,6 +43,10 @@ phase sets the total, so a new slow case belongs in whichever phase is shortest.
   mid-party, and `[R15b]`: closing a node's mpv is a normal end (exit 0, the room
   hears "has left"). Every other case ends nodes with a signal, which is how a
   regression there once slipped through.
+  URL cases share one HTTP server (`Quiet`). Its `delay` holds every client's
+  requests, so `[R11d2]` slows only its joiner, through `late` and `--user-agent=late`.
+  With `delay` the playing nodes' requests were held too, and one stuck mid-seek
+  answered the joiner with a stale position (2 runs in 8).
   Slow networks come from `lag(port, target, delay)`, a TCP proxy that delivers every
   chunk `delay` seconds late in both directions. `[R11g]` puts one in front of the relay
   per node (20ms and 250ms) and holds each stream request 200ms. P2P has no such case:

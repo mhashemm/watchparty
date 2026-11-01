@@ -987,6 +987,7 @@ def relay_suite():
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
         delay = 0
+        late = 0  # seconds, held only for a client whose User-Agent is "late"
         slow = 0  # bytes/s for a client whose User-Agent is "slow"
 
         def log_message(self, *a):
@@ -995,7 +996,7 @@ def relay_suite():
         # Range support: without it mpv calls the stream unseekable and refuses
         # any seek past what it has buffered, so [R11d] failed on a busy runner
         def do_GET(self):
-            time.sleep(Quiet.delay)
+            time.sleep(Quiet.late if self.headers.get("User-Agent") == "late" else Quiet.delay)
             r = self.headers.get("Range", "")
             if not r.startswith("bytes="):
                 return super().do_GET()
@@ -1049,7 +1050,7 @@ def relay_suite():
     until(lambda: booted("nodeUrl4"), BOOT)
     Quiet.delay = 0
     resolve("nodeUrl4")
-    until(lambda: near(get("nodeUrl4", "time-pos"), 50))
+    until(lambda: near(get("nodeUrl4", "time-pos"), 50) and get("nodeUrl4", "seeking") is False)
     ok("nodeUrl4 is where nodeUrl1 stopped", near(get("nodeUrl4", "time-pos"), 50), f"at {get('nodeUrl4', 'time-pos')}")
     ok("one seek, not five", osd("nodeUrl4").count("synced by nodeUrl1") == 1,
        f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
@@ -1057,12 +1058,12 @@ def relay_suite():
     print("\n[R11d2] a joiner slow to load while the party plays pauses it once loaded, not before")
     setp("nodeUrl1", "pause", False)
     until(lambda: all(get(n, "pause") is False for n in ("nodeUrl1", "nodeUrl2", "nodeUrl4")))
-    Quiet.delay = 3
-    launch("nodeUrl5", room="urlroom", media=url)
+    Quiet.late = 3
+    launch("nodeUrl5", room="urlroom", media=url, mpvflags="--user-agent=late")
     until(lambda: "nodeUrl5 has joined" in osd("nodeUrl1"), BOOT)
     ok("the party plays on while it loads", not booted("nodeUrl5") and get("nodeUrl1", "pause") is False)
     until(lambda: booted("nodeUrl5"), BOOT)
-    Quiet.delay = 0
+    Quiet.late = 0
     resolve("nodeUrl5")
     until(lambda: get("nodeUrl1", "pause") is True and "paused for nodeUrl5: joining" in osd("nodeUrl1") and near(get("nodeUrl5", "time-pos"), get("nodeUrl1", "time-pos"), 0.3))
     at = get("nodeUrl1", "time-pos")
