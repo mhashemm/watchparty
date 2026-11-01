@@ -41,6 +41,13 @@ jobs:
       - name: Test
         run: make -j test
 
+      - name: Keep the e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: .e2e
+
   windows:
     runs-on: windows-latest
     steps:

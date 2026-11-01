@@ -1342,7 +1342,8 @@ def relay_suite():
     proxy.cut()
     until(lambda: connected("flaky", 2))  # 1s backoff, then the redial
     time.sleep(QUIET)  # a second join or a false leave would follow the swap at once
-    ok("nodeFlaky redialled", log("flaky").count("relay: connected") == 2, "reconnect never happened")
+    connects = log("flaky").count("relay: connected")
+    ok("nodeFlaky redialled", connects == 2, f"connected {connects} times, want 2")
     for n in NODES:
         ok(f"{n} was told nodeFlaky joined once", osd(n).count("nodeFlaky has joined") == 1,
            f"{osd(n).count('nodeFlaky has joined')} joins")
