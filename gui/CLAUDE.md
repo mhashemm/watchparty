@@ -270,7 +270,13 @@ install it themselves.
 - **Windows picker:** PowerShell `-STA` with a WinForms `OpenFileDialog`, whose
   `Filter` is `Videos|*.mkv;*.mp4;…` (Windows matches it in any case).
   - `[Console]::OutputEncoding = UTF8` is needed or non-ASCII paths come back mangled.
-  - A `TopMost` owner form keeps the dialog from opening behind the app window.
+  - The dialog is owned by an invisible form that is shown, activated, then made
+    non-`TopMost` before `ShowDialog`. PowerShell runs in the background, so
+    Windows won't bring its windows to the front on their own. A `TopMost` owner
+    that was never shown did nothing, and the dialog opened behind the app window.
+    Leaving it `TopMost` brought the dialog to the front but kept it above every
+    other app. Showing it and then clearing `TopMost` leaves the owner, and the
+    dialog with it, at the top of the normal windows. Checked by hand on Windows 11.
 - **`hide()` uses only `CREATE_NO_WINDOW`.** Don't add `HideWindow`: it sets SW_HIDE
   for the child's first `ShowWindow`, which can hide the PowerShell file dialog
   itself.
