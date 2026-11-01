@@ -143,7 +143,7 @@ Each has caused a real bug; the package docs say where.
 ### Design and communication
 
 - **Visual taste is the user's call.** Render options side by side and apply only the
-  pick (`gui/CLAUDE.md`, "Working on the look"). Screenshots at the real 560×940 window size.
+  pick (`gui/DESIGN.md`). Screenshots at the real 560×940 window size.
 - **Change only what was asked.** A reverted change stays reverted.
 - Keep the product's theme (forest palette, mushrooms, turtles, the cat Fosdo2)
   neutral in docs and commits: never tie it to a person.
