@@ -195,9 +195,9 @@ positions.
   buffering"). `--cache-pause=yes` is pinned,
   so a user's config can't make mpv play through stalls instead.
 - **A node joins mid-party:** once its file has loaded it broadcasts `joined`. Every
-  node already there pauses ("paused for X: joining") and answers with `start-pos`,
-  its position. The joiner takes the first answer and seeks there. Details:
-  `mpv/CLAUDE.md`.
+  node already there pauses and shows "paused for X: joining", even one already
+  paused, then answers with `start-pos`, its position. The joiner takes the first
+  answer and seeks there. Details: `mpv/CLAUDE.md`.
 - **Every pause carries where it stopped.** A node's own pause is followed by
   `paused-at`, its position. A peer seeks there, with no notice, but only if it applied
   that same node's pause. Otherwise two nodes pausing at once would swap positions.
