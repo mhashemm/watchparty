@@ -21,11 +21,12 @@ make -j gui linux                          # components × OSes: any of cli gui 
 make -j test                               # unit tests (-race) and e2e.py together, ~45s
 go test -race -count=30 -cpu=1,4,16 ./...  # stress a changed test before trusting it
 go mod tidy                                # run it yourself; CI only does go mod download
-make e2e E2E="--mode gui"                  # e2e.py in docker; or ./e2e.py [--mode p2p|relay|caps|gui] [--nodes 3]
+make e2e E2E="--mode gui"                  # e2e.py in docker; python e2e_windows.py on Windows
 CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -room r -secret s [-createKey k]
 ```
 
-CI: `pr.yml` builds every OS and runs `make -j test`; a tag runs `publisher.yml` (10 files).
+CI: `pr.yml` builds every OS, runs `make -j test`, and Windows unit + `e2e_windows.py`;
+a tag runs `publisher.yml` (10 files).
 
 ## Architecture
 
@@ -66,8 +67,7 @@ file fingerprint differs is refused with 409.
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
-  `server/` and `relay/`, and parsed by `gui/store.go` and e2e's `known()`. Change both
-  or neither.
+  `server/` and `relay/`, parsed by `gui/store.go` and e2e's `known()`. Change all or none.
 - **The relay envelope** `{"hostname", "event": <raw mpv JSON>}` is declared in both
   `relay/main.go` and `party/ws.go`: importing `party` would pull upnp and server into
   the relay image. Keep them in sync by hand.
@@ -140,11 +140,11 @@ file fingerprint differs is refused with 409.
 
 ### Verifying without touching the user's machine
 
-- `make e2e` runs in a container. By hand: `./relay` on a high localhost port, mpv
-  with `--vo=null --ao=null`, GUIs driven with `curl` (recipe in `gui/CLAUDE.md`).
-- Isolate each run in a `mktemp -d` folder: `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-  `XDG_DATA_DIRS` inside it, `PATH` with only `mpv` and a no-op `xdg-open`. Never pop UI
-  on the user's screen; leave click-throughs to the user with a built binary.
-- Clean up every process and temp folder by literal path. **Never `pkill -f`** (it kills
-  its own shell): use a saved PID, or `pkill -x` for names of ≤15 characters.
-- Say what wasn't verified. Windows-only code compiles in CI but never runs there.
+- `make e2e` runs in a container, Windows code only in CI's `windows` job; say what
+  wasn't verified. By hand: `./relay` on a high port, mpv with `--vo=null --ao=null`, GUIs
+  driven with `curl` (recipe in `gui/CLAUDE.md`).
+- Isolate a run by hand in a `mktemp -d` folder: `XDG_*` and `HOME` inside it, `PATH` with
+  only `mpv` and a no-op `xdg-open`, `DBUS_SESSION_BUS_ADDRESS` at a dead path (godbus
+  finds the desktop's bus by itself). Never pop UI on the user's screen; leave
+  click-throughs to the user with a built binary.
+- Clean up by literal path and saved PID or `pkill -x`; **never `pkill -f`** (kills its shell).
