@@ -9,16 +9,6 @@ Reference: **`MPV.md`** in this folder covers the commands, properties and event
 use, and how mpv actually behaves (probed against real mpv). Upstream:
 <https://mpv.io/manual/master/#json-ipc>, <https://mpv.io/manual/master/#properties>
 
-## Files
-
-| File | Contents |
-|---|---|
-| `mpv.go` | the IPC client, what gets broadcast, and how remote events are applied |
-| `conn_unix.go` (`!windows`) | the unix socket, under `/tmp/` |
-| `conn_windows.go` | the named pipe, and the process attributes mpv gets (see "Windows") |
-| `MPV.md` | the slice of mpv we use, and its observed behaviour |
-| `mpv_test.go` | see "Testing notes" |
-
 ## Public surface
 
 - `Dial(ctx, socket) (net.Conn, error)` opens the unix socket or the Windows pipe. It
@@ -62,8 +52,6 @@ use, and how mpv actually behaves (probed against real mpv). Upstream:
   - Then it waits on its own channel, with a 5s timeout that returns `errTimeout`.
   - A response with `error != "success"` becomes an error.
 - Each request has its own channel, so `do()` is safe from any number of goroutines.
-  (A single shared channel once let concurrent calls steal each other's replies;
-  `TestConcurrentRequestsGetTheirOwnResponse` covers it.)
 - **`watch()` is the only reader of the socket.** Never read `conn.scanner` anywhere
   else.
   - A line with `request_id > 0` and a non-empty `error` is a response. `respond`
@@ -99,17 +87,15 @@ or on their own when the event itself isn't sent.
 Every `time-pos` with data also updates `c.pos`, echo or not.
 
 On `nil`, `watch` sends **`bytes.Clone(scanner.Bytes())`** to `outgoing` and logs
-`Watch: broadcasted event: …`. The clone is mandatory: `Scan()` reuses that buffer,
-and the consumer reads it later. `TestWatchDoesNotAliasScannerBuffer` reproduces the
-corruption only because `dripReader` returns about 7 bytes per `Read` against a
-128-byte buffer. With the whole input in one fill, the bug hides.
+`Watch: broadcasted event: …`. The clone is mandatory: `Scan()` reuses that buffer.
+`TestWatchDoesNotAliasScannerBuffer` catches it only because `dripReader` returns
+about 7 bytes per `Read`; with the whole input in one fill, the bug hides.
 
 ### Why the first change is swallowed (`seen`)
 
 `observe_property_string` makes mpv emit the current value immediately. A fresh node
 is paused, so that first `time-pos` passes the "only while paused" rule and would be
 broadcast as `time-pos=0`, rewinding everyone. The state is still recorded.
-`TestInitialPropertyChangeIsNotBroadcast` covers this.
 
 ### Echo suppression (`applied` / `isEcho`)
 
@@ -125,17 +111,13 @@ counters, that loops forever.
   - On a match at entry *i*, the entries before it are dropped and entry *i* becomes
     the echoed value. mpv handles seeks in order, so a later echo means it is done
     with the earlier ones. A user's own seek back to one of them still goes out.
-  - It used to be a single marker. A node that applied 30 and then 40 saw mpv's late
-    echo of 30 after the marker had moved, and broadcast it as its own seek: the party
-    jumped back to 30 (seen in CI in `[R11d]`).
+  - A single marker isn't enough: mpv's echo of an earlier seek can arrive after a
+    later one was applied.
   - A seek's echo comes back once or twice and up to a frame off (`123.456` →
     `123.456000`, then `123.458000`, see `MPV.md`), which is why the entry is kept and
     updated. `--hr-seek=yes` is pinned, so a frame is the most it can be off, and 0.1s
     covers anything from 10fps up. A deliberate seek of 0.1s or more is not an echo.
   - Cleared when the node unpauses, capped at `maxSeeks` (16).
-- `TestAppliedValueIsNotRebroadcast`, `TestLateEchoOfAnEarlierSeekIsNotRebroadcast`,
-  `TestSmallSeekIsNotAnEcho` and `TestAppliedPauseIsNotRebroadcast` cover it,
-  including that a genuine seek and a later genuine pause still go out.
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 
@@ -152,13 +134,10 @@ behind, and so would a node waiting on its cache. Instead the node pauses the pa
      and not broadcast.
    - A **peer's** resume while `stalled` never reaches mpv. `pause()` refuses it and
      sends the pause, position and reason to `outgoing` itself. Applying the resume
-     and pausing straight after doesn't work: mpv folds the two sets into no
-     `property-change` at all, so the re-pause was never broadcast, and in `[R11f]` the
-     party played on 30s ahead of the stalled node.
+     and re-pausing doesn't work: mpv folds the two sets into no `property-change`.
 3. `pauseParty` sets `reason` and sends `set_property pause true` **in a goroutine**,
    without marking `applied`. `do()` waits for a reply that only `watch()` reads, so
-   calling it from `handleEvent` deadlocks. The old commented-out `case seek:
-   s.pauseReq(true)` did exactly that. On success it shows "paused for everyone:
+   calling it from `handleEvent` deadlocks. On success it shows "paused for everyone:
    <reason>". On failure it clears `reason`.
 4. mpv reports `pause=yes`, broadcast as this node's own pause, followed by
    `pauseExtras`: the position (`c.pos`, so any frames played before the pause took
@@ -169,11 +148,8 @@ behind, and so would a node waiting on its cache. Instead the node pauses the pa
 5. If a peer's pause lands first, that `pause=yes` is an echo, and the extras still go
    out on their own, so the seek isn't lost.
 
-`TestSeekWhilePlayingPausesTheParty`, `TestPlaybackIsNotASeek`,
-`TestBufferingPausesTheParty` and `TestRemoteResumeWhileBufferingPausesAgain` cover
-it, through `liveClient`, a `watch()` over a `net.Pipe` with a fake mpv. `e2e.py`
-`[R6b]` and `[R11f]` (a stream served at half its bitrate to one node) cover it against
-real mpv.
+`e2e.py` `[R6b]` and `[R11f]` (a stream served at half its bitrate to one node)
+cover it against real mpv.
 
 ## Applying remote events: `ProcessIncomingEvents`
 
@@ -190,8 +166,7 @@ member once its 64-frame buffer fills. Until `ready`:
 On `ready` it applies `time-pos` first, then `pause`, then sets `joining` and
 broadcasts `{"name":"joined"}`, then applies the notices, and then carries on applying
 each event as it arrives. Position goes first because mpv starts
-`--pause`d, so the seek lands before any resume. Five seeks during a load become one
-seek and one "synced by", where the old replay showed all five. `e2e.py` `[R11d]` covers this
+`--pause`d, so the seek lands before any resume. `e2e.py` `[R11d]` covers this
 against a stream whose HTTP server holds each request for 3s.
 
 Each event, then, is `apply`d: its `IncomingMessage.Event` is unmarshalled and
@@ -211,8 +186,7 @@ dispatched by `Name`:
   if this node is paused, its last applied pause came from `host` (`pausedBy`, set in
   `pause()`), and it isn't already within 0.1s of that position or of an applied seek
   (`at`). The `pausedBy` check stops two nodes that pause at once from swapping
-  positions. `TestOwnPauseSendsWhereItStopped` and `TestPausedAtFollowsOnlyWhoPausedUs`
-  cover it, and `e2e.py` `[R11g]` covers it over a slow network.
+  positions. `e2e.py` `[R11g]` covers it over a slow network.
 - **`pause-reason`** → shows `paused for <host>: <reason>`.
 - **`joined`** → `welcome(host)`, see below.
 - **`start-pos`** → `arrive(event, host)`, see below.
@@ -233,10 +207,8 @@ behind until the next seek. Instead:
 2. **Every node already in the party, in `welcome`:**
    - if it is playing, it pauses its own mpv (`pauseReq`, not marked `applied`, so the
      pause goes out as its own)
-   - it shows `paused for <joiner>: joining` either way. A node often applies another
-     node's pause for the same joiner before the joiner's own `joined` reaches it.
-     It then showed only "paused by" that node, so users there never saw the reason
-     (`e2e.py` `[11c]` caught it, flakily)
+   - it shows `paused for <joiner>: joining` either way, since another node's pause
+     for the same joiner often arrives first
    - it broadcasts `{"event":"property-change","name":"start-pos","data":<c.pos>}`
    - a node that is itself still `joining` doesn't answer: its position isn't the
      party's
@@ -250,12 +222,9 @@ behind until the next seek. Instead:
 4. `joining` is also cleared by any resume and any seek, own or applied, so the room's
    first node stops being `joining` once the party starts.
 
-Older nodes' `apply` ignores both names. `TestJoinerAnnouncesItselfOnceLoaded`,
-`TestJoinPausesThePartyAndSendsThePosition`, `TestJoinWhilePausedStillShowsWhy`,
-`TestJoiningNodeDoesNotAnswerAnotherJoiner`
-and `TestStartPosAlreadyThereStillCounts` cover it. `e2e.py` `[11c]` (P2P), `[R9]`,
-`[R10b]` and `[R11d2]` (a joiner whose stream takes 3s to load while the party plays)
-cover it against real mpv.
+Older nodes' `apply` ignores both names. `e2e.py` `[11c]` (P2P), `[R9]`, `[R10b]` and
+`[R11d2]` (a joiner whose stream takes 3s to load while the party plays) cover it
+against real mpv.
 
 **Never hold `c.mu` across `do()`.** `do()` waits for `watch()`, and `watch()` needs
 `c.mu` for `handleEvent`, so holding it turns every call into a 5s timeout. `pause()`
@@ -269,10 +238,8 @@ and `sync()` lock, mutate, unlock, and only then do IPC.
   parent is the `-H=windowsgui` GUI has not been verified on Windows yet.
 - **`Init` runs the `mpv.exe` next to an `mpv.com`.** `mpv.com` is only a console
   wrapper that starts `mpv.exe`, and a bare `mpv` on `PATH` resolves to it, since
-  `.COM` comes before `.EXE` in `PATHEXT`. `cmd.Cancel` killed only the wrapper:
-  `mpv.exe` kept playing and kept mpv's output pipe open, so `cmd.Wait` and `Run`
-  never returned. In the GUI, End left the player open and the party "running" until
-  mpv was closed by hand. mpv's log lines still arrive from `mpv.exe`.
+  `.COM` comes before `.EXE` in `PATHEXT`. `cmd.Cancel` killed only the wrapper, and
+  `mpv.exe` kept the output pipe open, so `Run` never returned.
   `TestInitRunsMpvExeInsteadOfTheComWrapper` runs only on Windows, so CI never runs it.
 
 ## Testing notes
@@ -280,8 +247,4 @@ and `sync()` lock, mutate, unlock, and only then do IPC.
 - Tests build a `Client` by hand (`newTestClient`) and drive `watch()` through
   `feed()`, or over a `net.Pipe` with a fake mpv on the other end. They never touch
   a real socket.
-- mpv emits nothing for a no-op set, so tests that count events must strictly
-  alternate values, never repeat them.
-- When fixing a buffer or concurrency bug here, reintroduce it and watch the test fail
-  before trusting the fix.
-- Run with `go test -race ./mpv`. Every invariant above is a concurrency one.
+- mpv emits nothing for a no-op set, so tests that count events must alternate values.
