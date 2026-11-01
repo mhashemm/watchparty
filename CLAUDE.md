@@ -323,9 +323,13 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
   - Put the `CLAUDE.md` note for a change in the same commit.
 - **Push and open PRs only when asked.** A PR description lists what changed and how
   it was tested, and says plainly what was not exercised.
-- **Merge with a merge commit** (`gh pr merge N --merge`), matching the history's
-  "Merge pull request #N". Then pull `master` and delete the merged local branch.
-- **Releases:** a lightweight tag `vX.Y.Z` on the merge commit on `master` (`git tag
+- **Merge by rebase** (`gh pr merge N --rebase`). A ruleset on `master` requires
+  linear history, so `--merge` is refused; the "Merge pull request #N" commits up to
+  #28 predate it. A PR whose base moved is brought up to date with `gh pr update-branch
+  N --rebase`, since a merge from `master` into it would break the linear history
+  too. Then pull `master` and delete the merged local branch, with `git branch -D`:
+  the rebased commits have new hashes, so git doesn't see the branch as merged.
+- **Releases:** a lightweight tag `vX.Y.Z` on the last merged commit on `master` (`git tag
   vX.Y.Z <sha> && git push origin vX.Y.Z`), only when asked. The tag push runs
   `publisher.yml`, which uploads 10 files (CLI and GUI × linux amd64/arm64, darwin
   amd64/arm64, windows amd64).
