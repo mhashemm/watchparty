@@ -7,7 +7,7 @@
 # each go build already uses every core and unbounded -j compiles the std lib 15
 # times over. Names and flags match the release assets (publisher.yml), in .bin/.
 #
-# make [-j] test    unit tests (-race) and ./e2e.py; -j runs the two together
+# make [-j] test    unit tests (-race) and ./e2e.py in docker; -j runs the two together
 
 COMPONENTS := cli gui relay
 OSES := linux darwin windows
@@ -47,8 +47,12 @@ test: unit e2e
 unit:
 	go test -race ./...
 
+# in e2e.Dockerfile's container, so no case can reach this machine's desktop, bus or
+# display; E2E="--mode gui" passes flags through
 e2e:
-	./e2e.py
+	docker build -q -t watchparty-e2e - < e2e.Dockerfile > /dev/null
+	docker run --rm --init --shm-size=1g -e GOFLAGS=-buildvcs=false -v "$(CURDIR)":/src:ro -w /src \
+		-v watchparty-e2e-cache:/root/.cache -v watchparty-e2e-mod:/go/pkg/mod watchparty-e2e ./e2e.py $(E2E)
 
 clean:
 	rm -f $(foreach c,$(COMPONENTS),$(foreach o,$(OSES),$(foreach a,$(sort $(ARCHS_$(o))),$(call bin,$(c),$(o),$(a)))))

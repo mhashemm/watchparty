@@ -23,7 +23,8 @@ each on its own ports and in its own run directory:
   gui    real GUIs, each opening its own page in headless Chromium, driven
          through the page over CDP: every status, both modes, the invite, the
          feed, Browse through a fake portal, Settings, history, persistence,
-         self-update against a local release, and the window's lifetime.
+         self-update against a local release, and the window's lifetime,
+         including a real window on Xvfb closing itself.
 
     ./e2e.py                    # all four phases in parallel, ~45 seconds
     ./e2e.py --mode relay       # one phase
@@ -554,8 +555,8 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
     """A real GUI in its own HOME, XDG folders and TMPDIR, with a PATH of only mpv and
     an xdg-open that fails. browser="headless" gives it one browser, a desktop entry
     for a wrapper that runs headless Chromium, so the GUI's own launch path opens the
-    page and nothing reaches the screen; "handoff" is a browser that exits at once,
-    None no browser. Every GUI talks to the private bus, never the desktop's: godbus
+    page and nothing reaches the screen; "xvfb" runs it headed on a virtual display;
+    "handoff" is a browser that exits at once, None no browser. Every GUI talks to the private bus, never the desktop's: godbus
     finds /run/user/<uid>/bus on its own and would open a real file chooser."""
     home, key = f"{RUN}/{name}", tag or name
     if not os.path.exists(home):
@@ -565,7 +566,11 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
         script(f"{home}/bin/xdg-open", f'echo "$@" >> {home}/xdg-open.args\nexit 1')
         script(f"{home}/slow-mpv", f'{shutil.which("sleep")} 3\nexec {shutil.which("mpv")} "$@"')
         if browser:
-            run = f'PATH=/usr/bin:/bin exec {BROWSER} --headless=new --remote-debugging-port=0 "$@"' if browser == "headless" else "exit 0"
+            # Chromium refuses to run as root, which is what e2e.Dockerfile's container is, without --no-sandbox
+            flags = "--headless=new --remote-debugging-port=0" + (" --no-sandbox" if os.geteuid() == 0 else "")
+            if browser == "xvfb":
+                flags = flags.replace("--headless=new", "--ozone-platform=x11")
+            run = "exit 0" if browser == "handoff" else f'PATH=/usr/bin:/bin exec {"xvfb-run -a " if browser == "xvfb" else ""}{BROWSER} {flags} "$@"'
             script(f"{home}/browser.sh", f'echo "$@" >> {home}/browser.args\n{run}')
             with open(f"{home}/data/applications/e2e-chromium.desktop", "w") as f:
                 f.write(f"[Desktop Entry]\nType=Application\nName=e2e\nExec={home}/browser.sh %U\nMimeType=x-scheme-handler/https;\n")
@@ -582,7 +587,7 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
     nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None, "home": home, "gui": True}
     until(lambda: "gui: http" in log(key), BOOT)
     nodes[key]["url"] = log(key).split("gui: ", 1)[1].split("\n", 1)[0].strip()
-    if browser == "headless":
+    if browser in ("headless", "xvfb"):
         attach(key, opened + 1)
     return key
 
@@ -725,6 +730,7 @@ if args.mode == "gui":
     if not BROWSER:
         sys.exit("the gui phase needs Chrome or Chromium on PATH")
     need("dbus-daemon")
+    need("xvfb-run")
     print("building the gui, two stamped versions of it, and the fake portal")
     release = f"-X main.latestReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
     for out, flags in ((GUI_BIN, ""), (RUN + "/gui-v0.0.1", f"-X main.version=v0.0.1 {release}"), (RUN + "/gui-v0.0.2", f"-X main.version=v0.0.2 {release}")):
@@ -1537,6 +1543,8 @@ def gui_suite():
     until(lambda: listening(PORTS["relay"]))
     launch_gui(H)
     launch_gui(G, portal=False)
+    # launched now so it is long past the hand-off guard's 5s when [G32] closes it
+    X = launch_gui("guiXvfb", browser="xvfb")
 
     def mpv_of(n):
         return child_mpv_socket(nodes[n]["proc"].pid)
@@ -1842,6 +1850,15 @@ def gui_suite():
         ok("it tried xdg-open", open(f"{nodes[N]['home']}/xdg-open.args").read().strip() == nodes[N]["url"])
         ok("and logged the address", f"gui: no browser could be opened (exit status 1), open {nodes[N]['url']} yourself" in log(N), log(N).strip())
         stop(N)
+
+    print("\n[G32] window.close() from the page closes a real window, and the GUI with it")
+    # headless Chromium ignores window.close() on an --app window; Restart now relies on it
+    try:
+        js(X, "window.close()")
+    except (OSError, RuntimeError, ValueError):
+        pass  # the page can go before it answers
+    ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
+    ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
 
 
 def listening_unix(path):

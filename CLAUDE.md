@@ -21,7 +21,7 @@ make -j gui linux                          # components × OSes: any of cli gui 
 make -j test                               # unit tests (-race) and e2e.py together, ~45s
 go test -race -count=30 -cpu=1,4,16 ./...  # stress a changed test before trusting it
 go mod tidy                                # run it yourself; CI only does go mod download
-./e2e.py [--mode p2p|relay|caps|gui] [--file movie.mkv] [--nodes 3]
+make e2e E2E="--mode gui"                  # e2e.py in docker; or ./e2e.py [--mode p2p|relay|caps|gui] [--nodes 3]
 CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -room r -secret s [-createKey k]
 ```
 
@@ -140,8 +140,8 @@ file fingerprint differs is refused with 409.
 
 ### Verifying without touching the user's machine
 
-- Real runs: `./relay` on a high localhost port, mpv with `--vo=null --ao=null`, GUIs
-  driven with `curl` (recipe in `gui/CLAUDE.md`).
+- `make e2e` runs in a container. By hand: `./relay` on a high localhost port, mpv
+  with `--vo=null --ao=null`, GUIs driven with `curl` (recipe in `gui/CLAUDE.md`).
 - Isolate each run in a `mktemp -d` folder: `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
   `XDG_DATA_DIRS` inside it, `PATH` with only `mpv` and a no-op `xdg-open`. Never pop UI
   on the user's screen; leave click-throughs to the user with a built binary.

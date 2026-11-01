@@ -45,6 +45,11 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
 
 ## Running it
 
+- **`make e2e` runs it in `e2e.Dockerfile`'s container** (as root, so Chromium gets
+  `--no-sandbox`), so no case can reach this machine's desktop, session bus or display.
+  CI runs the same image. `./e2e.py` on the host still works, isolated only by each
+  GUI's environment.
+
 - `--audio` uses a real, muted audio output. It needs a sound server, so CI doesn't
   run it.
 - The script points its stdin at `/dev/null` so no mpv puts the terminal in raw mode.

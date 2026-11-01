@@ -38,11 +38,9 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
   `/log` (`grep -o 'room [A-Z0-9]* -secret [A-Z0-9]*'`), start the guest with them.
 - **Drive mpv directly:** each party's socket is its mpv's `--input-ipc-server=`
   argument (`pgrep -a mpv`). Write `set_property`/`quit` commands to it.
-- **`./e2e.py --mode gui`** automates the window lifecycle, the hand-off guard and
-  self-update (`E2E.md`). The recipes left here are for what it doesn't run.
-- **A real window closed from the page:** add `--remote-debugging-port=N` to a copied
-  entry's `Exec`, run on `Xvfb`, and send `window.close()` over the DevTools websocket
-  after `handoffWindow`.
+- **`make e2e E2E="--mode gui"`** automates the window lifecycle (a real window on Xvfb
+  too), the hand-off guard and self-update (`E2E.md`). The recipe left here is for what
+  it doesn't run.
 - **A released binary:** `gh release download <tag> -p watchparty-gui_amd64`, run it
   headless, and `GET /update` must report that tag as `current`.
 

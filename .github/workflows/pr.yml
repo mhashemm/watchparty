@@ -38,8 +38,5 @@ jobs:
       - name: Download
         run: go mod download
 
-      - name: Install mpv and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mpv ffmpeg
-
       - name: Test
         run: make -j test
