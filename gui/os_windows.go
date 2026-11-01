@@ -12,11 +12,17 @@ import (
 
 const exeSuffix = ".exe"
 
-var browsers = []string{
-	filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
-	filepath.Join(os.Getenv("LocalAppData"), `Google\Chrome\Application\chrome.exe`),
-	filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
-	filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
+func browsers() []browser {
+	var found []browser
+	for _, path := range []string{
+		filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("LocalAppData"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
+		filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
+	} {
+		found = append(found, browser{path, []string{path}, os.TempDir()})
+	}
+	return found
 }
 
 func openURL(url string) *exec.Cmd {
