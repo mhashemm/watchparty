@@ -59,10 +59,10 @@ file fingerprint differs is refused with 409.
   | party | `your address to share is <invite>` | GUI invite box, `gui/store.go` (real room and secret), e2e |
   | party | `init done` | GUI "You're in", e2e |
   | party | `file fingerprint: <hex>` | e2e |
-  | party/ws.go | `relay: connected`, `relay: dial: …`, `relay: disconnected` | GUI reconnecting state, e2e |
-  | party/ws.go | `… is not open yet …` inside the dial line | GUI "waiting for the host", e2e |
+  | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
+  | mpv | `Watch: broadcasted event: <raw mpv JSON>` | GUI feed (your own pause/resume), e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
