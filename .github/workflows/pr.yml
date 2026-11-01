@@ -66,4 +66,5 @@ jobs:
           $mpv.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: E2E
+        if: ${{ !cancelled() }}
         run: python e2e_windows.py
