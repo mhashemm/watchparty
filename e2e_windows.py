@@ -246,7 +246,9 @@ def attach(n, count):
     until(page, BOOT)
     ws = page()
     if not ws:
-        print(f"--- {n}'s log:\n{log(n)}--- its browser launches: {launches(n)}")
+        tree = [(p["Name"], p["CommandLine"]) for p in processes() if p["ParentProcessId"] == nodes[n]["proc"].pid]
+        files = [os.path.join(d, f) for d, _, fs in os.walk(nodes[n]["home"]) for f in fs][:40]
+        print(f"--- {n}'s log:\n{log(n)}--- its browser launches: {launches(n)}\n--- its children: {tree}\n--- its files: {files}")
         sys.exit(f"{n} never opened its page")
     c = CDP(ws)
     nodes[n]["page"] = c
