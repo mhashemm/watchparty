@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
@@ -18,7 +19,27 @@ import (
 
 const exeSuffix = ""
 
-var browsers = append([]string{"google-chrome", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"}, flatpaks(os.Getenv("XDG_DATA_HOME"), os.Getenv("HOME"))...)
+var snapBins = []string{"/snap/bin", "/var/lib/snapd/snap/bin"}
+
+var browsers = append([]string{
+	"google-chrome", "chromium",
+	snapBins[0] + "/chromium", snapBins[1] + "/chromium",
+	"chromium-browser", "microsoft-edge", "brave-browser",
+	snapBins[0] + "/brave", snapBins[1] + "/brave",
+}, flatpaks(os.Getenv("XDG_DATA_HOME"), os.Getenv("HOME"))...)
+
+func profileRoot(browser, home string) string {
+	dir, name := filepath.Split(browser)
+	dir = filepath.Clean(dir)
+	switch {
+	case home == "":
+	case slices.Contains(snapBins, dir):
+		return filepath.Join(home, "snap", name, "common")
+	case strings.HasSuffix(dir, "/exports/bin"):
+		return filepath.Join(home, ".var", "app", name, "cache")
+	}
+	return os.TempDir()
+}
 
 func flatpaks(dataHome, home string) []string {
 	if dataHome == "" {

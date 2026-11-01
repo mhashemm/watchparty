@@ -236,8 +236,8 @@ install it themselves.
   from it. On SIGINT/SIGTERM, `main` cancels the running party and `wg.Wait()`s for
   `Run` to return before exiting, so Ctrl-C on the GUI never leaks a UPNP mapping.
 - **Closing the window shuts everything down.** `openWindow` launches the browser as
-  **its own instance**, with a fresh temporary profile (`--user-data-dir` under
-  `os.TempDir()`), so the browser process the GUI started lives exactly as long as
+  **its own instance**, with a fresh temporary profile (`--user-data-dir`, see
+  "Window" below for where), so the browser process the GUI started lives exactly as long as
   the window. When it exits, `main` logs `gui: window closed` and cancels the GUI's
   context. That ends any running party gracefully (`/bye`, mpv closed, UPNP mapping
   deleted), and the temporary profile is deleted.
@@ -329,20 +329,36 @@ install it themselves.
     - The feature name comes from Edge's binary, not from docs, so a later Edge
       may rename it. Each browser gets only the flags that are its own.
   - **Only Chromium-family browsers are in the list**, because only they have an
-    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name, then the
-    same four as Flatpaks.
+    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name, the
+    Chromium and Brave snaps, then the same four as Flatpaks.
     - A Flatpak browser is never on `PATH`. Flatpak exports a launcher script per
       app at `<installation>/exports/bin/<app id>`, for the user installation
       (`$XDG_DATA_HOME/flatpak`, default `~/.local/share/flatpak`) and the system
       one (`/var/lib/flatpak`), and that path is what's run. `flatpak run <id>` would
       be wrong: it starts even when the app isn't installed and exits at once, so the
-      loop would stop on a browser that never opened.
-    - Missing from the list, a Flatpak Chromium left no window: the `xdg-open`
-      fallback failed without a word.
-    - Checked only with a stand-in launcher at the exported path. Not run against a
-      real Flatpak: whether its sandbox sees the seeded profile in the host's `/tmp`,
-      and whether `Kill` (on `bwrap`, which `flatpak run` execs into) closes the
-      window.
+      loop would stop on a browser that never opened. Missing from the list, a
+      Flatpak Chromium left no window: the `xdg-open` fallback failed without a word.
+    - Snaps live in `/snap/bin`, or `/var/lib/snapd/snap/bin` on Fedora and others.
+      It's on `PATH` only where a login shell set it, which an app started from a
+      desktop launcher may not have, so both paths are listed. They come before
+      `chromium-browser` because on Ubuntu that name is a script that runs the snap.
+      The Brave snap's command is `brave`, not `brave-browser`.
+    - Chromium and Brave publish snaps. Chrome and Edge don't.
+  - **A sandboxed browser gets its profile where it can see it** (`profileRoot`).
+    A snap has a private `/tmp`, and a Flatpak may too. A profile made in the host's
+    `/tmp` is invisible to the browser, which makes its own inside the sandbox.
+    The window still opens, but without the seeded `Preferences`, and the
+    browser's copy is never deleted (a snap's private `/tmp` is root-only, so the
+    user can't delete it either). So the profile goes in the one folder each sandbox shares
+    with the host at the same path: `~/snap/<name>/common` for a snap,
+    `~/.var/app/<id>/cache` for a Flatpak, and `os.TempDir()` for everything else.
+    The browser is resolved with `LookPath` first, so nothing is created for one
+    that isn't installed.
+    - Checked with stand-in launchers at `/var/lib/snapd/snap/bin/chromium` and
+      `~/.local/share/flatpak/exports/bin/com.brave.Browser`: each got its profile
+      there, seeded, and it was deleted when the stand-in exited. Not run against a
+      real snap or Flatpak, so the sandbox's view and closing the window through
+      `Kill` (on `bwrap` or the snap's exec'd browser) are unverified.
   - **When the fallback fails too**, `openURL` not starting or exiting non-zero (no
     `xdg-open`, no default browser), the log says `gui: no browser could be opened`
     with the URL to open by hand.

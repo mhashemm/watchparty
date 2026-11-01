@@ -19,6 +19,10 @@ var browsers = []string{
 	filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
 }
 
+func profileRoot(_, _ string) string {
+	return os.TempDir()
+}
+
 func openURL(url string) *exec.Cmd {
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 }

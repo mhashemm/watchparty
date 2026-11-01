@@ -313,28 +313,46 @@ func browserArgs(browser, url, profile string) []string {
 	return args
 }
 
+func newProfile(root string) (string, error) {
+	err := os.MkdirAll(root, 0o700)
+	if err != nil {
+		return "", err
+	}
+	profile, err := os.MkdirTemp(root, "watchparty-gui-browser-")
+	if err != nil {
+		return "", err
+	}
+	os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
+	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
+	return profile, nil
+}
+
 func openWindow(url string) (<-chan struct{}, *os.Process) {
-	profile, err := os.MkdirTemp("", "watchparty-gui-browser-")
-	if err == nil {
-		os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
-		os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
-		for _, browser := range browsers {
-			cmd := exec.Command(browser, browserArgs(browser, url, profile)...)
-			if cmd.Start() != nil {
-				continue
-			}
-			closed := make(chan struct{})
-			started := time.Now()
-			go func() {
-				cmd.Wait()
-				os.RemoveAll(profile)
-				if time.Since(started) > handoffWindow {
-					close(closed)
-				}
-			}()
-			return closed, cmd.Process
+	home, _ := os.UserHomeDir()
+	for _, browser := range browsers {
+		path, err := exec.LookPath(browser)
+		if err != nil {
+			continue
 		}
-		os.RemoveAll(profile)
+		profile, err := newProfile(profileRoot(path, home))
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, browserArgs(path, url, profile)...)
+		if cmd.Start() != nil {
+			os.RemoveAll(profile)
+			continue
+		}
+		closed := make(chan struct{})
+		started := time.Now()
+		go func() {
+			cmd.Wait()
+			os.RemoveAll(profile)
+			if time.Since(started) > handoffWindow {
+				close(closed)
+			}
+		}()
+		return closed, cmd.Process
 	}
 	cmd := openURL(url)
 	go func() {

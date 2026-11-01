@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"slices"
 	"testing"
 
@@ -37,5 +38,23 @@ func TestVideoFilterIsWhatThePortalExpects(t *testing.T) {
 		if !slices.Contains(rules, want) {
 			t.Errorf("video filter is missing %+v", want)
 		}
+	}
+}
+
+func TestSandboxedBrowsersGetAProfileTheyCanSee(t *testing.T) {
+	t.Parallel()
+	for browser, want := range map[string]string{
+		"/snap/bin/chromium":                                         "/home/u/snap/chromium/common",
+		"/var/lib/snapd/snap/bin/brave":                              "/home/u/snap/brave/common",
+		"/var/lib/flatpak/exports/bin/org.chromium.Chromium":         "/home/u/.var/app/org.chromium.Chromium/cache",
+		"/home/u/.local/share/flatpak/exports/bin/com.brave.Browser": "/home/u/.var/app/com.brave.Browser/cache",
+		"/usr/bin/chromium":                                          os.TempDir(),
+	} {
+		if got := profileRoot(browser, "/home/u"); got != want {
+			t.Errorf("%s: profile root = %s, want %s", browser, got, want)
+		}
+	}
+	if got := profileRoot("/snap/bin/chromium", ""); got != os.TempDir() {
+		t.Errorf("no home: profile root = %s, want %s", got, os.TempDir())
 	}
 }
