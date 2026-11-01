@@ -108,10 +108,11 @@ type gui struct {
 	lines     []string
 	exitErr   string
 	lastPoll  time.Time
+	idleAfter time.Duration
 }
 
 func newGUI(ctx context.Context, host string, st *store) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -280,7 +281,7 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 func (g *gui) idle() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.cancel == nil && time.Since(g.lastPoll) > 2*time.Minute
+	return g.cancel == nil && time.Since(g.lastPoll) > g.idleAfter
 }
 
 func sibling(name string) string {

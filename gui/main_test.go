@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/mhashemm/watchparty/party"
 )
@@ -146,5 +147,31 @@ func TestOnlyEdgeGetsTheEdgeFlag(t *testing.T) {
 		if got := slices.Contains(browserArgs(browser, "u", "p"), "--disable-features=msImplicitSignin"); got != want {
 			t.Errorf("%s: Edge flag = %v, want %v", browser, got, want)
 		}
+	}
+}
+
+func TestIdle(t *testing.T) {
+	t.Parallel()
+	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	g.idleAfter = 0
+	if g.idle() {
+		t.Fatal("idle before the page's first poll, which gets a grace period")
+	}
+	g.idleAfter = time.Hour
+	g.lastPoll = time.Now().Add(-2 * time.Hour)
+	if !g.idle() {
+		t.Fatal("not idle with no party and no poll for longer than idleAfter")
+	}
+	req := httptest.NewRequest("GET", "/log", nil)
+	req.Host = g.host
+	req.Header.Set("X-Token", g.token)
+	g.ServeHTTP(httptest.NewRecorder(), req)
+	if g.idle() {
+		t.Fatal("still idle after the page polled")
+	}
+	g.lastPoll = time.Now().Add(-2 * time.Hour)
+	g.cancel = func() {}
+	if g.idle() {
+		t.Fatal("idle during a party")
 	}
 }
