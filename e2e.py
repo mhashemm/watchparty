@@ -517,8 +517,8 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
         script(f"{home}/bin/xdg-open", f'echo "$@" >> {home}/xdg-open.args\nexit 1')
         script(f"{home}/slow-mpv", f'{shutil.which("sleep")} 3\nexec {shutil.which("mpv")} "$@"')
         if browser:
-            # Chromium refuses to run as root, which is what e2e.Dockerfile's container is, without --no-sandbox
-            flags = "--headless=new --remote-debugging-port=0" + (" --no-sandbox" if os.geteuid() == 0 else "")
+            # e2e.Dockerfile sets it: Docker's seccomp profile blocks the user namespaces the sandbox needs
+            flags = "--headless=new --remote-debugging-port=0" + (" --no-sandbox" if os.environ.get("E2E_NO_SANDBOX") else "")
             if browser == "xvfb":
                 flags = flags.replace("--headless=new", "--ozone-platform=x11")
             run = "exit 0" if browser == "handoff" else f'PATH=/usr/bin:/bin exec {"xvfb-run -a " if browser == "xvfb" else ""}{BROWSER} {flags} "$@"'
@@ -1823,6 +1823,23 @@ def listening_unix(path):
         s.close()
 
 
+def keep_logs():
+    """Copy this run's logs to $E2E_LOGS/<mode>, which make e2e mounts from the host, and
+    say where they are. Only logs: the binaries, the video and browser profiles stay."""
+    dest = os.environ.get("E2E_LOGS")
+    if not dest:
+        return RUN
+    dest = os.path.join(dest, args.mode)
+    for d, dirs, files in os.walk(RUN):
+        dirs[:] = [x for x in dirs if x != "tmp"]  # a GUI's TMPDIR: browser profiles, mpv sockets
+        for f in files:
+            if f.endswith((".log", ".args")):
+                rel = os.path.relpath(os.path.join(d, f), RUN)
+                os.makedirs(os.path.join(dest, os.path.dirname(rel)), exist_ok=True)
+                shutil.copy(os.path.join(d, f), os.path.join(dest, rel))
+    return dest
+
+
 try:
     {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite, "gui": gui_suite}[args.mode]()
 finally:
@@ -1839,7 +1856,8 @@ finally:
         if p.poll() is None:
             p.kill()
             p.wait(timeout=5)
+    # here, so a crash or an early exit still leaves its logs
+    print(f"\nlogs: {keep_logs()}")
 
-print(f"\nlogs: {RUN}")
 print("ALL PASS" if not fails else f"{len(fails)} FAILURES: " + ", ".join(fails))
 sys.exit(1 if fails else 0)
