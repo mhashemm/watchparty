@@ -26,6 +26,18 @@ and stops with the party. `Run` and `runMesh` need mpv and a network, so they ar
 covered end to end: `e2e.py` drives the CLI through them, and the GUI's checks drive
 them in-process (see `gui/CLAUDE.md`).
 
+## Same file, or no party
+
+`fingerprint` is a SHA-256 of the byte size plus eight 1MB samples from the first byte
+to the last, so a copy under another name or folder matches and a 20GB file is instant.
+A different encode, cut or release changes the size or the header. An edit that keeps
+the size and misses every sample slips through, which is accepted. A `-file`
+containing `://` is a URL, fingerprinted by its text, so nothing is fetched.
+
+A joiner whose fingerprint differs gets 409 and its party ends: from the peer it
+bootstraps off (`/hi`) or from the relay (against the room creator's). Older versions
+send none and can't join.
+
 ## `Run`, step by step
 
 1. `c, cancel := context.WithCancel(parent)`. **`parent` belongs to the caller**: the
@@ -37,10 +49,8 @@ them in-process (see `gui/CLAUDE.md`).
    - `outgoing`: mpv → the transport
    - `incoming`: the transport → mpv
 
-   Then `fingerprint(cfg.File)`: SHA-256 of the size and eight 1MB samples (why: the
-   root `CLAUDE.md`, "Same file, or no party"), or of the text itself for a URL
-   (anything containing `://`). A file it can't read (missing, a folder) is returned
-   as the error before anything starts. It logs `file
+   Then `fingerprint(cfg.File)` (see "Same file, or no party"). A file it can't read
+   (missing, a folder) is returned as the error before anything starts. It logs `file
    fingerprint: <hex>`, which `e2e.py` reads, and hands the hex to both transports.
 4. **Choosing a transport:** `strings.TrimSpace(cfg.Relay) != ""` selects the relay,
    and anything else is the P2P mesh. An empty `Relay` therefore silently means "try

@@ -13,7 +13,7 @@ Every endpoint is `POST`, and identity travels in headers:
 | `hit-me-up` | the sender's advertised `ip:port`, which is its key in everyone's peer map |
 | `counter` | the sender's monotonic broadcast counter (decimal `uint64`) |
 | `hostname` | the display name, shown in "paused by X" |
-| `file` | the sender's file fingerprint (see the root `CLAUDE.md`); only `/hi` checks it |
+| `file` | the sender's file fingerprint (see `party/CLAUDE.md`); only `/hi` checks it |
 | `secret` | the party's secret. `Guard` checks it on every endpoint |
 
 **`Guard` wraps the whole mux.** A missing or wrong `secret` (constant-time compare) is
