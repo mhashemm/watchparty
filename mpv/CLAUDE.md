@@ -232,7 +232,11 @@ behind until the next seek. Instead:
    notices are unchanged. Sent once: a relay reconnect doesn't resend it.
 2. **Every node already in the party, in `welcome`:**
    - if it is playing, it pauses its own mpv (`pauseReq`, not marked `applied`, so the
-     pause goes out as its own) and shows `paused for <joiner>: joining`
+     pause goes out as its own)
+   - it shows `paused for <joiner>: joining` either way. A node often applies another
+     node's pause for the same joiner before the joiner's own `joined` reaches it.
+     It then showed only "paused by" that node, so users there never saw the reason
+     (`e2e.py` `[11c]` caught it, flakily)
    - it broadcasts `{"event":"property-change","name":"start-pos","data":<c.pos>}`
    - a node that is itself still `joining` doesn't answer: its position isn't the
      party's
@@ -247,7 +251,8 @@ behind until the next seek. Instead:
    first node stops being `joining` once the party starts.
 
 Older nodes' `apply` ignores both names. `TestJoinerAnnouncesItselfOnceLoaded`,
-`TestJoinPausesThePartyAndSendsThePosition`, `TestJoiningNodeDoesNotAnswerAnotherJoiner`
+`TestJoinPausesThePartyAndSendsThePosition`, `TestJoinWhilePausedStillShowsWhy`,
+`TestJoiningNodeDoesNotAnswerAnotherJoiner`
 and `TestStartPosAlreadyThereStillCounts` cover it. `e2e.py` `[11c]` (P2P), `[R9]`,
 `[R10b]` and `[R11d2]` (a joiner whose stream takes 3s to load while the party plays)
 cover it against real mpv.
@@ -262,6 +267,13 @@ and `sync()` lock, mutate, unlock, and only then do IPC.
 - `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group. mpv's
   video window is a normal window and is unaffected. Whether that holds when the
   parent is the `-H=windowsgui` GUI has not been verified on Windows yet.
+- **`Init` runs the `mpv.exe` next to an `mpv.com`.** `mpv.com` is only a console
+  wrapper that starts `mpv.exe`, and a bare `mpv` on `PATH` resolves to it, since
+  `.COM` comes before `.EXE` in `PATHEXT`. `cmd.Cancel` killed only the wrapper:
+  `mpv.exe` kept playing and kept mpv's output pipe open, so `cmd.Wait` and `Run`
+  never returned. In the GUI, End left the player open and the party "running" until
+  mpv was closed by hand. mpv's log lines still arrive from `mpv.exe`.
+  `TestInitRunsMpvExeInsteadOfTheComWrapper` runs only on Windows, so CI never runs it.
 
 ## Testing notes
 

@@ -648,6 +648,22 @@ func TestJoinPausesThePartyAndSendsThePosition(t *testing.T) {
 	}
 }
 
+// A node already paused, often by another node's pause for the same joiner, still
+// says why the party is waiting.
+func TestJoinWhilePausedStillShowsWhy(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.paused = true
+
+	go c.apply(peer("j", `{"name":"joined"}`))
+	if got := next(t, requests); got != "show-text paused for j: joining 5000" {
+		t.Fatalf("sent %q, want the notice and no pause", got)
+	}
+	if e := nextEvent(t, outgoing); e.Name != startPos {
+		t.Fatalf("broadcast %s, want the position", e.Name)
+	}
+}
+
 // A node still waiting for its own position has none to give, so it doesn't answer.
 func TestJoiningNodeDoesNotAnswerAnotherJoiner(t *testing.T) {
 	t.Parallel()

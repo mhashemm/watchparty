@@ -915,7 +915,10 @@ def relay_suite():
     launch("nodeLate", room=ROOM, tag="late", relay=RELAY_URL + "/")
     until(lambda: booted("late") and connected("late"), BOOT)
     resolve("late")
-    until(lambda: near(get("late", "time-pos"), 33.0, 0.15))
+    until(lambda: near(get("late", "time-pos"), 33.0, 0.15)
+          and all("paused for nodeLate: joining" in osd(n) for n in NODES))
+    for n in NODES:
+        ok(f"{n} told why, though the party was already paused", "paused for nodeLate: joining" in osd(n))
     time.sleep(QUIET)  # a rewind would go out as soon as its file loaded
     ok("a trailing slash on the relay address still connects", connected("late"))
     for n in NODES:

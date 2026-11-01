@@ -410,8 +410,8 @@ func (c *Client) welcome(hostname string) error {
 		if err != nil {
 			return err
 		}
-		c.showText(fmt.Sprintf("paused for %s: joining", hostname))
 	}
+	c.showText(fmt.Sprintf("paused for %s: joining", hostname))
 	c.mu.Lock()
 	b := position(startPos, c.pos)
 	c.mu.Unlock()

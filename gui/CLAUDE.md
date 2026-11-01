@@ -270,7 +270,13 @@ install it themselves.
 - **Windows picker:** PowerShell `-STA` with a WinForms `OpenFileDialog`, whose
   `Filter` is `Videos|*.mkv;*.mp4;…` (Windows matches it in any case).
   - `[Console]::OutputEncoding = UTF8` is needed or non-ASCII paths come back mangled.
-  - A `TopMost` owner form keeps the dialog from opening behind the app window.
+  - The dialog is owned by an invisible form that is shown, activated, then made
+    non-`TopMost` before `ShowDialog`. PowerShell runs in the background, so
+    Windows won't bring its windows to the front on their own. A `TopMost` owner
+    that was never shown did nothing, and the dialog opened behind the app window.
+    Leaving it `TopMost` brought the dialog to the front but kept it above every
+    other app. Showing it and then clearing `TopMost` leaves the owner, and the
+    dialog with it, at the top of the normal windows. Checked by hand on Windows 11.
 - **`hide()` uses only `CREATE_NO_WINDOW`.** Don't add `HideWindow`: it sets SW_HIDE
   for the child's first `ShowWindow`, which can hide the PowerShell file dialog
   itself.
@@ -310,6 +316,18 @@ install it themselves.
   --window-size=560,940 --user-data-dir=<temp> --no-first-run
   --no-default-browser-check`, then `openURL` (`rundll32` / `xdg-open` / `open`)
   opens the default browser as a plain tab.
+  - **The fresh profile is seeded and Edge's sign-in is off.** Before launch,
+    `Default/Preferences` gets `credentials_enable_service: false` and
+    `profile.password_manager_enabled: false`, because Chrome offered to save the
+    `type="password"` secret fields. Edge alone also gets
+    `--disable-features=msImplicitSignin`, because Edge signs every new profile into
+    the Windows Microsoft account, turns on sync and shows "We are now syncing your
+    browsing data" on each launch.
+    - The `signin.allowed` preferences, `--inprivate` and `--guest` don't stop that
+      sign-in (tested against headless Edge 156). Machine-wide Edge policies would,
+      but they change the user's own browser.
+    - The feature name comes from Edge's binary, not from docs, so a later Edge
+      may rename it. Each browser gets only the flags that are its own.
   - **Only Chromium-family browsers are in the list**, because only they have an
     app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name.
   - Windows lists absolute paths, **Chrome first, then Edge**. Edge ships with every
@@ -528,20 +546,24 @@ When a reference is given, work out *what makes it work* (proportions, eye
 construction, outline, simplicity) and apply that essence. Don't copy it wholesale:
 a full kawaii redraw of Fosdo2's face lost what made him him.
 
-## Not yet verified on Windows
+## On Windows
 
-Everything Windows-specific compiles, but has not been run on Windows. Check these
-first:
+First run on Windows 11, with Edge 156 and mpv 0.40 (whose `mpv.com` wrapper is
+described in `mpv/CLAUDE.md`). Verified there:
 
-- The PowerShell picker appears in front of the window.
-- No console window flashes for the picker.
-- mpv's window shows up when it is launched from a `-H=windowsgui` parent through
-  `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE`.
-- The mpv named pipe (`\\.\pipe\mpv<random>`) connects, and a party syncs with a
-  Linux peer.
-- Chrome and Edge open in `--app` mode from the listed paths, and with a fresh
-  `--user-data-dir` the launched process stays alive until the window is closed. If
-  either one hands off and exits at once, the hand-off guard keeps the app running,
-  but closing the window then won't stop it.
-- The Windows self-update swap (`.exe` → `.old`, new file in place, `.old` deleted on
-  the next start).
+- The picker opens in front of the window, filtered to videos, with no console flash,
+  and returns paths with spaces and non-ASCII characters intact.
+- The mpv named pipe connects, and Windows nodes sync with each other over both
+  transports.
+- Edge opens in `--app` mode, and with a fresh `--user-data-dir` the launched
+  process lives as long as the window, so closing it ends the party and the app.
+- The self-update swap: `.exe` → `.old`, the new file in place, its SHA-256 checked.
+  After **Restart now**, `.old` survives one start: the new process tries to delete
+  it while the old one is still running. The start after that removes it.
+
+Still unverified:
+
+- mpv's video window when launched from the `-H=windowsgui` parent through
+  `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE` (only `--vo=null` has run).
+- A party between a Windows and a Linux peer.
+- Chrome on Windows. Only Edge was installed.

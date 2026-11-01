@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"testing"
 
 	"github.com/mhashemm/watchparty/party"
@@ -127,5 +128,21 @@ func TestPageScriptParses(t *testing.T) {
 	cmd.Stdin = bytes.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("the page script does not parse:\n%s", out)
+	}
+}
+
+func TestOnlyEdgeGetsTheEdgeFlag(t *testing.T) {
+	t.Parallel()
+	for browser, want := range map[string]bool{
+		"google-chrome": false,
+		"chromium":      false,
+		"brave-browser": false,
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`: false,
+		"microsoft-edge": true,
+		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`: true,
+	} {
+		if got := slices.Contains(browserArgs(browser, "u", "p"), "--disable-features=msImplicitSignin"); got != want {
+			t.Errorf("%s: Edge flag = %v, want %v", browser, got, want)
+		}
 	}
 }

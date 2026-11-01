@@ -42,7 +42,7 @@ func TestBroadcastDoesNotBlockOnFullIncoming(t *testing.T) {
 func TestBroadcastEvictsPeerAfterMaxFails(t *testing.T) {
 	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage, 8)
-	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", time.Nanosecond)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", 0)
 	dead := &peer{address: "127.0.0.1:2", Hostname: "dead"}
 	s.addresses[dead.address] = dead
 

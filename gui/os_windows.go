@@ -25,7 +25,10 @@ func openURL(url string) *exec.Cmd {
 
 const pickScript = `[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
-$owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true}
+$owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = 'None'; Opacity = 0; StartPosition = 'CenterScreen'; Width = 1; Height = 1}
+$owner.Show()
+$owner.Activate()
+$owner.TopMost = $false
 $d = New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos|PATTERNS'}
 if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`
 
