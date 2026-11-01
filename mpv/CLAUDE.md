@@ -262,6 +262,13 @@ and `sync()` lock, mutate, unlock, and only then do IPC.
 - `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group. mpv's
   video window is a normal window and is unaffected. Whether that holds when the
   parent is the `-H=windowsgui` GUI has not been verified on Windows yet.
+- **`Init` runs the `mpv.exe` next to an `mpv.com`.** `mpv.com` is only a console
+  wrapper that starts `mpv.exe`, and a bare `mpv` on `PATH` resolves to it, since
+  `.COM` comes before `.EXE` in `PATHEXT`. `cmd.Cancel` killed only the wrapper:
+  `mpv.exe` kept playing and kept mpv's output pipe open, so `cmd.Wait` and `Run`
+  never returned. In the GUI, End left the player open and the party "running" until
+  mpv was closed by hand. mpv's log lines still arrive from `mpv.exe`.
+  `TestInitRunsMpvExeInsteadOfTheComWrapper` runs only on Windows, so CI never runs it.
 
 ## Testing notes
 
