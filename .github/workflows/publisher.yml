@@ -8,7 +8,19 @@ on:
 permissions: read-all
 
 jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
   build:
+    needs: release
     permissions:
       id-token: write
       contents: write
@@ -40,6 +52,6 @@ jobs:
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-X main.version=${{ github.ref_name }} ${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
 
       - name: Publish
-        run: gh release create "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} --generate-notes || gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }}
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
