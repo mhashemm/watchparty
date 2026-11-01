@@ -208,7 +208,9 @@ def launch_gui(name, exe=None, browser=True):
         shutil.copy(FAKEBROWSER, os.path.join(pf, "chrome.exe"))
     env = environ(APPDATA=os.path.join(home, "appdata"), LOCALAPPDATA=os.path.join(home, "local"),
                   TMP=os.path.join(home, "tmp"), TEMP=os.path.join(home, "tmp"),
-                  ProgramFiles=os.path.join(home, "pf"), **{"ProgramFiles(x86)": os.path.join(home, "pf86")},
+                  # a 64-bit process gets ProgramFiles rebuilt from ProgramW6432, so set both
+                  ProgramFiles=os.path.join(home, "pf"), ProgramW6432=os.path.join(home, "pf"),
+                  **{"ProgramFiles(x86)": os.path.join(home, "pf86")},
                   E2E_BROWSER=CHROME if browser else "", E2E_BROWSER_LOG=os.path.join(home, "browser.args"))
     path = os.path.join(RUN, name + ".log")
     nodes[name] = {"home": home}
@@ -481,7 +483,8 @@ def gui_suite():
     for p in new:
         kill_tree(p["ProcessId"])
     nodes[U]["proc"] = subprocess.Popen([exe], env=environ(APPDATA=os.path.join(RUN, "winUpdate", "appdata"),
-                                                           ProgramFiles=os.path.join(RUN, "winUpdate", "pf"), E2E_BROWSER="",
+                                                           ProgramFiles=os.path.join(RUN, "winUpdate", "pf"),
+                                                           ProgramW6432=os.path.join(RUN, "winUpdate", "pf"), E2E_BROWSER="",
                                                            E2E_BROWSER_LOG=os.path.join(RUN, "winUpdate", "browser.args")))
     ok("the next start removes .old", until(lambda: not os.path.exists(exe + ".old")))
     kill_tree(nodes[U]["proc"].pid)
