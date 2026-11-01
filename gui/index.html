@@ -841,6 +841,13 @@ function handle(line) {
   if ((m = line.match(/do: sent request: (\{"command":\["show-text".*)$/))) {
     try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
   }
+  if ((m = line.match(/Watch: broadcasted event: (\{.*\})$/))) {
+    try {
+      const e = JSON.parse(m[1]);
+      if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");
+      if (e.name === "pause-reason") [...$("feed").children].find(li => li.lastChild.textContent === "paused by you")?.remove();
+    } catch {}
+  }
 }
 
 function render(exitErr) {
