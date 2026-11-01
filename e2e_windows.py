@@ -192,6 +192,12 @@ def ctrl_break(n):
 
 # ------------------------------------------------------------------- gui --
 
+def environ(**over):
+    """os.environ with over applied. Windows names are case-insensitive and Python keeps
+    them upper-cased, so a mixed-case key would sit next to the real one, not replace it."""
+    return {**os.environ, **{k.upper(): v for k, v in over.items()}}
+
+
 def launch_gui(name, exe=None, browser=True):
     home = os.path.join(RUN, name)
     pf = os.path.join(home, "pf", r"Google\Chrome\Application")
@@ -200,10 +206,10 @@ def launch_gui(name, exe=None, browser=True):
             os.makedirs(os.path.join(home, d))
         os.makedirs(pf)
         shutil.copy(FAKEBROWSER, os.path.join(pf, "chrome.exe"))
-    env = {**os.environ, "APPDATA": os.path.join(home, "appdata"), "LOCALAPPDATA": os.path.join(home, "local"),
-           "TMP": os.path.join(home, "tmp"), "TEMP": os.path.join(home, "tmp"),
-           "ProgramFiles": os.path.join(home, "pf"), "ProgramFiles(x86)": os.path.join(home, "pf86"),
-           "E2E_BROWSER": CHROME if browser else "", "E2E_BROWSER_LOG": os.path.join(home, "browser.args")}
+    env = environ(APPDATA=os.path.join(home, "appdata"), LOCALAPPDATA=os.path.join(home, "local"),
+                  TMP=os.path.join(home, "tmp"), TEMP=os.path.join(home, "tmp"),
+                  ProgramFiles=os.path.join(home, "pf"), **{"ProgramFiles(x86)": os.path.join(home, "pf86")},
+                  E2E_BROWSER=CHROME if browser else "", E2E_BROWSER_LOG=os.path.join(home, "browser.args"))
     path = os.path.join(RUN, name + ".log")
     nodes[name] = {"home": home}
     opened = len(launches(name))
@@ -240,7 +246,8 @@ def attach(n, count):
     until(page, BOOT)
     ws = page()
     if not ws:
-        sys.exit(f"{n} never opened its page; see {nodes[n]['log']}")
+        print(f"--- {n}'s log:\n{log(n)}--- its browser launches: {launches(n)}")
+        sys.exit(f"{n} never opened its page")
     c = CDP(ws)
     nodes[n]["page"] = c
     until(lambda: c.js('document.getElementById("store-path")?.textContent') not in (None, ""), BOOT)
@@ -310,7 +317,7 @@ def sha(path):
 def cli_suite():
     A, B, C = "winA", "winB", "winC"
     print("\n=== cli: three nodes through one relay, over mpv's named pipes ===")
-    relay = subprocess.Popen([RELAY_BIN], env={**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}"},
+    relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}"),
                              stdout=open(os.path.join(RUN, "relay.log"), "wb"), stderr=subprocess.STDOUT)
     others_procs.append(relay)
     for n in (A, B, C):
@@ -395,7 +402,7 @@ def cli_suite():
 def gui_suite():
     H, G = "winHost", "winGuest"
     print("\n=== gui: two GUIs built -H=windowsgui, each in headless Chrome ===")
-    relay = subprocess.Popen([RELAY_BIN], env={**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}"},
+    relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}"),
                              stdout=open(os.path.join(RUN, "relay-gui.log"), "wb"), stderr=subprocess.STDOUT)
     others_procs.append(relay)
     for n in (H, G):
@@ -471,9 +478,9 @@ def gui_suite():
     new = [p for p in processes() if (p["CommandLine"] or "").strip('" ').lower().startswith(exe.lower()) and p["ProcessId"] != old_pid]
     for p in new:
         kill_tree(p["ProcessId"])
-    nodes[U]["proc"] = subprocess.Popen([exe], env={**os.environ, "APPDATA": os.path.join(RUN, "winUpdate", "appdata"),
-                                                    "ProgramFiles": os.path.join(RUN, "winUpdate", "pf"), "E2E_BROWSER": "",
-                                                    "E2E_BROWSER_LOG": os.path.join(RUN, "winUpdate", "browser.args")})
+    nodes[U]["proc"] = subprocess.Popen([exe], env=environ(APPDATA=os.path.join(RUN, "winUpdate", "appdata"),
+                                                           ProgramFiles=os.path.join(RUN, "winUpdate", "pf"), E2E_BROWSER="",
+                                                           E2E_BROWSER_LOG=os.path.join(RUN, "winUpdate", "browser.args")))
     ok("the next start removes .old", until(lambda: not os.path.exists(exe + ".old")))
     kill_tree(nodes[U]["proc"].pid)
     relay.kill()
