@@ -86,8 +86,8 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
   automatically. The Settings page's fields are saved by its button. The first relay
   used becomes the default if none is set.
 - **History**, up to 100 parties. `begin` records the form on `/start`, `end` stamps
-  the end. `observe` runs on every log line: the invite line fills in the *real* room
-  and secret, and the notices "X has joined" / "connected to X" add people.
+  the end. `observe` fills in the *real* room and secret from the invite line, and
+  people from the join notices.
 
 ## Self-update (`update.go`)
 
@@ -169,21 +169,10 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
   strips a whole pasted log line up to `your address to share is`. `-createKey` is never
   in an invite.
 
-## Log-line contract
+## Log lines
 
-`handle()` in `index.html` matches these. Change one in `party/`, `mpv/` or `server/`
-and the GUI silently stops reacting:
-
-| Log substring | UI effect |
-|---|---|
-| `your address to share is <invite>` | invite box + Copy button (text taken verbatim) |
-| `relay: connected` | clears reconnecting/waiting |
-| `relay: dial:` / `relay: disconnected` | "Lost the relay. Reconnecting…", turtles hurry |
-| `is not open yet` (inside the dial line) | "Waiting for the host to open this room…" |
-| `rejected by relay` | "Diagnosis: the relay rejected this room or secret…" |
-| `rejected by relay` + `not the same file` | "Diagnosis: your video is not the same file as the party's…" |
-| `init done` | "You're in…", heartbeat line starts pulsing |
-| `do: sent request: {"command":["show-text",…` | party feed entry (`command[1]`) |
+`handle()` in `index.html` and `store.go`'s `observe` react only to log lines; the table
+of which lines, and who prints them, is in the root `CLAUDE.md`.
 
 ## On Windows
 

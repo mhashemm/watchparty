@@ -1,212 +1,138 @@
 # relay/CLAUDE.md
 
-`relay` is the websocket relay server, a separate `package main` binary for people
-whose UPNP never works (carrier NAT, locked-down routers). Every node dials **out** to
-it, so nobody needs to be reachable from outside. It runs on a public VPS, which is why
-half of this file is about abuse.
-
-The client side is `party/ws.go`. This package never imports `party`.
+The websocket relay, a separate `package main` for people UPNP can't help (carrier NAT,
+locked routers, double NAT). Every node dials **out** to it. It runs on a public VPS,
+so half of this file is about abuse. The client is `party/ws.go`, which also holds the
+table of how a node reacts to each status. This package never imports `party`.
 
 ```sh
-go build ./relay
 go test -race ./relay
 docker build -f relay/Dockerfile -t watchparty-relay .     # from the REPO ROOT
 [ADDR=:8080] [CREATE_KEY=k] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [MAX_ROOMS=10000] [MAX_CONNS=5000] ./relay
 ```
 
-It takes **no flags, only env vars**, read by `env()` in `main.go`. An empty value
-means the default, and a value that doesn't parse is fatal at startup. The
-`Dockerfile` lists every one of them in its `ENV`, so a new variable goes there too.
+**Env vars only, no flags.** An empty value means the default; one that doesn't parse
+is fatal at startup. The `Dockerfile` lists every one in its `ENV`, so a new variable
+goes there too. Not in the release; deployed by hand or as the image.
 
-It is **not** in `publisher.yml`'s release matrix. It is deployed by hand or as the
-Docker image.
+## Why this shape
+
+- **Websocket**, because it is HTTP until it isn't: it passes proxies and sits behind
+  caddy/nginx for TLS. SSE needs a second channel upstream, raw TCP dies at corporate
+  proxies, and WebRTC needs a signalling server *and* TURN, more than this relay.
+  `coder/websocket`: no dependencies, context-first.
+- **Dumb fan-out.** Frames are forwarded as opaque bytes and never sent back to their
+  sender, so the relay needs no counters and never parses playback. It only synthesizes
+  notices, as `show-text` events (so it imports `mpv`).
+- **Rooms are memory only.** The first joiner's secret and file define the room; it is
+  deleted when its last member leaves. No accounts, no persistence, no playback state.
+- **Accepted:** `hostname` is whatever a member claims, so anyone with the secret can
+  impersonate one, as in P2P. Volumetric floods must be absorbed upstream; the relay
+  only bounds what reaches its handler.
 
 ## Protocol
 
-- `GET /ws?room=<name>&hostname=<display name>&session=<random>&file=<fingerprint>` is
-  upgraded to a websocket. `file` is the node's file fingerprint (see the root
-  `CLAUDE.md`). It is not a secret, so it rides in the query string.
-- The secret goes in the **`room-secret`** header, never the query string, which
-  proxies log. The optional create key goes in **`create-key`**.
-- Frames are text messages of the form `{"hostname": "…", "event": <raw mpv JSON>}`.
-  The relay forwards them **as opaque bytes**. It never parses playback data, and it
-  never sends a frame back to its sender.
-- Notices it synthesizes use the same envelope with a `show-text` event:
-  - "X has joined" goes to the room.
-  - "connected to Y" goes to the joiner, once per member already there.
-  - "X has left" goes to the room.
+- `GET /ws?room=&hostname=&session=&file=` upgrades. The secret is in the
+  **`room-secret`** header, never the query (proxies log it); the optional create key
+  in **`create-key`**. `file` isn't secret.
+- Notices: "X has joined" and "X has left" to the room, and "connected to Y" to the
+  joiner once per member already there, so the last joiner learns who is in the room.
 
-  The GUI's party history parses "X has joined" and "connected to Y" to record who
-  was there. `server/` sends the same texts in P2P mode, so change both or neither.
-- **`message` is declared again in `party/ws.go`.** This package is `package main`,
-  so it can't be imported. Importing `party` from here would pull upnp, server and
-  mpv into the relay image. Keep the two structs in sync by hand.
+## Request handling, cheapest rejection first
 
-## Request handling, in cost order
+So a flood is refused before anything is allocated, and nobody who fails is upgraded:
 
-`handle` rejects as cheaply as possible, so a flood is refused before anything is
-allocated:
-
-1. **Connection cap.** `conns.Add(1) > maxConns` → 503. It reserves first and checks
-   after: with a `Load()` check, a burst would all pass before any of them
-   incremented.
-2. **`room` and `hostname` are required** → 400. The node treats 400 as fatal
-   (`errRejected`) and stops retrying.
+1. **Connection cap** → 503. `conns.Add(1)` then check: a `Load()` check let a whole
+   burst pass before any incremented.
+2. Missing `room` or `hostname` → 400.
 3. **`admit`**, under `r.mu`:
-   - **Existing room:** a constant-time secret compare. If it's wrong, the attempt
-     costs rate-limit quota (429 once over the limit), otherwise 403. With the right
-     secret, a `file` other than the room's is 409. It costs no quota and comes
-     after the secret, so nobody without the secret can probe what a room plays.
-   - **New room, `CREATE_KEY` set and no key sent** → 401, which costs no quota. This
-     is a guest who arrived before the host; the node keeps retrying.
-   - **New room:** rate limit (429) → create-key compare (403, after the quota was
-     spent, so guessing keys costs) → `maxRooms` (503) → create the room with this
-     caller's secret and `file`.
-4. **`websocket.Accept`.** If it fails, `leave(name, nil)` reaps the room `admit` may
-   have just created.
-5. **`add`** registers the member only now, once `m.conn` is set, so `broadcast` can
-   never reach a nil conn.
-   - If the room is gone, `add` returns false and the handler closes the websocket
-     with `StatusTryAgainLater`. That happens when the last member left (or another
-     joiner's `Accept` failed) between this caller's `admit` and its `add`, which
-     reaps the room. Without it the joiner stayed connected to nothing: it heard
-     nothing and nobody heard it. The node sees a disconnect, redials at once, and
-     goes through `admit` again: it recreates the room if it may, or waits with 401.
-   - If a member with the same non-empty `session` is already there, it is swapped
-     out and `CloseNow`ed. The room gets no new "has joined", and the stale member's
-     `leave` sends no "has left", because it is no longer present.
-   - This is keyed on session, not hostname: two machines that share a hostname would
-     otherwise keep kicking each other out. An empty session (an old client) is never
-     deduped.
-   - **The notices are queued inside `add`, under the same `r.mu`:** "X has joined"
-     to every member it found (not on a reconnect), and "connected to Y" to the
-     joiner for each of them. Both lists are the same room at the same instant. When
-     the handler broadcast "has joined" after `add` returned, a member that joined in
-     between got it on top of finding X in its "connected to" list, and after a
-     reconnect the new connection could be told it had joined itself. The sends are
-     non-blocking and a full buffer drops the notice, so nothing under the lock waits.
-6. The writer goroutine starts, then it reads in a loop. Each frame (read limit
-   **4096 bytes**) is passed to `broadcast`.
-
-| Status | Meaning | Node reaction (`party/ws.go`) |
-|---|---|---|
-| 400 | missing room or hostname | gives up |
-| 401 | room not open, no create key sent | retries |
-| 403 | wrong secret or wrong create key | gives up, logs `rejected by relay` |
-| 409 | a different file from the room creator's | gives up, logs `rejected by relay: … not the same file …` |
-| 429 | rate limit | retries with backoff |
-| 503 | `maxConns` / `maxRooms` | retries with backoff |
+   - Existing room: constant-time secret compare. Wrong → 403, and it costs rate-limit
+     quota (429 once over). Right secret but another `file` → 409, free, and only after
+     the secret, so outsiders can't probe what a room plays.
+   - New room with `CREATE_KEY` set and no key sent → 401, free: a guest who arrived
+     before the host, and the node keeps retrying.
+   - New room: rate limit (429) → create-key compare (403, after the quota is spent, so
+     guessing keys costs) → `MAX_ROOMS` (503) → create.
+4. `websocket.Accept`. On failure, `leave(name, nil)` reaps a room `admit` just made,
+   announcing nothing.
+5. **`add`** registers the member only once `m.conn` is set, or `broadcast` could reach
+   a nil conn.
+   - Room gone (its last member left between this `admit` and `add`): close with
+     `StatusTryAgainLater`, and the node redials through `admit`. Before, the joiner
+     stayed connected to nothing.
+   - **Same non-empty `session` already there:** swap it in and `CloseNow` the old one,
+     with no "has joined", and the old one's `leave` sends no "has left". Keyed on
+     session, not hostname: two machines with one hostname kicked each other out.
+   - **Notices are queued inside `add`, under the same `r.mu`**, non-blocking, so
+     "has joined" and the joiner's "connected to" list describe the same instant.
+     Broadcast after `add` returned, a member joining in between got both, and a
+     reconnect could be told it had joined itself.
+6. Read loop with a **4096-byte** read limit (mpv lines are tiny; the 32KB default lets
+   one member push junk to everyone).
 
 ## Fan-out and writes
 
-- **`broadcast`** snapshots the members under `r.mu`, releases it, then does a
-  non-blocking send into each member's **64-frame** `ch`. A full buffer means a dead
-  client, not a slow one: the member's conn is `CloseNow`ed. **Never write to N
-  sockets from the sender's read goroutine.** One stalled TCP connection must not
-  freeze the party.
-- **`write`** is one goroutine per member. It drains `ch` with a 10s timeout per
-  write, and **pings every 30s**. A party sits idle for hours between pauses, and NAT
-  and proxy idle timeouts kill silent connections. Any error ends the writer, and the
-  writer **`CloseNow`s the conn on its way out**, which fails the read loop, which
-  calls `leave`.
-  - Without that close, a client that stops answering pings (a frozen process, a
-    bot) only lost its writer. Its read loop blocked forever on a socket that was
-    still open, so the member and its room stayed until the TCP connection died, if
-    it ever did.
-  - The 30s/10s are `r.ping`/`r.timeout`, set from the `pingInterval`/`writeTimeout`
-    consts in `main`, so a test can shorten them on its own relay.
-- **`leave`** deletes the member, deletes the room once it is empty (rooms are
-  memory-only), and announces "has left" only for a member it actually removed.
+- **`broadcast`** snapshots members under `r.mu`, releases it, then does a non-blocking
+  send into each member's **64-frame** channel. A full channel means a dead client:
+  `CloseNow`. Never write to N sockets from the sender's read goroutine; one stalled
+  TCP connection would freeze the party.
+- **`write`**, one goroutine per member: 10s per write, **a ping every 30s** (a party
+  sits idle for hours, and NAT and proxy idle timeouts kill silent connections). Any
+  error ends it, and it **`CloseNow`s the conn on its way out**, which fails the read
+  loop, which calls `leave`. Without that, a member that stopped answering pings kept
+  its read loop and its room forever. The intervals are `r.ping`/`r.timeout` fields so
+  tests shorten them.
 
 ## Rate limiter: a count-min sketch. Do not turn it back into a map
 
-- `limiter` is `[4][1 << 20]uint16` with 4 `maphash` seeds: **8MB, allocated once**,
-  with zero allocation per check. On window rollover (1 hour) the whole thing is
-  `clear()`ed; nothing is evicted per key.
-- **Why not a map:** a `map[ip]int` allocates one entry per distinct source address.
-  A botnet with 100k addresses would mint 100k entries, and the rate limiter would
-  become the memory-exhaustion attack it exists to prevent. Capping the map only
-  chooses between failing open and failing closed.
-- A sketch over-counts on collisions and never under-counts. The error is one-sided
-  in the safe direction: the cost is a false rejection when all 4 of an address's
-  slots also hold someone else's counts. At 128KB (16384 columns) that was about a
-  4% chance for someone at their 10th room once 10k addresses had been seen in the
-  hour. At 8MB the noise per slot is ~0.01 at that load, and the chance is about
-  1e-8. The hourly `clear()` of 8MB is negligible.
-- Saturating `uint16` counters can't wrap around to 0.
-- What counts against `ROOMS_PER_HOUR`:
-  - room creations
-  - failed secret attempts
-  - any create that sends a key, right or wrong
-- What is free:
-  - joining an existing room (or a party of eight would exhaust one person's quota)
-  - a keyless create while `CREATE_KEY` is set (a guest waiting for the host)
+- `[4][1 << 20]uint16` with 4 `maphash` seeds: **8MB allocated once, zero allocation
+  per check**, `clear()`ed each hour instead of evicting per key.
+- **A `map[ip]int` is the memory-exhaustion attack it exists to prevent:** 100k botnet
+  addresses mint 100k entries, and capping the map only picks failing open or closed.
+  `x/time/rate`'s per-key form has the same problem.
+- It over-counts on collision and never under-counts, so an attacker can't collide into
+  extra quota; the cost is a rare false rejection (~1e-8 at 10k addresses an hour).
+  Seeds are per process, so collisions can't be targeted. Counters saturate.
+- Counted against `ROOMS_PER_HOUR`: room creations, failed secrets, any create that
+  sends a key. Free: joining an existing room (or a party of eight would use up one
+  person's quota) and a keyless create while `CREATE_KEY` is set.
 
-## Client IP: `TRUST_PROXY`
+## Client IP and HTTP server
 
-- Without it, the client IP is `r.RemoteAddr`.
-- With it, it is the **last** `X-Forwarded-For` element. With one proxy appending, the
-  last entry is the proxy's own view of the direct peer, and the client can't forge
-  it.
-- Getting this wrong behind a TLS-terminating proxy puts every user in one bucket, and
-  the relay bricks itself at room 11.
+- **`TRUST_PROXY` takes the last `X-Forwarded-For` entry**: with one proxy appending,
+  that is the proxy's own view of the peer, unforgeable; the first is attacker-supplied.
+  Without the flag behind a proxy (or in Docker, where everyone arrives from the bridge
+  IP), every user shares one bucket and the relay bricks itself at room 11.
+- **No `ReadTimeout`, deliberately:** it puts a deadline on the hijacked conn and kills
+  every websocket. `ReadHeaderTimeout` 5s, `IdleTimeout` 60s, `MaxHeaderBytes` 8KB:
+  Go's defaults are no timeout, which is free slowloris.
+- On SIGINT/SIGTERM, `Shutdown` gets 5s. Hijacked websockets end because `BaseContext`
+  is the signal context. No TLS: put a TLS proxy in front and set `TRUST_PROXY=true`.
 
-## HTTP server settings
+## Docker and compose
 
-- **No `ReadTimeout`, deliberately.** It puts an absolute deadline on the hijacked conn
-  and kills every long-lived websocket.
-- `ReadHeaderTimeout` 5s, `IdleTimeout` 60s and `MaxHeaderBytes` 8KB are set. Go's
-  defaults are no timeout at all, which is free slowloris.
-- On SIGINT/SIGTERM, `Shutdown` gets 5s. Websockets are hijacked, so `Shutdown` doesn't
-  track them. They end because `BaseContext` is the signal context, which cancels each
-  handler's `req.Context()`.
-- There is no TLS. For `wss://`, put a TLS-terminating proxy in front and set
-  `TRUST_PROXY=true`.
-
-## Docker (`Dockerfile`)
-
-- **Build from the repo root:** the relay is one package in the module and needs
-  `go.mod` and `mpv/` (for `mpv.Event`).
-- `COPY . .` makes **`.dockerignore` load-bearing**. Without it, `.bin` (about 10MB of
-  an 11MB context) ships to the daemon on every build.
-- The final stage is `scratch` with the static `CGO_ENABLED=0` binary, about 6MB: no
-  shell, no libc, no CA bundle. The relay only listens and never dials out, so certs
-  would be dead weight.
-- It listens on **:80** as root. Docker 20.10+ sets
-  `net.ipv4.ip_unprivileged_port_start=0` in containers, so `USER 65534:65534` would
-  also bind :80 (verified). Under podman or a hardened host, set `ADDR=:8080` inside the
-  container and publish `-p 80:8080`.
-
-## Compose (`compose.yaml`)
-
-```sh
-printf 'CREATE_KEY=%s\n' "$(openssl rand -hex 16)" > relay/.env   # also PORT, TRUST_PROXY
-docker compose -f relay/compose.yaml up -d --build
-```
-
-- `env_file: .env` resolves next to the compose file, so it is `relay/.env`, and it
-  must exist. It is in `.gitignore` and `.dockerignore`.
-- `PORT` is the host port and is read by compose, not the relay. Leave `ADDR` alone
-  under compose: the container side of the mapping is fixed at `:80`.
-- `context: ..` because the build needs the repo root, same as the plain
-  `docker build`.
+- Build from the repo root: the relay needs `go.mod` and `mpv/`. `COPY . .` makes
+  **`.dockerignore` load-bearing** (`.bin` is most of the context).
+- `scratch` with a static `CGO_ENABLED=0` binary: no shell, libc or CA bundle, since the
+  relay never dials out.
+- It listens on **:80** as root. Docker 20.10+ allows unprivileged ports below 1024 in
+  containers, so `USER 65534:65534` would also bind :80 (verified). Under podman or a
+  hardened host, use `ADDR=:8080` and `-p 80:8080`.
+- Compose: `printf 'CREATE_KEY=%s\n' "$(openssl rand -hex 16)" > relay/.env` (also
+  `PORT`, `TRUST_PROXY`), then `docker compose -f relay/compose.yaml up -d --build`.
+  `relay/.env` must exist and is ignored by git and Docker. `PORT` is the host port,
+  read by compose; leave `ADDR` alone there.
 
 ## Tests (`main_test.go`)
 
-The tests use real websockets against an `httptest` server, all in parallel:
+Real websockets against `httptest`, all parallel.
 
 - **`join` returns only once the relay has registered the member**, not when the
-  handshake completes: `add` runs after `Accept`, so a frame sent in between misses
-  the newcomer. `serve` records each URL's relay in `relays` for this.
-- **`mark` + `noticesBefore`** prove that something didn't happen without a timeout. A
-  member's queue is FIFO, so whatever the relay sent before the marker arrives before
-  it. A joiner's own notices are queued *after* `add`, so mark **from** the joiner first
-  (its handler forwards that only from its read loop, after the notices), then **to** it.
-- `recvEvent` skips the synthesized notices; `eventually` polls a condition for 2s.
-
-Each test is named for the behaviour it pins.
-
-The end-to-end versions are `e2e.py --mode relay` (fan-out, room isolation, reconnect
-through a TCP proxy) and `e2e.py --mode caps` (every cap, `CREATE_KEY`, a raw socket
-that never answers pings in `[R20]`).
-
+  handshake completes: `add` runs after `Accept`, so a frame sent in between misses the
+  newcomer. `serve` records each URL's relay for this.
+- **`mark` + `noticesBefore`** prove an absence without a timeout: a member's queue is
+  FIFO, so whatever was sent before the marker arrives first. A joiner's own notices
+  are queued after `add`, so mark **from** the joiner first, then **to** it.
+- End to end: `e2e.py --mode relay` (fan-out, isolation, reconnect through a TCP proxy)
+  and `--mode caps` (every cap, `CREATE_KEY`, `[R20]`'s socket that never answers
+  pings).

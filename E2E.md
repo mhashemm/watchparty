@@ -27,9 +27,7 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
   (`QUIET`, after its positive half holds).
 - **`osd()` returns a list**, so `.count(x)` is an exact match, never a substring. Use
   the full string (`f"paused by {A}"`) or `pauses()`.
-- `osd()` parses `do: sent request:` out of each node's log, and the relay cases grep
-  `relay: connected` and `relay: dial`. Change those log lines and update `e2e.py` in
-  the same commit.
+- The suite reads nodes through their log lines (root `CLAUDE.md` has the table).
 - mpv emits no `property-change` for a no-op set, so counted events must alternate.
 
 ## Running it
