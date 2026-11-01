@@ -1,8 +1,17 @@
 # CLAUDE.md
 
-Peer-to-peer mpv sync. This file is the overview and the cross-package rules. Each
-package has its own `CLAUDE.md`, `E2E.md` covers `e2e.py`, and `mpv/MPV.md` covers
-mpv's observed behaviour: read it before touching anything that depends on mpv's events.
+Peer-to-peer mpv sync. This file is always loaded: the overview, how we work, and every
+rule or contract that spans packages.
+
+## Where knowledge lives
+
+| What | Where |
+|---|---|
+| A package's rules and traps | `<pkg>/CLAUDE.md`, loaded when you work in that package |
+| How mpv really behaves; why each mpv flag is pinned | `mpv/MPV.md`. Read it before touching anything that reacts to mpv's events |
+| The GUI's look | `gui/DESIGN.md`. Read it before any visual change |
+| Writing and running `e2e.py` cases | `E2E.md` |
+| Why something is the way it is | the commit that did it: `git log -S'<identifier>'`, `git log -L`, `git log -- <file>`. Bodies hold the incident, the rejected alternatives and what was tested |
 
 ## Commands
 
@@ -10,24 +19,13 @@ mpv's observed behaviour: read it before touching anything that depends on mpv's
 make -j                                    # cli, gui and relay for this machine, into .bin/
 make -j gui linux                          # components × OSes: any of cli gui relay, linux darwin windows
 make -j test                               # unit tests (-race) and e2e.py together, ~45s
-go test -race ./...
-go test ./mpv -run '^TestName$' -v
 go test -race -count=30 -cpu=1,4,16 ./...  # stress a changed test before trusting it
 go mod tidy                                # run it yourself; CI only does go mod download
-docker build -f relay/Dockerfile -t watchparty-relay .   # from the repo root
 ./e2e.py [--mode p2p|relay|caps] [--file movie.mkv] [--nodes 3]
+CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -room r -secret s [-createKey k]
 ```
 
-Through a relay by hand:
-
-```sh
-CREATE_KEY=k ./relay                       # :8080; omit CREATE_KEY to let anyone open rooms
-./watchparty -relay ws://host:8080 -room test -secret s -createKey k -file movie.mkv   # host
-./watchparty -relay ws://host:8080 -room test -secret s -file movie.mkv                # guests
-```
-
-CI: `pr.yml` builds every OS and runs `make -j test`. A tag push runs `publisher.yml`,
-which uploads 10 files (CLI and GUI × linux/darwin amd64+arm64, windows amd64).
+CI: `pr.yml` builds every OS and runs `make -j test`; a tag runs `publisher.yml` (10 files).
 
 ## Architecture
 
@@ -42,33 +40,40 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
   Events travel as raw mpv JSON; no transport parses them.
 
 **No master, no slave:** any peer can drive the player. Only the node that generates
-an event broadcasts it, and three things stop loops: `applied`/`seeks` drop mpv's
-echo of a change applied from a peer, `seen` drops mpv's first reply to an observe,
-and P2P counters drop stale requests. Don't bring back a `role` echo hack.
+an event broadcasts it. `applied`/`seeks` drop mpv's echo of a peer's change, `seen`
+its first reply to an observe, P2P counters stale requests. Don't bring back a `role`
+echo hack: it muted the peer, not the echo.
 
 **Playback is never synced, only paused.** Only `pause` and `time-pos` (while paused)
 go over the wire. Anything that would put nodes out of step (a seek while playing,
 running out of cache, a mid-party join) pauses the whole party, and someone resumes it
-by hand. Every pause carries where it stopped. Details in `mpv/CLAUDE.md`.
-
-**Same file, or no party:** a joiner whose file fingerprint differs is refused with
-409 (`party/CLAUDE.md`).
+by hand. Every pause carries where it stopped. **Same file, or no party:** a joiner whose
+file fingerprint differs is refused with 409.
 
 ## Contracts between packages
 
-- **Log lines are an API.** The GUI (`gui/index.html`, `gui/store.go`) and `e2e.py`
-  parse them; the table is in `gui/CLAUDE.md`. Change one and update every reader in
-  the same commit.
-- **Notice texts** ("X has joined", "connected to X") are sent by both `server/` and
-  `relay/` and parsed by the GUI history. Change both or neither.
-- **The relay envelope** is declared in both `relay/main.go` and `party/ws.go`, since
-  importing `party` would bloat the relay image. Keep them in sync by hand.
-- **`party.Run` runs many times in one GUI process:** no global state, no leftover
-  goroutines. Flags live only in `main.go`.
+- **Log lines are an API.** Change one and update every reader in the same commit:
 
-## Concurrency invariants
+  | Printed by | Line | Read by |
+  |---|---|---|
+  | party | `your address to share is <invite>` | GUI invite box, `gui/store.go` (real room and secret), e2e |
+  | party | `init done` | GUI "You're in", e2e |
+  | party | `file fingerprint: <hex>` | e2e |
+  | party/ws.go | `relay: connected`, `relay: dial: …`, `relay: disconnected` | GUI reconnecting state, e2e |
+  | party/ws.go | `… is not open yet …` inside the dial line | GUI "waiting for the host", e2e |
+  | party/ws.go | `rejected by relay`, plus `not the same file` | GUI diagnosis |
+  | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
+  | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
-Each has caused a real bug; the package docs say where.
+- **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
+  `server/` and `relay/`, and parsed by `gui/store.go` and e2e's `known()`. Change both
+  or neither.
+- **The relay envelope** `{"hostname", "event": <raw mpv JSON>}` is declared in both
+  `relay/main.go` and `party/ws.go`: importing `party` would pull upnp and server into
+  the relay image. Keep them in sync by hand.
+- **`party.Run` runs many times in one GUI process:** no globals, no leftover goroutines.
+
+## Concurrency invariants (each caused a real bug; the package docs name where)
 
 - Never hold a lock across a blocking call that needs the same lock to finish.
 - Set `applied`/`seeks` before the IPC call, or the echo can beat the marker.
@@ -92,12 +97,13 @@ Each has caused a real bug; the package docs say where.
 
 ### Docs
 
-- **Update a doc only when a change makes something in it wrong.** Reasoning and
-  history go in the commit message.
-- **A rule gets at most one sentence of why;** the incident behind it goes in `git log`.
-- **Size budget:** this file ≤150 lines, each package doc ≤250. Trim before adding.
-- No inventories of functions or tests; the names are in the code. Name a test only
-  where it proves a specific point.
+- **A doc holds only what the code can't say:** a rule with one sentence of why, a trap
+  that looks like a simplification, a fact about mpv, browsers or an OS, a contract, or
+  a recipe to verify. Never what a function does, inventories, or history: the incident
+  goes in the commit body, where the next session will look for it.
+- **Each fact lives in one place**, cross-package here, the rest in its package's doc.
+- **Update a doc only when a change makes something in it wrong.** Budget: this file
+  ≤150 lines, every other doc ≤200. Trim before adding.
 
 ## How we work
 
@@ -106,44 +112,39 @@ Each has caused a real bug; the package docs say where.
 - **Never commit on `master`.** Branch first, and check `git status -sb` before
   committing: the user switches branches between requests.
 - **Commit each change as soon as it is verified**, without asking, one logical change
-  per commit. Subject: `area: what changed and why it matters`. Body: reasoning, what
-  was tested, what wasn't.
-- **Push, open PRs and tag releases only when asked.** A PR says what was tested and
-  what wasn't.
+  per commit. Subject: `area: what changed and why it matters`. Body: the reasoning,
+  the alternatives rejected, what was tested and what wasn't. Push, open PRs and tag
+  only when asked; a PR says what was tested and what wasn't.
 - **Merge by rebase** (`gh pr merge N --rebase`; `gh pr update-branch N --rebase`);
   `master` requires linear history. Delete merged branches with `git branch -D`.
   Never force-push.
 - **Release:** `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` on the last merged
-  commit. Verify by its files, not the Actions status: all 10 assets uploaded, the
-  Linux GUI's `GET /update` reports the tag, and its page loads in headless Chromium
-  with a working tab click.
+  commit. Verify by its files, not the Actions status: all 10 assets uploaded, the Linux
+  GUI's `GET /update` reports the tag, its page loads in headless Chromium and a tab
+  click works.
 
-### Approaching a problem
+### Approach
 
 - Find the root cause before fixing, and look at the actual environment
   (`XDG_CURRENT_DESKTOP`, how a browser is installed, `busctl introspect`) before
   guessing.
-- Prefer a standard API over hard-coding tools (the XDG portal, not zenity).
+- Prefer a standard API over hard-coding tools (the XDG portal, not zenity). Add a
+  dependency only when the alternative isn't a few lines.
 - Prove a test catches the bug: reintroduce it, watch it fail, restore, watch it pass.
-- When a check fails, suspect the check first.
-- Add a dependency only when the alternative isn't a few lines.
-
-### Verifying without touching the user's machine
-
-- Real runs: `./relay` on a high localhost port, mpv with `--vo=null --ao=null`, GUIs
-  driven with `curl` (recipe in `gui/CLAUDE.md`).
-- Isolate each run in a `mktemp -d` folder: `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
-  `XDG_DATA_DIRS` pointed into it, and a `PATH` with only `mpv` and a no-op
-  `xdg-open`, so no window opens. Never pop UI on the user's screen; leave
-  click-throughs to the user with a built binary.
-- Clean up every process and temp folder, by literal path. **Never `pkill -f`:** it
-  kills its own shell. Use a saved PID, or `pkill -x` for names of ≤15 characters.
-- Say what wasn't verified. Windows-only code compiles in CI but never runs there.
-
-### Design and communication
-
+  When a check fails, suspect the check first.
 - **Visual taste is the user's call.** Render options side by side and apply only the
   pick (`gui/DESIGN.md`). Screenshots at the real 560×940 window size.
 - **Change only what was asked.** A reverted change stays reverted.
 - Keep the product's theme (forest palette, mushrooms, turtles, the cat Fosdo2)
   neutral in docs and commits: never tie it to a person.
+
+### Verifying without touching the user's machine
+
+- Real runs: `./relay` on a high localhost port, mpv with `--vo=null --ao=null`, GUIs
+  driven with `curl` (recipe in `gui/CLAUDE.md`).
+- Isolate each run in a `mktemp -d` folder: `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_DATA_DIRS` inside it, `PATH` with only `mpv` and a no-op `xdg-open`. Never pop UI
+  on the user's screen; leave click-throughs to the user with a built binary.
+- Clean up every process and temp folder by literal path. **Never `pkill -f`** (it kills
+  its own shell): use a saved PID, or `pkill -x` for names of ≤15 characters.
+- Say what wasn't verified. Windows-only code compiles in CI but never runs there.

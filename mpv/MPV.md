@@ -41,9 +41,8 @@ config still applies, for example `keep-open` (see "Ending").
 ## The connection
 
 - **The socket exists ~40ms after mpv starts**, long before the file is loaded.
-  `party.Run` dials it every 50ms until it answers, and `mpv.New` then waits for the
-  first `time-pos` with data, which means the file is loaded. A movie is ready in
-  ~0.06s locally. (This replaced a fixed 5s `-cooldown`.)
+  `party.Run` dials it every 50ms, and `mpv.New` waits for the first `time-pos` with
+  data (the file is loaded, ~0.06s for a local movie).
 - Each connection is its own client. **Observers belong to the connection:** close
   it and they are gone, and mpv keeps running.
 - It is local-only and explicitly insecure (it can run arbitrary commands). Never
@@ -73,13 +72,12 @@ config still applies, for example `keep-open` (see "Ending").
 
 | Command | Sent by | Notes |
 |---|---|---|
-| `["observe_property_string", id, name]` | `New`, ids 1 = `pause`, 2 = `time-pos` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
+| `["observe_property_string", id, name]` | `New`, ids 1 = `pause`, 2 = `time-pos`, 3 = `paused-for-cache` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
 | `["set_property", "pause", bool]` | `pause()` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. |
 | `["set_property", "time-pos", "<string>"]` | `sync()` | A string is accepted, so the received event's `data` is forwarded as is. This is an **absolute seek**. |
 | `["show-text", text, ms]` | `showText()` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Its log line is how e2e and the GUI read notices. |
 
-Useful when testing by hand (not used by the code): `["get_property", name]`,
-`["quit"]`, `["seek", secs, "relative"|"absolute"]`.
+By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absolute"]`.
 
 ## Properties we watch
 
@@ -167,8 +165,7 @@ Every event goes through `handleEvent`; anything but `property-change` is
   not verified): the reply, then (if `time-pos` is observed) a **data-less
   `time-pos` change**, then `end-file` with `reason: "quit"`, then socket EOF, exit
   code 0.
-  - `handleEvent` drops that data-less change. (Receivers also ignore an empty
-    `time-pos` in `sync()`, for peers on older versions that still send it.)
+  - `handleEvent` drops that data-less change; `sync()` also ignores an empty one.
   - The EOF is what ends `watch()` and the party (see `party/CLAUDE.md`, "Return
     values").
 - **End of file:** without `keep-open`, mpv plays to the end, sends `end-file`
@@ -178,15 +175,10 @@ Every event goes through `handleEvent`; anything but `property-change` is
 
 ### Resuming
 
-- With `save-position-on-quit` (we don't pass it, but a user's `mpv.conf` may set
-  it), a quit writes the position to the watch-later dir
-  (`~/.local/state/mpv/watch_later` on Linux, or `--watch-later-dir`), and plain mpv
-  opens the file there next time.
-- **In a party, `--no-resume-playback` skips that**, so every node opens at 0.
-  Without the pin, a rejoining node opened at its saved position. `seen` swallowed
-  that, so the party wasn't dragged along, but the node didn't follow the party
-  until the next seek or pause either. A node that rejoins mid-party still opens
-  at 0, and catches up on the next pause and seek.
+- A user's `save-position-on-quit` writes the position to the watch-later dir
+  (`~/.local/state/mpv/watch_later` on Linux), and plain mpv reopens there.
+  **`--no-resume-playback` skips that**, so every node opens at 0: a rejoiner opening at
+  its saved spot had that swallowed by `seen` and then didn't follow the party.
 
 ## Re-probing
 
