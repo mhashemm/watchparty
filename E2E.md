@@ -1,8 +1,8 @@
 # E2E.md
 
 Notes for working on `e2e.py`. What each phase covers is in its docstring; this file
-has the rules for writing and running cases. Needs `mpv`, `ffmpeg` and Chrome or
-Chromium on PATH and a `-local`-reachable interface.
+has the rules for writing and running cases. Needs `mpv`, `ffmpeg`, `dbus-daemon`
+and Chrome or Chromium on PATH and a `-local`-reachable interface.
 
 ## Phases
 
@@ -16,12 +16,18 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
 - **`relay`**: every case ends nodes with a signal except `[R15b]`, which quits mpv.
   Keep it: the mpv-quit bug passed every other case.
 - **`gui`**: each GUI gets its own HOME, XDG folders, TMPDIR and a `PATH` with only
-  `mpv` and a no-op `xdg-open`. Its one browser is a desktop entry, set as the `mimeapps.list` default, for a
-  wrapper that adds `--headless=new --remote-debugging-port`, so the GUI's own launch
-  path opens the page. Drive it with `js(n, expr)`, read it with `feed()`/`status()`.
-  A real `confirm()` waits for a click forever: replace it in the page before
-  clicking End the party.
-  Cleanup kills each GUI's process group, which takes its browser and mpv.
+  `mpv` and a failing `xdg-open`. Its one browser is a desktop entry, made the
+  `mimeapps.list` default, for a wrapper that adds `--headless=new
+  --remote-debugging-port=0`; `attach()` reads the port from the profile's
+  `DevToolsActivePort`, so a GUI restarted by self-update is found too.
+  - **Every GUI gets `DBUS_SESSION_BUS_ADDRESS`**, our private `dbus-daemon` or a dead
+    path. Without it godbus finds `/run/user/<uid>/bus` by itself and Browse opens a
+    real file chooser on the desktop. `gui/fakeportal` answers `OpenFile` there.
+  - The update cases stamp `main.latestReleaseURL` to `Release`, a local stand-in.
+  - Drive a page with `js(n, expr)` and `click()`, read it with `feed()`/`status()`.
+    `go()` waits for the new run, or a check reads the last party's status.
+    `confirm()` is replaced on attach; `window.asked` holds the question.
+  - Cleanup kills each GUI's process group: its browser, its mpv, a restarted GUI.
 - URL cases share one HTTP server (`Quiet`). To slow one client only, use `late` and
   `--user-agent=late`; `delay` holds every client, which made `[R11d2]` flaky.
 - Slow networks come from `lag(port, target, delay)`, a TCP proxy. P2P can't use it,
