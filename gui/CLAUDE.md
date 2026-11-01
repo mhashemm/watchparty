@@ -546,20 +546,24 @@ When a reference is given, work out *what makes it work* (proportions, eye
 construction, outline, simplicity) and apply that essence. Don't copy it wholesale:
 a full kawaii redraw of Fosdo2's face lost what made him him.
 
-## Not yet verified on Windows
+## On Windows
 
-Everything Windows-specific compiles, but has not been run on Windows. Check these
-first:
+First run on Windows 11, with Edge 156 and mpv 0.40 (whose `mpv.com` wrapper is
+described in `mpv/CLAUDE.md`). Verified there:
 
-- The PowerShell picker appears in front of the window.
-- No console window flashes for the picker.
-- mpv's window shows up when it is launched from a `-H=windowsgui` parent through
-  `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE`.
-- The mpv named pipe (`\\.\pipe\mpv<random>`) connects, and a party syncs with a
-  Linux peer.
-- Chrome and Edge open in `--app` mode from the listed paths, and with a fresh
-  `--user-data-dir` the launched process stays alive until the window is closed. If
-  either one hands off and exits at once, the hand-off guard keeps the app running,
-  but closing the window then won't stop it.
-- The Windows self-update swap (`.exe` → `.old`, new file in place, `.old` deleted on
-  the next start).
+- The picker opens in front of the window, filtered to videos, with no console flash,
+  and returns paths with spaces and non-ASCII characters intact.
+- The mpv named pipe connects, and Windows nodes sync with each other over both
+  transports.
+- Edge opens in `--app` mode, and with a fresh `--user-data-dir` the launched
+  process lives as long as the window, so closing it ends the party and the app.
+- The self-update swap: `.exe` → `.old`, the new file in place, its SHA-256 checked.
+  After **Restart now**, `.old` survives one start: the new process tries to delete
+  it while the old one is still running. The start after that removes it.
+
+Still unverified:
+
+- mpv's video window when launched from the `-H=windowsgui` parent through
+  `mpv.Init`'s `HideWindow | CREATE_NEW_CONSOLE` (only `--vo=null` has run).
+- A party between a Windows and a Linux peer.
+- Chrome on Windows. Only Edge was installed.

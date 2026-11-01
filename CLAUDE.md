@@ -387,8 +387,10 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
     name such as a downloaded `watchparty-gui_amd64` matches nothing, with only a
     warning, so the check reports a clean machine while the process still runs.
     Use the saved PID for those, or `ps -eo pid,args | grep` to look.
-- **Say what was not verified.** Windows-only behaviour compiles in CI but has never
-  been run on Windows. Every summary and PR lists it.
+- **Say what was not verified.** Windows-only behaviour compiles in CI, but CI never
+  runs it. It has been run on Windows only by hand (`gui/CLAUDE.md`, "On Windows"),
+  and Windows-only tests such as `mpv/conn_windows_test.go` run only there. Every
+  summary and PR lists what wasn't run on Windows.
 
 ### Design and communication
 
