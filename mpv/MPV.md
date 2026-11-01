@@ -129,6 +129,14 @@ Every event goes through `handleEvent`; anything but `property-change` is
   `playback-restart`: `123.456` → `123.456000`, then `123.458000`. So **an echo can
   come twice and be up to one frame off**. That's why an applied seek in
   `seeks` matches within ±0.1s and is kept, not deleted, on the first match.
+- **`time-pos` reports the target at once, before the data is there.** Probed
+  paused on a local file: right after `set_property time-pos 50`, `get_property
+  time-pos` read `50.0` while `seeking` still read `true` (it was `false` 2s later). On a slow
+  stream that lasts until the new range arrives, and a node resumed in that window
+  "plays" with `time-pos` stuck at the target, without `paused-for-cache`. A check that
+  a seek finished must wait for `seeking` to be `false`. `e2e.py` `[R11d]` once ended
+  on `time-pos` alone, and its joiner then answered `[R11d2]`'s joiner with 50.0
+  while the party was at 53.
 - **A relative seek** (arrow keys, `seek N relative`) **is exact too, because we pin
   `--hr-seek=yes`**: +7 from 12 sent exactly one position, `19.000000`. Under mpv's
   default it would snap to a keyframe instead: +10 from 123.458 sent `133.458000`
