@@ -23,9 +23,13 @@ the directory.
 
 ### Looking at the UI without opening a window on your desktop
 
-`openWindow` launches Chrome/Chromium, or `xdg-open` as a fallback. To keep it
-headless, run the GUI with a `PATH` that holds only an `mpv` symlink and a no-op
-`xdg-open` script. Then screenshot the page:
+`openWindow` launches a Chromium-family browser from its desktop entry, or `xdg-open`
+as a fallback. To keep it headless, run the GUI with `XDG_DATA_HOME` and
+`XDG_DATA_DIRS` pointing at an empty folder, so it finds no browser, and a `PATH` that
+holds only an `mpv` symlink and a no-op `xdg-open` script. A bare `PATH` alone is not
+enough: `chromium.desktop` names `/usr/bin/chromium` absolutely. The Flatpak and snap
+folders under `/var/lib` are scanned regardless, so on a machine with a system-wide
+Flatpak or snap browser the window still opens. Then screenshot the page:
 
 ```sh
 chromium --headless --disable-gpu --hide-scrollbars --force-prefers-reduced-motion \
@@ -67,10 +71,16 @@ More recipes that have been used and work:
   of its mpv (`pgrep -a mpv`).
   Writing `{"command":["set_property","pause",false]}` or `{"command":["quit"]}` to
   it simulates the user, and `get_property` checks the other side followed.
-- **The window lifecycle:** put a stand-in `chromium` script first on `PATH` that
-  writes `"$@"` to a file and runs `/bin/sleep N` (absolute, since `PATH` is
-  minimal). Its exit is "closing the window". An instant `exit 0` checks the hand-off
-  guard.
+- **The window lifecycle:** write a `chromium.desktop` into `<tmp>/applications`,
+  with `MimeType=x-scheme-handler/https;` and an `Exec=` naming a stand-in script by
+  absolute path, and set `XDG_DATA_DIRS=<tmp>`. The script writes `"$@"` to a file
+  and runs `/bin/sleep N` (absolute, since `PATH` is minimal). Its exit is "closing
+  the window". An instant `exit 0` checks the hand-off guard.
+- **A real browser's window, closed from the page:** add `--remote-debugging-port=N`
+  to a copied entry's `Exec`, run the GUI on an `Xvfb` display, and send
+  `Runtime.evaluate` `window.close()` to the page over the DevTools websocket (Node's
+  built-in `WebSocket` is enough). Wait past `handoffWindow` first, or the exit counts
+  as a hand-off and the GUI keeps running.
 - **The self-update:** build with `-ldflags "-X main.version=v0.0.1"`, start it in a
   temp folder, and `POST /update`. Then check the file's SHA-256 against the release's
   `digest`, and that the old process exited while a new one runs.
@@ -94,7 +104,7 @@ print.
 | `store.go` | the saved settings and party history (`gui.json`) |
 | `update.go` | the self-update: version, GitHub release check, verified download and swap |
 | `index.html` | the entire UI: CSS, inline SVG art, vanilla JS. `//go:embed`ed |
-| `os_unix.go` (`!windows`) | browser list, `openURL`, `pickFile` (the XDG portal on Linux, osascript on macOS), no-op `hide` |
+| `os_unix.go` (`!windows`) | browsers from desktop entries, `openURL`, `pickFile` (the XDG portal on Linux, osascript on macOS), no-op `hide` |
 | `os_windows.go` | the same with Edge/Chrome paths, a PowerShell picker and `CREATE_NO_WINDOW` |
 | `main_test.go` | `form.config()` per mode plus its errors, the host/token guard table, and `TestPageScriptParses` |
 | `store_test.go` | a party recorded and reloaded (invite → room/secret, people from notices, dedupe, "has left" ignored), a direct party's secret, the history cap, `notice()` |
@@ -211,8 +221,11 @@ print.
      - Later does nothing. About shows "vX is installed" plus a Restart now button,
        and the next normal start runs the new file anyway.
      - **Restart now** (`POST /restart`, refused during a party) starts the new
-       binary, kills this instance's browser process so its window closes
-       (`g.closeWindow`), and quits.
+       binary and quits. The page calls `window.close()` once the request succeeds,
+       and the server also kills the browser process it started (`g.closeWindow`).
+       The kill alone doesn't close a Flatpak window: `flatpak run` execs `bwrap`,
+       and killing that leaves the inner `bwrap` and Chromium running. `window.close()`
+       works in every app window, sandboxed or not.
      - The restart uses `g.exe`, resolved once at startup by `executable()`. After
        the rename, the running process's own path lookup can point at the replaced
        file.
@@ -236,9 +249,9 @@ install it themselves.
   from it. On SIGINT/SIGTERM, `main` cancels the running party and `wg.Wait()`s for
   `Run` to return before exiting, so Ctrl-C on the GUI never leaks a UPNP mapping.
 - **Closing the window shuts everything down.** `openWindow` launches the browser as
-  **its own instance**, with a fresh temporary profile (`--user-data-dir` under
-  `os.TempDir()`), so the browser process the GUI started lives exactly as long as
-  the window. When it exits, `main` logs `gui: window closed` and cancels the GUI's
+  **its own instance**, with a fresh temporary profile (`--user-data-dir`, see
+  "Window" below for where), so the browser process the GUI started lives exactly as
+  long as the window. When it exits, `main` logs `gui: window closed` and cancels the GUI's
   context. That ends any running party gracefully (`/bye`, mpv closed, UPNP mapping
   deleted), and the temporary profile is deleted.
   - **A fresh profile per launch, not a shared one.** With a shared profile, a second
@@ -312,7 +325,7 @@ install it themselves.
   declares one.
 - On macOS and Windows, a non-zero exit from the picker command (`*exec.ExitError`)
   means cancelled and returns an empty path.
-- **Window:** each browser in `browsers` is tried with `--app=URL
+- **Window:** each browser from `browsers()` is tried with `--app=URL
   --window-size=560,940 --user-data-dir=<temp> --no-first-run
   --no-default-browser-check`, then `openURL` (`rundll32` / `xdg-open` / `open`)
   opens the default browser as a plain tab.
@@ -328,8 +341,46 @@ install it themselves.
       but they change the user's own browser.
     - The feature name comes from Edge's binary, not from docs, so a later Edge
       may rename it. Each browser gets only the flags that are its own.
-  - **Only Chromium-family browsers are in the list**, because only they have an
-    app-window mode. Linux tries Chrome, Chromium, Edge and Brave by name.
+  - **Only Chromium-family browsers are used**, because only they have an app-window
+    mode.
+  - **Linux finds browsers through their desktop entries**, the way `xdg-open` does,
+    not by binary name. Every packaging (deb, rpm, xbps, snap, Flatpak) installs a
+    `.desktop` file, while a Flatpak browser is never on `PATH`. A list of names left
+    a Flatpak Chromium unfound, and the GUI opened a plain tab.
+    - It scans `applications/` under `$XDG_DATA_HOME` and every `$XDG_DATA_DIRS`
+      entry, with the spec's defaults (`~/.local/share`, `/usr/local/share:/usr/share`)
+      when they're unset, as on a runit/dwm machine. The Flatpak export folders and
+      `/var/lib/snapd/desktop` are added when missing, because only systemd's
+      environment generators or a login shell put them in `XDG_DATA_DIRS`. An earlier
+      folder's entry hides a later one with the same name, as in the spec.
+    - It keeps entries whose `MimeType` has `x-scheme-handler/https`, aren't
+      `Hidden`, and whose file name matches `chrom|edge|brave|vivaldi`. That name
+      match is the one list left: nothing in a desktop entry says a browser has
+      `--app`. It covers each packaging's name (`chromium.desktop`,
+      `org.chromium.Chromium.desktop`, `chromium_chromium.desktop`, …).
+    - The default browser goes first: the first `x-scheme-handler/https` under
+      `[Default Applications]` in the spec's `mimeapps.list` order (`~/.config`,
+      `/etc/xdg`, then each `applications/`, each with the `<desktop>-mimeapps.list`
+      variants for `$XDG_CURRENT_DESKTOP`). With none set, the scan order stands.
+    - The command is the entry's own `Exec`, split on spaces and double quotes, with
+      field codes (`%U`) and Flatpak's `@@u`/`@@` dropped. Only one level of
+      backslash escapes is handled; the spec's second only matters for a literal
+      backslash inside quotes.
+  - **A sandboxed browser gets its profile where it can see it.** A Flatpak's `/tmp`
+    is private, so a profile in the host's `/tmp` was ignored: the browser made its own
+    inside the sandbox, without the seeded `Preferences`, and nobody deleted it. The
+    entry's `X-Flatpak=<id>` puts it in `~/.var/app/<id>/cache`, and
+    `X-SnapInstanceName=<name>` in `~/snap/<name>/common`. Everything else uses
+    `os.TempDir()`.
+  - Checked against a real Flatpak Chromium 156 (installed in a throwaway
+    `FLATPAK_USER_DIR`, on Xvfb) and the distro's Chromium: the window opens, the
+    profile lands where expected and is deleted, `window.close()` ends the process,
+    and `gui: window closed` follows. Not run against a snap, so
+    `X-SnapInstanceName` is unconfirmed: an entry without it gets a profile in
+    `/tmp`, which the snap can't see. A system-wide Flatpak (`/var/lib/flatpak`)
+    wasn't run either.
+  - **When the fallback fails too** (no `xdg-open`, or it exits non-zero), the log
+    says `gui: no browser could be opened` with the URL to open by hand.
   - Windows lists absolute paths, **Chrome first, then Edge**. Edge ships with every
     Windows 10/11, so the app window always works there. Chrome goes first because
     Edge's startup boost can hand windows off. `msedge` is not on `PATH`, and `cmd /c
@@ -337,7 +388,7 @@ install it themselves.
   - **Firefox has no app mode**, so it's never used for the window. It only appears as
     the default-browser tab when no Chromium-family browser is installed. Closing that
     tab can't be detected, so the idle exit applies.
-  - macOS has no list (the browsers aren't on `PATH`), so it always opens a tab.
+  - macOS has no desktop entries, so it always opens a tab.
 
 **One syntax error in the page script kills every button**, and the Go side never
 notices: the server still answers. v0.0.14 to v0.0.16 shipped with a stray block at

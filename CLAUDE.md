@@ -372,8 +372,11 @@ This is how work on this repo has gone best. Follow it unless asked otherwise.
 - **Isolation:** each test gets a `mktemp -d` folder.
   - `XDG_CONFIG_HOME=<tmp>` keeps the GUI off the real `~/.config/watchparty`, one
     folder per GUI so two instances don't share a store.
-  - A `PATH` with only an `mpv` symlink and a no-op `xdg-open` stops any window
-    opening. A stand-in `chromium` script can record its arguments and "close" by
+  - `XDG_DATA_HOME` and `XDG_DATA_DIRS` pointing at an empty folder, plus a `PATH`
+    with only an `mpv` symlink and a no-op `xdg-open`, stop any window opening. The
+    GUI finds browsers through desktop entries, whose `Exec` is often absolute, so
+    `PATH` alone no longer does it. A stand-in browser is a `.desktop` file in that
+    folder whose `Exec` runs a script that records its arguments and "closes" by
     exiting. Use absolute paths inside stand-ins, because `PATH` is minimal.
 - **Never pop UI on the user's screen** (a file dialog, a browser window). Prefer
   read-only checks, and leave the click-through to the user with a ready-built binary

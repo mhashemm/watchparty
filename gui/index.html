@@ -981,6 +981,7 @@ async function restartNow() {
   updated = true;
   $("restart").hidden = true;
   $("version-text").textContent = `Restarting into ${installed}. If this window stays open, you can close it.`;
+  window.close();
 }
 $("restart").addEventListener("click", restartNow);
 $("restart-now").addEventListener("click", restartNow);

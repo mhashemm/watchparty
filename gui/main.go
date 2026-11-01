@@ -313,33 +313,58 @@ func browserArgs(browser, url, profile string) []string {
 	return args
 }
 
+type browser struct {
+	name string
+	cmd  []string
+	root string
+}
+
+func newProfile(root string) (string, error) {
+	err := os.MkdirAll(root, 0o700)
+	if err != nil {
+		return "", err
+	}
+	profile, err := os.MkdirTemp(root, "watchparty-gui-browser-")
+	if err != nil {
+		return "", err
+	}
+	os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
+	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
+	return profile, nil
+}
+
 func openWindow(url string) (<-chan struct{}, *os.Process) {
-	profile, err := os.MkdirTemp("", "watchparty-gui-browser-")
-	if err == nil {
-		os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
-		os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
-		for _, browser := range browsers {
-			cmd := exec.Command(browser, browserArgs(browser, url, profile)...)
-			if cmd.Start() != nil {
-				continue
-			}
-			closed := make(chan struct{})
-			started := time.Now()
-			go func() {
-				cmd.Wait()
-				os.RemoveAll(profile)
-				if time.Since(started) > handoffWindow {
-					close(closed)
-				}
-			}()
-			return closed, cmd.Process
+	for _, b := range browsers() {
+		profile, err := newProfile(b.root)
+		if err != nil {
+			continue
 		}
-		os.RemoveAll(profile)
+		cmd := exec.Command(b.cmd[0], append(b.cmd[1:], browserArgs(b.name, url, profile)...)...)
+		if cmd.Start() != nil {
+			os.RemoveAll(profile)
+			continue
+		}
+		closed := make(chan struct{})
+		started := time.Now()
+		go func() {
+			cmd.Wait()
+			os.RemoveAll(profile)
+			if time.Since(started) > handoffWindow {
+				close(closed)
+			}
+		}()
+		return closed, cmd.Process
 	}
 	cmd := openURL(url)
-	if cmd.Start() == nil {
-		go cmd.Wait()
-	}
+	go func() {
+		err := cmd.Start()
+		if err == nil {
+			err = cmd.Wait()
+		}
+		if err != nil {
+			log.Printf("gui: no browser could be opened (%v), open %s yourself\n", err, url)
+		}
+	}()
 	return nil, nil
 }
 

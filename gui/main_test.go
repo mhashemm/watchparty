@@ -134,9 +134,11 @@ func TestPageScriptParses(t *testing.T) {
 func TestOnlyEdgeGetsTheEdgeFlag(t *testing.T) {
 	t.Parallel()
 	for browser, want := range map[string]bool{
-		"google-chrome": false,
-		"chromium":      false,
-		"brave-browser": false,
+		"google-chrome":                 false,
+		"chromium":                      false,
+		"brave-browser":                 false,
+		"org.chromium.Chromium.desktop": false,
+		"com.microsoft.Edge.desktop":    true,
 		`C:\Program Files\Google\Chrome\Application\chrome.exe`: false,
 		"microsoft-edge": true,
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`: true,
