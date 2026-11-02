@@ -1,0 +1,43 @@
+; makensis -DEXE=<watchparty-gui.exe> -DOUT=<setup.exe> gui/setup.nsi
+; Per user, so the app can still replace its own .exe when it updates itself.
+Unicode true
+Name "Watchparty"
+OutFile "${OUT}"
+InstallDir "$LOCALAPPDATA\Programs\watchparty"
+RequestExecutionLevel user
+Icon "icon.ico"
+UninstallIcon "icon.ico"
+SetCompressor /SOLID lzma
+AutoCloseWindow true
+Page instfiles
+
+!define UNINST "Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
+
+Section
+	SetOutPath "$INSTDIR"
+	File "/oname=watchparty-gui.exe" "${EXE}"
+	File "icon.ico"
+	WriteUninstaller "$INSTDIR\uninstall.exe"
+	CreateShortcut "$SMPROGRAMS\Watchparty.lnk" "$INSTDIR\watchparty-gui.exe" "" "$INSTDIR\icon.ico"
+	CreateShortcut "$DESKTOP\Watchparty.lnk" "$INSTDIR\watchparty-gui.exe" "" "$INSTDIR\icon.ico"
+	WriteRegStr HKCU "${UNINST}" "DisplayName" "Watchparty"
+	WriteRegStr HKCU "${UNINST}" "DisplayIcon" "$INSTDIR\icon.ico"
+	WriteRegStr HKCU "${UNINST}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+	WriteRegStr HKCU "${UNINST}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+	WriteRegDWORD HKCU "${UNINST}" "NoModify" 1
+	WriteRegDWORD HKCU "${UNINST}" "NoRepair" 1
+	IfSilent +2
+	Exec '"$INSTDIR\watchparty-gui.exe"'
+SectionEnd
+
+Section "Uninstall"
+	Delete "$INSTDIR\watchparty-gui.exe"
+	Delete "$INSTDIR\watchparty-gui.exe.old"
+	Delete "$INSTDIR\.watchparty-gui-update-*"
+	Delete "$INSTDIR\icon.ico"
+	Delete "$INSTDIR\uninstall.exe"
+	RMDir "$INSTDIR"
+	Delete "$SMPROGRAMS\Watchparty.lnk"
+	Delete "$DESKTOP\Watchparty.lnk"
+	DeleteRegKey HKCU "${UNINST}"
+SectionEnd

@@ -26,7 +26,7 @@ CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -
 ```
 
 CI: `pr.yml` builds every OS, runs `make -j test`, and Windows unit + `e2e_windows.py`;
-a tag runs `publisher.yml` (10 files).
+a tag runs `publisher.yml` (11 files).
 
 ## Architecture
 
@@ -119,7 +119,7 @@ file fingerprint differs is refused with 409.
   `master` requires linear history. Delete merged branches with `git branch -D`.
   Never force-push.
 - **Release:** `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` on the last merged
-  commit. Verify by its files, not the Actions status: all 10 assets uploaded, the Linux
+  commit. Verify by its files, not the Actions status: all 11 assets uploaded, the Linux
   GUI's `GET /update` reports the tag, its page loads in headless Chromium and a tab
   click works.
 

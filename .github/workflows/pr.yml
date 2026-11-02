@@ -25,6 +25,10 @@ jobs:
       - name: Build
         run: make -j4 ${{ matrix.goos }}
 
+      - name: Build the Windows installer
+        if: matrix.goos == 'windows'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis && make setup
+
   test:
     runs-on: ubuntu-latest
     steps:
