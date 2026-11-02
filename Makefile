@@ -7,7 +7,7 @@
 # each go build already uses every core and unbounded -j compiles the std lib 15
 # times over. Names and flags match the release assets (publisher.yml), in .bin/.
 #
-# make [-j] test    unit tests (-race) and ./e2e.py; -j runs the two together
+# make [-j] test    unit tests (-race) and ./e2e.py in docker; -j runs the two together
 
 COMPONENTS := cli gui relay
 OSES := linux darwin windows
@@ -47,8 +47,16 @@ test: unit e2e
 unit:
 	go test -race ./...
 
+# in e2e.Dockerfile's container as this user, so no case can reach this machine's desktop,
+# bus or display. The last run's logs land in .e2e/<phase>. E2E="--mode gui" passes flags.
+# It compiles into this machine's Go caches, which setup-go restores in CI, which also
+# builds the image itself with a layer cache and sets E2E_PREBUILT=1.
 e2e:
-	./e2e.py
+	$(if $(E2E_PREBUILT),,docker build -q -t watchparty-e2e --build-arg UID="$$(id -u)" --build-arg GID="$$(id -g)" - < e2e.Dockerfile > /dev/null)
+	rm -rf .e2e && mkdir .e2e
+	docker run --rm --init --shm-size=1g -v "$(CURDIR)":/src:ro -w /src \
+		-v "$(CURDIR)/.e2e":"$(CURDIR)/.e2e" -e E2E_LOGS="$(CURDIR)/.e2e" \
+		-v "$$(go env GOCACHE)":/cache/go-build -v "$$(go env GOMODCACHE)":/cache/mod watchparty-e2e ./e2e.py $(E2E)
 
 clean:
 	rm -f $(foreach c,$(COMPONENTS),$(foreach o,$(OSES),$(foreach a,$(sort $(ARCHS_$(o))),$(call bin,$(c),$(o),$(a)))))
