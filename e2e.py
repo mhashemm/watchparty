@@ -1485,6 +1485,10 @@ def gui_suite():
         until(lambda: status(n) == "The party has ended.")
         return js(n, "window.asked")
 
+    def read_all(n):
+        """The page has handled every log line its GUI has, so the feed isn't half a burst."""
+        return js(n, "api(`/log?from=${from}&run=${run}`).then(r => r.json()).then(j => j.run == run && !j.lines.length)")
+
     def joined(n):
         until(lambda: status(n).startswith("You're in"), BOOT)
         nodes[n]["sock"] = mpv_of(n)
@@ -1579,8 +1583,12 @@ def gui_suite():
     ok(f"{G}'s feed says you", feed(G)[:1] == ["resumed by you"], str(feed(G)))
 
     print("\n[G11] a seek while playing pauses everyone, and the feeds say why")
+    reasons = log(G).count('"name":"pause-reason"')
     ipc(nodes[G]["sock"], "seek", 30)
-    until(lambda: get(H, "pause") is True and f"paused for {G}: seek" in feed(H) and "paused for everyone: seek" in feed(G))
+    # mpv's notice can land on either side of the pause, and the pause-reason that retracts
+    # "paused by you" comes after it, so the feed is checked once the page has read them all
+    until(lambda: get(H, "pause") is True and f"paused for {G}: seek" in feed(H) and "paused for everyone: seek" in feed(G)
+          and log(G).count('"name":"pause-reason"') > reasons and read_all(G))
     ok(f"{H}'s feed says why", f"paused for {G}: seek" in feed(H), str(feed(H)))
     ok(f"{G}'s feed says why", "paused for everyone: seek" in feed(G), str(feed(G)))
     ok(f"{G}'s feed doesn't also say paused by you", "paused by you" not in feed(G), str(feed(G)))

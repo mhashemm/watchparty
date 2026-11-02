@@ -86,9 +86,9 @@ class Page(CDP):
         self.js("window.confirm = q => (window.asked = q, true); window.loading = 0; window.loads = 0; const real = loadState; "
                 "loadState = async () => { window.loading++; window.loads++; try { await real() } finally { window.loading-- } }")
         # these hooks lean on the page's globals; if a refactor moves them, fail here, loudly
-        hooked = self.js("window.confirm('?') === true && window.asked === '?' && typeof api === 'function' && typeof run === 'number'")
+        hooked = self.js("window.confirm('?') === true && window.asked === '?' && typeof api === 'function' && typeof run === 'number' && typeof from === 'number'")
         if not hooked:
-            raise RuntimeError("the page no longer has the globals e2e hooks into (loadState, api, run, confirm)")
+            raise RuntimeError("the page no longer has the globals e2e hooks into (loadState, api, run, from, confirm)")
 
     def status(self):
         return self.js('$("status").textContent')
