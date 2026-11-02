@@ -1307,9 +1307,11 @@ def relay_suite():
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])
     launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
-    until(lambda: all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
+    # the relay announces a join before the node has read the handshake's reply, so a cut
+    # that only waited for the announcement can land mid-handshake: a failed dial, not a drop
+    until(lambda: connected("flaky") and all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
     proxy.cut()
-    until(lambda: connected("flaky", 2))  # 1s backoff, then the redial
+    until(lambda: connected("flaky", 2))  # a dropped conn is redialled at once
     time.sleep(QUIET)  # a second join or a false leave would follow the swap at once
     connects = log("flaky").count("relay: connected")
     ok("nodeFlaky redialled", connects == 2, f"connected {connects} times, want 2")
