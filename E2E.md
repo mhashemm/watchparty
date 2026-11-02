@@ -45,6 +45,20 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
 - The suite reads nodes through their log lines (root `CLAUDE.md` has the table).
 - mpv emits no `property-change` for a no-op set, so counted events must alternate.
 
+## Windows (`e2e_windows.py`)
+
+Covers only what Windows has; the behaviour is e2e.py's. It runs in CI's `windows` job,
+natively (the runner is thrown away). Facts it rests on:
+
+- **Override an environment variable by its upper-cased name** (`environ()`): Python
+  keeps `os.environ` upper-cased, and a mixed-case key sits next to the real one.
+- **A 64-bit process's `ProgramFiles` is rebuilt from `ProgramW6432`**, so the GUI's
+  stand-in Chrome (`gui/fakebrowser` as `chrome.exe`) needs both overridden.
+- Chocolatey's `mpv.exe` on PATH is a shim that starts the real one; killing a shim
+  leaves mpv running, so the job puts the real `mpv.exe`'s folder first.
+- Nodes run in their own process group, so `CTRL_BREAK_EVENT` reaches them, which Go
+  reads as `os.Interrupt`. GUIs have no console: they end by `taskkill /T`.
+
 ## Running it
 
 - **`make e2e` runs it in `e2e.Dockerfile`'s container**, so no case can reach this

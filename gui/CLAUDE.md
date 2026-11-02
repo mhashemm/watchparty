@@ -175,5 +175,6 @@ Run by hand on Windows 11 with Edge 156 and mpv 0.40: the picker, the named pipe
 sync between Windows nodes over both transports, Edge's app window and its lifetime,
 and the self-update swap (`.old` survives one start, the next removes it).
 
-Not yet run: mpv's video window under the `-H=windowsgui` parent, a Windows–Linux
-party, and Chrome on Windows.
+CI's `windows` job runs `e2e_windows.py`: Chrome from Program Files (headless), a party
+from the page under `-H=windowsgui`, closing the window, the hand-off guard and the
+`.old` swap. Not yet run: mpv's video window under that parent, a Windows–Linux party.

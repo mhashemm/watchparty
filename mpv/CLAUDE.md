@@ -117,12 +117,13 @@ e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load
 ## Windows
 
 - The pipe is `\\.\pipe\mpv<random>`, dialed with `go-winio`.
-- `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group. Unverified
-  under the `-H=windowsgui` GUI parent.
+- `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group, so a
+  node's Ctrl-Break never reaches it. Works under the `-H=windowsgui` GUI parent
+  (`e2e_windows.py` `[W10]`, `--vo=null` only).
 - **`Init` runs the `mpv.exe` next to an `mpv.com`.** A bare `mpv` resolves to the
   `.com` console wrapper (`.COM` precedes `.EXE` in `PATHEXT`); `cmd.Cancel` killed only
-  the wrapper, `mpv.exe` kept the pipe open and `Run` never returned. Its test runs only
-  on Windows, so CI never runs it.
+  the wrapper, `mpv.exe` kept the pipe open and `Run` never returned. CI's `windows` job
+  runs its test, and `e2e_windows.py` `[W8]` runs a party through `mpv.com`.
 
 ## Tests
 
