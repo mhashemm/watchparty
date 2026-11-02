@@ -6,7 +6,7 @@ drives them by writing to one node's mpv IPC socket, then asserts the result on
 the other nodes' mpv. OSD notices are read back out of each node's log, since
 every show-text command appears there verbatim.
 
-Three phases, run by default at the same time as three copies of this script,
+Four phases, run by default at the same time as four copies of this script,
 each on its own ports and in its own run directory:
 
   p2p    the direct HTTP mesh. Nobody is given the full peer list: each node
@@ -20,18 +20,27 @@ each on its own ports and in its own run directory:
          refused, and that the same file renamed, moved and re-dated is not.
   caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
          client that never answers pings.
+  gui    real GUIs, each opening its own page in headless Chromium, driven
+         through the page over CDP: every status, both modes, the invite, the
+         feed, Browse through a fake portal, Settings, history, persistence,
+         self-update against a local release, and the window's lifetime,
+         including a real window on Xvfb closing itself.
 
-    ./e2e.py                    # all three phases in parallel, ~45 seconds
+    ./e2e.py                    # all four phases in parallel, ~45 seconds
     ./e2e.py --mode relay       # one phase
     ./e2e.py --file movie.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
 
-Needs go, mpv and (unless --file is given) ffmpeg. mpv runs headless.
+Needs go, mpv, Chrome or Chromium, dbus-daemon and (unless --file is given) ffmpeg.
+All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, functools, glob, http.server, json, os, shutil, signal, socket, subprocess
+import argparse, functools, glob, http.server, json, os, re, shutil, signal, socket, subprocess
 import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+sys.dont_write_bytecode = True  # no __pycache__ in the repo
+import e2e_lib
+from e2e_lib import Page, Release, find_page, sha
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
@@ -94,7 +103,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--file", help="media file to play (default: generate one with ffmpeg)")
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
-ap.add_argument("--mode", choices=("p2p", "relay", "caps", "all"), default="all")
+ap.add_argument("--mode", choices=("p2p", "relay", "caps", "gui", "all"), default="all")
 ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
 args = ap.parse_args()
 if args.audio:
@@ -108,7 +117,7 @@ if args.mode == "all":
     flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else [])
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
-             for i, m in enumerate(("p2p", "relay", "caps"))]
+             for i, m in enumerate(("p2p", "relay", "caps", "gui"))]
     for m, p in procs:
         print(f"\n######## {m} ########\n" + p.communicate()[0], end="")
     bad = [m for m, p in procs if p.returncode]
@@ -128,6 +137,9 @@ PORTS["http"] = args.port_base + len(NODES) + 4
 PORTS["nodeKeep"] = args.port_base + len(NODES) + 5
 PORTS["lagA"] = args.port_base + len(NODES) + 6
 PORTS["lagB"] = args.port_base + len(NODES) + 7
+PORTS["release"] = args.port_base + len(NODES) + 8
+PORTS["wifiHost"] = args.port_base + len(NODES) + 9
+PORTS["wifiGuest"] = args.port_base + len(NODES) + 10
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -188,14 +200,19 @@ def setp(n, prop, val):
     ipc(nodes[n]["sock"], "set_property", prop, val)
 
 
+class Stop(Exception):
+    """A setup step failed: every case after it would fail for the same reason."""
+
+
+def must(name, cond, detail=""):
+    """ok(), but a failure ends the phase here instead of cascading into later cases."""
+    ok(name, cond, detail)
+    if not cond:
+        raise Stop(name)
+
+
 def until(cond, timeout=SETTLE):
-    """Poll cond until it holds or timeout passes, and return whether it held."""
-    deadline = time.time() + timeout
-    while not cond():
-        if time.time() > deadline:
-            return False
-        time.sleep(0.05)
-    return True
+    return e2e_lib.until(cond, timeout)
 
 
 def listening(port):
@@ -484,6 +501,140 @@ def stub_stop(p):
     p.stdout.close()
 
 
+def children(pid):
+    out = []
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            with open(d + "/status") as f:
+                if f"PPid:\t{pid}\n" in f.read():
+                    out.append(int(os.path.basename(d)))
+        except OSError:
+            pass
+    return out
+
+
+def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
+    """A real GUI in its own HOME, XDG folders and TMPDIR, with a PATH of only mpv and
+    an xdg-open that fails. browser="headless" gives it one browser, a desktop entry
+    for a wrapper that runs headless Chromium, so the GUI's own launch path opens the
+    page and nothing reaches the screen; "xvfb" runs it headed on a virtual display;
+    "handoff" is a browser that exits at once, None no browser. Every GUI talks to the private bus, never the desktop's: godbus
+    finds /run/user/<uid>/bus on its own and would open a real file chooser."""
+    home, key = f"{RUN}/{name}", tag or name
+    if not os.path.exists(home):
+        for d in ("bin", "config", "data/applications", "tmp", "downloads"):
+            os.makedirs(f"{home}/{d}")
+        os.symlink(shutil.which("mpv"), f"{home}/bin/mpv")
+        script(f"{home}/bin/xdg-open", f'echo "$@" >> {home}/xdg-open.args\nexit 1')
+        script(f"{home}/slow-mpv", f'{shutil.which("sleep")} 3\nexec {shutil.which("mpv")} "$@"')
+        if browser:
+            # e2e.Dockerfile sets it: Docker's seccomp profile blocks the user namespaces the sandbox needs
+            flags = "--headless=new --remote-debugging-port=0" + (" --no-sandbox" if os.environ.get("E2E_NO_SANDBOX") else "")
+            if browser == "xvfb":
+                flags = flags.replace("--headless=new", "--ozone-platform=x11")
+            run = "exit 0" if browser == "handoff" else f'PATH=/usr/bin:/bin exec {"xvfb-run -a " if browser == "xvfb" else ""}{BROWSER} {flags} "$@"'
+            script(f"{home}/browser.sh", f'echo "$@" >> {home}/browser.args\n{run}')
+            with open(f"{home}/data/applications/e2e-chromium.desktop", "w") as f:
+                f.write(f"[Desktop Entry]\nType=Application\nName=e2e\nExec={home}/browser.sh %U\nMimeType=x-scheme-handler/https;\n")
+            with open(f"{home}/config/mimeapps.list", "w") as f:
+                f.write("[Default Applications]\nx-scheme-handler/https=e2e-chromium.desktop\n")
+    env = {"HOME": home, "PATH": f"{home}/bin", "TMPDIR": f"{home}/tmp", "XDG_CONFIG_HOME": f"{home}/config",
+           "XDG_DATA_HOME": f"{home}/data", "XDG_DATA_DIRS": f"{home}/data",
+           "DBUS_SESSION_BUS_ADDRESS": BUS if portal else f"unix:path={home}/no-bus"}
+    path = f"{RUN}/{key}.log"
+    nodes[key] = {"home": home}
+    opened = len(launches(key))
+    # its own process group, so cleanup takes its browser, its mpv and any GUI it restarts into
+    p = subprocess.Popen([exe or GUI_BIN], env=env, stdout=open(path, "wb"), stderr=subprocess.STDOUT, start_new_session=True)
+    nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None, "home": home, "gui": True}
+    until(lambda: "gui: http" in log(key), BOOT)
+    nodes[key]["url"] = log(key).split("gui: ", 1)[1].split("\n", 1)[0].strip()
+    if browser in ("headless", "xvfb"):
+        attach(key, opened + 1)
+    return key
+
+
+def script(path, body):
+    with open(path, "w") as f:
+        f.write("#!/bin/sh\n" + body + "\n")
+    os.chmod(path, 0o755)
+
+
+def launches(n):
+    try:
+        return open(f"{nodes[n]['home']}/browser.args").read().splitlines()
+    except OSError:
+        return []
+
+
+def attach(n, count):
+    """Connect to the page of the count-th window this GUI's folder has opened."""
+    def ws():
+        lines = launches(n)
+        return find_page(lines[count - 1]) if len(lines) >= count else None
+    until(ws, BOOT)
+    url = ws()
+    if not url:
+        sys.exit(f"{n} never opened its page; see {nodes[n]['log']}")
+    nodes[n]["page"] = Page(url)
+    nodes[n]["page"].ready(BOOT, downloads=f"{nodes[n]['home']}/downloads")
+
+
+def js(n, expr):
+    return nodes[n]["page"].js(expr)
+
+
+def feed(n):
+    return nodes[n]["page"].feed()
+
+
+def status(n):
+    return nodes[n]["page"].status()
+
+
+def click(n, selector):
+    nodes[n]["page"].click(selector)
+
+
+def fill(n, **fields):
+    nodes[n]["page"].fill(**fields)
+
+
+def tab(n, view):
+    nodes[n]["page"].tab(view)
+
+
+def state(n):
+    return nodes[n]["page"].state()
+
+
+def save_settings(n, **fields):
+    tab(n, "settings")
+    fill(n, **fields)
+    js(n, '$("settings-saved").hidden = true')
+    click(n, "#settings-form button[type=submit]")
+    until(lambda: js(n, '!$("settings-saved").hidden'))
+    tab(n, "party")
+    return js(n, '$("settings-saved").textContent')
+
+
+def private_bus():
+    """A dbus-daemon of our own, with no service directories so nothing real can be
+    activated on it, and the fake portal on it."""
+    path = f"{RUN}/bus"
+    with open(f"{RUN}/bus.conf", "w") as f:
+        f.write(f'<busconfig><type>session</type><listen>unix:path={path}</listen><auth>EXTERNAL</auth>'
+                '<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/>'
+                '<allow own="*"/></policy></busconfig>')
+    relays.append(subprocess.Popen(["dbus-daemon", f"--config-file={RUN}/bus.conf", "--nofork"]))
+    until(lambda: os.path.exists(path))
+    p = subprocess.Popen([PORTAL_BIN, MEDIA], env={"DBUS_SESSION_BUS_ADDRESS": f"unix:path={path}"}, stdout=subprocess.PIPE, text=True)
+    relays.append(p)
+    if p.stdout.readline() != "ready\n":
+        sys.exit("the fake portal could not start")
+    return f"unix:path={path}"
+
+
 need("go")
 need("mpv")
 print(f"run directory: {RUN}")
@@ -492,6 +643,19 @@ subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=
 subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
 BIN = RUN + "/watchparty"
 RELAY_BIN = RUN + "/relay"
+GUI_BIN = RUN + "/watchparty-gui"
+PORTAL_BIN = RUN + "/fakeportal"
+if args.mode == "gui":
+    BROWSER = next(filter(None, map(shutil.which, ("google-chrome", "chromium", "google-chrome-stable"))), None)
+    if not BROWSER:
+        sys.exit("the gui phase needs Chrome or Chromium on PATH")
+    need("dbus-daemon")
+    need("xvfb-run")
+    print("building the gui, two stamped versions of it, and the fake portal")
+    release = f"-X main.latestReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
+    for out, flags in ((GUI_BIN, ""), (RUN + "/gui-v0.0.1", f"-X main.version=v0.0.1 {release}"), (RUN + "/gui-v0.0.2", f"-X main.version=v0.0.2 {release}")):
+        subprocess.run(["go", "build", "-ldflags", flags, "-o", out, "./gui"], cwd=REPO, check=True)
+    subprocess.run(["go", "build", "-o", PORTAL_BIN, "./gui/fakeportal"], cwd=REPO, check=True)
 
 if args.file:
     MEDIA = os.path.abspath(args.file)
@@ -1143,11 +1307,14 @@ def relay_suite():
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
     proxy = Proxy(PORTS["relay"])
     launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
-    until(lambda: all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
+    # the relay announces a join before the node has read the handshake's reply, so a cut
+    # that only waited for the announcement can land mid-handshake: a failed dial, not a drop
+    until(lambda: connected("flaky") and all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
     proxy.cut()
-    until(lambda: connected("flaky", 2))  # 1s backoff, then the redial
+    until(lambda: connected("flaky", 2))  # a dropped conn is redialled at once
     time.sleep(QUIET)  # a second join or a false leave would follow the swap at once
-    ok("nodeFlaky redialled", log("flaky").count("relay: connected") == 2, "reconnect never happened")
+    connects = log("flaky").count("relay: connected")
+    ok("nodeFlaky redialled", connects == 2, f"connected {connects} times, want 2")
     for n in NODES:
         ok(f"{n} was told nodeFlaky joined once", osd(n).count("nodeFlaky has joined") == 1,
            f"{osd(n).count('nodeFlaky has joined')} joins")
@@ -1290,16 +1457,378 @@ def caps_suite():
     relay.kill(); relay.wait(timeout=10)
 
 
+def gui_suite():
+    global BUS
+    H, G, KEY = "guiHost", "guiGuest", "e2ekey"
+    print("\n=== gui setup: two real GUIs, each in headless Chromium, through one relay ===")
+    BUS = private_bus()
+    relay = launch_relay({"CREATE_KEY": KEY})
+    until(lambda: listening(PORTS["relay"]))
+    launch_gui(H)
+    launch_gui(G, portal=False)
+    # launched now so it is long past the hand-off guard's 5s when [G32] closes it
+    X = launch_gui("guiXvfb", browser="xvfb")
+
+    def mpv_of(n):
+        return child_mpv_socket(nodes[n]["proc"].pid)
+
+    def go(n):
+        nodes[n]["page"].go(BOOT)
+
+    def start(n, **fields):
+        fill(n, **fields)
+        go(n)
+
+    def end(n):
+        js(n, "window.asked = null")
+        click(n, "#go")
+        until(lambda: status(n) == "The party has ended.")
+        return js(n, "window.asked")
+
+    def joined(n):
+        until(lambda: status(n).startswith("You're in"), BOOT)
+        nodes[n]["sock"] = mpv_of(n)
+        return status(n).startswith("You're in")
+
+    print("\n[G1] the GUI opens its own app window at the phone-sized window")
+    for n in (H, G):
+        argv = launches(n)[0]
+        ok(f"{n} opened {nodes[n]['url']} as an app", f"--app={nodes[n]['url']} " in argv, argv)
+        ok(f"{n} asked for 560x940", "--window-size=560,940" in argv)
+    until(lambda: js(H, '$("version-text").textContent') != "Checking the version…")
+    ok("a dev build says so and offers no update", js(H, '$("version-text").textContent == "Development build" && $("update").hidden'))
+
+    print("\n[G2] the tabs switch views and the address remembers which")
+    for view in ("history", "settings", "party"):
+        tab(H, view)
+        shown = js(H, '["party", "history", "settings"].filter(v => !$("view-" + v).hidden)')
+        ok(f"{view} tab shows only its view", shown == [view], str(shown))
+        ok(f"{view} tab sets the address", js(H, "location.hash") == ("" if view == "party" else "#" + view))
+
+    print("\n[G3] Settings saves, and fills the party's relay")
+    ok(f"{H} saved", save_settings(H, **{"set-relay": RELAY_URL, "createKey": KEY, "mpvFlags": MPVFLAGS}) == "Saved.")
+    ok(f"{G} saved", save_settings(G, **{"set-relay": RELAY_URL, "mpvFlags": MPVFLAGS, "mpv": f"{nodes[G]['home']}/slow-mpv"}) == "Saved.")
+    s = state(H)["settings"]
+    ok("the settings reached the store", (s["relay"], s["createKey"], s["mpvFlags"]) == (RELAY_URL, KEY, MPVFLAGS), str(s))
+    ok("the party's relay was filled in", js(H, '$("relay").value') == RELAY_URL)
+    store = js(H, '$("store-path").textContent')
+    ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty/gui.json", store)
+    ok("the store is 0600 in a 0700 folder", (os.stat(store).st_mode & 0o777, os.stat(os.path.dirname(store)).st_mode & 0o777) == (0o600, 0o700))
+
+    print("\n[G4] Browse uses the desktop portal, and says so when there is none")
+    click(H, "[data-pick=file]")
+    ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
+    click(G, "[data-pick=file]")
+    until(lambda: js(G, '!$("error").hidden'))
+    ok(f"{G}, with no portal, is told to type the path", js(G, '$("error").textContent').startswith("No file picker found"), js(G, '$("error").textContent'))
+
+    print("\n[G5] the form refuses what can't start")
+    fill(H, file="   ")
+    click(H, "#go")
+    ok("a blank path asks for a video", js(H, '$("error").textContent') == "Pick a video first.")
+    fill(H, file=MEDIA, relay="")
+    click(H, "#go")
+    until(lambda: js(H, '$("error").textContent').startswith("Diagnosis"))
+    ok("relay mode with no relay is refused", js(H, '$("error").textContent') == "Diagnosis: enter the relay address, or paste an invite.", js(H, '$("error").textContent'))
+    ok("and nothing started", js(H, '$("vitals").hidden'))
+
+    print("\n[G6] the host starts a relay party from the form and gets an invite")
+    start(H, hostname=H, relay=RELAY_URL)
+    must(f"{H} is in", joined(H), status(H))
+    until(lambda: js(H, '$("share-text").textContent') != "")
+    invite = js(H, '$("share-text").textContent')
+    room, secret = invite.split("-room ", 1)[1].split()[0], invite.split("-secret ", 1)[1].split()[0]
+    ok(f"{H} shows an invite", invite == f"-relay {RELAY_URL} -room {room} -secret {secret}", invite)
+    ok(f"{H} hides the form and shows the invite box", js(H, '$("fields").hidden && !$("share").hidden'))
+    ok("Update and Restart are off during a party", js(H, '$("update").disabled && $("restart").disabled && $("restart-now").disabled'))
+
+    print("\n[G7] Copy invite puts it on the clipboard")
+    click(H, "#copy")
+    until(lambda: js(H, '$("copy").textContent') != "Copy invite")
+    ok("the button says Copied", js(H, '$("copy").textContent') == "Copied", js(H, '$("copy").textContent'))
+    ok("the clipboard has the invite", js(H, "navigator.clipboard.readText()") == invite)
+    ok("the button comes back", until(lambda: js(H, '$("copy").textContent') == "Copy invite", 5))
+
+    print("\n[G8] Save chart downloads the whole log")
+    click(H, "#save-chart")
+    dl = f"{nodes[H]['home']}/downloads"
+    until(lambda: any(f.endswith(".log") for f in os.listdir(dl)))
+    saved = [f for f in os.listdir(dl) if f.endswith(".log")]
+    ok("one watchparty-<date>.log", len(saved) == 1 and saved[0].startswith("watchparty-"), str(saved))
+    chart = open(f"{dl}/{saved[0]}").read() if saved else ""
+    ok("it holds the party's log", "init done" in chart and invite in chart)
+
+    print("\n[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
+    js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '
+          '$("invite").dispatchEvent(new Event("input"))')
+    ok(f"{G} filled relay, room and secret from it", js(G, f'$("relay").value == {json.dumps(RELAY_URL)} && $("room").value == {json.dumps(room)} '
+                                                      f'&& $("secret").value == {json.dumps(secret)} && !$("invite-hint").hidden'))
+    start(G, hostname=G, file=MEDIA)
+    ok(f"{G} said it is opening mpv", until(lambda: status(G).startswith("Opening mpv"), BOOT), status(G))
+    ok(f"{G} walks while it waits", js(G, 'document.body.classList.contains("walking")'))
+    must(f"{G} is in", joined(G), status(G))
+    until(lambda: f"{G} has joined" in feed(H) and f"connected to {H}" in feed(G))
+    ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
+    ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
+
+    print(f"\n[G10] a resume in {G}'s mpv: the feeds say who did it")
+    setp(G, "pause", False)
+    until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
+    ok(f"{H}'s mpv resumed", get(H, "pause") is False)
+    ok(f"{H}'s feed credits {G}", f"resumed by {G}" in feed(H), str(feed(H)))
+    ok(f"{G}'s feed says you", feed(G)[:1] == ["resumed by you"], str(feed(G)))
+
+    print("\n[G11] a seek while playing pauses everyone, and the feeds say why")
+    ipc(nodes[G]["sock"], "seek", 30)
+    until(lambda: get(H, "pause") is True and f"paused for {G}: seek" in feed(H) and "paused for everyone: seek" in feed(G))
+    ok(f"{H}'s feed says why", f"paused for {G}: seek" in feed(H), str(feed(H)))
+    ok(f"{G}'s feed says why", "paused for everyone: seek" in feed(G), str(feed(G)))
+    ok(f"{G}'s feed doesn't also say paused by you", "paused by you" not in feed(G), str(feed(G)))
+
+    print(f"\n[G12] resuming after the seek shows up in {G}'s feed")
+    setp(G, "pause", False)
+    until(lambda: get(H, "pause") is False and feed(G)[:1] == ["resumed by you"])
+    ok(f"{G}'s feed moved on from the seek", feed(G)[:1] == ["resumed by you"], str(feed(G)))
+
+    print(f"\n[G13] a pause in {H}'s mpv")
+    setp(H, "pause", True)
+    until(lambda: get(G, "pause") is True and feed(H)[:1] == ["paused by you"] and f"paused by {H}" in feed(G))
+    ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
+    ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
+
+    print(f"\n[G14] {H}'s history has the real room and secret, and who came")
+    last = state(H)["history"][-1]
+    ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
+    ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
+
+    print(f"\n[G15] {G} ends the party from the page")
+    asked = end(G)
+    ok("it asked first", asked == "End the party? mpv closes for you, and everyone else keeps watching.", str(asked))
+    ok(f"{G} shows the form again", js(G, '!$("fields").hidden && $("go-label").textContent == "Start the party"'))
+    ok(f"{G}'s mpv closed", until(lambda: not mpv_of(G)))
+    ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+    ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
+
+    print("\n[G16] a missing mpv is diagnosed as one")
+    save_settings(G, mpv="/nonexistent/mpv")
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("it says mpv isn't installed", status(G).startswith("Diagnosis: mpv isn't installed"), status(G))
+    ok("in red, with the chart open", js(G, '$("status").classList.contains("bad") && $("chart").open'))
+    save_settings(G, mpv="")
+
+    print("\n[G17] a wrong secret, and a different file, are diagnosed")
+    fill(G, secret="wrong" + secret)
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("the relay rejected the secret", status(G) == "Diagnosis: the relay rejected this room or secret. Check the invite and start again.", status(G))
+    _, diff = variants()
+    fill(G, secret=secret, file=diff)
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
+    ok("the relay rejected the file", status(G) == "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.", status(G))
+    ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    print("\n[G18] a guest who comes first waits for the host, then gets in by itself")
+    end(H)
+    start(G, file=MEDIA, room="e2ewait", secret="e2ewaitsecret")
+    until(lambda: status(G).startswith("Waiting"), BOOT)
+    ok(f"{G} is waiting for the host", status(G) == "Waiting for the host to open this room. It starts by itself once they're in.", status(G))
+    start(H, room="e2ewait", secret="e2ewaitsecret")
+    must(f"{H} opened it", joined(H), status(H))
+    must(f"{G} got in", joined(G), status(G))
+
+    print("\n[G19] losing the relay shows on both, and both come back")
+    relay.kill(); relay.wait(timeout=10)
+    until(lambda: all(status(n).startswith("Lost the relay") for n in (H, G)))
+    for n in (H, G):
+        ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
+    relay = launch_relay({"CREATE_KEY": KEY})
+    until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
+    for n in (H, G):
+        must(f"{n} is back in", status(n).startswith("You're in"), status(n))
+    for n in (G, H):
+        end(n)
+
+    print("\n[G20] a Wi-Fi party: the invite switches the guest to Same Wi-Fi")
+    js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
+    start(H, port=str(PORTS["wifiHost"]))
+    must(f"{H} is in", joined(H), status(H))
+    until(lambda: "-addrs" in js(H, '$("share-text").textContent'))
+    wifi = js(H, '$("share-text").textContent')
+    addr, wsecret = wifi.split()[1], wifi.split()[3]
+    ok(f"{H}'s invite has its Wi-Fi address", wifi.startswith("-addrs ") and addr.endswith(f":{PORTS['wifiHost']}"), wifi)
+    js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
+    ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
+    start(G, port=str(PORTS["wifiGuest"]))
+    must(f"{G} is in", joined(G), status(G))
+    until(lambda: f"{G} has joined" in feed(H) or f"connected to {G}" in feed(H))
+    setp(H, "pause", False)
+    until(lambda: get(G, "pause") is False and f"resumed by {H}" in feed(G))
+    ok(f"{G} follows {H} over Wi-Fi", get(G, "pause") is False and f"resumed by {H}" in feed(G), str(feed(G)))
+
+    print(f"\n[G21] quitting mpv ends {G}'s party without a diagnosis")
+    ipc(nodes[G]["sock"], "quit")
+    until(lambda: not js(G, "running"))
+    ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
+    ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+
+    print(f"\n[G22] SIGTERM ends {H} mid-party, mpv and all")
+    sock = nodes[H]["sock"]
+    nodes[H]["proc"].send_signal(signal.SIGTERM)
+    ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
+    ok(f"{H}'s mpv closed", not listening_unix(sock))
+
+    print(f"\n[G23] {G}'s history: every party, and Watch again for both modes")
+    tab(G, "history")
+    until(lambda: js(G, '$("history-list").children.length') == len(state(G)["history"]))
+    items = js(G, '[...$("history-list").children].map(li => li.textContent)')
+    ok("newest first, a Wi-Fi party with the host", "on Wi-Fi" in items[0] and f"with {H}" in items[0], items[0])
+    ok("the first is over the internet with the host", "over the internet" in items[-1] and f"with {H}" in items[-1], items[-1])
+    click(G, "#history-list li .again")
+    ok("Watch again filled Same Wi-Fi", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)} && !$("view-party").hidden'))
+    tab(G, "history")
+    click(G, "#history-list li:last-child .again")
+    ok("and the relay party", js(G, f'mode() == "relay" && $("room").value == {json.dumps(room)} && $("file").value == {json.dumps(MEDIA)}'))
+
+    print(f"\n[G24] closing {G}'s window ends its GUI")
+    browser = next(c for c in children(nodes[G]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
+    os.kill(browser, signal.SIGTERM)
+    ok(f"{G} exited", until(lambda: nodes[G]["proc"].poll() is not None))
+    ok(f"{G} logged it", "gui: window closed" in log(G))
+
+    print(f"\n[G25] {G} again, on the same folder: everything was kept")
+    count = len(items)
+    G2 = launch_gui(G, tag="guiGuest2", portal=False)
+    ok("a new port", nodes[G2]["url"] != nodes[G]["url"])
+    ok("the name, relay and Wi-Fi port are filled in", js(G2, f'$("hostname").value == {json.dumps(G)} && $("relay").value == {json.dumps(RELAY_URL)} '
+                                                         f'&& $("port").value == {json.dumps(str(PORTS["wifiGuest"]))} && $("local").checked'))
+    tab(G2, "settings")
+    ok("the settings are kept", js(G2, f'$("mpvFlags").value == {json.dumps(MPVFLAGS)} && $("set-relay").value == {json.dumps(RELAY_URL)}'))
+    tab(G2, "history")
+    ok("the history is kept", until(lambda: js(G2, '$("history-list").children.length') == count))
+
+    print("\n[G26] Clear history asks, then empties it")
+    click(G2, "#clear-history")
+    until(lambda: js(G2, '$("history-list").children.length') == 0)
+    ok("it asked first", js(G2, "window.asked") == "Clear the whole party history?")
+    ok("the list is empty and says so", js(G2, '!$("history-empty").hidden && $("clear-history").hidden'))
+    ok("the store is empty", not state(G2)["history"])
+
+    print("\n[G27] the cat")
+    js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
+    ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
+    stop(G2)
+
+    print("\n[G28] self-update: offered, refused on a bad digest, installed on a good one")
+    rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
+    os.makedirs(f"{RUN}/upd")
+    exe = f"{RUN}/upd/watchparty-gui"
+    shutil.copy(RUN + "/gui-v0.0.1", exe)
+    old = sha(exe)
+    U = launch_gui("guiUpdate", exe=exe)
+    tab(U, "settings")
+    until(lambda: js(U, '!$("update").hidden'))
+    ok("it offers v0.0.2", js(U, '$("version-text").textContent == "Version v0.0.1" && $("update").textContent == "Update to v0.0.2" && !$("update-dot").hidden'))
+    click(U, "#update")
+    until(lambda: js(U, '$("version-text").textContent').startswith("Update failed"))
+    ok("a bad digest is refused", js(U, '$("version-text").textContent') == "Update failed: the download does not match its published sha256, not installing it.", js(U, '$("version-text").textContent'))
+    ok("and the binary is untouched", sha(exe) == old)
+    ok("and no download is left behind", os.listdir(f"{RUN}/upd") == ["watchparty-gui"], str(os.listdir(f"{RUN}/upd")))
+    rel.digest = "sha256:" + rel.sha
+    click(U, "#update")
+    until(lambda: js(U, '$("restart-dialog").open'))
+    ok("a good one is installed", sha(exe) == rel.sha)
+    ok("and it asks to restart", js(U, '$("restart-text").textContent') == "Version v0.0.2 is installed. A restart is required to start using it.")
+    click(U, "#restart-later")
+    ok("Restart later closes the dialog and leaves the button", js(U, '!$("restart-dialog").open && !$("restart").hidden && $("update").hidden'))
+
+    print("\n[G29] Restart now hands over to the new version")
+    click(U, "#restart")
+    ok("the old one exited", until(lambda: nodes[U]["proc"].poll() is not None))
+    attach(U, 2)
+    until(lambda: js(U, '$("version-text").textContent') != "Checking the version…")
+    ok("the new window runs v0.0.2", js(U, '$("version-text").textContent') == "Version v0.0.2", js(U, '$("version-text").textContent'))
+    ok("and offers nothing", js(U, '$("update").hidden && $("restart").hidden'))
+
+    print("\n[G30] a browser that hands the page off doesn't count as closing the window")
+    O = launch_gui("guiHandoff", browser="handoff")
+    until(lambda: launches(O))
+    time.sleep(QUIET)
+    ok("the GUI is still up", nodes[O]["proc"].poll() is None and listening(int(nodes[O]["url"].rsplit(":", 1)[1].strip("/"))))
+    ok("and didn't log a closed window", "gui: window closed" not in log(O))
+    stop(O)
+
+    print("\n[G31] with no browser at all, it says where the page is")
+    system = [d for d in ("/var/lib/flatpak/exports/share/applications", "/var/lib/snapd/desktop/applications")
+              if os.path.isdir(d) and any(re.search("chrom|edge|brave|vivaldi", f, re.I) for f in os.listdir(d))]
+    if system:
+        print(f"  SKIP  a system-wide browser in {system} would open on screen")
+    else:
+        N = launch_gui("guiNoBrowser", browser=None)
+        until(lambda: "no browser could be opened" in log(N))
+        ok("it tried xdg-open", open(f"{nodes[N]['home']}/xdg-open.args").read().strip() == nodes[N]["url"])
+        ok("and logged the address", f"gui: no browser could be opened (exit status 1), open {nodes[N]['url']} yourself" in log(N), log(N).strip())
+        stop(N)
+
+    print("\n[G32] window.close() from the page closes a real window, and the GUI with it")
+    # headless Chromium ignores window.close() on an --app window; Restart now relies on it
+    try:
+        js(X, "window.close()")
+    except (OSError, RuntimeError, ValueError):
+        pass  # the page can go before it answers
+    ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
+    ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
+
+
+def listening_unix(path):
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def keep_logs():
+    """Copy this run's logs to $E2E_LOGS/<mode>, which make e2e mounts from the host, and
+    say where they are. Only logs: the binaries, the video and browser profiles stay."""
+    dest = os.environ.get("E2E_LOGS")
+    if not dest:
+        return RUN
+    dest = os.path.join(dest, args.mode)
+    for d, dirs, files in os.walk(RUN):
+        dirs[:] = [x for x in dirs if x != "tmp"]  # a GUI's TMPDIR: browser profiles, mpv sockets
+        for f in files:
+            if f.endswith((".log", ".args")):
+                rel = os.path.relpath(os.path.join(d, f), RUN)
+                os.makedirs(os.path.join(dest, os.path.dirname(rel)), exist_ok=True)
+                shutil.copy(os.path.join(d, f), os.path.join(dest, rel))
+    return dest
+
+
 try:
-    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite}[args.mode]()
+    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite, "gui": gui_suite}[args.mode]()
+except Stop as e:
+    print(f"  STOP  the rest of this phase depends on: {e}")
 finally:
     for name in list(nodes):
+        if nodes[name].get("gui"):
+            try:
+                os.killpg(nodes[name]["proc"].pid, signal.SIGKILL)
+            except OSError:
+                pass
+            nodes[name]["proc"].wait(timeout=5)
+            continue
         stop(name, signal.SIGKILL, timeout=5)
     for p in stubs + relays:
         if p.poll() is None:
             p.kill()
             p.wait(timeout=5)
+    # here, so a crash or an early exit still leaves its logs
+    print(f"\nlogs: {keep_logs()}")
 
-print(f"\nlogs: {RUN}")
 print("ALL PASS" if not fails else f"{len(fails)} FAILURES: " + ", ".join(fails))
 sys.exit(1 if fails else 0)

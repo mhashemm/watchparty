@@ -38,16 +38,9 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
   `/log` (`grep -o 'room [A-Z0-9]* -secret [A-Z0-9]*'`), start the guest with them.
 - **Drive mpv directly:** each party's socket is its mpv's `--input-ipc-server=`
   argument (`pgrep -a mpv`). Write `set_property`/`quit` commands to it.
-- **Window lifecycle:** a `chromium.desktop` in `<tmp>/applications` with
-  `MimeType=x-scheme-handler/https;` and an `Exec=` naming a stand-in script by
-  absolute path, `XDG_DATA_DIRS=<tmp>`. The script records `"$@"` and runs `/bin/sleep
-  N`; its exit is "closing the window". An instant `exit 0` checks the hand-off guard.
-- **A real window closed from the page:** add `--remote-debugging-port=N` to a copied
-  entry's `Exec`, run on `Xvfb`, and send `window.close()` over the DevTools websocket
-  after `handoffWindow`.
-- **Self-update:** build with `-ldflags "-X main.version=v0.0.1"` in a temp folder,
-  `POST /update`, check the SHA-256 against the release `digest` and that a new process
-  replaced the old.
+- **`make e2e E2E="--mode gui"`** automates the window lifecycle (a real window on Xvfb
+  too), the hand-off guard and self-update (`E2E.md`). The recipe left here is for what
+  it doesn't run.
 - **A released binary:** `gh release download <tag> -p watchparty-gui_amd64`, run it
   headless, and `GET /update` must report that tag as `current`.
 
@@ -93,7 +86,9 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
 
 - `version` is `"dev"` unless the release stamps `-X main.version=<tag>`. A `dev` build
   never updates, so a local build can't overwrite itself.
-- Check: GitHub `releases/latest`, compared as dotted numbers.
+- Check: GitHub `releases/latest`, compared as dotted numbers. **`latestReleaseURL` is
+  a `var` so e2e can stamp a local server with `-X`.** `-X` ignores a `const` without a
+  word, and the update cases would then install the real release.
 - Install (refused during a party): download this platform's asset next to the binary,
   **refuse it unless its SHA-256 matches GitHub's `digest`**, then swap. Linux and
   macOS rename over the running file; Windows renames the running `.exe` to `.old`
