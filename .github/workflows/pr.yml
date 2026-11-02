@@ -38,8 +38,32 @@ jobs:
       - name: Download
         run: go mod download
 
-      - name: Install mpv and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mpv ffmpeg
+      - name: Who runs the e2e container
+        id: user
+        run: printf 'uid=%s\ngid=%s\n' "$(id -u)" "$(id -g)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the e2e image
+        uses: docker/build-push-action@v7
+        with:
+          file: e2e.Dockerfile
+          tags: watchparty-e2e
+          load: true
+          build-args: |
+            UID=${{ steps.user.outputs.uid }}
+            GID=${{ steps.user.outputs.gid }}
+          cache-from: type=gha,scope=e2e
+          cache-to: type=gha,mode=max,scope=e2e
 
       - name: Test
-        run: make -j test
+        run: make -j test E2E_PREBUILT=1
+
+      - name: Keep the e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: .e2e
+          include-hidden-files: true
+
