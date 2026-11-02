@@ -7,6 +7,7 @@
 # each go build already uses every core and unbounded -j compiles the std lib 15
 # times over. Names and flags match the release assets (publisher.yml), in .bin/.
 #
+# make setup        the Windows installer, from gui/setup.nsi (needs makensis)
 # make [-j] test    unit tests (-race) and ./e2e.py in docker; -j runs the two together
 
 COMPONENTS := cli gui relay
@@ -42,6 +43,11 @@ targets := $(foreach c,$(components),$(foreach p,$(platforms),$(call bin,$(c),$(
 
 all $(COMPONENTS) $(OSES): $(targets)
 
+setup: $(OUT)/watchparty-gui-setup.exe
+
+$(OUT)/watchparty-gui-setup.exe: $(OUT)/watchparty-gui.exe
+	makensis -V2 -DEXE=$(CURDIR)/$< -DOUT=$(CURDIR)/$@ gui/setup.nsi
+
 test: unit e2e
 
 unit:
@@ -59,8 +65,8 @@ e2e:
 		-v "$$(go env GOCACHE)":/cache/go-build -v "$$(go env GOMODCACHE)":/cache/mod watchparty-e2e ./e2e.py $(E2E)
 
 clean:
-	rm -f $(foreach c,$(COMPONENTS),$(foreach o,$(OSES),$(foreach a,$(sort $(ARCHS_$(o))),$(call bin,$(c),$(o),$(a)))))
+	rm -f $(OUT)/watchparty-gui-setup.exe $(foreach c,$(COMPONENTS),$(foreach o,$(OSES),$(foreach a,$(sort $(ARCHS_$(o))),$(call bin,$(c),$(o),$(a)))))
 
 FORCE:
 
-.PHONY: all $(COMPONENTS) $(OSES) test unit e2e clean FORCE
+.PHONY: all $(COMPONENTS) $(OSES) setup test unit e2e clean FORCE

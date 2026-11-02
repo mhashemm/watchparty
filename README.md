@@ -10,16 +10,24 @@ between you. Only pause and seek events are sent, so a slow connection is fine.
 ## Install
 
 1. Install mpv (`apt install mpv`, `brew install mpv`, or [mpv.io](https://mpv.io/installation/)).
-2. Download a binary from [Releases](https://github.com/mhashemm/watchparty/releases):
+2. Install the app:
 
-   | | App | Command line |
-   |---|---|---|
-   | Linux x86-64 / ARM64 | `watchparty-gui_amd64` / `_arm64` | `watchparty_amd64` / `_arm64` |
-   | macOS Intel / Apple silicon | `watchparty-gui_mac_amd64` / `_mac_arm64` | `watchparty_mac_amd64` / `_mac_arm64` |
-   | Windows | `watchparty-gui.exe` | `watchparty.exe` |
+   - **Linux and macOS:** `curl -fsSL https://raw.githubusercontent.com/mhashemm/watchparty/master/install.sh | sh`.
+     On Linux it lands in `~/.local/bin` with an entry in your app menu; on macOS it is
+     `~/Applications/Watchparty.app`.
+   - **Windows:** run `watchparty-gui-setup.exe` from [Releases](https://github.com/mhashemm/watchparty/releases).
+     It installs for your user only, with Start menu and desktop shortcuts.
 
-   On Linux and macOS, `chmod +x` it first. The app updates itself from Settings.
-   Windows builds are provided but haven't been tested on Windows yet.
+   The app updates itself from Settings.
+
+Or download a binary from [Releases](https://github.com/mhashemm/watchparty/releases)
+(`chmod +x` it first on Linux and macOS):
+
+| | App | Command line |
+|---|---|---|
+| Linux x86-64 / ARM64 | `watchparty-gui_amd64` / `_arm64` | `watchparty_amd64` / `_arm64` |
+| macOS Intel / Apple silicon | `watchparty-gui_mac_amd64` / `_mac_arm64` | `watchparty_mac_amd64` / `_mac_arm64` |
+| Windows | `watchparty-gui.exe` | `watchparty.exe` |
 
 ## The app
 

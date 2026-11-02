@@ -51,7 +51,13 @@ jobs:
       - name: Build gui
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-X main.version=${{ github.ref_name }} ${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
 
+      - name: Build the Windows installer
+        if: matrix.goos == 'windows'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+          makensis -V2 -DEXE=$PWD/${{ matrix.gui }} -DOUT=$PWD/watchparty-gui-setup.exe gui/setup.nsi
+
       - name: Publish
-        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} --clobber
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} ${{ matrix.goos == 'windows' && 'watchparty-gui-setup.exe' || '' }} --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
