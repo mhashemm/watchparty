@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const latestReleaseURL = "https://api.github.com/repos/mhashemm/watchparty/releases/latest"
+var latestReleaseURL = "https://api.github.com/repos/mhashemm/watchparty/releases/latest"
 
 var version = "dev"
 
