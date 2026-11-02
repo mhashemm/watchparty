@@ -581,6 +581,10 @@ def attach(n, count):
     until(lambda: c.js('document.getElementById("store-path")?.textContent') not in (None, ""), BOOT)
     # a real confirm() waits for a click forever; this one says yes and keeps the question
     c.js("window.confirm = q => (window.asked = q, true)")
+    # count loadState()s in flight: a late one refills the form with what the store had
+    # when it asked, over anything filled in since, so tab() waits for them
+    c.js("window.loading = 0; const real = loadState; "
+         "loadState = async () => { window.loading++; try { await real() } finally { window.loading-- } }")
 
 
 def js(n, expr):
@@ -606,6 +610,7 @@ def fill(n, **fields):
 
 def tab(n, view):
     click(n, f".tabs button[data-view={view}]")
+    until(lambda: js(n, "window.loading") == 0)
 
 
 def state(n):

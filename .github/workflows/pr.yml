@@ -47,6 +47,7 @@ jobs:
         with:
           name: e2e-logs
           path: .e2e
+          include-hidden-files: true
 
   windows:
     runs-on: windows-latest
