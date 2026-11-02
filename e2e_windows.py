@@ -44,6 +44,17 @@ def ok(name, cond, detail=""):
     print(("  PASS  " if cond else "  FAIL  ") + name + (f"  [{detail}]" if detail else ""), flush=True)
 
 
+class Stop(Exception):
+    """A setup step failed: every case after it would fail for the same reason."""
+
+
+def must(name, cond, detail=""):
+    """ok(), but a failure ends the phase here instead of cascading into later cases."""
+    ok(name, cond, detail)
+    if not cond:
+        raise Stop(name)
+
+
 def until(cond, timeout=SETTLE):
     return e2e_lib.until(cond, timeout)
 
@@ -380,7 +391,7 @@ def gui_suite():
     print("\n[W10] a relay party from the page: mpv starts under the windowsgui parent")
     fill(H, hostname=H, file=MEDIA, relay=RELAY_URL, mpvFlags=MPVFLAGS)
     go(H)
-    ok(f"{H} is in", until(lambda: status(H).startswith("You're in"), BOOT), status(H))
+    must(f"{H} is in", until(lambda: status(H).startswith("You're in"), BOOT), status(H))
     nodes[H]["pipe"] = mpv_pipe(nodes[H]["proc"].pid)
     ok(f"{H}'s mpv.exe answers", bool(nodes[H]["pipe"]) and get(H, "pause") is True)
     until(lambda: js(H, '$("share-text").textContent') != "")
@@ -388,7 +399,7 @@ def gui_suite():
     js(G, f'$("invite").value = {json.dumps(invite)}; $("invite").dispatchEvent(new Event("input"))')
     fill(G, hostname=G, file=MEDIA, mpvFlags=MPVFLAGS)
     go(G)
-    ok(f"{G} is in", until(lambda: status(G).startswith("You're in"), BOOT), status(G))
+    must(f"{G} is in", until(lambda: status(G).startswith("You're in"), BOOT), status(G))
     nodes[G]["pipe"] = mpv_pipe(nodes[G]["proc"].pid)
 
     print(f"\n[W11] {G}'s resume reaches {H}, and both feeds say so")
@@ -473,6 +484,8 @@ subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=siz
 try:
     cli_suite()
     gui_suite()
+except Stop as e:
+    print(f"  STOP  the rest of the suite depends on: {e}")
 finally:
     for n in nodes.values():
         if "proc" in n and n["proc"].poll() is None:

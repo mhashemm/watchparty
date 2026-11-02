@@ -200,6 +200,17 @@ def setp(n, prop, val):
     ipc(nodes[n]["sock"], "set_property", prop, val)
 
 
+class Stop(Exception):
+    """A setup step failed: every case after it would fail for the same reason."""
+
+
+def must(name, cond, detail=""):
+    """ok(), but a failure ends the phase here instead of cascading into later cases."""
+    ok(name, cond, detail)
+    if not cond:
+        raise Stop(name)
+
+
 def until(cond, timeout=SETTLE):
     return e2e_lib.until(cond, timeout)
 
@@ -1523,7 +1534,7 @@ def gui_suite():
 
     print("\n[G6] the host starts a relay party from the form and gets an invite")
     start(H, hostname=H, relay=RELAY_URL)
-    ok(f"{H} is in", joined(H), status(H))
+    must(f"{H} is in", joined(H), status(H))
     until(lambda: js(H, '$("share-text").textContent') != "")
     invite = js(H, '$("share-text").textContent')
     room, secret = invite.split("-room ", 1)[1].split()[0], invite.split("-secret ", 1)[1].split()[0]
@@ -1555,7 +1566,7 @@ def gui_suite():
     start(G, hostname=G, file=MEDIA)
     ok(f"{G} said it is opening mpv", until(lambda: status(G).startswith("Opening mpv"), BOOT), status(G))
     ok(f"{G} walks while it waits", js(G, 'document.body.classList.contains("walking")'))
-    ok(f"{G} is in", joined(G), status(G))
+    must(f"{G} is in", joined(G), status(G))
     until(lambda: f"{G} has joined" in feed(H) and f"connected to {H}" in feed(G))
     ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
     ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
@@ -1624,8 +1635,8 @@ def gui_suite():
     until(lambda: status(G).startswith("Waiting"), BOOT)
     ok(f"{G} is waiting for the host", status(G) == "Waiting for the host to open this room. It starts by itself once they're in.", status(G))
     start(H, room="e2ewait", secret="e2ewaitsecret")
-    ok(f"{H} opened it", joined(H), status(H))
-    ok(f"{G} got in", joined(G), status(G))
+    must(f"{H} opened it", joined(H), status(H))
+    must(f"{G} got in", joined(G), status(G))
 
     print("\n[G19] losing the relay shows on both, and both come back")
     relay.kill(); relay.wait(timeout=10)
@@ -1635,14 +1646,14 @@ def gui_suite():
     relay = launch_relay({"CREATE_KEY": KEY})
     until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
     for n in (H, G):
-        ok(f"{n} is back in", status(n).startswith("You're in"), status(n))
+        must(f"{n} is back in", status(n).startswith("You're in"), status(n))
     for n in (G, H):
         end(n)
 
     print("\n[G20] a Wi-Fi party: the invite switches the guest to Same Wi-Fi")
     js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
     start(H, port=str(PORTS["wifiHost"]))
-    ok(f"{H} is in", joined(H), status(H))
+    must(f"{H} is in", joined(H), status(H))
     until(lambda: "-addrs" in js(H, '$("share-text").textContent'))
     wifi = js(H, '$("share-text").textContent')
     addr, wsecret = wifi.split()[1], wifi.split()[3]
@@ -1650,7 +1661,7 @@ def gui_suite():
     js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
     ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
     start(G, port=str(PORTS["wifiGuest"]))
-    ok(f"{G} is in", joined(G), status(G))
+    must(f"{G} is in", joined(G), status(G))
     until(lambda: f"{G} has joined" in feed(H) or f"connected to {G}" in feed(H))
     setp(H, "pause", False)
     until(lambda: get(G, "pause") is False and f"resumed by {H}" in feed(G))
@@ -1800,6 +1811,8 @@ def keep_logs():
 
 try:
     {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite, "gui": gui_suite}[args.mode]()
+except Stop as e:
+    print(f"  STOP  the rest of this phase depends on: {e}")
 finally:
     for name in list(nodes):
         if nodes[name].get("gui"):

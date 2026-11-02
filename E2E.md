@@ -38,6 +38,8 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
 - **No fixed sleeps for things that happen.** Every wait is `until(cond, ceiling)`;
   `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen sleeps
   (`QUIET`, after its positive half holds).
+- **A step every later case needs is `must()`, not `ok()`**: a failure ends the phase
+  with `STOP` instead of one cause showing up as ten FAILs. Logs are still kept.
 - **`osd()` returns a list**, so `.count(x)` is an exact match, never a substring. Use
   the full string (`f"paused by {A}"`) or `pauses()`.
 - The suite reads nodes through their log lines (root `CLAUDE.md` has the table).
