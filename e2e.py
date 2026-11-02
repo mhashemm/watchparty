@@ -36,11 +36,11 @@ All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, functools, glob, hashlib, http.server, json, os, re, shutil, signal, socket, subprocess
+import argparse, functools, glob, http.server, json, os, re, shutil, signal, socket, subprocess
 import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
-from e2e_lib import CDP
+from e2e_lib import Page, Release, find_page, sha
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
@@ -558,33 +558,15 @@ def launches(n):
 
 def attach(n, count):
     """Connect to the page of the count-th window this GUI's folder has opened."""
-    def page():
+    def ws():
         lines = launches(n)
-        if len(lines) < count:
-            return None
-        argv = dict(a.split("=", 1) for a in lines[count - 1].split() if a.startswith("--") and "=" in a)
-        try:
-            port = open(argv["--user-data-dir"] + "/DevToolsActivePort").read().split()[0]
-            tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1))
-        except (OSError, ValueError, IndexError):
-            return None
-        return next((t["webSocketDebuggerUrl"] for t in tabs if t["type"] == "page" and t["url"] == argv["--app"]), None)
-    until(page, BOOT)
-    ws = page()
-    if not ws:
+        return find_page(lines[count - 1]) if len(lines) >= count else None
+    until(ws, BOOT)
+    url = ws()
+    if not url:
         sys.exit(f"{n} never opened its page; see {nodes[n]['log']}")
-    c = CDP(ws)
-    nodes[n]["page"] = c
-    c.call("Browser.grantPermissions", permissions=["clipboardReadWrite", "clipboardSanitizedWrite"])
-    c.call("Browser.setDownloadBehavior", behavior="allow", downloadPath=f"{nodes[n]['home']}/downloads")
-    # the first loadState fills the form; filling it before then would be overwritten
-    until(lambda: c.js('document.getElementById("store-path")?.textContent') not in (None, ""), BOOT)
-    # a real confirm() waits for a click forever; this one says yes and keeps the question
-    c.js("window.confirm = q => (window.asked = q, true)")
-    # count loadState()s in flight: a late one refills the form with what the store had
-    # when it asked, over anything filled in since, so tab() waits for them
-    c.js("window.loading = 0; const real = loadState; "
-         "loadState = async () => { window.loading++; try { await real() } finally { window.loading-- } }")
+    nodes[n]["page"] = Page(url)
+    nodes[n]["page"].ready(BOOT, downloads=f"{nodes[n]['home']}/downloads")
 
 
 def js(n, expr):
@@ -592,29 +574,27 @@ def js(n, expr):
 
 
 def feed(n):
-    """The page's party feed, newest first."""
-    return js(n, '[...$("feed").children].filter(li => !li.classList.contains("empty")).map(li => li.lastChild.textContent)')
+    return nodes[n]["page"].feed()
 
 
 def status(n):
-    return js(n, '$("status").textContent')
+    return nodes[n]["page"].status()
 
 
 def click(n, selector):
-    js(n, f"document.querySelector({json.dumps(selector)}).click()")
+    nodes[n]["page"].click(selector)
 
 
 def fill(n, **fields):
-    js(n, f'for (const [k, v] of Object.entries({json.dumps(fields)})) $(k).value = v')
+    nodes[n]["page"].fill(**fields)
 
 
 def tab(n, view):
-    click(n, f".tabs button[data-view={view}]")
-    until(lambda: js(n, "window.loading") == 0)
+    nodes[n]["page"].tab(view)
 
 
 def state(n):
-    return js(n, 'api("/state").then(r => r.json())')
+    return nodes[n]["page"].state()
 
 
 def save_settings(n, **fields):
@@ -642,33 +622,6 @@ def private_bus():
     if p.stdout.readline() != "ready\n":
         sys.exit("the fake portal could not start")
     return f"unix:path={path}"
-
-
-class Release:
-    """GitHub's releases/latest for the self-update cases, offering v0.0.2."""
-
-    def __init__(self, port, asset):
-        data = open(asset, "rb").read()
-        self.sha, self.digest = hashlib.sha256(data).hexdigest(), "sha256:" + "0" * 64
-        name = "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip()
-        rel = self
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                body = data if self.path == "/asset" else json.dumps({"tag_name": "v0.0.2", "assets": [
-                    {"name": name, "browser_download_url": f"http://127.0.0.1:{port}/asset", "digest": rel.digest}]}).encode()
-                self.send_response(200)
-                self.send_header("content-length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *a):
-                pass
-        threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever, daemon=True).start()
-
-
-def sha(path):
-    return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 
 need("go")
@@ -1509,10 +1462,7 @@ def gui_suite():
         return child_mpv_socket(nodes[n]["proc"].pid)
 
     def go(n):
-        # wait for the new run, or a check can read the last party's status
-        run = js(n, "run")
-        click(n, "#go")
-        until(lambda: js(n, "run") > run, BOOT)
+        nodes[n]["page"].go(BOOT)
 
     def start(n, **fields):
         fill(n, **fields)
@@ -1760,7 +1710,7 @@ def gui_suite():
     stop(G2)
 
     print("\n[G28] self-update: offered, refused on a bad digest, installed on a good one")
-    rel = Release(PORTS["release"], RUN + "/gui-v0.0.2")
+    rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
     os.makedirs(f"{RUN}/upd")
     exe = f"{RUN}/upd/watchparty-gui"
     shutil.copy(RUN + "/gui-v0.0.1", exe)

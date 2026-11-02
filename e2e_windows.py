@@ -13,12 +13,12 @@ gets a ProgramFiles of its own holding gui/fakebrowser as chrome.exe, which runs
 real Chrome headless with a debugging port. Exits non-zero if any assertion fails;
 the run directory with every log is printed at the end.
 """
-import argparse, hashlib, http.server, json, os, re, shutil, signal, socket, subprocess
-import sys, tempfile, threading, time, urllib.request
+import argparse, json, os, re, shutil, signal, subprocess
+import sys, tempfile, threading, time
 
 sys.dont_write_bytecode = True
 import e2e_lib
-from e2e_lib import CDP
+from e2e_lib import Page, Release, find_page, sha
 
 if os.name != "nt":
     sys.exit("e2e_windows.py runs on Windows; on Linux, use make e2e")
@@ -233,29 +233,18 @@ def launches(n):
 
 
 def attach(n, count):
-    def page():
+    def ws():
         lines = launches(n)
-        if len(lines) < count:
-            return None
-        argv = dict(a.split("=", 1) for a in lines[count - 1].split() if a.startswith("--") and "=" in a)
-        try:
-            with open(os.path.join(argv["--user-data-dir"], "DevToolsActivePort")) as f:
-                port = f.read().split()[0]
-            tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1))
-        except (OSError, ValueError, IndexError, KeyError):
-            return None
-        return next((t["webSocketDebuggerUrl"] for t in tabs if t["type"] == "page" and t["url"] == argv["--app"]), None)
-    until(page, BOOT)
-    ws = page()
-    if not ws:
+        return find_page(lines[count - 1]) if len(lines) >= count else None
+    until(ws, BOOT)
+    url = ws()
+    if not url:
         tree = [(p["Name"], p["CommandLine"]) for p in processes() if p["ParentProcessId"] == nodes[n]["proc"].pid]
         files = [os.path.join(d, f) for d, _, fs in os.walk(nodes[n]["home"]) for f in fs][:40]
         print(f"--- {n}'s log:\n{log(n)}--- its browser launches: {launches(n)}\n--- its children: {tree}\n--- its files: {files}")
         sys.exit(f"{n} never opened its page")
-    c = CDP(ws)
-    nodes[n]["page"] = c
-    until(lambda: c.js('document.getElementById("store-path")?.textContent') not in (None, ""), BOOT)
-    c.js("window.confirm = q => (window.asked = q, true)")
+    nodes[n]["page"] = Page(url)
+    nodes[n]["page"].ready(BOOT)
 
 
 def js(n, expr):
@@ -263,57 +252,27 @@ def js(n, expr):
 
 
 def status(n):
-    return js(n, '$("status").textContent')
+    return nodes[n]["page"].status()
 
 
 def feed(n):
-    return js(n, '[...$("feed").children].filter(li => !li.classList.contains("empty")).map(li => li.lastChild.textContent)')
+    return nodes[n]["page"].feed()
 
 
 def click(n, selector):
-    js(n, f"document.querySelector({json.dumps(selector)}).click()")
+    nodes[n]["page"].click(selector)
 
 
 def fill(n, **fields):
-    js(n, f'for (const [k, v] of Object.entries({json.dumps(fields)})) $(k).value = v')
+    nodes[n]["page"].fill(**fields)
 
 
 def go(n):
-    run = js(n, "run")
-    click(n, "#go")
-    until(lambda: js(n, "run") > run, BOOT)
+    nodes[n]["page"].go(BOOT)
 
 
 def browser_of(n):
     return next((p["ProcessId"] for p in children(nodes[n]["proc"].pid, "chrome.exe")), None)
-
-
-class Release:
-    """GitHub's releases/latest for the self-update case, offering v0.0.2."""
-
-    def __init__(self, port, asset):
-        with open(asset, "rb") as f:
-            data = f.read()
-        self.sha = hashlib.sha256(data).hexdigest()
-        body = json.dumps({"tag_name": "v0.0.2", "assets": [{"name": "watchparty-gui.exe", "digest": "sha256:" + self.sha,
-                           "browser_download_url": f"http://127.0.0.1:{port}/asset"}]}).encode()
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                b = data if self.path == "/asset" else body
-                self.send_response(200)
-                self.send_header("content-length", str(len(b)))
-                self.end_headers()
-                self.wfile.write(b)
-
-            def log_message(self, *a):
-                pass
-        threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever, daemon=True).start()
-
-
-def sha(path):
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
 
 
 # ----------------------------------------------------------------- cases --
@@ -462,12 +421,12 @@ def gui_suite():
     kill_tree(nodes[O]["proc"].pid)
 
     print("\n[W15] self-update: the running .exe becomes .old, Restart runs v0.0.2, the next start removes .old")
-    rel = Release(PORTS["release"], GUI_NEW)
+    rel = Release(PORTS["release"], GUI_NEW, "watchparty-gui.exe", good=True)
     os.makedirs(os.path.join(RUN, "upd"))
     exe = os.path.join(RUN, "upd", "watchparty-gui.exe")
     shutil.copy(GUI_OLD, exe)
     U = launch_gui("winUpdate", exe=exe)
-    click(U, ".tabs button[data-view=settings]")
+    nodes[U]["page"].tab("settings")
     until(lambda: js(U, '!$("update").hidden'))
     ok("it offers v0.0.2", js(U, '$("update").textContent') == "Update to v0.0.2", js(U, '$("version-text").textContent'))
     click(U, "#update")
