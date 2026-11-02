@@ -67,3 +67,30 @@ jobs:
           path: .e2e
           include-hidden-files: true
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.3"
+
+      - name: Download
+        run: go mod download
+
+      - name: Install mpv and ffmpeg
+        # Chocolatey's mpv.exe on PATH is a shim that starts the real one, and killing
+        # the shim leaves mpv running, so put the real mpv.exe's folder first
+        run: |
+          choco install -y --no-progress mpv ffmpeg
+          $mpv = Get-ChildItem C:\ProgramData\chocolatey\lib -Recurse -Filter mpv.exe | Select-Object -First 1
+          $mpv.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Unit tests
+        run: go test -race ./...
+
+      - name: E2E
+        if: ${{ !cancelled() }}
+        run: python e2e_windows.py
