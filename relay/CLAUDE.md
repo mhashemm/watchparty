@@ -30,6 +30,9 @@ goes there too. Not in the release; deployed by hand or as the image.
   notices, as `show-text` events (so it imports `mpv`).
 - **Rooms are memory only.** The first joiner's secret and file define the room; it is
   deleted when its last member leaves. No accounts, no persistence, no playback state.
+- **`room` and `hostname` arrive URL-decoded**, so a newline is one `%0a` away. `hostname`
+  is cleaned once at ingress, since notices echo it. `room` is the routing key, so it stays
+  raw and every log site cleans it.
 - **Accepted:** `hostname` is whatever a member claims, so anyone with the secret can
   impersonate one, as in P2P. Volumetric floods must be absorbed upstream; the relay
   only bounds what reaches its handler.
