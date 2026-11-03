@@ -127,6 +127,18 @@ func (r *relay) ip(req *http.Request) string {
 	return host
 }
 
+// clean strips control characters so an attacker-supplied room or hostname cannot
+// forge log lines with CR/LF or inject terminal escapes into whatever reads the log.
+// room and hostname arrive URL-decoded, so a raw newline is one %0a away.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func notice(hostname, text string) []byte {
 	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
 	b, _ := json.Marshal(message{Hostname: hostname, Event: event})
@@ -151,7 +163,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 		case m.ch <- b:
 		default:
 			// 64 frames behind is not a slow client, it is a dead one
-			log.Printf("%s: send buffer full, dropping\n", m.hostname)
+			log.Printf("%s: send buffer full, dropping\n", clean(m.hostname))
 			m.conn.CloseNow()
 		}
 	}
@@ -304,7 +316,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 
 	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file"), ip)
 	if err != nil {
-		log.Printf("%s %s: %s\n", ip, name, err)
+		log.Printf("%s %s: %s\n", ip, clean(name), err)
 		http.Error(res, err.Error(), code)
 		return
 	}
@@ -337,12 +349,12 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}()
 
 	go r.write(c, m)
-	log.Printf("%s joined %s from %s\n", hostname, name, ip)
+	log.Printf("%s joined %s from %s\n", clean(hostname), clean(name), ip)
 
 	for {
 		_, b, err := conn.Read(c)
 		if err != nil {
-			log.Printf("%s: %s\n", hostname, err)
+			log.Printf("%s: %s\n", clean(hostname), err)
 			return
 		}
 		r.broadcast(name, m, b)
