@@ -14,7 +14,7 @@ real Chrome headless with a debugging port. Exits non-zero if any assertion fail
 the run directory with every log is printed at the end.
 """
 import argparse, json, os, re, shutil, signal, subprocess
-import sys, tempfile, threading, time
+import sys, tempfile, threading, time, winreg
 
 sys.dont_write_bytecode = True
 import e2e_lib
@@ -29,7 +29,7 @@ args = ap.parse_args()
 
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error"
 BOOT, SETTLE, QUIET = 30, 15, 1.0
-PORTS = {"relay": args.port_base, "release": args.port_base + 1, "p1": args.port_base + 2, "p2": args.port_base + 3}
+PORTS = {"relay": args.port_base, "release": args.port_base + 1, "p1": args.port_base + 2, "p2": args.port_base + 3, "cliRelease": args.port_base + 4}
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 REPO = os.path.dirname(os.path.abspath(__file__))
 RUN = tempfile.mkdtemp(prefix="watchparty-e2e-")
@@ -461,12 +461,50 @@ def gui_suite():
     kill_tree(nodes[U]["proc"].pid)
     relay.kill()
 
+    print("\n[W15b] the cli's -update swaps its own running .exe too")
+    rel = Release(PORTS["cliRelease"], CLI_NEW, "watchparty.exe", good=True)
+    os.makedirs(os.path.join(RUN, "updcli"))
+    exe = os.path.join(RUN, "updcli", "watchparty.exe")
+    shutil.copy(CLI_OLD, exe)
+    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+    ok("installed", res.returncode == 0 and sha(exe) == rel.sha, res.stderr)
+    ok("the running binary was moved to .old", os.path.exists(exe + ".old") and sha(exe + ".old") == sha(CLI_OLD))
+    res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
+    ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
+
+    print("\n[W16] the installer: per user, silent, and its uninstaller leaves nothing")
+    setup = os.path.join(RUN, "setup.exe")
+    subprocess.run([MAKENSIS, "/V2", f"/DEXE={GUI_BIN}", f"/DOUT={setup}", os.path.join(REPO, "gui", "setup.nsi")], cwd=REPO, check=True)
+    target = os.path.join(RUN, "installed")
+    subprocess.run([setup, "/S", f"/D={target}"], check=True, timeout=BOOT)
+    exe = os.path.join(target, "watchparty-gui.exe")
+    ok("the exe is the one it was built from", sha(exe) == sha(GUI_BIN))
+    menu = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Watchparty.lnk")
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop", "Watchparty.lnk")
+    ok("Start menu and desktop shortcuts", os.path.exists(menu) and os.path.exists(desktop))
+    key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+        ok("Add/Remove Programs points at its uninstaller", os.path.join(target, "uninstall.exe") in winreg.QueryValueEx(k, "UninstallString")[0])
+    for left in (exe + ".old", os.path.join(target, ".watchparty-update-1"), os.path.join(target, ".watchparty-gui-update-1")):
+        open(left, "w").close()
+    subprocess.run([os.path.join(target, "uninstall.exe"), "/S"], check=True, timeout=BOOT)
+    ok("uninstalling removes the folder, with a self-update's leftovers", until(lambda: not os.path.exists(target)), str(os.path.exists(target) and os.listdir(target)))
+    ok("and both shortcuts", not os.path.exists(menu) and not os.path.exists(desktop))
+    try:
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, key).Close()
+        ok("and its Add/Remove Programs entry", False)
+    except FileNotFoundError:
+        ok("and its Add/Remove Programs entry", True)
+
 
 # ------------------------------------------------------------------ main --
 
 need("go")
 need("mpv")
 need("ffmpeg")
+MAKENSIS = shutil.which("makensis") or os.path.join(os.environ.get("ProgramFiles(x86)", ""), r"NSIS\makensis.exe")
+if not os.path.exists(MAKENSIS):
+    sys.exit(f"makensis is required, looked at {MAKENSIS}")
 if not os.path.exists(CHROME):
     sys.exit(f"Chrome is required at {CHROME}")
 print(f"run directory: {RUN}")
@@ -476,6 +514,9 @@ release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1
 GUI_BIN = build("watchparty-gui.exe", "./gui", "-H=windowsgui")
 GUI_OLD = build("gui-v0.0.1.exe", "./gui", f"-H=windowsgui -X main.version=v0.0.1 {release}")
 GUI_NEW = build("gui-v0.0.2.exe", "./gui", f"-H=windowsgui -X main.version=v0.0.2 {release}")
+release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['cliRelease']}/latest"
+CLI_OLD = build("cli-v0.0.1.exe", ".", f"-X main.version=v0.0.1 {release}")
+CLI_NEW = build("cli-v0.0.2.exe", ".", f"-X main.version=v0.0.2 {release}")
 FAKEBROWSER = build("fakebrowser.exe", "./gui/fakebrowser")
 MEDIA = os.path.join(RUN, "test.mkv")
 subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10", "-t", "120",
