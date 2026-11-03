@@ -115,9 +115,9 @@ file fingerprint differs is refused with 409.
   per commit. Subject: `area: what changed and why it matters`. Body: the reasoning,
   the alternatives rejected, what was tested and what wasn't. Push, open PRs and tag
   only when asked; a PR says what was tested and what wasn't.
-- **Merge by rebase** (`gh pr merge N --rebase`; `gh pr update-branch N --rebase`) to keep
-  `master` linear — a convention now, not an enforced rule. Delete merged branches with
-  `git branch -D`. Never force-push.
+- **Merge normally** (`gh pr merge N --merge`); `master` no longer requires linear history
+  and rebase is not a convention. Delete merged branches with `git branch -D`.
+  Never force-push.
 - **Release:** `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` on the last merged
   commit. Verify by its files, not the Actions status: all 11 assets uploaded, the Linux
   GUI's `GET /update` reports the tag, its page loads in headless Chromium and a tab
