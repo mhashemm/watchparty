@@ -23,7 +23,7 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
   - **Every GUI gets `DBUS_SESSION_BUS_ADDRESS`**, our private `dbus-daemon` or a dead
     path. Without it godbus finds `/run/user/<uid>/bus` by itself and Browse opens a
     real file chooser on the desktop. `gui/fakeportal` answers `OpenFile` there.
-  - The update cases stamp `main.latestReleaseURL` to `Release`, a local stand-in.
+  - The update cases stamp `update.ReleaseURL` to `Release`, a local stand-in.
   - Drive a page with `js(n, expr)` and `click()`, read it with `feed()`/`status()`.
     `go()` waits for the new run, or a check reads the last party's status.
     `confirm()` is replaced on attach; `window.asked` holds the question.

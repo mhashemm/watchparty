@@ -46,7 +46,11 @@ jobs:
         run: go mod download
 
       - name: Build
-        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o ${{ matrix.out }} .
+        # the tag goes through env, never interpolated into the shell: a git tag may
+        # legally contain backticks or $(), which would otherwise run in this step
+        env:
+          REF: ${{ github.ref_name }}
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-X main.version=$REF" -o ${{ matrix.out }} .
 
       - name: Build gui
         # the tag goes through env, never interpolated into the shell: a git tag may
