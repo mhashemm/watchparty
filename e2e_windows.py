@@ -472,7 +472,7 @@ if not os.path.exists(CHROME):
 print(f"run directory: {RUN}")
 BIN = build("watchparty.exe", ".")
 RELAY_BIN = build("relay.exe", "./relay")
-release = f"-X main.latestReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
+release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
 GUI_BIN = build("watchparty-gui.exe", "./gui", "-H=windowsgui")
 GUI_OLD = build("gui-v0.0.1.exe", "./gui", f"-H=windowsgui -X main.version=v0.0.1 {release}")
 GUI_NEW = build("gui-v0.0.2.exe", "./gui", f"-H=windowsgui -X main.version=v0.0.2 {release}")
