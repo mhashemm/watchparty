@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -248,6 +249,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 		address = fmt.Sprintf("%s:%d", localIP, cfg.Port)
 	} else {
+		upnp.Logger = slog.New(upnpLogger{l: log.Default()})
 		upnpClient, err := upnp.New()
 		if err != nil {
 			return nil, fmt.Errorf("upnp: %w", err)
