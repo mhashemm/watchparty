@@ -264,11 +264,6 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 			NewLeaseDuration:          86400,
 		}
 		_, err = upnpClient.AddPortMapping(mapping)
-		var upnpErr *upnp.Error
-		if errors.As(err, &upnpErr) && upnpErr.Code == upnp.ErrOnlyPermanentLease {
-			mapping.NewLeaseDuration = 0
-			_, err = upnpClient.AddPortMapping(mapping)
-		}
 		if err != nil {
 			return nil, fmt.Errorf("upnp: %w", err)
 		}
