@@ -286,13 +286,8 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	mux.HandleFunc("/bye", ser.Bye)
 	mux.HandleFunc("/event", ser.Event)
 	s := &http.Server{
-		Addr:    fmt.Sprintf("0.0.0.0:%d", cfg.Port),
-		Handler: ser.Guard(mux),
-		// Reachable from the LAN and, under UPNP, from the public internet, and Guard
-		// runs only after net/http has read the headers. Go's zero value is no timeout,
-		// i.e. free slowloris, so bound the header phase exactly like the relay does. No
-		// ReadTimeout: an event body is tiny and already capped at 64KB by Guard, and a
-		// legit /event can block briefly draining into mpv.
+		Addr:              fmt.Sprintf("0.0.0.0:%d", cfg.Port),
+		Handler:           ser.Guard(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    8192,
