@@ -49,7 +49,11 @@ jobs:
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o ${{ matrix.out }} .
 
       - name: Build gui
-        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-X main.version=${{ github.ref_name }} ${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
+        # the tag goes through env, never interpolated into the shell: a git tag may
+        # legally contain backticks or $(), which would otherwise run in this step
+        env:
+          REF: ${{ github.ref_name }}
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-X main.version=$REF ${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
 
       - name: Build the Windows installer
         if: matrix.goos == 'windows'
