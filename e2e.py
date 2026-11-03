@@ -37,7 +37,7 @@ Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
 import argparse, functools, glob, http.server, json, os, re, shutil, signal, socket, subprocess
-import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import plistlib, queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
 from e2e_lib import Page, Release, find_page, sha
@@ -1812,6 +1812,56 @@ def gui_suite():
         pass  # the page can go before it answers
     ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
     ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
+    install_suite()
+
+
+def install_suite():
+    print("\n[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
+    stubs = f"{RUN}/installer"
+    os.makedirs(stubs)
+    script(stubs + "/uname", 'case $1 in -m) echo "$FAKE_M" ;; *) echo "$FAKE_S" ;; esac')
+    script(stubs + "/curl", 'echo "$5" >> "$HOME/urls"\n[ -z "$CURL_FAIL" ] || { echo partial > "$4"; exit 22; }\necho the-binary > "$4"')
+
+    def install(home, s, m, **env):
+        os.makedirs(home, exist_ok=True)
+        return subprocess.run(["sh", REPO + "/install.sh"], capture_output=True, text=True, timeout=SETTLE,
+                              env={"HOME": home, "PATH": f"{stubs}:/usr/bin:/bin", "FAKE_S": s, "FAKE_M": m, **env})
+
+    def asked(home):
+        return open(home + "/urls").read().split() if os.path.exists(home + "/urls") else []
+
+    home = f"{RUN}/install linux"  # a space, as a real home may have
+    res = install(home, "Linux", "x86_64")
+    ok("linux installs", res.returncode == 0, res.stderr)
+    ok("it asks for the latest gui", asked(home) == ["https://github.com/mhashemm/watchparty/releases/latest/download/watchparty-gui_amd64"], str(asked(home)))
+    exe = home + "/.local/bin/watchparty-gui"
+    ok("the binary is executable, with nothing left beside it", os.access(exe, os.X_OK) and os.listdir(home + "/.local/bin") == ["watchparty-gui"], str(os.listdir(home + "/.local/bin")))
+    entry = open(home + "/.local/share/applications/watchparty.desktop").read()
+    ok("the app menu entry runs it, quoted", f'Exec="{exe}"' in entry and "Icon=watchparty" in entry, entry)
+    ok("and has its icon", os.path.exists(home + "/.local/share/icons/hicolor/scalable/apps/watchparty.svg"))
+
+    res = install(home, "Linux", "x86_64", CURL_FAIL="1")
+    ok("a failed download fails the install", res.returncode != 0)
+    ok("keeps the installed binary and leaves no partial file", open(exe).read() == "the-binary\n" and os.listdir(home + "/.local/bin") == ["watchparty-gui"], str(os.listdir(home + "/.local/bin")))
+
+    home = f"{RUN}/install-arm"
+    res = install(home, "Linux", "aarch64", XDG_BIN_HOME=home + "/b", XDG_DATA_HOME=home + "/d")
+    ok("arm64 gets its asset, in the XDG folders", res.returncode == 0 and asked(home)[0].endswith("/watchparty-gui_arm64") and os.path.exists(home + "/b/watchparty-gui") and os.path.exists(home + "/d/applications/watchparty.desktop"), res.stderr)
+
+    home = f"{RUN}/install-mac"
+    res = install(home, "Darwin", "arm64")
+    ok("macOS installs", res.returncode == 0, res.stderr)
+    ok("it asks for the mac asset", asked(home)[0].endswith("/watchparty-gui_mac_arm64"), str(asked(home)))
+    contents = home + "/Applications/Watchparty.app/Contents"
+    with open(contents + "/Info.plist", "rb") as f:
+        plist = plistlib.load(f)
+    ok("the bundle's plist names the binary inside it", os.access(f"{contents}/MacOS/{plist['CFBundleExecutable']}", os.X_OK), str(plist))
+    ok("and can find Homebrew's mpv from Finder", "/opt/homebrew/bin" in plist["LSEnvironment"]["PATH"], str(plist))
+
+    for s, m, why in (("Linux", "armv7l", "an architecture with no build"), ("FreeBSD", "amd64", "an OS with no build")):
+        home = f"{RUN}/install-{m}"
+        res = install(home, s, m)
+        ok(f"{why} stops before downloading", res.returncode != 0 and not asked(home) and res.stderr, res.stderr)
 
 
 def listening_unix(path):
