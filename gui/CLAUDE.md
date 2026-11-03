@@ -88,15 +88,13 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mk
 
 ## Self-update (`update.go`)
 
+The download, SHA-256 check and binary swap live in the `update` package
+(`update/CLAUDE.md`); this file only wires them to the page. What's GUI-specific:
+
 - `version` is `"dev"` unless the release stamps `-X main.version=<tag>`. A `dev` build
-  never updates, so a local build can't overwrite itself.
-- Check: GitHub `releases/latest`, compared as dotted numbers. **`latestReleaseURL` is
-  a `var` so e2e can stamp a local server with `-X`.** `-X` ignores a `const` without a
-  word, and the update cases would then install the real release.
-- Install (refused during a party): download this platform's asset next to the binary,
-  **refuse it unless its SHA-256 matches GitHub's `digest`**, then swap. Linux and
-  macOS rename over the running file; Windows renames the running `.exe` to `.old`
-  (deleted on the next start) with a rollback.
+  offers no update, so a local build can't overwrite itself.
+- Update and Restart are refused during a party. `update.Install` swaps next to `g.exe`;
+  `main` clears a leftover `g.exe + ".old"` (Windows) at startup.
 - **Don't restart on install.** The page asks, Restart later first. **Restart now**
   starts `g.exe` (resolved at startup, since the path can point at the replaced file
   after the rename), and the page calls `window.close()`: killing a Flatpak browser's

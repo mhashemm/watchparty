@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/mhashemm/watchparty/party"
+	"github.com/mhashemm/watchparty/update"
 )
 
 //go:embed index.html
@@ -381,7 +382,7 @@ func main() {
 	}
 	g := newGUI(c, ln.Addr().String(), openStore(storePath()))
 	g.quit = stop
-	g.exe, err = executable()
+	g.exe, err = update.Executable()
 	if err == nil {
 		os.Remove(g.exe + ".old")
 	}

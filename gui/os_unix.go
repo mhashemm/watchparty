@@ -230,7 +230,3 @@ func fileURIPath(uri string) (string, error) {
 }
 
 func hide(_ *exec.Cmd) {}
-
-func replaceExe(src, dst string) error {
-	return os.Rename(src, dst)
-}

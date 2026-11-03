@@ -652,7 +652,7 @@ if args.mode == "gui":
     need("dbus-daemon")
     need("xvfb-run")
     print("building the gui, two stamped versions of it, and the fake portal")
-    release = f"-X main.latestReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
+    release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
     for out, flags in ((GUI_BIN, ""), (RUN + "/gui-v0.0.1", f"-X main.version=v0.0.1 {release}"), (RUN + "/gui-v0.0.2", f"-X main.version=v0.0.2 {release}")):
         subprocess.run(["go", "build", "-ldflags", flags, "-o", out, "./gui"], cwd=REPO, check=True)
     subprocess.run(["go", "build", "-o", PORTAL_BIN, "./gui/fakeportal"], cwd=REPO, check=True)

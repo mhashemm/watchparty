@@ -74,43 +74,6 @@ func TestGuard(t *testing.T) {
 	}
 }
 
-func TestNewer(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		latest, current string
-		want            bool
-	}{
-		{"v0.0.12", "v0.0.11", true},
-		{"v0.0.10", "v0.0.9", true},
-		{"v0.1.0", "v0.0.99", true},
-		{"v0.0.11", "v0.0.11", false},
-		{"v0.0.9", "v0.0.10", false},
-		{"v1.0", "v1.0.0", false},
-		{"v1.0.1", "v1.0", true},
-	} {
-		if got := newer(c.latest, c.current); got != c.want {
-			t.Errorf("newer(%q, %q) = %v, want %v", c.latest, c.current, got, c.want)
-		}
-	}
-}
-
-func TestAssetName(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct{ goos, goarch, want string }{
-		{"windows", "amd64", "watchparty-gui.exe"},
-		{"windows", "arm64", ""},
-		{"linux", "amd64", "watchparty-gui_amd64"},
-		{"linux", "arm64", "watchparty-gui_arm64"},
-		{"darwin", "amd64", "watchparty-gui_mac_amd64"},
-		{"darwin", "arm64", "watchparty-gui_mac_arm64"},
-		{"freebsd", "amd64", ""},
-	} {
-		if got := assetName(c.goos, c.goarch); got != c.want {
-			t.Errorf("assetName(%q, %q) = %q, want %q", c.goos, c.goarch, got, c.want)
-		}
-	}
-}
-
 // One syntax error anywhere in the page's script kills every button, and nothing
 // on the Go side notices. vm.Script parses it the way a browser parses a classic
 // <script>: no top-level await, no top-level return.
