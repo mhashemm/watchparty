@@ -1781,6 +1781,8 @@ def gui_suite():
     ok("a good one is installed", res.returncode == 0 and sha(exe) == rel.sha, res.stderr)
     res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
     ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
+    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+    ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
 
     print("\n[G30] a browser that hands the page off doesn't count as closing the window")
     O = launch_gui("guiHandoff", browser="handoff")

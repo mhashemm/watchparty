@@ -62,7 +62,8 @@ watchparty -relay wss://relay.example.com -file movie.mkv                       
 watchparty -relay wss://relay.example.com -room ROOM -secret SECRET -file movie.mkv
 ```
 
-`watchparty -h` lists every flag. `-mpvFlags` passes extra options to mpv.
+`watchparty -h` lists every flag. `-mpvFlags` passes extra options to mpv. `-update`
+installs the latest release over the binary, and `-version` prints the one you have.
 
 ## How it stays in sync
 

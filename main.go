@@ -67,6 +67,10 @@ func selfUpdate() error {
 	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	tag, err := update.Install(c, exe, version, "watchparty")
+	if errors.Is(err, update.ErrUpToDate) {
+		fmt.Println(err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
