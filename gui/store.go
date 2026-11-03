@@ -114,7 +114,7 @@ func (s *store) begin(f form) int {
 
 func (s *store) observe(i int, line string) {
 	person := ""
-	if _, after, ok := strings.Cut(line, "your address to share is "); ok {
+	if after, ok := strings.CutPrefix(message(line), "your address to share is "); ok {
 		s.update(i, func(sess *session) {
 			sess.Invite = strings.TrimSpace(after)
 			fields := strings.Fields(sess.Invite)
@@ -160,8 +160,15 @@ func (s *store) update(i int, f func(*session)) {
 	s.save()
 }
 
+func message(line string) string {
+	if len(line) < len("2006/01/02 15:04:05 ") {
+		return ""
+	}
+	return line[len("2006/01/02 15:04:05 "):]
+}
+
 func notice(line string) (string, bool) {
-	_, body, ok := strings.Cut(line, "do: sent request: ")
+	body, ok := strings.CutPrefix(message(line), "do: sent request: ")
 	if !ok {
 		return "", false
 	}

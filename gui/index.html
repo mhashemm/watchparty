@@ -827,21 +827,22 @@ function handle(line) {
   log.textContent += line + "\n";
   if (log.textContent.length > 200000) log.textContent = log.textContent.slice(-150000);
 
+  const msg = line.slice(20);
   let m;
-  if ((m = line.match(/your address to share is (.*)$/))) {
+  if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
   }
-  if (/relay: connected/.test(line)) Object.assign(state, { connected: true, reconnecting: false, waiting: false });
-  if (/relay: (dial|disconnected)/.test(line)) {
+  if (/^relay: connected/.test(msg)) Object.assign(state, { connected: true, reconnecting: false, waiting: false });
+  if (/^relay: (dial|disconnected)/.test(msg)) {
     state.reconnecting = true;
-    state.waiting = /is not open yet/.test(line);
+    state.waiting = /is not open yet/.test(msg);
   }
-  if (/rejected by relay/.test(line)) state.rejected = /not the same file/.test(line) ? "file" : "secret";
-  if (/init done/.test(line)) state.ready = true;
-  if ((m = line.match(/do: sent request: (\{"command":\["show-text".*)$/))) {
+  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : "secret";
+  if (/^init done/.test(msg)) state.ready = true;
+  if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
   }
-  if ((m = line.match(/Watch: broadcasted event: (\{.*\})$/))) {
+  if ((m = msg.match(/^Watch: broadcasted event: (\{.*\})$/))) {
     try {
       const e = JSON.parse(m[1]);
       if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");

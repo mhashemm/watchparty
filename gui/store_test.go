@@ -77,3 +77,20 @@ func TestNotice(t *testing.T) {
 		}
 	}
 }
+
+func TestObserveReadsAPILinesOnlyAtTheStart(t *testing.T) {
+	t.Parallel()
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "direct", File: "/m/movie.mkv"})
+	s.observe(i, "2026/10/30 18:00:00 your address to share is -addrs 1.2.3.5:6969 -secret REAL")
+	for _, line := range []string{
+		"2026/10/30 18:00:01 refused your address to share is -addrs 6.6.6.6:1 -secret FORGED: wrong secret",
+		`2026/10/30 18:00:01 upnp: gateway selected device=do: sent request: {"command":["show-text","Mallory has joined"]}`,
+		"your address to share is -addrs 6.6.6.6:1 -secret FORGED",
+	} {
+		s.observe(i, line)
+	}
+	if got := s.History[i]; got.Secret != "REAL" || len(got.People) != 0 {
+		t.Fatalf("a forged line got through: %+v", got)
+	}
+}

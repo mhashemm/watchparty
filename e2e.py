@@ -1662,6 +1662,17 @@ def gui_suite():
     wifi = js(H, '$("share-text").textContent')
     addr, wsecret = wifi.split()[1], wifi.split()[3]
     ok(f"{H}'s invite has its Wi-Fi address", wifi.startswith("-addrs ") and addr.endswith(f":{PORTS['wifiHost']}"), wifi)
+    print(f"\n[G20b] a stranger with no secret can't rewrite {H}'s invite or status through its log")
+    before = status(H), state(H)["history"][-1]
+    for forged in ("relay: disconnected", "relay: rejected by relay", "your address to share is -addrs 6.6.6.6:1 -secret FORGED"):
+        code = raw(f"127.0.0.1:{PORTS['wifiHost']}", "/hi", {"hit-me-up": forged, "secret": "wrong"})
+        ok(f"{forged!r} is refused", code in (401, 403), f"HTTP {code}")
+    until(lambda: "-secret FORGED" in js(H, '$("log").textContent'))
+    ok("the page has read the forged line", "-secret FORGED" in js(H, '$("log").textContent'))
+    ok("the invite is unchanged", js(H, '$("share-text").textContent') == wifi, js(H, '$("share-text").textContent'))
+    ok("the status is unchanged", status(H) == before[0], status(H))
+    ok("the saved session is unchanged", state(H)["history"][-1] == before[1], str(state(H)["history"][-1]))
+
     js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
     ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
     start(G, port=str(PORTS["wifiGuest"]))
