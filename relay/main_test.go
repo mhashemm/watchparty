@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -499,5 +500,24 @@ func TestCleanStripsControlChars(t *testing.T) {
 		if got := clean(in); got != want {
 			t.Errorf("clean(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestHostnameIsSanitizedInNotices(t *testing.T) {
+	t.Parallel()
+	url := serve(t, newRelay(10, 10, 10))
+	a, _ := join(t, url, "movie", "s", "a")
+	// a spoofed hostname with a CRLF: cleaned at ingress, so the notice echoed to
+	// the room (mpv OSD / GUI feed) must not carry the raw control char.
+	evil, _ := join(t, url, "movie", "s", "evil%0aFORGED")
+	mark(t, evil, "evil") // evil's frame reaches a and terminates a's notice stream
+	got := noticesBefore(t, a)
+	for _, n := range got {
+		if strings.ContainsAny(n, "\r\n") {
+			t.Fatalf("notice carried a raw control char from a spoofed hostname: %q", n)
+		}
+	}
+	if !slices.Contains(got, "evilFORGED has joined") {
+		t.Fatalf("hostname not sanitized in notice: got %v", got)
 	}
 }

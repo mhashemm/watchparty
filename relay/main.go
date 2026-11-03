@@ -129,7 +129,9 @@ func (r *relay) ip(req *http.Request) string {
 
 // clean strips control characters so an attacker-supplied room or hostname cannot
 // forge log lines with CR/LF or inject terminal escapes into whatever reads the log.
-// room and hostname arrive URL-decoded, so a raw newline is one %0a away.
+// room and hostname arrive URL-decoded, so a raw newline is one %0a away. hostname is
+// cleaned once at ingress (it is stored and also echoed to peers in notices); room stays
+// raw because it is the routing key, so it is cleaned at each log site instead.
 func clean(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -163,7 +165,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 		case m.ch <- b:
 		default:
 			// 64 frames behind is not a slow client, it is a dead one
-			log.Printf("%s: send buffer full, dropping\n", clean(m.hostname))
+			log.Printf("%s: send buffer full, dropping\n", m.hostname)
 			m.conn.CloseNow()
 		}
 	}
@@ -307,7 +309,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	defer r.conns.Add(-1)
 
 	name := req.URL.Query().Get("room")
-	hostname := req.URL.Query().Get("hostname")
+	hostname := clean(req.URL.Query().Get("hostname"))
 	if name == "" || hostname == "" {
 		http.Error(res, "room and hostname are required", http.StatusBadRequest)
 		return
@@ -349,12 +351,12 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}()
 
 	go r.write(c, m)
-	log.Printf("%s joined %s from %s\n", clean(hostname), clean(name), ip)
+	log.Printf("%s joined %s from %s\n", hostname, clean(name), ip)
 
 	for {
 		_, b, err := conn.Read(c)
 		if err != nil {
-			log.Printf("%s: %s\n", clean(hostname), err)
+			log.Printf("%s: %s\n", hostname, err)
 			return
 		}
 		r.broadcast(name, m, b)
