@@ -484,3 +484,20 @@ func TestMemberThatStopsAnsweringPingsIsRemoved(t *testing.T) {
 		return len(r.rooms) == 0
 	})
 }
+
+func TestCleanStripsControlChars(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"plain-host":                  "plain-host",
+		"inj\r\n2026 FORGED log line": "inj2026 FORGED log line",
+		"a\x1b[31mb":                  "a[31mb",
+		"tab\there":                   "tabhere",
+		"room\x7fdel":                 "roomdel",
+		"café-room":                   "café-room",
+	}
+	for in, want := range cases {
+		if got := clean(in); got != want {
+			t.Errorf("clean(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
