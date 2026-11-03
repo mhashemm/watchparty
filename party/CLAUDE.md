@@ -6,6 +6,10 @@ peers, blocks until the party ends and cleans up. Its two callers, `main.go` (fl
 parses flags, touches globals or exits. `Run` and `runMesh` need mpv and a network, so
 they are tested by `e2e.py` and the GUI recipes, not unit tests.
 
+Security: `runMesh` starts the P2P server, which faces the internet under UPNP, and the
+relay client talks to a public relay. The cross-cutting mindset, trust boundary and method
+are in `SECURITY.md` (repo root) — read it before changing either.
+
 ## Same file, or no party (`fingerprint`)
 
 SHA-256 of the byte size plus eight 1MB samples spread from the first byte to the last:
