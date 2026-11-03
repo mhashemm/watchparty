@@ -140,6 +140,7 @@ PORTS["lagB"] = args.port_base + len(NODES) + 7
 PORTS["release"] = args.port_base + len(NODES) + 8
 PORTS["wifiHost"] = args.port_base + len(NODES) + 9
 PORTS["wifiGuest"] = args.port_base + len(NODES) + 10
+PORTS["cliRelease"] = args.port_base + len(NODES) + 11
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -655,6 +656,9 @@ if args.mode == "gui":
     release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
     for out, flags in ((GUI_BIN, ""), (RUN + "/gui-v0.0.1", f"-X main.version=v0.0.1 {release}"), (RUN + "/gui-v0.0.2", f"-X main.version=v0.0.2 {release}")):
         subprocess.run(["go", "build", "-ldflags", flags, "-o", out, "./gui"], cwd=REPO, check=True)
+    release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['cliRelease']}/latest"
+    for v in ("v0.0.1", "v0.0.2"):
+        subprocess.run(["go", "build", "-ldflags", f"-X main.version={v} {release}", "-o", f"{RUN}/cli-{v}", "."], cwd=REPO, check=True)
     subprocess.run(["go", "build", "-o", PORTAL_BIN, "./gui/fakeportal"], cwd=REPO, check=True)
 
 if args.file:
@@ -1750,6 +1754,22 @@ def gui_suite():
     until(lambda: js(U, '$("version-text").textContent') != "Checking the version…")
     ok("the new window runs v0.0.2", js(U, '$("version-text").textContent') == "Version v0.0.2", js(U, '$("version-text").textContent'))
     ok("and offers nothing", js(U, '$("update").hidden && $("restart").hidden'))
+
+    print("\n[G29b] the cli updates itself the same way, with its own asset")
+    rel = Release(PORTS["cliRelease"], RUN + "/cli-v0.0.2", "watchparty_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
+    os.makedirs(f"{RUN}/updcli")
+    exe = f"{RUN}/updcli/watchparty"
+    shutil.copy(RUN + "/cli-v0.0.1", exe)
+    old = sha(exe)
+    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+    ok("a bad digest is refused", res.returncode != 0 and "does not match its published sha256" in res.stderr, res.stderr)
+    ok("and the binary is untouched", sha(exe) == old)
+    ok("and no download is left behind", os.listdir(f"{RUN}/updcli") == ["watchparty"], str(os.listdir(f"{RUN}/updcli")))
+    rel.digest = "sha256:" + rel.sha
+    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+    ok("a good one is installed", res.returncode == 0 and sha(exe) == rel.sha, res.stderr)
+    res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
+    ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
 
     print("\n[G30] a browser that hands the page off doesn't count as closing the window")
     O = launch_gui("guiHandoff", browser="handoff")
