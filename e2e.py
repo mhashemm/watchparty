@@ -36,7 +36,7 @@ All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, functools, glob, http.server, json, os, re, shutil, signal, socket, subprocess
+import argparse, functools, glob, http.client, http.server, json, os, re, shutil, signal, socket, subprocess
 import plistlib, queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
@@ -1452,6 +1452,23 @@ def caps_suite():
     ok("the key holder opened the room", connected("k3"))
     until(lambda: connected("k1"), 35)  # the keyless node's backoff may be up to 16s by now
     ok("the waiting node got in once the room was open", connected("k1"))
+
+    print("\n[R19b] a room or hostname can't forge a line in the relay's log")
+    def ws_get(query, headers):
+        conn = http.client.HTTPConnection("127.0.0.1", PORTS["relay"], timeout=SETTLE)
+        conn.request("GET", "/ws?" + query, headers=headers)
+        code = conn.getresponse().status
+        conn.close()
+        return code
+    code = ws_get("room=inj%0aFORGED1&hostname=h&file=f", {"create-key": "wrong"})
+    ok("a bad create key is refused", code == 403, f"HTTP {code}")
+    code = ws_get("room=inj%0aFORGED2&hostname=evil%0aFORGED3&session=s&file=f",
+                  {"create-key": "k", "room-secret": "s", "Connection": "Upgrade", "Upgrade": "websocket",
+                   "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="})
+    ok("the key holder gets in", code == 101, f"HTTP {code}")
+    until(lambda: "joined inj" in relay_log())
+    ok("both requests were logged", "FORGED1: bad create key" in relay_log() and "FORGED2 from" in relay_log(), relay_log())
+    ok("and nothing they sent starts a line", not [l for l in relay_log().splitlines() if l.startswith("FORGED")], relay_log())
     for t in ("k1", "k2", "k3"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
