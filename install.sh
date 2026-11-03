@@ -24,6 +24,7 @@ esac
 
 mkdir -p "$bin"
 tmp=$bin/.watchparty-gui-install
+trap 'rm -f "$tmp"' EXIT
 curl -fL --progress-bar -o "$tmp" "https://github.com/mhashemm/watchparty/releases/latest/download/$asset"
 chmod 755 "$tmp"
 mv -f "$tmp" "$bin/watchparty-gui"

@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
@@ -127,14 +128,9 @@ func (r *relay) ip(req *http.Request) string {
 	return host
 }
 
-// clean strips control characters so an attacker-supplied room or hostname cannot
-// forge log lines with CR/LF or inject terminal escapes into whatever reads the log.
-// room and hostname arrive URL-decoded, so a raw newline is one %0a away. hostname is
-// cleaned once at ingress (it is stored and also echoed to peers in notices); room stays
-// raw because it is the routing key, so it is cleaned at each log site instead.
 func clean(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			return -1
 		}
 		return r

@@ -494,6 +494,7 @@ func TestCleanStripsControlChars(t *testing.T) {
 		"a\x1b[31mb":                  "a[31mb",
 		"tab\there":                   "tabhere",
 		"room\x7fdel":                 "roomdel",
+		"a\u009b31mb":                 "a31mb",
 		"café-room":                   "café-room",
 	}
 	for in, want := range cases {

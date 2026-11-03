@@ -36,8 +36,8 @@ All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, functools, glob, http.server, json, os, re, shutil, signal, socket, subprocess
-import queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import argparse, functools, glob, http.client, http.server, json, os, re, shutil, signal, socket, subprocess
+import plistlib, queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
 from e2e_lib import Page, Release, find_page, sha
@@ -812,6 +812,20 @@ def p2p_suite():
                b'{"event":"property-change","name":"pause","data":"yes"}')
     ok(f"{A} rejects unknown peer's event", code == 400, f"HTTP {code}")
 
+    print("\n[9b] a client that never finishes its headers is dropped, and huge headers are refused")
+    host, port = nodes[A]["addr"].rsplit(":", 1)
+    with socket.create_connection((host, int(port)), timeout=SETTLE) as s:
+        s.sendall(b"POST /hi HTTP/1.1\r\nHost: x\r\nsecret:")
+        try:
+            s.recv(1024)
+            ok("the server hung up on it", True)
+        except TimeoutError:
+            ok("the server hung up on it", False, f"still open after {SETTLE}s")
+    with socket.create_connection((host, int(port)), timeout=SETTLE) as s:
+        s.sendall(b"POST /hi HTTP/1.1\r\nHost: x\r\nsecret: " + b"a" * 20000 + b"\r\n\r\n")
+        got = s.recv(64)
+        ok("20KB of headers gets a 431", got.startswith(b"HTTP/1.1 431"), str(got))
+
     print("\n[10] /bye from an unknown address is rejected")
     code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger", "secret": SECRET})
     ok(f"{A} rejects unknown peer's bye", code == 400, f"HTTP {code}")
@@ -1438,6 +1452,23 @@ def caps_suite():
     ok("the key holder opened the room", connected("k3"))
     until(lambda: connected("k1"), 35)  # the keyless node's backoff may be up to 16s by now
     ok("the waiting node got in once the room was open", connected("k1"))
+
+    print("\n[R19b] a room or hostname can't forge a line in the relay's log")
+    def ws_get(query, headers):
+        conn = http.client.HTTPConnection("127.0.0.1", PORTS["relay"], timeout=SETTLE)
+        conn.request("GET", "/ws?" + query, headers=headers)
+        code = conn.getresponse().status
+        conn.close()
+        return code
+    code = ws_get("room=inj%0aFORGED1&hostname=h&file=f", {"create-key": "wrong"})
+    ok("a bad create key is refused", code == 403, f"HTTP {code}")
+    code = ws_get("room=inj%0aFORGED2&hostname=evil%0aFORGED3&session=s&file=f",
+                  {"create-key": "k", "room-secret": "s", "Connection": "Upgrade", "Upgrade": "websocket",
+                   "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="})
+    ok("the key holder gets in", code == 101, f"HTTP {code}")
+    until(lambda: "joined inj" in relay_log())
+    ok("both requests were logged", "FORGED1: bad create key" in relay_log() and "FORGED2 from" in relay_log(), relay_log())
+    ok("and nothing they sent starts a line", not [l for l in relay_log().splitlines() if l.startswith("FORGED")], relay_log())
     for t in ("k1", "k2", "k3"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
@@ -1662,6 +1693,17 @@ def gui_suite():
     wifi = js(H, '$("share-text").textContent')
     addr, wsecret = wifi.split()[1], wifi.split()[3]
     ok(f"{H}'s invite has its Wi-Fi address", wifi.startswith("-addrs ") and addr.endswith(f":{PORTS['wifiHost']}"), wifi)
+    print(f"\n[G20b] a stranger with no secret can't rewrite {H}'s invite or status through its log")
+    before = status(H), state(H)["history"][-1]
+    for forged in ("relay: disconnected", "relay: rejected by relay", "your address to share is -addrs 6.6.6.6:1 -secret FORGED"):
+        code = raw(f"127.0.0.1:{PORTS['wifiHost']}", "/hi", {"hit-me-up": forged, "secret": "wrong"})
+        ok(f"{forged!r} is refused", code in (401, 403), f"HTTP {code}")
+    until(lambda: "-secret FORGED" in js(H, '$("log").textContent'))
+    ok("the page has read the forged line", "-secret FORGED" in js(H, '$("log").textContent'))
+    ok("the invite is unchanged", js(H, '$("share-text").textContent') == wifi, js(H, '$("share-text").textContent'))
+    ok("the status is unchanged", status(H) == before[0], status(H))
+    ok("the saved session is unchanged", state(H)["history"][-1] == before[1], str(state(H)["history"][-1]))
+
     js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
     ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
     start(G, port=str(PORTS["wifiGuest"]))
@@ -1770,6 +1812,8 @@ def gui_suite():
     ok("a good one is installed", res.returncode == 0 and sha(exe) == rel.sha, res.stderr)
     res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
     ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
+    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+    ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
 
     print("\n[G30] a browser that hands the page off doesn't count as closing the window")
     O = launch_gui("guiHandoff", browser="handoff")
@@ -1799,6 +1843,56 @@ def gui_suite():
         pass  # the page can go before it answers
     ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
     ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
+    install_suite()
+
+
+def install_suite():
+    print("\n[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
+    stubs = f"{RUN}/installer"
+    os.makedirs(stubs)
+    script(stubs + "/uname", 'case $1 in -m) echo "$FAKE_M" ;; *) echo "$FAKE_S" ;; esac')
+    script(stubs + "/curl", 'echo "$5" >> "$HOME/urls"\n[ -z "$CURL_FAIL" ] || { echo partial > "$4"; exit 22; }\necho the-binary > "$4"')
+
+    def install(home, s, m, **env):
+        os.makedirs(home, exist_ok=True)
+        return subprocess.run(["sh", REPO + "/install.sh"], capture_output=True, text=True, timeout=SETTLE,
+                              env={"HOME": home, "PATH": f"{stubs}:/usr/bin:/bin", "FAKE_S": s, "FAKE_M": m, **env})
+
+    def asked(home):
+        return open(home + "/urls").read().split() if os.path.exists(home + "/urls") else []
+
+    home = f"{RUN}/install linux"  # a space, as a real home may have
+    res = install(home, "Linux", "x86_64")
+    ok("linux installs", res.returncode == 0, res.stderr)
+    ok("it asks for the latest gui", asked(home) == ["https://github.com/mhashemm/watchparty/releases/latest/download/watchparty-gui_amd64"], str(asked(home)))
+    exe = home + "/.local/bin/watchparty-gui"
+    ok("the binary is executable, with nothing left beside it", os.access(exe, os.X_OK) and os.listdir(home + "/.local/bin") == ["watchparty-gui"], str(os.listdir(home + "/.local/bin")))
+    entry = open(home + "/.local/share/applications/watchparty.desktop").read()
+    ok("the app menu entry runs it, quoted", f'Exec="{exe}"' in entry and "Icon=watchparty" in entry, entry)
+    ok("and has its icon", os.path.exists(home + "/.local/share/icons/hicolor/scalable/apps/watchparty.svg"))
+
+    res = install(home, "Linux", "x86_64", CURL_FAIL="1")
+    ok("a failed download fails the install", res.returncode != 0)
+    ok("keeps the installed binary and leaves no partial file", open(exe).read() == "the-binary\n" and os.listdir(home + "/.local/bin") == ["watchparty-gui"], str(os.listdir(home + "/.local/bin")))
+
+    home = f"{RUN}/install-arm"
+    res = install(home, "Linux", "aarch64", XDG_BIN_HOME=home + "/b", XDG_DATA_HOME=home + "/d")
+    ok("arm64 gets its asset, in the XDG folders", res.returncode == 0 and asked(home)[0].endswith("/watchparty-gui_arm64") and os.path.exists(home + "/b/watchparty-gui") and os.path.exists(home + "/d/applications/watchparty.desktop"), res.stderr)
+
+    home = f"{RUN}/install-mac"
+    res = install(home, "Darwin", "arm64")
+    ok("macOS installs", res.returncode == 0, res.stderr)
+    ok("it asks for the mac asset", asked(home)[0].endswith("/watchparty-gui_mac_arm64"), str(asked(home)))
+    contents = home + "/Applications/Watchparty.app/Contents"
+    with open(contents + "/Info.plist", "rb") as f:
+        plist = plistlib.load(f)
+    ok("the bundle's plist names the binary inside it", os.access(f"{contents}/MacOS/{plist['CFBundleExecutable']}", os.X_OK), str(plist))
+    ok("and can find Homebrew's mpv from Finder", "/opt/homebrew/bin" in plist["LSEnvironment"]["PATH"], str(plist))
+
+    for s, m, why in (("Linux", "armv7l", "an architecture with no build"), ("FreeBSD", "amd64", "an OS with no build")):
+        home = f"{RUN}/install-{m}"
+        res = install(home, s, m)
+        ok(f"{why} stops before downloading", res.returncode != 0 and not asked(home) and res.stderr, res.stderr)
 
 
 def listening_unix(path):

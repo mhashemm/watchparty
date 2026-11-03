@@ -88,7 +88,7 @@ jobs:
         # Chocolatey's mpv.exe on PATH is a shim that starts the real one, and killing
         # the shim leaves mpv running, so put the real mpv.exe's folder first
         run: |
-          choco install -y --no-progress mpv ffmpeg
+          choco install -y --no-progress mpv ffmpeg nsis
           $mpv = Get-ChildItem C:\ProgramData\chocolatey\lib -Recurse -Filter mpv.exe | Select-Object -First 1
           $mpv.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 

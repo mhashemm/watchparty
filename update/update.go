@@ -19,6 +19,8 @@ import (
 
 var ReleaseURL = "https://api.github.com/repos/mhashemm/watchparty/releases/latest"
 
+var ErrUpToDate = errors.New("already on the latest version")
+
 type release struct {
 	Tag    string `json:"tag_name"`
 	Assets []struct {
@@ -98,7 +100,7 @@ func Install(c context.Context, exe, version, base string) (string, error) {
 		return "", err
 	}
 	if !Newer(rel.Tag, version) {
-		return "", fmt.Errorf("already on the latest version (%s)", version)
+		return "", fmt.Errorf("%w (%s)", ErrUpToDate, version)
 	}
 	name := assetName(base, runtime.GOOS, runtime.GOARCH)
 	i := 0

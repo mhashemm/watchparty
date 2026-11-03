@@ -33,7 +33,7 @@ SectionEnd
 Section "Uninstall"
 	Delete "$INSTDIR\watchparty-gui.exe"
 	Delete "$INSTDIR\watchparty-gui.exe.old"
-	Delete "$INSTDIR\.watchparty-gui-update-*"
+	Delete "$INSTDIR\.watchparty-*"
 	Delete "$INSTDIR\icon.ico"
 	Delete "$INSTDIR\uninstall.exe"
 	RMDir "$INSTDIR"

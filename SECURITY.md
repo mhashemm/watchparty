@@ -16,7 +16,8 @@ anything else that parses network input.
   for text echoed to peers (notices land in mpv's OSD and the GUI feed). The hole is input
   URL-decoded *after* parsing (a query param, as on the relay); Go's server already rejects
   control chars in a header *value* with 400, so the P2P server, reading only headers,
-  needs no such cleaning.
+  needs no such cleaning. Cleaning doesn't stop a value spelling a line the GUI reacts to, so the
+  GUI reads those only at the start of a line.
 - **Defense lives at the layer that owns it.** Behind a proxy (the relay), TLS, volumetric
   floods, bot/WAF filtering and real-client-IP attribution belong to that proxy / CDN; don't
   move a check into the app that the proxy must own — trusting a `CF-Connecting-IP` header is
@@ -30,7 +31,7 @@ A party's **secret is the only lock.** Model every actor against it:
 
 | Actor | Can | Cannot |
 |---|---|---|
-| Outsider (no secret) | reach `/ws`; create a room only if they also hold the create key | join/read a party, drive playback |
+| Outsider (no secret) | reach `/ws`; create a room, unless the relay sets a create key they don't hold | join/read a party, drive playback |
 | Peer (holds the secret) | drive playback, claim any hostname, push frames to peers | — full trust, by design, as in the P2P mesh |
 | The relay | fan out opaque frames, synthesize notices | read playback, persist anything |
 
