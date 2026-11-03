@@ -2,14 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/mhashemm/watchparty/party"
+	"github.com/mhashemm/watchparty/update"
 )
+
+var version = "dev"
 
 func main() {
 	cfg := party.Config{}
@@ -26,7 +31,21 @@ func main() {
 	flag.StringVar(&cfg.Room, "room", "", "relay room code (generated if empty)")
 	flag.StringVar(&cfg.Secret, "secret", "", "party secret, for the relay room or the direct mesh (generated if empty)")
 	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	doUpdate := flag.Bool("update", false, "update to the latest release and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
+	if *doUpdate {
+		if err := selfUpdate(); err != nil {
+			log.Println(err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
 	err := party.Run(c, cfg)
@@ -35,4 +54,22 @@ func main() {
 		log.Println(err)
 		os.Exit(1)
 	}
+}
+
+func selfUpdate() error {
+	if version == "dev" {
+		return errors.New("development builds do not update themselves")
+	}
+	exe, err := update.Executable()
+	if err != nil {
+		return err
+	}
+	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+	tag, err := update.Install(c, exe, version, "watchparty")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("updated to %s; re-run watchparty to use it\n", tag)
+	return nil
 }

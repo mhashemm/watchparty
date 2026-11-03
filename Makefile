@@ -29,7 +29,7 @@ name_gui := watchparty-gui
 name_relay := watchparty-relay
 
 bin = $(OUT)/$(name_$(1))$(if $(filter windows,$(2)),.exe,$(if $(filter darwin,$(2)),_mac)_$(3))
-ldflags = $(if $(filter gui,$(1)),-X main.version=$(VERSION) $(if $(filter windows,$(2)),-H=windowsgui))
+ldflags = $(strip $(if $(filter cli gui,$(1)),-X main.version=$(VERSION)) $(if $(filter gui,$(1)),$(if $(filter windows,$(2)),-H=windowsgui)))
 
 define rule
 $(call bin,$(1),$(2),$(3)): FORCE
