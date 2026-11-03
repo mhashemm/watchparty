@@ -77,6 +77,8 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - A failed `-addrs` peer is logged, not fatal, except `ErrDifferentFile` and
   `ErrWrongSecret`.
 - An `EvictAfter` of zero (the GUI) means `DefaultEvictAfter`.
+- **`upnpLogger` flattens control characters:** its values come from whatever answers
+  SSDP on the LAN, and a newline in one would start a new line for the GUI to read.
 - **The `http.Server` sets `ReadHeaderTimeout`/`IdleTimeout`/`MaxHeaderBytes`** like the
   relay: UPNP makes it internet-reachable and `Guard` runs only after the headers, so
   Go's no-timeout default is free slowloris. No `ReadTimeout`: bodies are tiny and capped

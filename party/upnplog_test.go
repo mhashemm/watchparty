@@ -22,3 +22,12 @@ func TestUpnpLoggerFormatsInfoAndDropsDebug(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+func TestUpnpLoggerKeepsAGatewaysTextOnOneLine(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	slog.New(upnpLogger{l: log.New(&buf, "", 0)}).Info("gateway selected", "device", "router\n2026/01/01 00:00:00 init done\u009b")
+	if got, want := buf.String(), "upnp: gateway selected device=router 2026/01/01 00:00:00 init done \n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
