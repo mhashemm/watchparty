@@ -5,6 +5,10 @@ locked routers, double NAT). Every node dials **out** to it. It runs on a public
 so half of this file is about abuse. The client is `party/ws.go`, which also holds the
 table of how a node reacts to each status. This package never imports `party`.
 
+Security: the cross-cutting mindset, trust boundary and method live in `SECURITY.md` (repo
+root) — read it before touching anything that parses network input. A dated live-deployment
+assessment is kept private, out of the repo.
+
 ```sh
 go test -race ./relay
 docker build -f relay/Dockerfile -t watchparty-relay .     # from the REPO ROOT
