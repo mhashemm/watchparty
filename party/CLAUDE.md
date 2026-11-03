@@ -6,6 +6,10 @@ peers, blocks until the party ends and cleans up. Its two callers, `main.go` (fl
 parses flags, touches globals or exits. `Run` and `runMesh` need mpv and a network, so
 they are tested by `e2e.py` and the GUI recipes, not unit tests.
 
+Security: `runMesh` starts the P2P server, which faces the internet under UPNP, and the
+relay client talks to a public relay. The cross-cutting mindset, trust boundary and method
+are in `SECURITY.md` (repo root) — read it before changing either.
+
 ## Same file, or no party (`fingerprint`)
 
 SHA-256 of the byte size plus eight 1MB samples spread from the first byte to the last:
@@ -73,6 +77,10 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - A failed `-addrs` peer is logged, not fatal, except `ErrDifferentFile` and
   `ErrWrongSecret`.
 - An `EvictAfter` of zero (the GUI) means `DefaultEvictAfter`.
+- **The `http.Server` sets `ReadHeaderTimeout`/`IdleTimeout`/`MaxHeaderBytes`** like the
+  relay: UPNP makes it internet-reachable and `Guard` runs only after the headers, so
+  Go's no-timeout default is free slowloris. No `ReadTimeout`: bodies are tiny and capped
+  at 64KB, and `/event` can block briefly draining into mpv.
 
 ## `ws.go`: the relay client
 

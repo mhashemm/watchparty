@@ -6,6 +6,12 @@ here on purpose: counters, strikes and gossip solve problems a relay doesn't hav
 shared transport interface would join two implementations with almost no common
 semantics.
 
+Security: this transport is reachable from the LAN and, under UPNP, the public internet,
+guarded only by the secret and with no proxy in front, so its `http.Server` owns its own
+header timeouts (`party.runMesh`). The cross-cutting mindset, trust boundary and method are
+in `SECURITY.md` (repo root) — read it before touching request handling, the secret check
+or anything logged.
+
 ## Wire protocol
 
 Every endpoint is `POST`; identity travels in headers: `hit-me-up` (the sender's

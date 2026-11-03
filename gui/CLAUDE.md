@@ -5,6 +5,10 @@ calls `party.Run` in-process, so it needs only mpv. Its status display is driven
 entirely by the log lines `party`, `mpv` and `server` already print. For any visual
 change read **`DESIGN.md`** first.
 
+Security: the `Host` + `X-Token` guard on every route but `GET /` is the whole defense
+against a web page or another local app driving the GUI (which launches mpv). Cross-cutting
+mindset, trust boundary and method: `SECURITY.md` (repo root).
+
 Dependencies: stdlib, `golang.org/x/sys/windows`, and `godbus` (pure Go, for the Linux
 file picker). No cgo, so it cross-compiles in the release matrix.
 
