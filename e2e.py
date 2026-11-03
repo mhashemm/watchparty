@@ -812,6 +812,20 @@ def p2p_suite():
                b'{"event":"property-change","name":"pause","data":"yes"}')
     ok(f"{A} rejects unknown peer's event", code == 400, f"HTTP {code}")
 
+    print("\n[9b] a client that never finishes its headers is dropped, and huge headers are refused")
+    host, port = nodes[A]["addr"].rsplit(":", 1)
+    with socket.create_connection((host, int(port)), timeout=SETTLE) as s:
+        s.sendall(b"POST /hi HTTP/1.1\r\nHost: x\r\nsecret:")
+        try:
+            s.recv(1024)
+            ok("the server hung up on it", True)
+        except TimeoutError:
+            ok("the server hung up on it", False, f"still open after {SETTLE}s")
+    with socket.create_connection((host, int(port)), timeout=SETTLE) as s:
+        s.sendall(b"POST /hi HTTP/1.1\r\nHost: x\r\nsecret: " + b"a" * 20000 + b"\r\n\r\n")
+        got = s.recv(64)
+        ok("20KB of headers gets a 431", got.startswith(b"HTTP/1.1 431"), str(got))
+
     print("\n[10] /bye from an unknown address is rejected")
     code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger", "secret": SECRET})
     ok(f"{A} rejects unknown peer's bye", code == 400, f"HTTP {code}")
