@@ -21,6 +21,9 @@ const (
 	pause          = "pause"
 	timePos        = "time-pos"
 	pausedForCache = "paused-for-cache"
+	playlistPos    = "playlist-pos"
+	fileLoaded     = "file-loaded"
+	duration       = "duration"
 	propertyChange = "property-change"
 	seek           = "seek"
 	setProperty    = "set_property"
@@ -32,6 +35,7 @@ const (
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
+	endGraceSeconds         = 5
 	maxSeeks                = 16
 )
 
@@ -122,6 +126,8 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
+	Entry     *int   `json:"entry,omitempty"`
+	From      *int   `json:"from,omitempty"`
 	Response
 }
 
@@ -139,21 +145,28 @@ type Response struct {
 }
 
 type Client struct {
-	ctx      context.Context
-	ready    chan struct{}
-	outgoing chan<- []byte
-	conn     *connection
-	mu       sync.Mutex
-	paused   bool
-	applied  map[string]string
-	seeks    []float64
-	seen     map[string]bool
-	pos      float64
-	seeking  bool
-	stalled  bool
-	reason   string
-	joining  bool
-	pausedBy string
+	ctx       context.Context
+	ready     chan struct{}
+	outgoing  chan<- []byte
+	conn      *connection
+	mu        sync.Mutex
+	paused    bool
+	applied   map[string]string
+	seeks     []float64
+	seen      map[string]bool
+	pos       float64
+	duration  float64
+	seeking   bool
+	stalled   bool
+	reason    string
+	joining   bool
+	pausedBy  string
+	entries   int
+	current   int
+	movedFrom int
+	loading   bool
+	heldSeek  string
+	leaving   bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -189,19 +202,44 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		}
 		return nil, errDoNotSend
 
+	case fileLoaded:
+		c.loading = false
+		if held := c.heldSeek; held != "" {
+			c.heldSeek = ""
+			go func() {
+				if err := c.seekTo(held); err != nil {
+					log.Println("seek after loading:", err)
+				}
+			}()
+		}
+		return nil, errDoNotSend
+
 	case propertyChange:
 		if event.Data == "" {
 			return nil, errDoNotSend
 		}
 		var extra [][]byte
+		changed, previous := false, c.current
 		switch event.Name {
 		case timePos:
 			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
 				c.pos = pos
 			}
+		case duration:
+			if d, err := strconv.ParseFloat(event.Data, 64); err == nil {
+				c.duration = d
+			}
 		case pause:
 			if event.paused() {
 				extra = c.pauseExtras()
+			}
+		case playlistPos:
+			if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
+				c.current, c.pos, c.seeking = n, 0, false
+				changed = c.seen[timePos]
+				if changed {
+					c.seeks = []float64{0}
+				}
 			}
 		}
 		if c.isEcho(event) {
@@ -224,7 +262,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking, c.joining = false, false
+				c.seeking, c.joining, c.leaving = false, false, false
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
@@ -246,6 +284,16 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 				c.pauseParty("buffering")
 			}
 			return nil, errDoNotSend
+		case playlistPos:
+			if !changed || first {
+				return nil, errDoNotSend
+			}
+			if !c.paused {
+				c.pauseParty("video changed")
+			}
+			c.movedFrom = previous
+			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
+			return [][]byte{b}, errDoNotSend
 		default:
 			return nil, errDoNotSend
 		}
@@ -255,6 +303,39 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		return extra, nil
 	}
 	return nil, errDoNotSend
+}
+
+// tagged says which entry a message belongs to, so a peer that has moved on can drop
+// it. Only this node knows, at the moment it sends.
+func (c *Client) tagged(b []byte) []byte {
+	if c.entries == 0 {
+		return b
+	}
+	c.mu.Lock()
+	current := c.current
+	c.mu.Unlock()
+	return append(fmt.Appendf(nil, `{"entry":%d,`, current), b[1:]...)
+}
+
+// heading is the entry this node is on, or on its way to.
+func (c *Client) heading() int {
+	if target, ok := c.applied[playlistPos]; ok {
+		if i, err := strconv.Atoi(target); err == nil {
+			return i
+		}
+	}
+	return c.current
+}
+
+// fromAnotherEntry is a position or a resume sent before its sender moved, or before
+// we did. A pause still counts, since stopping is always safe.
+func (c *Client) fromAnotherEntry(event Event) bool {
+	if event.Entry == nil || (event.Name != timePos && event.Name != pausedAt && event.Name != startPos && (event.Name != pause || event.paused())) {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *event.Entry != c.heading()
 }
 
 func (c *Client) pauseExtras() [][]byte {
@@ -312,6 +393,7 @@ func (c *Client) watch() error {
 			out = append([][]byte{bytes.Clone(scanner.Bytes())}, extra...)
 		}
 		for _, b := range out {
+			b = c.tagged(b)
 			select {
 			case c.outgoing <- b:
 				log.Printf("Watch: broadcasted event: %s\n", b)
@@ -375,6 +457,10 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 func (c *Client) apply(e IncomingMessage) {
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
+	if err == nil && c.fromAnotherEntry(event) {
+		log.Printf("ProcessIncomingEvents: from another entry [event=%s] [host=%s]\n", e.Event, e.HostName)
+		return
+	}
 	if err == nil {
 		switch event.Name {
 		case pause:
@@ -383,6 +469,9 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
+			if event.Data == e.HostName+" has left" {
+				err = errors.Join(err, c.left(e.HostName))
+			}
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
@@ -391,6 +480,8 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.arrive(event, e.HostName)
 		case pausedAt:
 			err = c.align(event, e.HostName)
+		case playlistPos:
+			err = c.followEntry(event, e.HostName)
 		}
 	}
 	if err != nil {
@@ -401,7 +492,18 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
+	var entry []byte
+	if c.entries > 0 {
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
+	}
 	c.mu.Unlock()
+	if entry != nil {
+		select {
+		case c.outgoing <- entry:
+		case <-c.ctx.Done():
+			return nil
+		}
+	}
 	if joining {
 		return nil
 	}
@@ -416,10 +518,65 @@ func (c *Client) welcome(hostname string) error {
 	b := position(startPos, c.pos)
 	c.mu.Unlock()
 	select {
-	case c.outgoing <- b:
+	case c.outgoing <- c.tagged(b):
 	case <-c.ctx.Done():
 	}
 	return nil
+}
+
+func (c *Client) left(hostname string) error {
+	c.mu.Lock()
+	c.leaving = true
+	playing := !c.paused
+	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
+	c.mu.Unlock()
+	if !playing || ending {
+		return nil
+	}
+	c.showText(fmt.Sprintf("paused for %s: left", hostname))
+	return c.pauseReq(true)
+}
+
+func (c *Client) followEntry(event Event, hostname string) error {
+	i, err := strconv.Atoi(event.Data)
+	if err != nil {
+		return err
+	}
+	if i < 0 || i >= c.entries {
+		return errors.New("no such entry")
+	}
+	c.mu.Lock()
+	heading := c.heading()
+	lost := event.From != nil && *event.From == c.movedFrom && i < heading
+	c.mu.Unlock()
+	if i == heading || lost {
+		return nil
+	}
+	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if i == c.current {
+		c.mu.Unlock()
+		return nil
+	}
+	c.loading = true
+	c.applied[playlistPos] = event.Data
+	c.movedFrom = heading
+	if event.From != nil {
+		c.movedFrom = *event.From
+	}
+	c.mu.Unlock()
+	err = c.conn.do(setProperty, playlistPos, i)
+	if err != nil {
+		c.mu.Lock()
+		c.loading = false
+		delete(c.applied, playlistPos)
+		c.mu.Unlock()
+		return err
+	}
+	return c.showText(fmt.Sprintf("video %d of %d, by %s", i+1, c.entries, hostname))
 }
 
 func (c *Client) arrive(event Event, hostname string) error {
@@ -460,7 +617,7 @@ func (c *Client) pause(event Event, hostname string) error {
 		c.mu.Unlock()
 		for _, b := range out {
 			select {
-			case c.outgoing <- b:
+			case c.outgoing <- c.tagged(b):
 			case <-c.ctx.Done():
 				return nil
 			}
@@ -479,7 +636,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining = false
+		c.joining, c.leaving = false, false
 	}
 	c.mu.Unlock()
 
@@ -519,6 +676,11 @@ func (c *Client) seekTo(data string) error {
 	c.seeks = append(c.seeks, pos)
 	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
 	c.joining = false
+	if c.loading {
+		c.heldSeek = data
+		c.mu.Unlock()
+		return nil
+	}
 	c.mu.Unlock()
 	return c.conn.do(setProperty, timePos, data)
 }
@@ -529,7 +691,7 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	follow := c.paused && c.pausedBy == hostname && !c.at(pos)
+	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.leaving && pos < c.pos)
 	c.mu.Unlock()
 	if !follow {
 		return nil
@@ -546,7 +708,8 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage) (*Client, error) {
+// New wires up one mpv. entries is the length of its playlist, and 0 for a single file.
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, entries int) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -554,13 +717,15 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		closed:  make(chan struct{}),
 	}
 	client := &Client{
-		ctx:      c,
-		ready:    make(chan struct{}),
-		conn:     conn,
-		outgoing: outgoing,
-		paused:   true,
-		applied:  map[string]string{},
-		seen:     map[string]bool{},
+		ctx:       c,
+		ready:     make(chan struct{}),
+		conn:      conn,
+		outgoing:  outgoing,
+		paused:    true,
+		applied:   map[string]string{},
+		seen:      map[string]bool{},
+		entries:   entries,
+		movedFrom: -1,
 	}
 
 	go client.ProcessIncomingEvents(incoming)
@@ -578,7 +743,10 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		}
 	}()
 
-	events := []string{pause, timePos, pausedForCache}
+	events := []string{pause, timePos, pausedForCache, duration}
+	if entries > 0 {
+		events = append(events, playlistPos)
+	}
 	for i, event := range events {
 		err := conn.do("observe_property_string", i+1, event)
 		if err != nil {

@@ -33,7 +33,7 @@ Drive a party with the token from the page:
 
 ```sh
 T=$(curl -s $U/ | grep -o 'const TOKEN = "[^"]*"' | cut -d'"' -f2)
-curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null"}'
+curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null"}'
 ```
 
 - **Isolate the store:** `XDG_CONFIG_HOME=<tmp>/cN`, one folder per GUI. Restarting on
@@ -116,8 +116,9 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 ## OS helpers (`os_unix.go`, `os_windows.go`)
 
-- **Pickers show only videos**, by extension from `videoExts` (Go's sniffer misses
-  `.mov` and `.ts`). Add an extension when a real video doesn't show up.
+- **Pickers show only videos** and `.torrent`, by extension from `pickExts`, built on
+  `party.VideoExts` (Go's sniffer misses `.mov` and `.ts`), which also decides what a
+  playlist holds. Add an extension when a real video doesn't show up.
 - **Linux: only the XDG desktop portal** (`portalPick`), never a specific program;
   hard-coded zenity/kdialog broke on desktops without them. Subscribe to `Response` on
   the predicted request path *before* calling `FileChooser.OpenFile`. The filter type

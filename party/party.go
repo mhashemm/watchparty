@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,8 @@ const (
 
 type Config struct {
 	File       string
+	Playlist   bool
+	CacheDir   string
 	Mpv        string
 	MpvFlags   string
 	Hostname   string
@@ -52,7 +55,7 @@ type Config struct {
 
 var (
 	errStopped = errors.New("the party stopped unexpectedly")
-	errHungUp  = errors.New("mpv stopped answering before the movie was ready, though it was still running")
+	errHungUp  = errors.New("mpv stopped answering before the video was ready, though it was still running")
 )
 
 const mpvExitGrace = 10 * time.Second
@@ -67,9 +70,33 @@ func Run(parent context.Context, cfg Config) error {
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 
-	file, err := fingerprint(strings.TrimSpace(cfg.File))
-	if err != nil {
-		return err
+	target := strings.TrimSpace(cfg.File)
+	var files []string
+	var start int
+	var playlist bool
+	var file string
+	if isTorrent(target) {
+		cache, err := torrentCache(strings.TrimSpace(cfg.CacheDir))
+		if err != nil {
+			return err
+		}
+		stream, err := openTorrent(c, target, cache, torrentConfig())
+		if err != nil && parent.Err() != nil {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer stream.close()
+		files, playlist, file = stream.urls, len(stream.urls) > 1, stream.id
+		cfg.Playlist = false
+	} else {
+		var err error
+		files, start, playlist, file, err = media(target, cfg.Playlist)
+		if err != nil {
+			return err
+		}
+		cfg.Playlist = playlist
 	}
 	log.Printf("file fingerprint: %s\n", file)
 	if cfg.Secret == "" {
@@ -99,7 +126,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer conn.Close()
 		go conn.Connect(c, cancel)
 		go conn.Broadcast(c, outgoing)
-		log.Printf("your address to share is -relay %s -room %s -secret %s\n", conn.addr, cfg.Room, cfg.Secret)
+		log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
 	} else {
 		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, file)
 		if err != nil && parent.Err() != nil {
@@ -111,14 +138,20 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	entries := 0
+	if playlist {
+		entries = len(files)
+		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
+	}
+	args = append(args, files...)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
 	out := &lineLog{l: log.Default()}
 	cmd.Stdout, cmd.Stderr = out, out
 
-	err = cmd.Start()
+	err := cmd.Start()
 	if err != nil {
 		return err
 	}
@@ -146,7 +179,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming)
+	}, conn, outgoing, incoming, entries)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():
@@ -198,13 +231,13 @@ func (w *lineLog) Write(p []byte) (int, error) {
 	}
 }
 
-// notReady reports mpv exiting before the movie was loaded. Exit 0 is the user
+// notReady reports mpv exiting before the video was loaded. Exit 0 is the user
 // closing it, which is a normal end; mpv exits non-zero for a bad file or flag.
 func notReady(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("mpv exited before the movie was ready: %w", err)
+	return fmt.Errorf("mpv exited before the video was ready: %w", err)
 }
 
 func waitExit(exited <-chan error, grace time.Duration) error {
@@ -214,6 +247,13 @@ func waitExit(exited <-chan error, grace time.Duration) error {
 	case <-time.After(grace):
 		return errHungUp
 	}
+}
+
+func (cfg Config) playlistFlag() string {
+	if cfg.Playlist {
+		return " -playlist"
+	}
+	return ""
 }
 
 func stopReason(parent context.Context) error {
@@ -350,7 +390,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 	}
 
-	log.Printf("your address to share is -addrs %s -secret %s\n", address, cfg.Secret)
+	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())
 
 	// callers defer this, so it runs in Run and keeps the original LIFO order:
 	// /bye first, then the http server, then the upnp mapping

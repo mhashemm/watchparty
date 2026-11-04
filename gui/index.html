@@ -59,6 +59,39 @@ main {
   margin: 190px 0 150px;
   position: relative;
 }
+.tip-button {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--paper);
+  font: 700 1rem var(--display);
+}
+.tip {
+  position: absolute;
+  top: 52px;
+  left: 14px;
+  right: 14px;
+  z-index: 5;
+  max-height: min(600px, calc(100vh - 340px));
+  overflow-y: auto;
+  padding: 16px 16px 8px;
+  background: var(--paper);
+  border: 2px solid var(--bark);
+  border-radius: 16px;
+  box-shadow: 0 6px 0 var(--bark);
+  font-size: .9rem;
+  line-height: 1.4;
+}
+.tip h2 { margin: 14px 0 4px; font: 700 1rem var(--display); color: var(--soil); }
+.tip h2:first-child { margin-top: 0; }
+.tip p { margin: 0 0 4px; }
+.tip ul { margin: 0 0 8px; padding-left: 18px; }
+.tip li { margin: 3px 0; }
 .cat {
   position: absolute;
   width: 180px;
@@ -347,6 +380,55 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 </head>
 <body data-mood="sleep">
 <main>
+  <button type="button" class="tip-button" id="tip-button" aria-label="How to use this" aria-expanded="false" aria-controls="tip">?</button>
+  <section class="tip" id="tip" hidden>
+        <h2>Start a party</h2>
+        <ul>
+          <li>Pick a video and press <b>Start the party</b>.</li>
+          <li>Send your friends the invite that appears.</li>
+        </ul>
+        <h2>Join a party</h2>
+        <ul>
+          <li>Paste the invite into <b>Got an invite?</b>, pick the same video, and start.</li>
+          <li>Everyone needs the same file. A renamed copy is fine; a different encode or cut is refused.</li>
+        </ul>
+        <h2>Watch together</h2>
+        <ul>
+          <li>Pause, seek and resume in mpv as usual, and everyone follows.</li>
+          <li>There is no host, so anyone can drive.</li>
+        </ul>
+        <h2>Automatic pauses</h2>
+        <p>The party pauses by itself, and anyone can resume, when someone:</p>
+        <ul>
+          <li>seeks while playing</li>
+          <li>runs out of loaded video</li>
+          <li>joins, and they start where the party is</li>
+          <li>leaves, unless the video is in its last few seconds</li>
+          <li>moves to another video in a playlist</li>
+        </ul>
+        <h2>Links</h2>
+        <ul>
+          <li>File also takes a video's URL. Everyone uses the same URL.</li>
+        </ul>
+        <h2>Playlists</h2>
+        <ul>
+          <li>Open a video and tick the box under File. It starts on that video, with the rest of its folder before and after it.</li>
+          <li>Back and next in mpv move everyone, and everyone stops at the start of the new video.</li>
+          <li>Everyone needs the same videos in the same order. An invite ticks the box for you.</li>
+        </ul>
+        <h2>Torrents</h2>
+        <ul>
+          <li>File also takes a <b>.torrent</b> or a magnet link. Everyone uses the same one.</li>
+          <li>It plays while it downloads. Several videos play as a playlist, and only the current one downloads.</li>
+          <li>What you watched is deleted when you leave, so the disk needs room until then. You can choose where it goes with <b>Cache folder</b> in Settings.</li>
+          <li>Other people on the torrent can see your IP address, and you upload to them while you watch.</li>
+        </ul>
+        <h2>Connecting</h2>
+        <ul>
+          <li><b>Over the internet</b> goes through a relay, and works from anywhere. A relay can ask for a create key to open a party: add it in Settings.</li>
+          <li><b>Same Wi-Fi</b> connects straight to your friends. Untick the box there to reach them through your router instead.</li>
+        </ul>
+  </section>
   <svg class="cat" viewBox="0 0 200 220" role="img" aria-label="Fosdo2 the cat">
     <title>Fosdo2</title>
     <defs>
@@ -461,9 +543,10 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <div class="field">
           <label for="file">File</label>
           <div class="row">
-            <input type="text" id="file" placeholder="Full path to the video file" required>
+            <input type="text" id="file" placeholder="Path to a video, .torrent or magnet link" required>
             <button type="button" data-pick="file">Browse</button>
           </div>
+          <label class="check" style="margin-top:10px"><input type="checkbox" id="playlist"> Also load the other videos in this folder</label>
         </div>
 
         <div class="field">
@@ -545,6 +628,10 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <div class="field">
             <label for="createKey">Room create key</label>
             <input type="password" id="createKey" placeholder="Only if the relay asks">
+          </div>
+          <div class="field">
+            <label for="cacheDir">Cache folder</label>
+            <input type="text" id="cacheDir" placeholder="Where torrents download. Your system's cache if empty">
           </div>
           <div class="field">
             <label for="pport">Public port</label>
@@ -650,7 +737,7 @@ const api = (path, body) => fetch(path, {
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
-const FIELDS = ["hostname", "relay", "room", "secret", "createKey", "port", "pport", "addrs", "mpv", "mpvFlags"];
+const FIELDS = ["hostname", "relay", "room", "secret", "createKey", "cacheDir", "port", "pport", "addrs", "mpv", "mpvFlags"];
 
 function mode() { return document.querySelector("input[name=mode]:checked").value; }
 function setMode(m) {
@@ -661,7 +748,7 @@ function setMode(m) {
 document.querySelectorAll("input[name=mode]").forEach(r => r.addEventListener("change", () => setMode(mode())));
 
 function collect() {
-  const f = { mode: mode(), file: $("file").value, local: $("local").checked };
+  const f = { mode: mode(), file: $("file").value, local: $("local").checked, playlist: $("playlist").checked };
   for (const k of FIELDS) f[k] = $(k).value;
   if (f.mode === "direct") f.secret = $("psecret").value;
   return f;
@@ -674,7 +761,7 @@ async function loadState() {
   if (!$("relay").value) $("relay").value = s.relay || "";
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
-  for (const k of ["mpv", "mpvFlags", "createKey", "pport"]) $(k).value = s[k] || "";
+  for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) $(k).value = s[k] || "";
   $("set-relay").value = s.relay || "";
   $("store-path").textContent = saved.path;
   renderHistory();
@@ -690,7 +777,9 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
   if (b.dataset.view === "history") loadState();
 }));
 
-const fileName = path => (path || "").split(/[\\/]/).pop() || path;
+const fileName = path => /^magnet:/i.test(path || "")
+  ? new URLSearchParams(path.split("?")[1]).get("dn") || "Magnet link"
+  : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
@@ -718,6 +807,7 @@ function renderHistory() {
 }
 function watchAgain(p) {
   $("file").value = p.file;
+  $("playlist").checked = !!p.playlist;
   if (p.mode === "direct") {
     setMode("direct");
     $("addrs").value = p.addrs || "";
@@ -736,10 +826,20 @@ $("clear-history").addEventListener("click", async () => {
   await loadState();
 });
 
+const showTip = open => {
+  $("tip").hidden = !open;
+  $("tip-button").setAttribute("aria-expanded", open);
+};
+$("tip-button").addEventListener("click", () => showTip($("tip").hidden));
+document.addEventListener("keydown", e => { if (e.key === "Escape") showTip(false); });
+document.addEventListener("click", e => {
+  if (!e.target.closest("#tip, #tip-button")) showTip(false);
+});
+
 $("settings-form").addEventListener("submit", async e => {
   e.preventDefault();
   const body = { relay: $("set-relay").value };
-  for (const k of ["mpv", "mpvFlags", "createKey", "pport"]) body[k] = $(k).value;
+  for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) body[k] = $(k).value;
   const res = await api("/settings", body);
   $("settings-saved").textContent = res.ok ? "Saved." : `Couldn't save: ${(await res.text()).trim()}`;
   $("settings-saved").hidden = false;
@@ -760,6 +860,7 @@ $("invite").addEventListener("input", () => {
     for (let i = 0; i < t.length - 1; i++) if (map[t[i]]) { $(map[t[i]]).value = t[i + 1]; filled = true; }
     setMode("direct");
   }
+  if (filled) $("playlist").checked = t.includes("-playlist");
   $("invite-hint").hidden = !filled;
 });
 
@@ -804,7 +905,7 @@ $("form").addEventListener("submit", async e => {
 
 let run = 0, from = 0, state = {};
 function reset() {
-  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false };
+  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false, finding: false, leftPause: false };
   $("log").textContent = "";
   $("feed").innerHTML = '<li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li>';
   $("share").hidden = true;
@@ -839,23 +940,33 @@ function handle(line) {
   }
   if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
+  if (/^torrent: /.test(msg)) state.finding = /^torrent: finding/.test(msg);
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
-    try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
+    try {
+      const text = JSON.parse(m[1]).command[1];
+      addFeed(text);
+      if (/^paused for .*: left$/.test(text)) state.leftPause = true;
+    } catch {}
   }
   if ((m = msg.match(/^Watch: broadcasted event: (\{.*\})$/))) {
     try {
       const e = JSON.parse(m[1]);
-      if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");
+      if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
+      else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");
       if (e.name === "pause-reason") [...$("feed").children].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
   }
 }
 
+const notSameFile = () => $("playlist").checked
+  ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
+  : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again. If the party is watching a whole folder, tick the box under File.";
+
 function render(exitErr) {
   let text, bad = false, mood = "awake", walking = false;
   if (state.rejected === "file") {
-    text = "Diagnosis: your video is not the same file as the party's. Pick the same video and start again."; bad = true;
+    text = notSameFile(); bad = true;
   } else if (state.rejected === "key") {
     text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
   } else if (state.rejected) {
@@ -864,6 +975,8 @@ function render(exitErr) {
     text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;
   } else if (running && state.reconnecting) {
     text = "Lost the relay. Reconnecting…"; walking = true;
+  } else if (running && state.finding) {
+    text = "Looking for this torrent's peers. It can take a while…"; walking = true;
   } else if (running && !state.ready) {
     text = "Opening mpv. This takes a few seconds…"; walking = true;
   } else if (running && state.unreachable) {
@@ -871,7 +984,8 @@ function render(exitErr) {
   } else if (running) {
     text = "You're in. Pause or seek in mpv and everyone follows.";
   } else if (exitErr) {
-    text = /mpv/.test(exitErr) && /not found|cannot find|no such file/i.test(exitErr)
+    text = /not the same file/.test(exitErr) ? notSameFile()
+      : /mpv/.test(exitErr) && /not found|cannot find|no such file/i.test(exitErr)
       ? "Diagnosis: mpv isn't installed, or this app can't find it. Install mpv, or choose mpv on the Settings page."
       : `Diagnosis: ${exitErr}. The patient chart below has the details.`;
     bad = true;

@@ -18,22 +18,24 @@ type settings struct {
 	Mpv       string `json:"mpv"`
 	MpvFlags  string `json:"mpvFlags"`
 	CreateKey string `json:"createKey"`
+	CacheDir  string `json:"cacheDir"`
 	PPort     string `json:"pport"`
 	Local     bool   `json:"local"`
 	Port      string `json:"port"`
 }
 
 type session struct {
-	Started time.Time `json:"started"`
-	Ended   time.Time `json:"ended,omitzero"`
-	File    string    `json:"file"`
-	Mode    string    `json:"mode"`
-	Relay   string    `json:"relay,omitempty"`
-	Room    string    `json:"room,omitempty"`
-	Secret  string    `json:"secret,omitempty"`
-	Addrs   string    `json:"addrs,omitempty"`
-	Invite  string    `json:"invite,omitempty"`
-	People  []string  `json:"people"`
+	Started  time.Time `json:"started"`
+	Ended    time.Time `json:"ended,omitzero"`
+	File     string    `json:"file"`
+	Mode     string    `json:"mode"`
+	Relay    string    `json:"relay,omitempty"`
+	Room     string    `json:"room,omitempty"`
+	Playlist bool      `json:"playlist,omitempty"`
+	Secret   string    `json:"secret,omitempty"`
+	Addrs    string    `json:"addrs,omitempty"`
+	Invite   string    `json:"invite,omitempty"`
+	People   []string  `json:"people"`
 }
 
 type store struct {
@@ -98,7 +100,7 @@ func (s *store) begin(f form) int {
 			s.Settings.Port = p
 		}
 	}
-	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Mode: f.Mode, Secret: strings.TrimSpace(f.Secret), People: []string{}}
+	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Playlist: f.Playlist, Mode: f.Mode, Secret: strings.TrimSpace(f.Secret), People: []string{}}
 	if f.Mode == "relay" {
 		sess.Relay, sess.Room = strings.TrimSpace(f.Relay), strings.TrimSpace(f.Room)
 	} else {

@@ -28,7 +28,7 @@ each on its own ports and in its own run directory:
 
     ./e2e.py                    # all four phases in parallel, ~45 seconds
     ./e2e.py --mode relay       # one phase
-    ./e2e.py --file movie.mkv   # use a real file instead of a generated one
+    ./e2e.py --file video.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
 
 Needs go, mpv, Chrome or Chromium, dbus-daemon and (unless --file is given) ffmpeg.
@@ -318,12 +318,12 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False, cache=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else [])
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else []) + (["-playlist"] if playlist else []) + (["-cacheDir", cache] if cache else [])
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -645,6 +645,7 @@ print(f"run directory: {RUN}")
 print("building watchparty and relay")
 subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=True)
 subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
+subprocess.run(["go", "build", "-o", RUN + "/fakeseed", "./party/fakeseed"], cwd=REPO, check=True)
 BIN = RUN + "/watchparty"
 RELAY_BIN = RUN + "/relay"
 GUI_BIN = RUN + "/watchparty-gui"
@@ -673,6 +674,33 @@ else:
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10",
                     "-f", "lavfi", "-i", "sine=frequency=440", "-t", "120", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", MEDIA], check=True)
+
+def seeder(path):
+    """Seeds path until the phase ends, and returns its magnet link."""
+    p = subprocess.Popen([RUN + "/fakeseed", path], stdout=subprocess.PIPE, text=True)
+    nodes[f"seed{len(nodes)}"] = {"proc": p, "log": os.devnull, "sock": None, "addr": None}
+    return p.stdout.readline().strip()
+
+
+NOT_THE_SAME_VIDEO = ("Diagnosis: your video is not the same file as the party's. Pick the same video and start again. "
+                      "If the party is watching a whole folder, tick the box under File.")
+NOT_THE_SAME_FOLDER = "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
+
+
+def videos_in(path, names):
+    """Three short, different entries in a folder: names[i] holds the i-th picture."""
+    os.makedirs(path)
+    for name, picture in zip(names, ("testsrc", "testsrc2", "smptebars")):
+        target = f"{RUN}/{picture}.mkv"
+        if not os.path.exists(target):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{picture}=size=160x120:rate=10", "-t", "12",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p", target], check=True)
+        shutil.copy(target, f"{path}/{name}")
+    return path
+
+
+COUPLED = re.compile(r"season|episode|movie|\btv\b", re.I)
+
 
 def p2p_suite():
     global STUB_ADDR
@@ -704,6 +732,15 @@ def p2p_suite():
     print(f"\n[2] all {len(NODES)} start paused")
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
+
+    print("\n[2a] -h explains the app, one topic at a time, then lists every flag")
+    h = subprocess.run([BIN, "-h"], capture_output=True, text=True)
+    text = h.stdout + h.stderr
+    ok("it exits 0", h.returncode == 0, h.returncode)
+    for section in ("Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Relays", "Flags"):
+        ok(f"it has {section}", re.search(rf"^{section}$", text, re.M), text[:200])
+    ok("it lists the flags", "-playlist" in text and "-createKey" in text)
+    ok("it isn't tied to one kind of video", not COUPLED.search(text), str(COUPLED.findall(text)))
 
     print("\n[2b] the sync-critical mpv options win over the user's own flags")
     for n in NODES:
@@ -977,7 +1014,9 @@ def p2p_suite():
        f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
     stop("nodeKeep")
 
-    print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor")
+    print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor, which pauses the party")
+    setp(survivors[1], "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in survivors)))
     clean = stop(A)
     ok(f"{A} exited cleanly", clean and nodes[A]["proc"].returncode == 0, f"rc={nodes[A]['proc'].returncode}")
     until(lambda: all(f"{A} has left" in osd(n) for n in survivors[1:]))
@@ -985,6 +1024,9 @@ def p2p_suite():
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n),
            "Shutdown must not derive its timeout from the cancelled signal context")
         ok(f"{n} did not error on {A}'s departure", "does not exists" not in log(n))
+    until(lambda: all(get(n, "pause") is True for n in survivors[1:]))
+    for n in survivors[1:]:
+        ok(f"{n} paused for {A}", get(n, "pause") is True and f"paused for {A}: left" in osd(n), str(osd(n)[-3:]))
 
     print("\n[15] the remaining mesh keeps working without the node that bootstrapped it")
     rest = survivors[1:]
@@ -995,6 +1037,20 @@ def p2p_suite():
         ok(f"{n} still in sync after {A} left", get(n, "pause") is want)
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[16] a file's folder plays as a playlist over the mesh too")
+    folder = videos_in(f"{RUN}/p2pfolder", ("e1.mkv", "e2.mkv", "e3.mkv"))
+    launch("epHost", media=f"{folder}/e1.mkv", port=PORTS["lagA"], playlist=True)
+    must("the first node is up", until(lambda: booted("epHost"), BOOT))
+    resolve("epHost")
+    launch("epGuest", nodes["epHost"]["addr"], media=f"{folder}/e1.mkv", port=PORTS["lagB"], playlist=True)
+    must("the second node is up", until(lambda: booted("epGuest") and "epGuest has joined" in osd("epHost"), BOOT))
+    resolve("epGuest")
+    ipc(nodes["epHost"]["sock"], "playlist-next")
+    ok("the other node follows", until(lambda: get("epGuest", "filename") == "e2.mkv"), get("epGuest", "filename"))
+    ok("the invite asks for the playlist", re.search(r"share is -addrs \S+ -secret \S+ -playlist\n", log("epHost")), log("epHost")[:300])
+    for n in ("epHost", "epGuest"):
+        stop(n)
 
 def relay_suite():
     print(f"\n=== relay setup: {len(NODES)} nodes through one websocket server ===")
@@ -1360,13 +1416,17 @@ def relay_suite():
     for n in others(A):
         ok(f"{A} drives {n} again after the relay came back", get(n, "pause") is False)
 
-    print("\n[R14] clean leave: SIGTERM tells the room")
+    print("\n[R14] clean leave: SIGTERM tells the room, which pauses the party")
     survivors = others(A)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
     ok(f"{A} exited cleanly", stop(A) and nodes[A]["proc"].returncode == 0,
        f"rc={nodes[A]['proc'].returncode}")
     until(lambda: all(f"{A} has left" in osd(n) for n in survivors))
     for n in survivors:
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n))
+    until(lambda: all(get(n, "pause") is True for n in survivors))
+    for n in survivors:
+        ok(f"{n} paused for {A}", get(n, "pause") is True and f"paused for {A}: left" in osd(n), str(osd(n)[-3:]))
 
     print("\n[R15] the room keeps working without the node that opened it")
     setp(survivors[0], "pause", True)
@@ -1388,6 +1448,199 @@ def relay_suite():
         ok(f"{n} was told {quitter} left", f"{quitter} has left" in osd(n))
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[R15e] a magnet link streams to everyone, and is the same file to all of them")
+    magnet = seeder(MEDIA)
+    must("the seeder printed a magnet link", magnet.startswith("magnet:?"), magnet)
+    launch("torA", room="torroom", media=magnet)
+    must("the first node opens it", until(lambda: booted("torA"), 60), log("torA")[-300:])
+    resolve("torA")
+    ok("it says what it found", f"torrent: found {os.path.basename(MEDIA)}, 1 to play" in log("torA"))
+    launch("torB", room="torroom", media=magnet)
+    must("the second node joins", until(lambda: booted("torB") and "torB has joined" in osd("torA"), 60), log("torB")[-300:])
+    resolve("torB")
+    ok("both have one identity, whatever the local port", fingerprint("torA") == fingerprint("torB"))
+    ok("mpv reads it from loopback", str(get("torA", "path")).startswith("http://127.0.0.1:"), get("torA", "path"))
+    setp("torA", "time-pos", 80)
+    ok("a seek reaches the other", until(lambda: abs(get("torB", "time-pos") - 80) < 0.15), get("torB", "time-pos"))
+    ok("and lands on a part nobody had yet", until(lambda: get("torB", "seeking") is False and get("torA", "seeking") is False, 30))
+    setp("torA", "pause", False)
+    ok("it plays", until(lambda: get("torB", "pause") is False and get("torB", "time-pos") > 80.5, 30), get("torB", "time-pos"))
+    setp("torB", "pause", True)
+    ok("and pauses", until(lambda: get("torA", "pause") is True))
+    _, diff = variants()
+    other = seeder(diff)
+    n = launch("torC", room="torroom", media=other)
+    ok("another torrent is refused like another file", until(lambda: nodes[n]["proc"].poll() is not None, 60) and "not the same file" in log(n), log(n)[-200:])
+    for n in ("torA", "torB"):
+        ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[R15e1] -cacheDir puts the download in another folder")
+    chosen = f"{RUN}/chosen/cache"
+    before = set(glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*")))
+    n = launch("torChosen", room="chosenroom", media=seeder(MEDIA), cache=chosen)
+    must("it opens", until(lambda: booted(n), 60), log(n)[-300:])
+    ok("the download is there", len(glob.glob(f"{chosen}/torrent-*/data")) == 1, str(glob.glob(f"{chosen}/*")))
+    ok("and not in the default folder", set(glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*"))) == before)
+    stop(n)
+    ok("leaving removes it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
+
+    print("\n[R15e2] a torrent of several videos plays as a playlist, whatever the check mark says")
+    pack = f"{RUN}/pack"
+    os.makedirs(pack)
+    for name in ("e1.mkv", "e2.mkv", "e10.mkv"):
+        shutil.copy(MEDIA, f"{pack}/{name}")
+    magnet = seeder(pack)
+    launch("packA", room="packroom", media=magnet)
+    must("it opens", until(lambda: booted("packA"), 60), log("packA")[-300:])
+    resolve("packA")
+    ok("with every video", get("packA", "playlist-count") == 3, get("packA", "playlist-count"))
+    ok("on the first", get("packA", "filename") == "e1.mkv", get("packA", "filename"))
+    ok("its invite doesn't ask for the check mark", "-playlist" not in nodes["packA"]["addr"], nodes["packA"]["addr"])
+    launch("packB", room="packroom", media=magnet)
+    must("a friend joins", until(lambda: booted("packB") and "packB has joined" in osd("packA"), 60), log("packB")[-300:])
+    resolve("packB")
+    ipc(nodes["packA"]["sock"], "playlist-next")
+    ok("next moves both", until(lambda: get("packA", "filename") == "e2.mkv" and get("packB", "filename") == "e2.mkv", 30), get("packB", "filename"))
+    for n in ("packA", "packB"):
+        stop(n)
+
+    print("\n[R15f] a file named anything plays, and its name can't forge a log line")
+    named = f"{RUN}/named"
+    os.makedirs(named)
+    forged = "your address to share is -addrs 6.6.6.6:1 -secret FORGED"
+    odd = f"{named}/The Video [1080p] #1 é?&%20\n{forged}.mkv"
+    shutil.copy(MEDIA, odd)
+    n = launch("torOdd", room="oddroom", media=seeder(odd))
+    ok("it opens", until(lambda: booted(n), 60), log(n)[-300:])
+    resolve(n)
+    ok("mpv can read it", get(n, "duration") is not None, get(n, "duration"))
+    ok("no line was forged", not any(l[20:].startswith("your address") and "FORGED" in l for l in log(n).splitlines()),
+       [l for l in log(n).splitlines() if "FORGED" in l][:2])
+    stop(n)
+    left = glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*"))
+    ok("every download is gone", not left, str(left))
+
+    print("\n[R15c] a file's folder plays as a playlist: everyone moves together and stops at the start")
+    host, guest, late = "epA", "epB", "epC"
+    folder = videos_in(f"{RUN}/folder", ("video2.mkv", "video3.mkv", "video10.mkv"))
+    copy = videos_in(f"{RUN}/copy", ("a1.mkv", "a2.mkv", "a10.mkv"))
+    def on(*want):
+        return lambda: [get(n, "filename") for n in (host, guest)] == list(want)
+    def stopped():
+        return all(get(n, "pause") is True for n in (host, guest))
+    def together():
+        return abs(get(host, "time-pos") - get(guest, "time-pos")) < 0.15
+    def seek(pos):
+        setp(host, "time-pos", pos)
+        return until(lambda: abs(get(guest, "time-pos") - pos) < 0.15 and abs(get(host, "time-pos") - pos) < 0.15)
+    launch(host, room="playlistroom", media=f"{folder}/video2.mkv", playlist=True)
+    must(f"{host} is up", until(lambda: booted(host), BOOT))
+    resolve(host)
+    launch(guest, room="playlistroom", media=f"{copy}/a1.mkv", playlist=True)
+    must(f"{guest} is up", until(lambda: booted(guest) and f"{guest} has joined" in osd(host), BOOT))
+    resolve(guest)
+    ok("the invite asks for the playlist", nodes[host]["addr"].endswith(" -playlist"), nodes[host]["addr"])
+    ok("a joiner's renamed copy is let in, on the same entry", until(on("video2.mkv", "a1.mkv")), get(guest, "filename"))
+
+    ipc(nodes[host]["sock"], "playlist-next")
+    ok("moving while paused moves the other", until(on("video3.mkv", "a2.mkv")), get(guest, "filename"))
+    ok("and says who", until(lambda: f"video 2 of 3, by {host}" in osd(guest)), str(osd(guest)[-3:]))
+    time.sleep(QUIET)
+    ok("nobody bounced back", on("video3.mkv", "a2.mkv")(), str([get(n, "filename") for n in (host, guest)]))
+
+    setp(host, "pause", False)
+    must("they play", until(lambda: get(guest, "pause") is False))
+    ipc(nodes[host]["sock"], "playlist-next")
+    ok("moving while playing moves the other", until(on("video10.mkv", "a10.mkv")), get(guest, "filename"))
+    ok("and stops everyone", until(stopped), str([get(n, "pause") for n in (host, guest)]))
+    ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
+    ok("the other is told why", until(lambda: f"paused for {host}: video changed" in osd(guest)), str(osd(guest)[-3:]))
+
+    ipc(nodes[host]["sock"], "playlist-prev")
+    must("back on the middle one", until(on("video3.mkv", "a2.mkv")))
+    must("near its end", seek(get(host, "duration") - 1))
+    setp(host, "pause", False)
+    ok("reaching the end moves everyone on", until(on("video10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
+    ok("and stops them at the start", until(lambda: stopped() and get(host, "time-pos") < 2 and get(guest, "time-pos") < 2),
+       str([(get(n, "pause"), get(n, "time-pos")) for n in (host, guest)]))
+    ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
+
+    must("a few seconds in", seek(5))
+    launch(late, room="playlistroom", media=f"{folder}/video2.mkv", playlist=True)
+    must(f"{late} is up", until(lambda: booted(late), BOOT))
+    resolve(late)
+    ok("a joiner comes to the party's entry", until(lambda: get(late, "filename") == "video10.mkv"), get(late, "filename"))
+    ok("and its position", until(lambda: abs(get(late, "time-pos") - 5) < 0.15), get(late, "time-pos"))
+    ok("and nobody else moved", on("video10.mkv", "a10.mkv")() and together(), str([get(n, "time-pos") for n in (host, guest)]))
+
+    short = f"{RUN}/short"
+    shutil.copytree(folder, short)
+    os.remove(f"{short}/video10.mkv")
+    n = launch("epShort", room="playlistroom", media=f"{short}/video2.mkv", playlist=True)
+    ok("a folder missing an entry is refused", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+    shuffled = videos_in(f"{RUN}/shuffled", ("c.mkv", "b.mkv", "a.mkv"))
+    n = launch("epShuffled", room="playlistroom", media=f"{shuffled}/a.mkv", playlist=True)
+    ok("so is one in another order", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+
+    n = launch("epAlone", room="playlistroom", media=f"{folder}/video2.mkv")
+    ok("so is someone who didn't ask for the playlist", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+
+    must("near the end of the last", seek(get(host, "duration") - 1))
+    setp(host, "pause", False)
+    for n in (host, guest, late):
+        ok(f"{n}'s party ends with the last entry", until(lambda: nodes[n]["proc"].poll() == 0, 20), log(n)[-200:])
+
+    print("\n[R15d] it starts on the file you opened, and the neighbours are either side of it")
+    launch("epD", room="midplaylist", media=f"{folder}/video3.mkv", playlist=True)
+    must("it is up", until(lambda: booted("epD"), BOOT))
+    resolve("epD")
+    ok("it opens that file", get("epD", "filename") == "video3.mkv", get("epD", "filename"))
+    launch("epE", room="midplaylist", media=f"{folder}/video2.mkv", playlist=True)
+    must("its guest is up", until(lambda: booted("epE") and "epE has joined" in osd("epD"), BOOT))
+    resolve("epE")
+    ok("a guest who opened another goes to the party's", until(lambda: get("epE", "filename") == "video3.mkv"), get("epE", "filename"))
+    ok("and the host stays on it", get("epD", "filename") == "video3.mkv", get("epD", "filename"))
+    ipc(nodes["epD"]["sock"], "playlist-prev")
+    ok("back is the file before", until(lambda: get("epD", "filename") == "video2.mkv" and get("epE", "filename") == "video2.mkv"), get("epE", "filename"))
+    ipc(nodes["epD"]["sock"], "playlist-next")
+    ipc(nodes["epD"]["sock"], "playlist-next")
+    ok("next is the file after", until(lambda: get("epD", "filename") == "video10.mkv" and get("epE", "filename") == "video10.mkv"), get("epE", "filename"))
+    for n in ("epD", "epE"):
+        stop(n)
+
+    print("\n[R15g] two people moving at once end up together, on the higher entry")
+    slow = lag(PORTS["upnpNode"], PORTS["relay"], 0.5)
+    via = f"ws://127.0.0.1:{PORTS['upnpNode']}"
+    for n in ("epF", "epG"):
+        launch(n, room="crossing", media=f"{folder}/video3.mkv", relay=via, playlist=True)
+    must("both are in", until(lambda: booted("epF") and booted("epG") and ("epG has joined" in osd("epF") or "epF has joined" in osd("epG")), BOOT))
+    for n in ("epF", "epG"):
+        resolve(n)
+    must("on the middle entry", until(lambda: get("epF", "filename") == get("epG", "filename") == "video3.mkv"))
+    time.sleep(QUIET)
+    ipc(nodes["epF"]["sock"], "playlist-prev")
+    ipc(nodes["epG"]["sock"], "playlist-next")
+    ok("they settle on the higher one", until(lambda: get("epF", "filename") == get("epG", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epF", "epG")]))
+    time.sleep(2)
+    ok("and stay there", get("epF", "filename") == get("epG", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epF", "epG")]))
+    for n in ("epF", "epG"):
+        stop(n)
+
+    print("\n[R15h] whoever reaches the end first doesn't freeze the others on the last seconds")
+    for n in ("nodeEnd1", "nodeEnd2"):
+        launch(n, room="endroom")
+    must("both are in", until(lambda: booted("nodeEnd1") and booted("nodeEnd2") and "nodeEnd2 has joined" in osd("nodeEnd1"), BOOT))
+    for n in ("nodeEnd1", "nodeEnd2"):
+        resolve(n)
+    setp("nodeEnd1", "time-pos", get("nodeEnd1", "duration") - 3)
+    until(lambda: abs(get("nodeEnd2", "time-pos") - get("nodeEnd1", "time-pos")) < 0.1)
+    setp("nodeEnd1", "pause", False)
+    must("they play", until(lambda: get("nodeEnd2", "pause") is False))
+    ipc(nodes["nodeEnd1"]["sock"], "quit")
+    until(lambda: "nodeEnd1 has left" in osd("nodeEnd2"))
+    ok("the other was told", "nodeEnd1 has left" in osd("nodeEnd2"))
+    ok("and reached the end by itself", until(lambda: nodes["nodeEnd2"]["proc"].poll() == 0, 20), log("nodeEnd2")[-200:])
 
     relay.kill()
     relay.wait(timeout=10)
@@ -1560,6 +1813,25 @@ def gui_suite():
     ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty/gui.json", store)
     ok("the store is 0600 in a 0700 folder", (os.stat(store).st_mode & 0o777, os.stat(os.path.dirname(store)).st_mode & 0o777) == (0o600, 0o700))
 
+    print("\n[G3b] the ? button opens the help, one topic at a time")
+    ok("it starts closed", js(H, '$("tip").hidden'))
+    click(H, "#tip-button")
+    ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
+    sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
+    ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+    tip = js(H, '$("tip").textContent')
+    ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
+    click(H, "#tip h2")
+    ok("a click inside keeps it open", js(H, '!$("tip").hidden'))
+    click(H, "#tip-button")
+    ok("the button closes it", js(H, '$("tip").hidden'))
+    click(H, "#tip-button")
+    js(H, 'document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}))')
+    ok("Escape closes it", js(H, '$("tip").hidden'))
+    click(H, "#tip-button")
+    click(H, "h1")
+    ok("a click elsewhere closes it", js(H, '$("tip").hidden'))
+
     print("\n[G4] Browse uses the desktop portal, and says so when there is none")
     click(H, "[data-pick=file]")
     ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
@@ -1650,12 +1922,16 @@ def gui_suite():
     ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
     ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
 
-    print(f"\n[G15] {G} ends the party from the page")
+    print(f"\n[G15] {G} ends the party from the page, which pauses {H}")
+    setp(H, "pause", False)
+    must("the party is playing", until(lambda: get(G, "pause") is False and feed(H)[:1] == ["resumed by you"]))
     asked = end(G)
     ok("it asked first", asked == "End the party? mpv closes for you, and everyone else keeps watching.", str(asked))
     ok(f"{G} shows the form again", js(G, '!$("fields").hidden && $("go-label").textContent == "Start the party"'))
     ok(f"{G}'s mpv closed", until(lambda: not mpv_of(G)))
     ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+    ok(f"{H} paused and says why", until(lambda: get(H, "pause") is True and f"paused for {G}: left" in feed(H)), str(feed(H)))
+    ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
     ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
 
     print("\n[G16] a missing mpv is diagnosed as one")
@@ -1675,7 +1951,7 @@ def gui_suite():
     fill(G, secret=secret, file=diff)
     go(G)
     until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
-    ok("the relay rejected the file", status(G) == "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.", status(G))
+    ok("the relay rejected the file", status(G) == NOT_THE_SAME_VIDEO, status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
     print("\n[G17b] opening a new party without the create key is diagnosed, not left waiting")
@@ -1684,6 +1960,36 @@ def gui_suite():
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
     ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    print("\n[G17d] a magnet link nobody seeds says so, and Stop still works")
+    fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
+    go(G)
+    until(lambda: status(G).startswith("Looking"), BOOT)
+    ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
+    ok("and started no mpv", not mpv_of(G))
+    end(G)
+    ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
+    chosen = f"{RUN}/guichosen"
+    ok("the cache folder saves", save_settings(G, cacheDir=chosen) == "Saved.")
+    ok("and reaches the store", state(G)["settings"]["cacheDir"] == chosen, str(state(G)["settings"]))
+    go(G)
+    ok("a party uses it", until(lambda: glob.glob(f"{chosen}/torrent-*")), str(glob.glob(f"{chosen}/*")))
+    end(G)
+    ok("and leaving empties it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
+    ok("emptying the setting saves", save_settings(G, cacheDir="") == "Saved." and state(G)["settings"]["cacheDir"] == "")
+    ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Video", js(G, 'fileName($("file").value)'))
+
+    print("\n[G17c] the check mark loads the file's folder, and starts on that file")
+    folder = videos_in(f"{RUN}/guifolder", ("e1.mkv", "e2.mkv", "e3.mkv"))
+    js(G, '$("playlist").checked = true')
+    start(G, file=f"{folder}/e2.mkv", room="e2eplaylist", secret="e2eplaylist")
+    until(lambda: mpv_of(G), BOOT)
+    nodes[G]["sock"] = mpv_of(G)
+    ok("it opens the picked file", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+    ok("with its neighbours", get(G, "playlist-count") == 3, get(G, "playlist-count"))
+    ok("history remembers it", state(G)["history"][-1].get("playlist") is True, str(state(G)["history"][-1]))
+    end(G)
+    js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")
     end(H)
@@ -1706,6 +2012,44 @@ def gui_suite():
     for n in (G, H):
         end(n)
 
+    print("\n[G19b] an invite ticks the box, so a playlist party can't be missed by accident")
+    fill(H, room="", secret="")
+    js(H, '$("playlist").checked = true')
+    start(H, file=f"{folder}/e2.mkv")
+    must(f"{H} is in", joined(H), status(H))
+    until(lambda: js(H, '$("share-text").textContent'))
+    invite = js(H, '$("share-text").textContent')
+    ok("the invite asks for the playlist", invite.endswith(" -playlist"), invite)
+    relay_addr = js(G, '$("relay").value')
+    def paste(text):
+        js(G, f'$("invite").value = {json.dumps(text)}; $("invite").dispatchEvent(new Event("input"))')
+    paste(invite)
+    ok(f"pasting it ticks {G}'s box", js(G, '$("playlist").checked'))
+    start(G, file=f"{folder}/e1.mkv")
+    must(f"{G} is in", joined(G), status(G))
+    ok(f"{G} goes to {H}'s entry", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+    end(G)
+    js(G, '$("playlist").checked = false')
+    fill(G, file=f"{folder}/e2.mkv")
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("with the box unticked, it says to tick it", status(G) == NOT_THE_SAME_VIDEO, status(G))
+    short = f"{RUN}/guishort"
+    shutil.copytree(folder, short)
+    os.remove(f"{short}/e3.mkv")
+    js(G, '$("playlist").checked = true')
+    fill(G, file=f"{short}/e2.mkv")
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis: this folder"), BOOT)
+    ok("with another folder, it says the folders differ", status(G) == NOT_THE_SAME_FOLDER, status(G))
+    paste("-relay ws://example.invalid -room r -secret s")
+    ok("an invite with no playlist unticks it", not js(G, '$("playlist").checked'))
+    fill(G, relay=relay_addr, room="", secret="", file=MEDIA)
+    js(G, '$("invite").value = ""')
+    end(H)
+    js(H, '$("playlist").checked = false')
+    fill(H, file=MEDIA)
+
     print("\n[G20] a Wi-Fi party: the invite switches the guest to Same Wi-Fi")
     js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
     start(H, port=str(PORTS["wifiHost"]))
@@ -1727,6 +2071,11 @@ def gui_suite():
 
     js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
     ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
+    _, diff = variants()
+    start(G, file=diff, port=str(PORTS["wifiGuest"]))
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("over Wi-Fi, another file gets the same diagnosis", status(G) == NOT_THE_SAME_VIDEO, status(G))
+    fill(G, file=MEDIA)
     start(G, port=str(PORTS["wifiGuest"]))
     must(f"{G} is in", joined(G), status(G))
     until(lambda: f"{G} has joined" in feed(H) or f"connected to {G}" in feed(H))
@@ -1941,7 +2290,7 @@ s.bind(path)
 s.listen()
 c = s.accept()[0]
 r = c.makefile("rb")
-for _ in range(3):
+for _ in range(4):
     c.sendall(json.dumps({{"request_id": json.loads(r.readline())["request_id"], "error": "success"}}).encode() + b"\\n")
 r.close()
 c.close()

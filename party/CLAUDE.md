@@ -20,6 +20,51 @@ fetched. A joiner that differs gets 409 from the peer it bootstraps off (`/hi`) 
 the relay (against the room creator's) and its party ends. Older versions send no
 fingerprint and can't join.
 
+**`Config.Playlist` loads the file's folder (`media`):** its videos, not its subfolders, in
+natural order (`v2` before `v10`), starting on the file. Its identity is the hash of its
+fingerprints **in that order**: names may differ and each person can pick a different
+entry, but another order is refused like a different file. The invite carries
+`-playlist` so a guest can't miss it, and the GUI ticks its box from that. Each player moves on by
+itself at the end of an entry; with different orders each went to its own next one and
+then followed the other's. Each file costs one `fingerprint`, so a big folder on a slow disk
+takes a moment before mpv opens.
+
+## Torrents (`torrent.go`)
+
+`-file` as a magnet link or a local `.torrent` starts a client, waits for the metadata
+with no time limit (Stop ends it, the GUI says it is looking), and serves each file it
+plays to mpv over HTTP on loopback, at a path with a random token. **Nothing asks to download
+but mpv's own range requests**, so only the playing video buffers, what's already played
+stays on disk until the party ends, and a slow swarm reaches the party as
+`paused-for-cache`, like any stream.
+
+**What plays (`playable`):** its videos, without anything named `sample` or under a tenth of
+the largest, in natural order from the first, as a playlist if there's more than one. The
+size rule keeps a trailer from playing before the main video, and also drops a short special in a
+torrent of long videos. The check mark doesn't matter.
+
+- **Identity is the infohash plus the paths it plays:** a stream's URL has a local port and
+  a token. A magnet link and a `.torrent` for the same thing match; a plain copy of the
+  file doesn't, since there's nothing to fingerprint until it has downloaded.
+- **Torrent names are hostile input**, so a name goes through `flatten` before the log, or
+  it could forge a line the GUI reads.
+- **Each party downloads to a new `torrent-*` folder** in the user cache or `Config.CacheDir`,
+  removed when it ends: one sparse file named `data`, with piece state in memory (`torrentStore`). A crash
+  leaves that folder behind. Nothing is seeded after the party.
+- **Don't go back to the library's file store.** It memory-maps and never unmaps, so Windows
+  couldn't delete a partly downloaded file and a full disk would crash the app. Its piece map
+  also panicked if closed while a hasher ran, in a goroutine, killing the GUI. Ours returns
+  errors, a full disk stalls the stream, and nothing on disk is named by the torrent.
+- **No router port is opened** (`NoDefaultPortForwarding`): that would surprise someone who
+  only ever saw watchparty ask for one.
+- The library's logging is discarded, since log lines here are an API.
+- **`publisher.yml` builds releases itself, not through `make`,** so build settings go in
+  both. Both strip debug info (`-s -w`), about 30% of a binary. Crash reports keep function
+  names and files; debug with a plain `go build`.
+- **Releases, `make` and e2e build with `CGO_ENABLED=0`.** With cgo the library compiles a C++ uTP
+  library, which would make the Linux binary need libstdc++. `-race` needs cgo, so tests
+  pass `-tags disable_libutp`.
+
 ## `Run`'s traps
 
 - **`parent` belongs to the caller** (CLI signal context, GUI per-party context). Run
@@ -50,9 +95,9 @@ fingerprint and can't join.
 | Something inside cancelled `c` (relay rejection, failed bind) | `errStopped` |
 | Setup failed (unreadable file, no mpv, UPNP, no LAN IP) | that error |
 | P2P bootstrap plays another file / refuses the secret | `server.ErrDifferentFile` / `ErrWrongSecret` |
-| mpv exited before the movie was ready | `mpv exited before the movie was ready: exit status N`; the reason is in the `mpv:` lines just before |
+| mpv exited before the video was ready | `mpv exited before the video was ready: exit status N`; the reason is in the `mpv:` lines just before |
 | mpv's own `Wait` error, nothing cancelled | that error |
-| mpv's socket dropped before the movie was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
+| mpv's socket dropped before the video was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
 
 **The mpv-quit case was a real bug.** Quitting closes mpv's socket first, `watch()`
 sees EOF and cancels, and `exec.CommandContext` then kills the already-exiting mpv, so

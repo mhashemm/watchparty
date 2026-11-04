@@ -8,4 +8,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG UID=1000 GID=1000
 RUN groupadd -o -g $GID e2e && useradd -o -m -u $UID -g $GID e2e && install -d -o $UID -g $GID /cache
 USER e2e
-ENV GOCACHE=/cache/go-build GOMODCACHE=/cache/mod GOFLAGS=-buildvcs=false E2E_NO_SANDBOX=1
+ENV GOCACHE=/cache/go-build GOMODCACHE=/cache/mod GOFLAGS=-buildvcs=false CGO_ENABLED=0 E2E_NO_SANDBOX=1

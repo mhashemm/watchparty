@@ -151,9 +151,9 @@ func recvEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration) (messa
 func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(10, 10, 10))
-	a, _ := join(t, url, "movie", "s3cret", "a")
-	b, _ := join(t, url, "movie", "s3cret", "b")
-	c, _ := join(t, url, "movie", "s3cret", "c")
+	a, _ := join(t, url, "room", "s3cret", "a")
+	b, _ := join(t, url, "room", "s3cret", "b")
+	c, _ := join(t, url, "room", "s3cret", "c")
 
 	sent, _ := json.Marshal(message{Hostname: "a", Event: json.RawMessage(`{"name":"pause","data":"yes"}`)})
 	if err := a.Write(context.Background(), websocket.MessageText, sent); err != nil {
@@ -181,9 +181,9 @@ func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
 func TestJoinerLearnsWhoIsAlreadyThere(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(10, 10, 10))
-	a, _ := join(t, url, "movie", "s", "a")
-	join(t, url, "movie", "s", "b")
-	c, _ := join(t, url, "movie", "s", "c")
+	a, _ := join(t, url, "room", "s", "a")
+	join(t, url, "room", "s", "b")
+	c, _ := join(t, url, "room", "s", "c")
 
 	// c's mark reaches a only from c's read loop, which starts after c's notices are queued
 	mark(t, c, "c")
@@ -204,9 +204,9 @@ func TestReconnectReplacesStaleMember(t *testing.T) {
 	t.Parallel()
 	r := newRelay(10, 10, 10)
 	url := serve(t, r)
-	a, _ := join(t, url, "movie", "s", "a")
-	stale, _ := join(t, url, "movie", "s", "b&session=x")
-	fresh, _ := join(t, url, "movie", "s", "b&session=x")
+	a, _ := join(t, url, "room", "s", "a")
+	stale, _ := join(t, url, "room", "s", "b&session=x")
+	fresh, _ := join(t, url, "room", "s", "b&session=x")
 
 	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -254,14 +254,14 @@ func queued(m *member) []string {
 func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	t.Parallel()
 	r := newRelay(10, 10, 10)
-	r.rooms["movie"] = &room{members: map[*member]struct{}{}}
+	r.rooms["room"] = &room{members: map[*member]struct{}{}}
 	mk := func(hostname, session string) *member {
 		return &member{hostname: hostname, session: session, ch: make(chan []byte, sendBuffer)}
 	}
 	b, a, c := mk("b", ""), mk("a", "x"), mk("c", "")
-	r.add("movie", b)
-	r.add("movie", a)
-	r.add("movie", c)
+	r.add("room", b)
+	r.add("room", a)
+	r.add("room", c)
 	if got := queued(b); !slices.Equal(got, []string{"a has joined", "c has joined"}) {
 		t.Fatalf("b got %v", got)
 	}
@@ -273,7 +273,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	}
 
 	fresh := mk("a", "x")
-	if stale, _ := r.add("movie", fresh); stale != a {
+	if stale, _ := r.add("room", fresh); stale != a {
 		t.Fatal("the reconnect did not replace the stale member")
 	}
 	if got := queued(fresh); !slices.Equal(got, []string{"connected to b", "connected to c"}) {
@@ -291,14 +291,14 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(10, 10, 10)
-	if _, err := r.admit("movie", []byte("s"), nil, "f", "ip"); err != nil {
+	if _, err := r.admit("room", []byte("s"), nil, "f", "ip"); err != nil {
 		t.Fatal(err)
 	}
-	r.leave("movie", nil)
-	if _, ok := r.add("movie", &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
+	r.leave("room", nil)
+	if _, ok := r.add("room", &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
 		t.Fatal("add succeeded on a reaped room")
 	}
-	if _, exists := r.rooms["movie"]; exists {
+	if _, exists := r.rooms["room"]; exists {
 		t.Fatal("add recreated the room behind admit's back")
 	}
 }
@@ -306,12 +306,12 @@ func TestAddToAReapedRoomFails(t *testing.T) {
 func TestWrongSecretIsRejected(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(100, 10, 10))
-	join(t, url, "movie", "right", "a")
+	join(t, url, "room", "right", "a")
 
-	if _, code := join(t, url, "movie", "wrong", "b"); code != http.StatusForbidden {
+	if _, code := join(t, url, "room", "wrong", "b"); code != http.StatusForbidden {
 		t.Fatalf("wrong secret got %d, want 403", code)
 	}
-	if _, code := join(t, url, "movie", "right", "b"); code != http.StatusSwitchingProtocols {
+	if _, code := join(t, url, "room", "right", "b"); code != http.StatusSwitchingProtocols {
 		t.Fatalf("right secret got %d, want an upgrade", code)
 	}
 }
@@ -321,15 +321,15 @@ func TestWrongSecretIsRejected(t *testing.T) {
 func TestDifferentFileIsRejected(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(100, 10, 10))
-	join(t, url, "movie", "s", "a&file=abc")
+	join(t, url, "room", "s", "a&file=abc")
 
-	if _, code := join(t, url, "movie", "s", "b&file=xyz"); code != http.StatusConflict {
+	if _, code := join(t, url, "room", "s", "b&file=xyz"); code != http.StatusConflict {
 		t.Fatalf("a different file got %d, want 409", code)
 	}
-	if _, code := join(t, url, "movie", "s", "b"); code != http.StatusConflict {
+	if _, code := join(t, url, "room", "s", "b"); code != http.StatusConflict {
 		t.Fatalf("no file got %d, want 409", code)
 	}
-	if _, code := join(t, url, "movie", "s", "b&file=abc"); code != http.StatusSwitchingProtocols {
+	if _, code := join(t, url, "room", "s", "b&file=abc"); code != http.StatusSwitchingProtocols {
 		t.Fatalf("the same file got %d, want an upgrade", code)
 	}
 }
@@ -358,11 +358,11 @@ func TestOnlyRoomCreationIsRateLimited(t *testing.T) {
 func TestSecretGrindingIsRateLimited(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(3, 100, 100))
-	join(t, url, "movie", "right", "a")
+	join(t, url, "room", "right", "a")
 
 	codes := map[int]int{}
 	for range 10 {
-		_, code := join(t, url, "movie", "wrong", "b")
+		_, code := join(t, url, "room", "wrong", "b")
 		codes[code]++
 	}
 	if codes[http.StatusTooManyRequests] == 0 {
@@ -380,17 +380,17 @@ func TestCreateKey(t *testing.T) {
 	url := serve(t, r)
 
 	for range 5 {
-		if _, code := join(t, url, "movie", "s", "b"); code != http.StatusUnauthorized {
+		if _, code := join(t, url, "room", "s", "b"); code != http.StatusUnauthorized {
 			t.Fatalf("keyless create got %d, want 401", code)
 		}
 	}
-	if _, code := join(t, url, "movie", "s", "a", "wrong"); code != http.StatusForbidden {
+	if _, code := join(t, url, "room", "s", "a", "wrong"); code != http.StatusForbidden {
 		t.Fatalf("wrong key got %d, want 403", code)
 	}
-	if _, code := join(t, url, "movie", "s", "a", "k"); code != http.StatusSwitchingProtocols {
+	if _, code := join(t, url, "room", "s", "a", "k"); code != http.StatusSwitchingProtocols {
 		t.Fatalf("right key got %d after keyless retries, want an upgrade", code)
 	}
-	if _, code := join(t, url, "movie", "s", "b"); code != http.StatusSwitchingProtocols {
+	if _, code := join(t, url, "room", "s", "b"); code != http.StatusSwitchingProtocols {
 		t.Fatalf("keyless join of an open room got %d, want an upgrade", code)
 	}
 	if _, code := join(t, url, "other", "s", "a", "k"); code != http.StatusTooManyRequests {
@@ -409,9 +409,9 @@ func TestMaxRoomsAndMaxConns(t *testing.T) {
 
 	r2 := newRelay(100, 100, 2)
 	url2 := serve(t, r2)
-	join(t, url2, "movie", "s", "a")
-	join(t, url2, "movie", "s", "b")
-	if _, code := join(t, url2, "movie", "s", "c"); code != http.StatusServiceUnavailable {
+	join(t, url2, "room", "s", "a")
+	join(t, url2, "room", "s", "b")
+	if _, code := join(t, url2, "room", "s", "c"); code != http.StatusServiceUnavailable {
 		t.Fatalf("third conn got %d, want 503", code)
 	}
 }
@@ -507,10 +507,10 @@ func TestCleanStripsControlChars(t *testing.T) {
 func TestHostnameIsSanitizedInNotices(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(10, 10, 10))
-	a, _ := join(t, url, "movie", "s", "a")
+	a, _ := join(t, url, "room", "s", "a")
 	// a spoofed hostname with a CRLF: cleaned at ingress, so the notice echoed to
 	// the room (mpv OSD / GUI feed) must not carry the raw control char.
-	evil, _ := join(t, url, "movie", "s", "evil%0aFORGED")
+	evil, _ := join(t, url, "room", "s", "evil%0aFORGED")
 	mark(t, evil, "evil") // evil's frame reaches a and terminates a's notice stream
 	got := noticesBefore(t, a)
 	for _, n := range got {
