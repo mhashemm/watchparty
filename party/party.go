@@ -88,12 +88,14 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		defer stream.close()
 		files, playlist, file = stream.urls, len(stream.urls) > 1, stream.id
+		cfg.Playlist = false
 	} else {
 		var err error
 		files, start, playlist, file, err = media(target, cfg.Playlist)
 		if err != nil {
 			return err
 		}
+		cfg.Playlist = playlist
 	}
 	log.Printf("file fingerprint: %s\n", file)
 	if cfg.Secret == "" {
@@ -123,7 +125,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer conn.Close()
 		go conn.Connect(c, cancel)
 		go conn.Broadcast(c, outgoing)
-		log.Printf("your address to share is -relay %s -room %s -secret %s\n", conn.addr, cfg.Room, cfg.Secret)
+		log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
 	} else {
 		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, file)
 		if err != nil && parent.Err() != nil {
@@ -244,6 +246,13 @@ func waitExit(exited <-chan error, grace time.Duration) error {
 	case <-time.After(grace):
 		return errHungUp
 	}
+}
+
+func (cfg Config) playlistFlag() string {
+	if cfg.Playlist {
+		return " -playlist"
+	}
+	return ""
 }
 
 func stopReason(parent context.Context) error {
@@ -380,7 +389,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 	}
 
-	log.Printf("your address to share is -addrs %s -secret %s\n", address, cfg.Secret)
+	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())
 
 	// callers defer this, so it runs in Run and keeps the original LIFO order:
 	// /bye first, then the http server, then the upnp mapping

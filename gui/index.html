@@ -764,6 +764,7 @@ $("invite").addEventListener("input", () => {
     for (let i = 0; i < t.length - 1; i++) if (map[t[i]]) { $(map[t[i]]).value = t[i + 1]; filled = true; }
     setMode("direct");
   }
+  if (filled) $("playlist").checked = t.includes("-playlist");
   $("invite-hint").hidden = !filled;
 });
 
@@ -857,10 +858,14 @@ function handle(line) {
   }
 }
 
+const notSameFile = () => $("playlist").checked
+  ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
+  : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again. If the party is watching a whole folder, tick the box under File.";
+
 function render(exitErr) {
   let text, bad = false, mood = "awake", walking = false;
   if (state.rejected === "file") {
-    text = "Diagnosis: your video is not the same file as the party's. Pick the same video and start again."; bad = true;
+    text = notSameFile(); bad = true;
   } else if (state.rejected === "key") {
     text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
   } else if (state.rejected) {
@@ -878,7 +883,8 @@ function render(exitErr) {
   } else if (running) {
     text = "You're in. Pause or seek in mpv and everyone follows.";
   } else if (exitErr) {
-    text = /mpv/.test(exitErr) && /not found|cannot find|no such file/i.test(exitErr)
+    text = /not the same file/.test(exitErr) ? notSameFile()
+      : /mpv/.test(exitErr) && /not found|cannot find|no such file/i.test(exitErr)
       ? "Diagnosis: mpv isn't installed, or this app can't find it. Install mpv, or choose mpv on the Settings page."
       : `Diagnosis: ${exitErr}. The patient chart below has the details.`;
     bad = true;

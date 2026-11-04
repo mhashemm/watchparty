@@ -69,7 +69,8 @@ installs the latest release over the binary, and `-version` prints the one you h
 
 To watch a season, add `-playlist`. It starts on `-file` and loads the other videos in its
 folder, so back and next in mpv go to the episodes either side of it. Everyone needs the
-same videos in the same order, and `-playlist` too; names can differ.
+same videos in the same order, though names can differ. The invite includes `-playlist`,
+and pasting it in the app ticks the box.
 
 ## How it stays in sync
 
