@@ -150,6 +150,9 @@ reason: nobody starts the next one until someone resumes.
 - **`followEntry` pauses first**, so the file opens stopped, and marks `applied`, so
   mpv's report isn't sent back. It skips one it is on or already headed to: every member
   answers a joiner, and two nodes often reach the end together.
+- **Only a matching `playlist-pos` uses up the marker.** mpv's first report of where it
+  started can land after a peer already sent this node elsewhere; used up on that, the real
+  echo goes out as this node moving the party.
 - **A switch resets `c.pos` and `seeks` to 0.** The old position would go out with the
   pause, and the new file's `time-pos` 0 would go out as a seek.
 - **`loading` holds a seek until `file-loaded`** (`heldSeek`). Sent right after the

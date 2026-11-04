@@ -185,7 +185,7 @@ func (c *Client) isEcho(event Event) bool {
 		return false
 	}
 	applied, ok := c.applied[event.Name]
-	if !ok {
+	if !ok || (event.Name == playlistPos && applied != event.Data) {
 		return false
 	}
 	delete(c.applied, event.Name)
