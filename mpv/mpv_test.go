@@ -737,6 +737,7 @@ func playlistClient(t *testing.T) (*Client, func(string), chan []byte, chan stri
 	c, send, outgoing, requests := liveClient(t)
 	c.episodes = 3
 	c.seen[playlistPos] = true
+	c.left = -1
 	return c, send, outgoing, requests
 }
 
@@ -920,5 +921,181 @@ func TestJoinAnswerNamesTheEpisodeFirst(t *testing.T) {
 	}
 	if e := nextEvent(t, outgoing); e.Name != startPos || e.Data != "33.000000" {
 		t.Fatalf("broadcast %+v, want the position", e)
+	}
+}
+
+func tagged(episode int, event string) string {
+	return fmt.Sprintf(`{"episode":%d,%s`, episode, event[1:])
+}
+
+// Everything a playlist node sends says which episode it belongs to, and a move also
+// says which one it left. A single file's messages stay exactly as they were.
+func TestMessagesSayWhichEpisodeTheyBelongTo(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, _ := playlistClient(t)
+	c.paused = true
+
+	send(propertyChangeLine(playlistPos, "2", 0))
+	e := nextEvent(t, outgoing)
+	if e.Name != playlistPos || e.From == nil || *e.From != 0 || e.Episode == nil || *e.Episode != 2 {
+		t.Fatalf("broadcast %+v, want a move from 0 to 2", e)
+	}
+	send(propertyChangeLine(timePos, "0.000000", 0))
+	send(propertyChangeLine(timePos, "9.000000", 0))
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Episode == nil || *e.Episode != 2 {
+		t.Fatalf("broadcast %+v, want a seek on episode 2", e)
+	}
+
+	single, send, outgoing, _ := liveClient(t)
+	single.paused = true
+	send(propertyChangeLine(timePos, "9.000000", 0))
+	if msg := string(next(t, outgoing)); strings.Contains(msg, "episode") {
+		t.Fatalf("a single file sent %s", msg)
+	}
+}
+
+// A seek sent just before its sender moved, or just before we did, belongs to a file
+// we're not playing. So does a resume. A pause still stops us: stopping is always safe.
+func TestMessagesFromAnotherEpisodeAreDropped(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.current = true, 1
+
+	go func() {
+		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
+		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"start-pos","data":"40.000000"}`)))
+		c.apply(peer("a", tagged(0, `{"name":"pause","data":"no"}`)))
+		c.apply(peer("a", tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`)))
+	}()
+	if got := next(t, requests); got != "set_property time-pos 41.000000" {
+		t.Fatalf("sent %q, want only the seek on our episode", got)
+	}
+}
+
+func TestAPauseFromAnotherEpisodeStillStops(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.current = 1
+
+	go c.apply(peer("a", tagged(0, `{"name":"pause","data":"yes"}`)))
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the pause", got)
+	}
+}
+
+// While a move is on its way, the episode it is heading to is the one that counts.
+func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
+	t.Parallel()
+	c, send, _, requests := playlistClient(t)
+	c.paused = true
+
+	go func() {
+		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
+		c.apply(peer("a", tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`)))
+	}()
+	for _, want := range []string{"set_property playlist-pos 1", "show-text episode 2 of 3, by a 5000", "show-text synced by a 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	send(`{"event":"file-loaded"}` + "\n")
+	if got := next(t, requests); got != "set_property time-pos 41.000000" {
+		t.Fatalf("sent %q, want the seek on the new episode", got)
+	}
+}
+
+func move(from, to int) string {
+	return fmt.Sprintf(`{"from":%d,"event":"property-change","name":"playlist-pos","data":"%d"}`, from, to)
+}
+
+// Two people leave episode 5 at once, one forward and one back. Without a rule each
+// follows the other and they swap. Everyone applies the same rule, so they end up
+// together on the higher one.
+func TestTwoMovesFromTheSameEpisodeSettleOnTheHigher(t *testing.T) {
+	t.Parallel()
+	const left = 1
+	for name, c := range map[string]struct{ mine, theirs int }{
+		"we went higher": {2, 0},
+		"we went lower":  {0, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client, send, outgoing, requests := playlistClient(t)
+			client.paused, client.current = true, left
+
+			send(propertyChangeLine(playlistPos, fmt.Sprint(c.mine), 0))
+			next(t, outgoing)
+			go func() {
+				client.apply(peer("a", move(left, c.theirs)))
+				client.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+			}()
+			got := next(t, requests)
+			if c.mine > c.theirs && got != "show-text mark 5000" {
+				t.Fatalf("sent %q, want to keep the higher one", got)
+			}
+			if c.mine < c.theirs && got != fmt.Sprintf("set_property playlist-pos %d", c.theirs) {
+				t.Fatalf("sent %q, want to follow the higher one", got)
+			}
+		})
+	}
+}
+
+// A third member hears both moves, in either order, and must land in the same place.
+func TestAThirdMemberSettlesOnTheHigherInEitherOrder(t *testing.T) {
+	t.Parallel()
+	for name, moves := range map[string][2]int{"higher first": {2, 0}, "lower first": {0, 2}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, _, _, requests := playlistClient(t)
+			c.paused, c.current = true, 1
+
+			go func() {
+				c.apply(peer("a", move(1, moves[0])))
+				c.apply(peer("b", move(1, moves[1])))
+				c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
+			}()
+			last := ""
+			for got := next(t, requests); got != "show-text mark 5000"; got = next(t, requests) {
+				if strings.HasPrefix(got, "set_property playlist-pos") {
+					last = got
+				}
+			}
+			if last != "set_property playlist-pos 2" {
+				t.Fatalf("settled with %q, want the higher one", last)
+			}
+		})
+	}
+}
+
+// Someone behind everyone else hears a tie too, and what it compares is where the moves
+// left from, not where it happens to be.
+func TestATieIsSeenFromAnyEpisode(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused = true
+
+	go func() {
+		c.apply(peer("a", move(1, 2)))
+		c.apply(peer("b", move(1, 1)))
+		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
+	}()
+	for _, want := range []string{"set_property playlist-pos 2", "show-text episode 3 of 3, by a 5000", "show-text mark 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+}
+
+// The rule only settles a tie. Any other move is followed, lower or not, so someone who
+// missed a message catches up on the next one instead of staying apart.
+func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.current, c.left = true, 2, 1
+
+	go c.apply(peer("a", move(2, 0)))
+	if got := next(t, requests); got != "set_property playlist-pos 0" {
+		t.Fatalf("sent %q, want it followed", got)
 	}
 }

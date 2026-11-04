@@ -63,7 +63,7 @@ fingerprint differs is refused with 409. `-playlist` loads the file's folder; ep
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
-  | mpv | `Watch: broadcasted event: <raw mpv JSON>` | GUI feed (your own pause/resume), e2e |
+  | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `episode`>` | GUI feed (your own pause/resume), e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both

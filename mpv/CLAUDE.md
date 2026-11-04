@@ -137,9 +137,16 @@ reason: nobody starts the next one until someone resumes.
 - **`loading` holds a seek until `file-loaded`** (`heldSeek`). Sent right after the
   switch it lands on the old file, which then ends and loses it. A joiner hits this every
   time: `welcome` sends the episode, then `start-pos`.
-- Accepted: two people moving at once can swap episodes, until the next move. A peer's
-  `time-pos` from the old episode can land on the new one; past its end, it stops on the
-  last frame.
+- **Every message says its episode (`tagged`).** A position or a resume for another
+  episode is dropped, against where this node is `heading`, since it was sent before someone
+  moved. A pause still counts. A table of who is on what can't do this: a follower doesn't
+  announce its move, so the table would go stale and drop its later seeks.
+- **Two moves that left the same episode settle on the higher (`left`, `From`).** Each
+  would otherwise follow the other and swap. Dropping them would strand both. Any other
+  move is followed, lower or not, so someone who missed one catches up on the next.
+- Accepted: a seek reaching someone just before the move it depends on is lost. A node
+  that really is on another episode stays paused until the next move, since its resumes
+  and everyone else's are dropped.
 
 e2e `[16]`, `[R15c]`.
 

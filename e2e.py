@@ -1508,6 +1508,24 @@ def relay_suite():
     for n in ("epD", "epE"):
         stop(n)
 
+    print("\n[R15g] two people moving at once end up together, on the higher episode")
+    slow = lag(PORTS["upnpNode"], PORTS["relay"], 0.5)
+    via = f"ws://127.0.0.1:{PORTS['upnpNode']}"
+    for n in ("epF", "epG"):
+        launch(n, room="crossing", media=f"{folder}/Show.S01E03.mkv", relay=via, playlist=True)
+    must("both are in", until(lambda: booted("epF") and booted("epG") and ("epG has joined" in osd("epF") or "epF has joined" in osd("epG")), BOOT))
+    for n in ("epF", "epG"):
+        resolve(n)
+    must("on the middle episode", until(lambda: get("epF", "filename") == get("epG", "filename") == "Show.S01E03.mkv"))
+    time.sleep(QUIET)
+    ipc(nodes["epF"]["sock"], "playlist-prev")
+    ipc(nodes["epG"]["sock"], "playlist-next")
+    ok("they settle on the higher one", until(lambda: get("epF", "filename") == get("epG", "filename") == "Show.S01E10.mkv"), str([get(n, "filename") for n in ("epF", "epG")]))
+    time.sleep(2)
+    ok("and stay there", get("epF", "filename") == get("epG", "filename") == "Show.S01E10.mkv", str([get(n, "filename") for n in ("epF", "epG")]))
+    for n in ("epF", "epG"):
+        stop(n)
+
     relay.kill()
     relay.wait(timeout=10)
 
