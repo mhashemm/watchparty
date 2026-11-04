@@ -85,8 +85,8 @@ Every pause also carries the position where it stopped, so network delay can't l
 people apart.
 
 `-file` can be a `.torrent` file or a magnet link. Everyone uses the same one. It plays
-the torrent's largest file while it downloads, and running out of downloaded video pauses
-the party. The download goes in your cache folder and is deleted when you leave, so make
+while it downloads, a pack of episodes plays as a playlist with only the current one
+downloading, and running out of downloaded video pauses the party. What you watched stays in your cache folder until you leave, when it is deleted, so make
 sure the disk has room for it. As with any torrent, peers see your IP address, and you
 upload to them while you watch.
 

@@ -2,6 +2,7 @@ package party
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -24,22 +25,21 @@ func testConfig(t *testing.T) *torrent.ClientConfig {
 	return cfg
 }
 
-// seed serves a folder holding a small sample and a larger movie, and returns a magnet
-// link that names the seeder, and a .torrent that doesn't.
-func seed(t *testing.T) (magnet, file string, movie []byte) {
+// seed serves a folder of files named as given, and returns a magnet link that names the
+// seeder, and a .torrent that doesn't.
+func seed(t *testing.T, contents map[string][]byte) (magnet, file string) {
 	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "Show")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	movie = []byte(strings.Repeat("the movie ", 200_000))
-	for name, content := range map[string][]byte{"sample.mkv": []byte("short"), "movie.mkv": movie} {
+	for name, content := range contents {
 		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info := metainfo.Info{PieceLength: 1 << 18}
+	info := metainfo.Info{PieceLength: 1 << 16}
 	if err := info.BuildFromFilePath(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,35 @@ func seed(t *testing.T) (magnet, file string, movie []byte) {
 		t.Fatal(err)
 	}
 	m.Params.Add("x.pe", "127.0.0.1:"+portOf(client))
-	return m.String(), file, movie
+	return m.String(), file
+}
+
+func repeated(s string, size int) []byte {
+	return []byte(strings.Repeat(s, size/len(s)))
+}
+
+func aMovie() map[string][]byte {
+	return map[string][]byte{"a.trailer.mkv": []byte("short"), "movie.mkv": repeated("the movie ", 2_000_000), "movie.nfo": []byte("notes"), "movie.sample.mkv": repeated("x", 1_000_000)}
+}
+
+func aPack() map[string][]byte {
+	return map[string][]byte{"e10.mkv": repeated("ten ", 2_000_000), "e2.mkv": repeated("two ", 2_000_000), "e1.mkv": repeated("one ", 2_000_000), "sample.mkv": repeated("x", 1000), "cover.jpg": repeated("c", 3_000_000)}
+}
+
+func read(t *testing.T, url string, from, to int) []byte {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", from, to))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusPartialContent {
+		t.Fatalf("got %d", res.StatusCode)
+	}
+	return body
 }
 
 func portOf(client *torrent.Client) string {
@@ -97,35 +125,64 @@ func openOrFail(t *testing.T, target string) *torrentStream {
 }
 
 // mpv reads a stream with range requests from wherever it needs: a seek, or the index
-// at the end of the file. Only the largest file is served: a pack's sample isn't the movie.
-func TestMagnetServesTheLargestFileWithRanges(t *testing.T) {
+// at the end of the file. A movie's sample and notes aren't something to play.
+func TestAMoviePlaysAloneWithRanges(t *testing.T) {
 	t.Parallel()
-	magnet, _, movie := seed(t)
+	magnet, _ := seed(t, aMovie())
 	stream := openOrFail(t, magnet)
 
-	req, _ := http.NewRequest(http.MethodGet, stream.url, nil)
-	req.Header.Set("Range", "bytes=1000000-1000008")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	if len(stream.urls) != 1 || !strings.HasSuffix(stream.urls[0], "/movie.mkv") {
+		t.Fatalf("plays %q", stream.urls)
 	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(res.Body)
-	if res.StatusCode != http.StatusPartialContent || string(body) != string(movie[1000000:1000009]) {
-		t.Fatalf("got %d %q", res.StatusCode, body)
+	if got := read(t, stream.urls[0], 1000000, 1000008); string(got) != "the movie" {
+		t.Fatalf("got %q", got)
 	}
-	if !strings.HasSuffix(stream.url, "/movie.mkv") {
-		t.Fatalf("mpv would show %q", stream.url)
+}
+
+func TestAPackPlaysItsEpisodesInOrder(t *testing.T) {
+	t.Parallel()
+	magnet, _ := seed(t, aPack())
+	stream := openOrFail(t, magnet)
+
+	want := []string{"/e1.mkv", "/e2.mkv", "/e10.mkv"}
+	if len(stream.urls) != len(want) {
+		t.Fatalf("plays %q", stream.urls)
+	}
+	for i, w := range want {
+		if !strings.HasSuffix(stream.urls[i], w) {
+			t.Fatalf("plays %q, want %q", stream.urls, want)
+		}
+	}
+	if got := read(t, stream.urls[2], 800, 802); string(got) != "ten" {
+		t.Fatalf("the third is %q", got)
+	}
+}
+
+// Only what mpv reads downloads, or a whole season would fill the disk behind the first
+// episode. A file's last piece can be shared with its neighbour, so read the middle.
+func TestOnlyThePlayingEpisodeBuffers(t *testing.T) {
+	t.Parallel()
+	magnet, _ := seed(t, aPack())
+	stream := openOrFail(t, magnet)
+
+	read(t, stream.urls[1], 1_000_000, 1_000_100)
+	if got := stream.files[1].BytesCompleted(); got == 0 {
+		t.Fatal("the playing episode has nothing")
+	}
+	for _, i := range []int{0, 2} {
+		if got := stream.files[i].BytesCompleted(); got != 0 {
+			t.Fatalf("episode %d buffered %d bytes", i, got)
+		}
 	}
 }
 
 // The stream's address is a local port and a random token, so identity can't come from it.
 func TestEveryWayToNameATorrentHasOneIdentity(t *testing.T) {
 	t.Parallel()
-	magnet, file, _ := seed(t)
+	magnet, file := seed(t, aPack())
 	byMagnet := openOrFail(t, magnet)
 	byFile := openOrFail(t, file)
-	if byMagnet.id != byFile.id || byMagnet.url == byFile.url {
+	if byMagnet.id != byFile.id || byMagnet.urls[0] == byFile.urls[0] {
 		t.Fatalf("magnet %s and .torrent %s", byMagnet.id, byFile.id)
 	}
 	other := openOrFail(t, magnet)
@@ -138,9 +195,10 @@ func TestEveryWayToNameATorrentHasOneIdentity(t *testing.T) {
 // read the stream without the random token.
 func TestStreamNeedsItsToken(t *testing.T) {
 	t.Parallel()
-	magnet, _, _ := seed(t)
+	magnet, _ := seed(t, aMovie())
 	stream := openOrFail(t, magnet)
-	res, err := http.Get(stream.url[:strings.LastIndex(stream.url, "/")+1] + "other.mkv")
+	url := stream.urls[0]
+	res, err := http.Get(url[:strings.LastIndex(url, "/")+1] + "other.mkv")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +206,8 @@ func TestStreamNeedsItsToken(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("got %d", res.StatusCode)
 	}
-	if !strings.HasPrefix(stream.url, "http://127.0.0.1:") {
-		t.Fatalf("not on loopback: %s", stream.url)
+	if !strings.HasPrefix(url, "http://127.0.0.1:") {
+		t.Fatalf("not on loopback: %s", url)
 	}
 }
 
@@ -188,7 +246,7 @@ func TestStopWhileFindingPeersLeavesNothingBehind(t *testing.T) {
 
 func TestClosingAStreamRemovesItsDownload(t *testing.T) {
 	t.Parallel()
-	magnet, _, _ := seed(t)
+	magnet, _ := seed(t, aMovie())
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cache := t.TempDir()
@@ -204,7 +262,7 @@ func TestClosingAStreamRemovesItsDownload(t *testing.T) {
 	if found, _ := filepath.Glob(dirs); len(found) != 0 {
 		t.Fatalf("left %q behind", found)
 	}
-	if _, err = http.Get(stream.url); err == nil {
+	if _, err = http.Get(stream.urls[0]); err == nil {
 		t.Fatal("still serving after close")
 	}
 }

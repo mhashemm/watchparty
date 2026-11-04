@@ -87,7 +87,7 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		files, file = []string{stream.url}, stream.id
+		files, playlist, file = stream.urls, len(stream.urls) > 1, stream.id
 	} else {
 		var err error
 		files, start, playlist, file, err = media(target, cfg.Playlist)

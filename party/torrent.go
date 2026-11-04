@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,8 +40,28 @@ func torrentConfig() *torrent.ClientConfig {
 }
 
 type torrentStream struct {
-	url, id string
-	close   func()
+	urls  []string
+	files []*torrent.File
+	id    string
+	close func()
+}
+
+// playable picks what a torrent plays: its videos in natural order, without samples, or
+// anything under a tenth of the largest, which keeps a trailer from playing before a movie.
+// ponytail: a size guess, so a short special in a pack of long episodes is dropped too; a
+// way to choose files is the upgrade. A torrent with no videos plays its largest file and
+// leaves the failing to mpv.
+func playable(files []*torrent.File) []*torrent.File {
+	largest := slices.MaxFunc(files, func(a, b *torrent.File) int { return cmp.Compare(a.Length(), b.Length()) })
+	videos := slices.DeleteFunc(slices.Clone(files), func(f *torrent.File) bool {
+		name := strings.ToLower(f.DisplayPath())
+		return f.Length() < largest.Length()/10 || strings.Contains(name, "sample") || !slices.Contains(VideoExts, path.Ext(name))
+	})
+	if len(videos) == 0 {
+		return []*torrent.File{largest}
+	}
+	slices.SortStableFunc(videos, func(a, b *torrent.File) int { return naturalCompare(a.DisplayPath(), b.DisplayPath()) })
+	return videos
 }
 
 func torrentCache() (string, error) {
@@ -52,8 +73,9 @@ func torrentCache() (string, error) {
 	return cache, os.MkdirAll(cache, 0o700)
 }
 
-// openTorrent waits for the torrent's metadata, then serves its largest file to mpv on
-// loopback. It downloads into a new folder in cache, which close removes.
+// openTorrent waits for the torrent's metadata, then serves what it plays to mpv on
+// loopback. Nothing downloads but what mpv reads, so only the episode playing buffers. It
+// downloads into a new folder in cache, which close removes.
 func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig) (*torrentStream, error) {
 	dir, err := os.MkdirTemp(cache, "torrent-*")
 	if err != nil {
@@ -91,17 +113,28 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 		closeAll()
 		return nil, c.Err()
 	}
-	f := slices.MaxFunc(t.Files(), func(a, b *torrent.File) int { return cmp.Compare(a.Length(), b.Length()) })
-	log.Printf("torrent: found %s\n", flatten(f.DisplayPath()))
+	files := playable(t.Files())
+	log.Printf("torrent: found %s, %d to play\n", flatten(files[0].DisplayPath()), len(files))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		closeAll()
 		return nil, err
 	}
-	token, name := rand.Text(), path.Base(f.DisplayPath())
+	token := rand.Text()
+	routes := map[string]*torrent.File{}
+	urls := make([]string, len(files))
+	identity := sha256.New()
+	io.WriteString(identity, t.InfoHash().HexString())
+	for i, f := range files {
+		name := path.Base(f.DisplayPath())
+		routes["/"+token+"/"+strconv.Itoa(i)+"/"+name] = f
+		urls[i] = "http://" + listener.Addr().String() + "/" + token + "/" + strconv.Itoa(i) + "/" + url.PathEscape(name)
+		io.WriteString(identity, "/"+f.Path())
+	}
 	server := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/"+token+"/"+name {
+		f, ok := routes[r.URL.Path]
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
@@ -116,6 +149,5 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 	go server.Serve(listener)
 	closers = append(closers, func() { server.Close() })
 
-	sum := sha256.Sum256([]byte(t.InfoHash().HexString() + "/" + f.Path()))
-	return &torrentStream{"http://" + listener.Addr().String() + "/" + token + "/" + url.PathEscape(name), hex.EncodeToString(sum[:]), closeAll}, nil
+	return &torrentStream{urls, files, hex.EncodeToString(identity.Sum(nil)), closeAll}, nil
 }

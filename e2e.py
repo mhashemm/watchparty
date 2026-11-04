@@ -1428,7 +1428,7 @@ def relay_suite():
     launch("torA", room="torroom", media=magnet)
     must("the first node opens it", until(lambda: booted("torA"), 60), log("torA")[-300:])
     resolve("torA")
-    ok("it says what it found", f"torrent: found {os.path.basename(MEDIA)}" in log("torA"))
+    ok("it says what it found", f"torrent: found {os.path.basename(MEDIA)}, 1 to play" in log("torA"))
     launch("torB", room="torroom", media=magnet)
     must("the second node joins", until(lambda: booted("torB") and "torB has joined" in osd("torA"), 60), log("torB")[-300:])
     resolve("torB")
@@ -1447,6 +1447,25 @@ def relay_suite():
     ok("another torrent is refused like another file", until(lambda: nodes[n]["proc"].poll() is not None, 60) and "not the same file" in log(n), log(n)[-200:])
     for n in ("torA", "torB"):
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[R15e2] a torrent of episodes plays as a playlist, whatever the check mark says")
+    pack = f"{RUN}/pack"
+    os.makedirs(pack)
+    for name in ("e1.mkv", "e2.mkv", "e10.mkv"):
+        shutil.copy(MEDIA, f"{pack}/{name}")
+    magnet = seeder(pack)
+    launch("packA", room="packroom", media=magnet)
+    must("it opens", until(lambda: booted("packA"), 60), log("packA")[-300:])
+    resolve("packA")
+    ok("with every episode", get("packA", "playlist-count") == 3, get("packA", "playlist-count"))
+    ok("on the first", get("packA", "filename") == "e1.mkv", get("packA", "filename"))
+    launch("packB", room="packroom", media=magnet)
+    must("a friend joins", until(lambda: booted("packB") and "packB has joined" in osd("packA"), 60), log("packB")[-300:])
+    resolve("packB")
+    ipc(nodes["packA"]["sock"], "playlist-next")
+    ok("next moves both", until(lambda: get("packA", "filename") == "e2.mkv" and get("packB", "filename") == "e2.mkv", 30), get("packB", "filename"))
+    for n in ("packA", "packB"):
+        stop(n)
 
     print("\n[R15f] a file named anything plays, and its name can't forge a log line")
     named = f"{RUN}/named"

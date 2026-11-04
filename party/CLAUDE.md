@@ -31,12 +31,18 @@ takes a moment before mpv opens.
 ## Torrents (`torrent.go`)
 
 `-file` as a magnet link or a local `.torrent` starts a client, waits for the metadata
-with no time limit (Stop ends it, the GUI says it is looking), and serves the **largest
-file** to mpv over HTTP on loopback, at a path with a random token. So mpv's own range
-requests decide what downloads, with `Reader.SetResponsive`, and a slow swarm reaches
-the party as `paused-for-cache`, like any stream.
+with no time limit (Stop ends it, the GUI says it is looking), and serves each file it
+plays to mpv over HTTP on loopback, at a path with a random token. **Nothing asks to download
+but mpv's own range requests**, so only the playing episode buffers, what's already played
+stays on disk until the party ends, and a slow swarm reaches the party as
+`paused-for-cache`, like any stream.
 
-- **Identity is the infohash plus the file's path:** the stream's URL has a local port and
+**What plays (`playable`):** its videos, without anything named `sample` or under a tenth of
+the largest, in natural order from the first, as a playlist if there's more than one. The
+size rule keeps a trailer from playing before a movie, and also drops a short special in a
+pack of long episodes. The check mark doesn't matter.
+
+- **Identity is the infohash plus the paths it plays:** a stream's URL has a local port and
   a token. A magnet link and a `.torrent` for the same thing match; a plain copy of the
   file doesn't, since there's nothing to fingerprint until it has downloaded.
 - **Torrent names are hostile input**, so a name goes through `flatten` before the log, or
