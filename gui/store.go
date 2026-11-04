@@ -18,6 +18,7 @@ type settings struct {
 	Mpv       string `json:"mpv"`
 	MpvFlags  string `json:"mpvFlags"`
 	CreateKey string `json:"createKey"`
+	CacheDir  string `json:"cacheDir"`
 	PPort     string `json:"pport"`
 	Local     bool   `json:"local"`
 	Port      string `json:"port"`

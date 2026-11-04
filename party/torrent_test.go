@@ -288,6 +288,41 @@ func TestTheDownloadTakesNoNamesFromTheTorrent(t *testing.T) {
 	}
 }
 
+func TestAChosenCacheFolderIsCreatedAndUsed(t *testing.T) {
+	t.Parallel()
+	chosen := filepath.Join(t.TempDir(), "new", "folder")
+	got, err := torrentCache(chosen)
+	if err != nil || got != chosen {
+		t.Fatalf("got %q %v", got, err)
+	}
+	if info, err := os.Stat(chosen); err != nil || !info.IsDir() {
+		t.Fatalf("not created: %v", err)
+	}
+}
+
+// A path that can't be a folder fails before anything starts, and says why.
+func TestACacheFolderThatCantBeUsedIsAnError(t *testing.T) {
+	t.Parallel()
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := torrentCache(filepath.Join(file, "sub")); err == nil {
+		t.Fatal("no error")
+	}
+}
+
+func TestTheDefaultCacheFolderIsTheSystems(t *testing.T) {
+	t.Parallel()
+	system, err := os.UserCacheDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if got, err := torrentCache(""); err != nil || got != filepath.Join(system, "watchparty") {
+		t.Fatalf("got %q %v", got, err)
+	}
+}
+
 func TestIsTorrent(t *testing.T) {
 	t.Parallel()
 	for target, want := range map[string]bool{

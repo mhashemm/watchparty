@@ -318,12 +318,12 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False, cache=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else []) + (["-playlist"] if playlist else [])
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else []) + (["-playlist"] if playlist else []) + (["-cacheDir", cache] if cache else [])
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -1475,6 +1475,16 @@ def relay_suite():
     for n in ("torA", "torB"):
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
+    print("\n[R15e1] -cacheDir puts the download in another folder")
+    chosen = f"{RUN}/chosen/cache"
+    before = set(glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*")))
+    n = launch("torChosen", room="chosenroom", media=seeder(MEDIA), cache=chosen)
+    must("it opens", until(lambda: booted(n), 60), log(n)[-300:])
+    ok("the download is there", len(glob.glob(f"{chosen}/torrent-*/data")) == 1, str(glob.glob(f"{chosen}/*")))
+    ok("and not in the default folder", set(glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*"))) == before)
+    stop(n)
+    ok("leaving removes it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
+
     print("\n[R15e2] a torrent of several videos plays as a playlist, whatever the check mark says")
     pack = f"{RUN}/pack"
     os.makedirs(pack)
@@ -1959,6 +1969,14 @@ def gui_suite():
     ok("and started no mpv", not mpv_of(G))
     end(G)
     ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
+    chosen = f"{RUN}/guichosen"
+    ok("the cache folder saves", save_settings(G, cacheDir=chosen) == "Saved.")
+    ok("and reaches the store", state(G)["settings"]["cacheDir"] == chosen, str(state(G)["settings"]))
+    go(G)
+    ok("a party uses it", until(lambda: glob.glob(f"{chosen}/torrent-*")), str(glob.glob(f"{chosen}/*")))
+    end(G)
+    ok("and leaving empties it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
+    ok("emptying the setting saves", save_settings(G, cacheDir="") == "Saved." and state(G)["settings"]["cacheDir"] == "")
     ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Video", js(G, 'fileName($("file").value)'))
 
     print("\n[G17c] the check mark loads the file's folder, and starts on that file")

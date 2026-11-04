@@ -88,8 +88,9 @@ people apart.
 
 `-file` can be a `.torrent` file or a magnet link. Everyone uses the same one. It plays
 while it downloads, a torrent of several videos plays as a playlist with only the current
-one downloading, and running out of downloaded video pauses the party. What you watched stays in your cache folder until you leave, when it is deleted, so make
-sure the disk has room for it. As with any torrent, peers see your IP address, and you
+one downloading, and running out of downloaded video pauses the party. What you watched stays in your system's cache folder until you
+leave, when it is deleted, so the disk needs room for it. **Cache folder** in Settings, or
+`-cacheDir`, puts it somewhere else. As with any torrent, peers see your IP address, and you
 upload to them while you watch.
 
 A joiner whose file differs from the party's is refused. Files are compared by a

@@ -40,6 +40,7 @@ type form struct {
 	Room      string `json:"room"`
 	Secret    string `json:"secret"`
 	CreateKey string `json:"createKey"`
+	CacheDir  string `json:"cacheDir"`
 	Local     bool   `json:"local"`
 	Playlist  bool   `json:"playlist"`
 	Port      string `json:"port"`
@@ -74,6 +75,7 @@ func (f form) config() (party.Config, error) {
 		return cfg, errors.New("pick a video first")
 	}
 	cfg.Playlist = f.Playlist
+	cfg.CacheDir = strings.TrimSpace(f.CacheDir)
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)
 		cfg.Room = strings.TrimSpace(f.Room)
@@ -230,6 +232,7 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s := &g.store.Settings
 	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
 	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
+	s.CacheDir = strings.TrimSpace(in.CacheDir)
 	err = g.store.save()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

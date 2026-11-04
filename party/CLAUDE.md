@@ -48,8 +48,8 @@ torrent of long videos. The check mark doesn't matter.
   file doesn't, since there's nothing to fingerprint until it has downloaded.
 - **Torrent names are hostile input**, so a name goes through `flatten` before the log, or
   it could forge a line the GUI reads.
-- **Each party downloads to a new `torrent-*` folder** in the user cache, removed when it
-  ends: one sparse file named `data`, with piece state in memory (`torrentStore`). A crash
+- **Each party downloads to a new `torrent-*` folder** in the user cache or `Config.CacheDir`,
+  removed when it ends: one sparse file named `data`, with piece state in memory (`torrentStore`). A crash
   leaves that folder behind. Nothing is seeded after the party.
 - **Don't go back to the library's file store.** It memory-maps and never unmaps, so Windows
   couldn't delete a partly downloaded file and a full disk would crash the app. Its piece map

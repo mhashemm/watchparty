@@ -38,6 +38,7 @@ const (
 type Config struct {
 	File       string
 	Playlist   bool
+	CacheDir   string
 	Mpv        string
 	MpvFlags   string
 	Hostname   string
@@ -75,7 +76,7 @@ func Run(parent context.Context, cfg Config) error {
 	var playlist bool
 	var file string
 	if isTorrent(target) {
-		cache, err := torrentCache()
+		cache, err := torrentCache(strings.TrimSpace(cfg.CacheDir))
 		if err != nil {
 			return err
 		}

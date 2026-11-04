@@ -69,13 +69,16 @@ func removeDownload(dir string) {
 	}
 }
 
-func torrentCache() (string, error) {
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
+// torrentCache is where downloads go: a folder the user chose, or their system's cache.
+func torrentCache(chosen string) (string, error) {
+	if chosen == "" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		chosen = filepath.Join(cache, "watchparty")
 	}
-	cache = filepath.Join(cache, "watchparty")
-	return cache, os.MkdirAll(cache, 0o700)
+	return chosen, os.MkdirAll(chosen, 0o700)
 }
 
 // openTorrent waits for the torrent's metadata, then serves what it plays to mpv on

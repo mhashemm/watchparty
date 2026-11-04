@@ -52,8 +52,9 @@ Playlists
 Torrents
   -file also takes a .torrent or a magnet link. Everyone uses the same one. It plays while it
   downloads. Several videos play as a playlist, and only the current one downloads. What you
-  watched is deleted when you leave, so make sure the disk has room until then. Other people
-  on the torrent can see your IP address, and you upload to them while you watch.
+  watched is deleted when you leave, so the disk needs room until then. It goes in your system's
+  cache folder, or -cacheDir to use another. Other people on the torrent can see your IP address,
+  and you upload to them while you watch.
 
 Relays
   A relay can ask for a create key to open a party: add -createKey KEY. Joining needs none.
@@ -76,6 +77,7 @@ func main() {
 	flag.StringVar(&cfg.Relay, "relay", "", "relay websocket url to use instead of a direct peer mesh")
 	flag.StringVar(&cfg.Room, "room", "", "relay room code (generated if empty)")
 	flag.StringVar(&cfg.Secret, "secret", "", "party secret, for the relay room or the direct mesh (generated if empty)")
+	flag.StringVar(&cfg.CacheDir, "cacheDir", "", "folder for torrent downloads, instead of your system's cache folder")
 	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	doUpdate := flag.Bool("update", false, "update to the latest release and exit")
