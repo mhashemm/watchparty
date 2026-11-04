@@ -55,6 +55,8 @@ torrent of long videos. The check mark doesn't matter.
   couldn't delete a partly downloaded file and a full disk would crash the app. Its piece map
   also panicked if closed while a hasher ran, in a goroutine, killing the GUI. Ours returns
   errors, a full disk stalls the stream, and nothing on disk is named by the torrent.
+- **No WebRTC peers** (`DisableWebtorrent`), so a torrent seeded only over WebRTC won't play.
+  That code parses hostile input and has panicked on it, which would kill the GUI.
 - **No router port is opened** (`NoDefaultPortForwarding`): that would surprise someone who
   only ever saw watchparty ask for one.
 - The library's logging is discarded, since log lines here are an API.

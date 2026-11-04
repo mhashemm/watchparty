@@ -323,6 +323,15 @@ func TestTheDefaultCacheFolderIsTheSystems(t *testing.T) {
 	}
 }
 
+// WebRTC peers bring a large parser surface for little gain, as nearly every swarm has
+// regular peers. It also means a magnet link's wss:// tracker opens no connection.
+func TestWebRTCPeersAreOff(t *testing.T) {
+	t.Parallel()
+	if !torrentConfig().DisableWebtorrent {
+		t.Fatal("WebRTC peers are on")
+	}
+}
+
 func TestIsTorrent(t *testing.T) {
 	t.Parallel()
 	for target, want := range map[string]bool{
@@ -371,5 +380,54 @@ func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
 		if left, _ := filepath.Glob(filepath.Join(cache, "torrent-*")); len(left) != 0 {
 			t.Fatalf("left %q behind", left)
 		}
+	}
+}
+
+// A .torrent, or metadata from a peer on a magnet link, can nest lists millions of levels
+// deep. The decoder used to recurse once per level until the stack limit, which Go can't
+// recover from, so one hostile peer took the whole app down.
+func TestDeeplyNestedMetadataDoesNotCrash(t *testing.T) {
+	t.Parallel()
+	const depth = 4_000_000
+	crafted := "d4:infod" + strings.Repeat("l", depth) + strings.Repeat("e", depth) + "ee"
+	file := filepath.Join(t.TempDir(), "crafted.torrent")
+	if err := os.WriteFile(file, []byte(crafted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if stream, err := openTorrent(c, file, t.TempDir(), testConfig(t)); err == nil {
+		stream.close()
+		t.Fatal("opened a crafted torrent")
+	}
+	var info metainfo.Info
+	if err := bencode.Unmarshal([]byte(strings.Repeat("l", depth)+strings.Repeat("e", depth)), &info); err == nil {
+		t.Fatal("decoded crafted metadata")
+	}
+}
+
+// A v2 file tree used to be re-parsed at every level, so a small one pinned a core for
+// minutes. Peers can send one on a magnet link too.
+func TestDeepFileTreeDoesNotHang(t *testing.T) {
+	t.Parallel()
+	const depth = 30_000
+	var tree any = map[string]any{"": map[string]any{"length": 5, "pieces root": strings.Repeat("A", 32)}}
+	for range depth {
+		tree = map[string]any{"a": tree}
+	}
+	crafted, err := bencode.Marshal(map[string]any{"meta version": 2, "piece length": 32768, "file tree": tree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var info metainfo.Info
+		bencode.Unmarshal(crafted, &info)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("still parsing after 10s")
 	}
 }

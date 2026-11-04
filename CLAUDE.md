@@ -129,7 +129,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   (`XDG_CURRENT_DESKTOP`, how a browser is installed, `busctl introspect`) before
   guessing.
 - Prefer a standard API over hard-coding tools (the XDG portal, not zenity). Add a
-  dependency only when the alternative isn't a few lines.
+  dependency only when the alternative isn't a few lines; keep direct ones on their latest.
 - Prove a test catches the bug: reintroduce it, watch it fail, restore, watch it pass.
   When a check fails, suspect the check first.
 - **Visual taste is the user's call.** Render options side by side and apply only the
