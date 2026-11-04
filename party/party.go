@@ -67,7 +67,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 
-	file, err := fingerprint(strings.TrimSpace(cfg.File))
+	files, playlist, file, err := media(strings.TrimSpace(cfg.File))
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,13 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	episodes := 0
+	if playlist {
+		episodes = len(files)
+		args = append(args, "--no-shuffle")
+	}
+	args = append(args, files...)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
@@ -146,7 +152,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming)
+	}, conn, outgoing, incoming, episodes)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():

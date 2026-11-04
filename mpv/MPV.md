@@ -5,13 +5,10 @@ upstream manual is <https://mpv.io/manual/master/> (sections "JSON IPC",
 "Properties", "List of events"). Read this first, and the manual only for anything
 not covered here.
 
-**Where this comes from.** Protocol text: the manual for mpv 0.37.0, the version
-installed on the dev machine. `DOCS/man/ipc.rst` is unchanged from v0.37.0 through
-master (v0.41.0 is the latest release), apart from a new `--input-ipc-client`
-mention, and no interface change since 0.37 touches anything below. Behaviour: real
-mpv 0.37.0 driven over the socket on 2026-10-30, with `--vo=null --ao=null --pause`
-and a 24fps H.264 file with a keyframe every 10s. "Observed" means seen in those
-runs; re-probe after an mpv upgrade (recipe at the end).
+**Where this comes from.** The manual and real mpv 0.37.0 (the dev machine's) driven
+over the socket on 2026-10-30, `--vo=null --ao=null --pause`, a 24fps H.264 file with a
+keyframe every 10s. `ipc.rst` is unchanged through v0.41.0 apart from `--input-ipc-client`.
+"Observed" means seen in those runs; re-probe after an mpv upgrade (recipe at the end).
 
 ## How `party.Run` starts mpv
 
@@ -27,6 +24,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--cache-pause=yes` | **Pinned.** When the cache runs dry, mpv waits and reports `paused-for-cache`, which pauses the party. With `no` it plays through stalls with no signal, and the node falls behind: `[R11f]` measured 16.9s without the pin. |
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
+| `--no-shuffle` | **Pinned, folders only.** Peers can start on the same entry only if the order is ours. |
 | `--vo=null --ao=null` | Tests only (e2e, GUI checks): no window, no sound. |
 
 **We don't pass `--no-config`, on purpose:** people keep their subtitle languages,
@@ -40,13 +38,11 @@ config still applies, for example `keep-open` (see "Ending").
 
 ## The connection
 
-- **The socket exists ~40ms after mpv starts**, long before the file is loaded.
-  `party.Run` dials it every 50ms, and `mpv.New` waits for the first `time-pos` with
-  data (the file is loaded, ~0.06s for a local movie).
+- **The socket exists ~40ms after mpv starts**, long before the file is loaded. `party.Run`
+  dials it every 50ms, and `mpv.New` waits for the first `time-pos` with data.
 - Each connection is its own client. **Observers belong to the connection:** close
   it and they are gone, and mpv keeps running.
-- It is local-only and explicitly insecure (it can run arbitrary commands). Never
-  expose it.
+- It is local-only and can run arbitrary commands. Never expose it.
 
 ## Wire protocol
 
@@ -64,9 +60,7 @@ config still applies, for example `keep-open` (see "Ending").
   - `data` is absent for `set_property`/`observe_*`, `null` for commands with no
     result (`show-text`, `quit`, `seek`), and the value for `get_property`.
 - **Events:** `{"event": name, ...}`. They can arrive between our request and its
-  reply, so never assume the next line is the reply. Replies to one connection come
-  in request order (the manual's only ordering guarantee). The `async` flag exists;
-  we don't use it.
+  reply. Replies to one connection come in request order, the manual's only guarantee.
 
 ## Commands we send
 
@@ -75,22 +69,21 @@ config still applies, for example `keep-open` (see "Ending").
 | `["observe_property_string", id, name]` | `New`, ids 1 = `pause`, 2 = `time-pos`, 3 = `paused-for-cache` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
 | `["set_property", "pause", bool]` | `pause()` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. |
 | `["set_property", "time-pos", "<string>"]` | `sync()` | A string is accepted, so the received event's `data` is forwarded as is. This is an **absolute seek**. |
+| `["set_property", "playlist-pos", n]` | `followEpisode()` | Observed with id 4, folders only. A no-op set emits nothing. |
 | `["show-text", text, ms]` | `showText()` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Its log line is how e2e and the GUI read notices. |
 
 By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absolute"]`.
 
 ## Properties we watch
 
-- **`pause`** (option-property, RW): `"yes"`/`"no"` via `observe_property_string`.
-  `core-idle` differs (also true while buffering or seeking). We don't use it.
+- **`pause`** (RW): `"yes"`/`"no"` via `observe_property_string`.
 - **`paused-for-cache`** (RO): `"yes"` while mpv is waiting on its cache, with
   `pause` still `"no"`. At load it comes first with no data, then `"no"`. Under
   `--cache-pause-wait` (default 1s) it clears once that much is cached again, and mpv
   then resumes by itself unless `pause` is set, which is why the node pauses itself.
 - **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet,
   or quitting) **the `property-change` event has no `data` field at all**, which
-  unmarshals to `Data == ""`. `playback-time` is the same, clamped to the file's
-  range. We don't use it.
+  unmarshals to `Data == ""`.
 
 ## Events
 
@@ -173,6 +166,14 @@ Every event goes through `handleEvent`; anything but `property-change` is
   a quit, so each node's party ends with the movie. A user's `keep-open` instead
   pauses on the last frame and broadcasts that pause.
 
+### Playlists (probed 2026-11-04 on 0.37.0 and 0.40.0)
+
+- A switch sends a data-less `time-pos`, `playlist-pos` (0-based; its place around
+  `end-file` varies), `file-loaded`, then `time-pos` 0. It always beat `file-loaded`.
+- **`pause` carries over**, so a playing node starts the next file playing. No `seek` is sent.
+- A seek past the end while paused stops on the last frame. Resuming there moves on at
+  once. After the last file: `end-file` `eof`, then exit 0.
+
 ### Resuming
 
 - A user's `save-position-on-quit` writes the position to the watch-later dir
@@ -183,7 +184,6 @@ Every event goes through `handleEvent`; anything but `property-change` is
 ## Re-probing
 
 Drive a real mpv the way `watch()` does: Python, a unix socket, no dependencies.
-
 ```sh
 ffmpeg -f lavfi -i testsrc=size=160x120:rate=24 -t 200 -c:v libx264 -g 240 -pix_fmt yuv420p /tmp/probe.mkv
 mpv --vo=null --ao=null --pause --watch-later-dir=/tmp/wl --input-ipc-server=/tmp/probe.sock /tmp/probe.mkv &
@@ -195,6 +195,5 @@ for c in [b"[\"observe_property_string\",2,\"time-pos\"]", b"[\"set_property\",\
 print(s.recv(65536).decode())'
 ```
 
-- `--watch-later-dir` keeps probes out of the real resume store.
-- `-g 240` gives a keyframe every 10s, so keyframe snapping is visible.
-- Keep the connection open for as long as you want events: observers die with it.
+`--watch-later-dir` keeps probes out of the real resume store, `-g 240` makes keyframe
+snapping visible, and observers die with the connection.

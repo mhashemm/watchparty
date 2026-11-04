@@ -48,8 +48,6 @@ type form struct {
 	MpvFlags  string `json:"mpvFlags"`
 }
 
-var videoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
-
 func (f form) config() (party.Config, error) {
 	cfg := party.Config{
 		File:     strings.TrimSpace(f.File),
@@ -141,7 +139,7 @@ func (g *gui) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *gui) pick(w http.ResponseWriter, r *http.Request) {
-	path, err := pickFile()
+	path, err := pickFile(r.URL.Query().Has("folder"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

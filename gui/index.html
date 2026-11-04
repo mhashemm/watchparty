@@ -461,8 +461,9 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <div class="field">
           <label for="file">File</label>
           <div class="row">
-            <input type="text" id="file" placeholder="Full path to the video file" required>
+            <input type="text" id="file" placeholder="Path to a video or a folder" required>
             <button type="button" data-pick="file">Browse</button>
+            <button type="button" data-pick="file" data-folder="1">Folder</button>
           </div>
         </div>
 
@@ -767,7 +768,7 @@ document.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click"
   const target = $(b.dataset.pick);
   b.disabled = true;
   try {
-    const res = await api("/pick", {});
+    const res = await api(b.dataset.folder ? "/pick?folder=1" : "/pick", {});
     const path = (await res.text()).trim();
     if (!res.ok) throw new Error(path);
     if (path) target.value = path;

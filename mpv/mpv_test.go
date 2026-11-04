@@ -326,7 +326,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage))
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), 0)
 		close(loaded)
 	}()
 	select {
@@ -354,7 +354,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 	start := time.Now()
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage))
+	_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), 0)
 	if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 		t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 	}
@@ -393,7 +393,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 	incoming := make(chan IncomingMessage)
 	loaded := make(chan error, 1)
 	go func() {
-		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming)
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, 0)
 		loaded <- err
 	}()
 	send := func(name, data string) {
@@ -729,5 +729,196 @@ func TestPausedAtFollowsOnlyWhoPausedUs(t *testing.T) {
 	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want a position already within a frame skipped", got)
+	}
+}
+
+func playlistClient(t *testing.T) (*Client, func(string), chan []byte, chan string) {
+	t.Helper()
+	c, send, outgoing, requests := liveClient(t)
+	c.episodes = 3
+	c.seen[playlistPos] = true
+	return c, send, outgoing, requests
+}
+
+// Moving on while playing, at the end of an episode or by hand, stops the party on the
+// next one. Peers hear which episode first, so the pause and position land on it.
+func TestMovingToAnEpisodeWhilePlayingPausesTheParty(t *testing.T) {
+	t.Parallel()
+	_, send, outgoing, requests := playlistClient(t)
+	send(propertyChangeLine(timePos, "900.000000", 0))
+
+	send(propertyChangeLine(playlistPos, "1", 0))
+	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Data != "1" {
+		t.Fatalf("broadcast %+v, want the episode", e)
+	}
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the party paused", got)
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause {
+		t.Fatalf("broadcast %+v, want the pause", e)
+	}
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "0.000000" {
+		t.Fatalf("broadcast %+v, want the new episode's start, not the old position", e)
+	}
+	if e := nextEvent(t, outgoing); e.Name != pauseReason || e.Data != "episode changed" {
+		t.Fatalf("broadcast %+v, want the reason", e)
+	}
+}
+
+// A new file reports time-pos 0 while paused. Sent on, it would seek a peer still
+// playing the end of the last episode.
+func TestMovingWhilePausedSendsOnlyTheEpisode(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, _ := playlistClient(t)
+	c.paused = true
+
+	send(propertyChangeLine(playlistPos, "2", 0))
+	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Data != "2" {
+		t.Fatalf("broadcast %+v, want the episode", e)
+	}
+	send(propertyChangeLine(timePos, "0.000000", 0))
+	send(propertyChangeLine(pause, "no", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause {
+		t.Fatalf("broadcast %+v, want nothing before the resume", e)
+	}
+}
+
+// mpv reports where it starts as soon as it is observed, and -1 once the list runs out.
+// Neither is someone moving.
+func TestPlaylistPositionThatIsNotAMoveStaysLocal(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, _ := playlistClient(t)
+	c.paused = true
+	delete(c.seen, playlistPos)
+
+	send(propertyChangeLine(playlistPos, "2", 0))
+	send(propertyChangeLine(playlistPos, "-1", 0))
+	send(propertyChangeLine(playlistPos, "0", 0))
+	if e := nextEvent(t, outgoing); e.Data != "0" {
+		t.Fatalf("broadcast %+v, want only the move to the first", e)
+	}
+}
+
+// mpv can report the entry it starts on, from --playlist-start, before the file is
+// loaded. That isn't a move, and the file's first time-pos must still count as loaded.
+func TestStartingEntryBeforeTheFileLoadsIsNotAMove(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, _ := playlistClient(t)
+	c.paused = true
+	delete(c.seen, timePos)
+
+	send(propertyChangeLine(playlistPos, "1", 0))
+	send(propertyChangeLine(timePos, "0.000000", 0))
+	select {
+	case <-c.ready:
+	case <-time.After(time.Second):
+		t.Fatal("the party never learned the file loaded")
+	}
+	send(propertyChangeLine(pause, "no", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause {
+		t.Fatalf("broadcast %+v, want nothing before the resume", e)
+	}
+	if c.current != 1 {
+		t.Fatalf("on entry %d, want 1", c.current)
+	}
+}
+
+// A peer's move opens the next file stopped, and mpv's report of it isn't sent back.
+func TestFollowingAnEpisodeStopsFirstAndStaysQuiet(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := playlistClient(t)
+
+	go c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"2"}`))
+	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property playlist-pos 2", "show-text episode 3 of 3, by a 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	send(propertyChangeLine(playlistPos, "2", 0))
+	send(propertyChangeLine(timePos, "0.000000", 0))
+	send(propertyChangeLine(pause, "no", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "no" {
+		t.Fatalf("broadcast %+v, want nothing before the resume", e)
+	}
+}
+
+// Every member answers a joiner, and two nodes can reach the end together.
+func TestEpisodeAlreadyHeadedThereIsNotRepeated(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.current = true, 1
+
+	go func() {
+		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"2"}`))
+		c.apply(peer("b", `{"event":"property-change","name":"playlist-pos","data":"2"}`))
+		c.apply(peer("b", `{"event":"property-change","name":"playlist-pos","data":"3"}`))
+		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
+	}()
+	for _, want := range []string{"set_property playlist-pos 2", "show-text episode 3 of 3, by a 5000", "show-text mark 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+}
+
+// A seek right after a move would land on the old file, which then ends and loses it.
+// A joiner hits this every time: it is told the episode, then the position.
+func TestSeekAfterFollowingAnEpisodeWaitsForTheFile(t *testing.T) {
+	t.Parallel()
+	c, send, _, requests := playlistClient(t)
+	c.paused = true
+
+	go func() {
+		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+		c.apply(peer("a", `{"event":"property-change","name":"time-pos","data":"40.000000"}`))
+	}()
+	for _, want := range []string{"set_property playlist-pos 1", "show-text episode 2 of 3, by a 5000", "show-text synced by a 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	send(`{"event":"file-loaded"}` + "\n")
+	if got := next(t, requests); got != "set_property time-pos 40.000000" {
+		t.Fatalf("sent %q, want the held seek", got)
+	}
+}
+
+// The room's first node is still a joiner until someone resumes or seeks, so it has no
+// position to give, but it does know which episode it opened.
+func TestJoiningNodeStillNamesItsEpisode(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := playlistClient(t)
+	c.paused, c.joining, c.current = true, true, 2
+
+	c.apply(peer("j", `{"name":"joined"}`))
+	c.apply(peer("j", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q before the mark", got)
+	}
+	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Data != "2" {
+		t.Fatalf("broadcast %+v, want the episode", e)
+	}
+	select {
+	case e := <-outgoing:
+		t.Fatalf("answered with a position too: %s", e)
+	default:
+	}
+}
+
+// A joiner opens on the first episode, so it is told which one before where in it.
+func TestJoinAnswerNamesTheEpisodeFirst(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, _ := playlistClient(t)
+	c.paused, c.current, c.pos = true, 2, 33
+
+	go c.apply(peer("j", `{"name":"joined"}`))
+	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Data != "2" {
+		t.Fatalf("broadcast %+v, want the episode", e)
+	}
+	if e := nextEvent(t, outgoing); e.Name != startPos || e.Data != "33.000000" {
+		t.Fatalf("broadcast %+v, want the position", e)
 	}
 }

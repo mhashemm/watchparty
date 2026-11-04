@@ -45,11 +45,11 @@ an event broadcasts it. `applied`/`seeks` drop mpv's echo of a peer's change, `s
 its first reply to an observe, P2P counters stale requests. Don't bring back a `role`
 echo hack: it muted the peer, not the echo.
 
-**Playback is never synced, only paused.** Only `pause` and `time-pos` (while paused)
-go over the wire. Anything that would put nodes out of step (a seek while playing,
-running out of cache, a mid-party join) pauses the whole party, and someone resumes it
-by hand. Every pause carries where it stopped. **Same file, or no party:** a joiner whose
-file fingerprint differs is refused with 409.
+**Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
+the episode go over the wire. Anything that would put nodes out of step (a seek while
+playing, running out of cache, a mid-party join, a new episode) pauses the whole party,
+and someone resumes it by hand. Every pause carries where it stopped. **Same file, or no party:** a joiner whose
+fingerprint differs is refused with 409. A folder is a playlist; episodes move together.
 
 ## Contracts between packages
 
