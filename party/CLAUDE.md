@@ -49,7 +49,8 @@ torrent of long videos. The check mark doesn't matter.
 - **Torrent names are hostile input**, so a name goes through `flatten` before the log, or
   it could forge a line the GUI reads. The library refuses a path that escapes its folder.
 - **Each party downloads to a new `torrent-*` folder** in the user cache, removed when it
-  ends, with a map for piece completion: a crash leaves that folder behind, not a database
+  ends (retrying for up to 10s, since Windows can't remove a file the client's last reads
+  still hold), with a map for piece completion: a crash leaves that folder behind, not a database
   that a second party would lock. Nothing is seeded after the party.
 - **Never close the storage.** `Client.Close` doesn't wait for its piece hashers, and closing
   the store clears the piece map a hasher reads, so the library panics in its own goroutine,

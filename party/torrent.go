@@ -24,7 +24,10 @@ import (
 	"github.com/anacrolix/torrent/storage"
 )
 
-const torrentReadahead = 32 << 20
+const (
+	torrentReadahead   = 32 << 20
+	removeDownloadWait = 10 * time.Second
+)
 
 func isTorrent(target string) bool {
 	lower := strings.ToLower(target)
@@ -64,6 +67,18 @@ func playable(files []*torrent.File) []*torrent.File {
 	return videos
 }
 
+// removeDownload outlasts the client's last reads and writes, which it doesn't wait for
+// when it closes. On Windows a file that is still open can't be removed.
+func removeDownload(dir string) {
+	err := os.RemoveAll(dir)
+	for end := time.Now().Add(removeDownloadWait); err != nil && time.Now().Before(end); err = os.RemoveAll(dir) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		log.Printf("torrent: couldn't remove the download: %s\n", flatten(err.Error()))
+	}
+}
+
 func torrentCache() (string, error) {
 	cache, err := os.UserCacheDir()
 	if err != nil {
@@ -87,7 +102,7 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	closers := []func(){func() { os.RemoveAll(dir) }, func() { client.Close() }}
+	closers := []func(){func() { removeDownload(dir) }, func() { client.Close() }}
 	closeAll := func() {
 		for _, f := range slices.Backward(closers) {
 			f()

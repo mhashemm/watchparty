@@ -292,8 +292,9 @@ func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
 	t.Parallel()
 	magnet, _ := seed(t, severalVideos())
 	for range 5 {
+		cache := t.TempDir()
 		c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		stream, err := openTorrent(c, magnet, t.TempDir(), testConfig(t))
+		stream, err := openTorrent(c, magnet, cache, testConfig(t))
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -310,5 +311,8 @@ func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		stream.close()
 		<-done
+		if left, _ := filepath.Glob(filepath.Join(cache, "torrent-*")); len(left) != 0 {
+			t.Fatalf("left %q behind", left)
+		}
 	}
 }
