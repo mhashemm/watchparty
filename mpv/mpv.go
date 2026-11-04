@@ -124,7 +124,7 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
-	Entry   *int   `json:"entry,omitempty"`
+	Entry     *int   `json:"entry,omitempty"`
 	From      *int   `json:"from,omitempty"`
 	Response
 }
@@ -158,7 +158,7 @@ type Client struct {
 	reason   string
 	joining  bool
 	pausedBy string
-	entries int
+	entries  int
 	current  int
 	left     int
 	loading  bool
@@ -700,7 +700,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		paused:   true,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
-		entries: entries,
+		entries:  entries,
 		left:     -1,
 	}
 
