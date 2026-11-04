@@ -95,6 +95,9 @@ func Run(parent context.Context, cfg Config) error {
 		log.Printf("your address to share is -relay %s -room %s -secret %s\n", conn.addr, cfg.Room, cfg.Secret)
 	} else {
 		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, file)
+		if err != nil && parent.Err() != nil {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -250,7 +253,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		address = fmt.Sprintf("%s:%d", localIP, cfg.Port)
 	} else {
 		upnp.Logger = slog.New(upnpLogger{l: log.Default()})
-		upnpClient, err := upnp.New()
+		upnpClient, err := upnp.NewContext(c)
 		if err != nil {
 			return nil, fmt.Errorf("upnp: %w", err)
 		}

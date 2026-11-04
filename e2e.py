@@ -1883,6 +1883,17 @@ def gui_suite():
         ok("and nothing it sent starts a line", not [l for l in log(n).splitlines() if l.startswith("2026/01/01")], log(n))
         stop(n)
 
+        print("\n[G34d] stopping during discovery doesn't wait out the search, and isn't an error")
+        calls = len(gw.actions)
+        n = launch("upnpStopped", port=PORTS["upnpNode"], local=False)
+        must("it reached discovery", until(lambda: "file fingerprint" in log(n), BOOT), log(n))
+        began = time.time()
+        stop(n)
+        took = time.time() - began
+        ok("it stops well inside the 6.5s search", took < 4, f"{took:.1f}s")
+        ok("with exit code 0", nodes[n]["proc"].returncode == 0, str(nodes[n]["proc"].returncode))
+        ok("and no error, and nothing mapped", "canceled" not in log(n) and "AddPortMapping" not in gw.actions[calls:], log(n))
+
         print("\n[G35] the GUI says so too, and only for the party it's true of")
         gw.ip = "10.172.178.175"
         P = launch_gui("guiUpnp")
@@ -1898,6 +1909,14 @@ def gui_suite():
         must("the next party starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
         ok("with a public address it doesn't warn", status(P) == "You're in. Pause or seek in mpv and everyone follows.", status(P))
         end(P)
+
+        print("\n[G35b] the GUI's Stop during discovery ends the party, without a diagnosis")
+        go(P)
+        began = time.time()
+        end(P)
+        took = time.time() - began
+        ok("it says it ended", status(P) == "The party has ended.", status(P))
+        ok("well inside the 6.5s search", took < 4, f"{took:.1f}s")
         stop(P)
 
     install_suite()
