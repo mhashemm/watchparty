@@ -804,7 +804,7 @@ $("form").addEventListener("submit", async e => {
 
 let run = 0, from = 0, state = {};
 function reset() {
-  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false };
+  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false };
   $("log").textContent = "";
   $("feed").innerHTML = '<li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li>';
   $("share").hidden = true;
@@ -839,6 +839,7 @@ function handle(line) {
   }
   if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
+  if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
   }
@@ -863,6 +864,8 @@ function render(exitErr) {
     text = "Lost the relay. Reconnecting…"; walking = true;
   } else if (running && !state.ready) {
     text = "Opening mpv. This takes a few seconds…"; walking = true;
+  } else if (running && state.unreachable) {
+    text = "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.";
   } else if (running) {
     text = "You're in. Pause or seek in mpv and everyone follows.";
   } else if (exitErr) {

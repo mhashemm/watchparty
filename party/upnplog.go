@@ -23,11 +23,15 @@ func (h upnpLogger) Handle(_ context.Context, r slog.Record) error {
 		fmt.Fprintf(&b, " %s=%v", a.Key, a.Value)
 		return true
 	})
-	h.l.Println(strings.Map(func(c rune) rune {
+	h.l.Println(flatten(b.String()))
+	return nil
+}
+
+func flatten(s string) string {
+	return strings.Map(func(c rune) rune {
 		if unicode.IsControl(c) {
 			return ' '
 		}
 		return c
-	}, b.String()))
-	return nil
+	}, s)
 }

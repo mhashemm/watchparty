@@ -53,7 +53,8 @@ watchparty -local -file movie.mkv -port 6970 -addrs 192.168.1.5:6969 -secret XYZ
 ```
 
 Over the internet, without `-local`, the program opens a port on your router through
-UPnP. Your router has to support UPnP for this to work.
+UPnP. Your router has to support UPnP for this to work, and your connection needs a
+public address: behind carrier NAT, common on mobile routers, it warns you to use a relay.
 
 Through a relay, which works behind any NAT:
 

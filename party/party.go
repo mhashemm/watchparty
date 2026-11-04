@@ -276,7 +276,10 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 			runCleanup()
 			return nil, fmt.Errorf("upnp: %w", err)
 		}
-		publicIp := externalIp.NewExternalIPAddress
+		publicIp := flatten(externalIp.NewExternalIPAddress)
+		if upnp.IPClass(publicIp) != upnp.IPPublic {
+			log.Printf("unreachable address: %s can't be reached from outside this network, your connection may be behind carrier NAT; use a relay for friends elsewhere\n", publicIp)
+		}
 		address = fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort)
 	}
 

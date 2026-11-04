@@ -4,7 +4,7 @@ github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNU
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/godbus/dbus/v5 v5.1.0 h1:4KLkAxT3aOY8Li4FRJe/KvhoNFFxo0m6fNuFUO8QJUk=
 github.com/godbus/dbus/v5 v5.1.0/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
-github.com/mhashemm/upnp v0.5.0 h1:3bwtPgJ/uztaxKwT1eCcUwkT1Nubs4V1/yqDtaneaUs=
-github.com/mhashemm/upnp v0.5.0/go.mod h1:TRO8uMYDugCqJI9SSHY2HT9gdqOMvX0MJH2lCWP8A2s=
+github.com/mhashemm/upnp v0.5.1 h1:0EmS+2ZMA5XV7dk2tYFauvuumIfcGMTU6T5DRIQ1EKM=
+github.com/mhashemm/upnp v0.5.1/go.mod h1:TRO8uMYDugCqJI9SSHY2HT9gdqOMvX0MJH2lCWP8A2s=
 golang.org/x/sys v0.10.0 h1:SqMFp9UcQJZa+pmYuAKjd9xq1f0j5rLcDIk0mj4qAsA=
 golang.org/x/sys v0.10.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
