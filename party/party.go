@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ const (
 
 type Config struct {
 	File       string
+	Playlist   bool
 	Mpv        string
 	MpvFlags   string
 	Hostname   string
@@ -67,7 +69,11 @@ func Run(parent context.Context, cfg Config) error {
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 
-	target, file := strings.TrimSpace(cfg.File), ""
+	target := strings.TrimSpace(cfg.File)
+	var files []string
+	var start int
+	var playlist bool
+	var file string
 	if isTorrent(target) {
 		cache, err := torrentCache()
 		if err != nil {
@@ -81,10 +87,10 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		target, file = stream.url, stream.id
+		files, file = []string{stream.url}, stream.id
 	} else {
 		var err error
-		file, err = fingerprint(target)
+		files, start, playlist, file, err = media(target, cfg.Playlist)
 		if err != nil {
 			return err
 		}
@@ -129,7 +135,13 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), target)
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	episodes := 0
+	if playlist {
+		episodes = len(files)
+		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
+	}
+	args = append(args, files...)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
@@ -164,7 +176,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming)
+	}, conn, outgoing, incoming, episodes)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():

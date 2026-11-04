@@ -21,6 +21,8 @@ const (
 	pause          = "pause"
 	timePos        = "time-pos"
 	pausedForCache = "paused-for-cache"
+	playlistPos    = "playlist-pos"
+	fileLoaded     = "file-loaded"
 	propertyChange = "property-change"
 	seek           = "seek"
 	setProperty    = "set_property"
@@ -154,6 +156,10 @@ type Client struct {
 	reason   string
 	joining  bool
 	pausedBy string
+	episodes int
+	current  int
+	loading  bool
+	heldSeek string
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -189,11 +195,24 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		}
 		return nil, errDoNotSend
 
+	case fileLoaded:
+		c.loading = false
+		if held := c.heldSeek; held != "" {
+			c.heldSeek = ""
+			go func() {
+				if err := c.seekTo(held); err != nil {
+					log.Println("seek after loading:", err)
+				}
+			}()
+		}
+		return nil, errDoNotSend
+
 	case propertyChange:
 		if event.Data == "" {
 			return nil, errDoNotSend
 		}
 		var extra [][]byte
+		changed := false
 		switch event.Name {
 		case timePos:
 			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
@@ -202,6 +221,14 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		case pause:
 			if event.paused() {
 				extra = c.pauseExtras()
+			}
+		case playlistPos:
+			if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
+				c.current, c.pos, c.seeking = n, 0, false
+				changed = c.seen[timePos]
+				if changed {
+					c.seeks = []float64{0}
+				}
 			}
 		}
 		if c.isEcho(event) {
@@ -246,6 +273,14 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 				c.pauseParty("buffering")
 			}
 			return nil, errDoNotSend
+		case playlistPos:
+			if !changed || first {
+				return nil, errDoNotSend
+			}
+			if !c.paused {
+				c.pauseParty("episode changed")
+			}
+			return nil, nil
 		default:
 			return nil, errDoNotSend
 		}
@@ -391,6 +426,8 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.arrive(event, e.HostName)
 		case pausedAt:
 			err = c.align(event, e.HostName)
+		case playlistPos:
+			err = c.followEpisode(event, e.HostName)
 		}
 	}
 	if err != nil {
@@ -401,7 +438,18 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
+	var episode []byte
+	if c.episodes > 0 {
+		episode, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
+	}
 	c.mu.Unlock()
+	if episode != nil {
+		select {
+		case c.outgoing <- episode:
+		case <-c.ctx.Done():
+			return nil
+		}
+	}
 	if joining {
 		return nil
 	}
@@ -420,6 +468,39 @@ func (c *Client) welcome(hostname string) error {
 	case <-c.ctx.Done():
 	}
 	return nil
+}
+
+func (c *Client) followEpisode(event Event, hostname string) error {
+	i, err := strconv.Atoi(event.Data)
+	if err != nil {
+		return err
+	}
+	if i < 0 || i >= c.episodes {
+		return errors.New("no such episode")
+	}
+	c.mu.Lock()
+	there := i == c.current || c.applied[playlistPos] == event.Data
+	c.mu.Unlock()
+	if there {
+		return nil
+	}
+	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.loading = true
+	c.applied[playlistPos] = event.Data
+	c.mu.Unlock()
+	err = c.conn.do(setProperty, playlistPos, i)
+	if err != nil {
+		c.mu.Lock()
+		c.loading = false
+		delete(c.applied, playlistPos)
+		c.mu.Unlock()
+		return err
+	}
+	return c.showText(fmt.Sprintf("episode %d of %d, by %s", i+1, c.episodes, hostname))
 }
 
 func (c *Client) arrive(event Event, hostname string) error {
@@ -519,6 +600,11 @@ func (c *Client) seekTo(data string) error {
 	c.seeks = append(c.seeks, pos)
 	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
 	c.joining = false
+	if c.loading {
+		c.heldSeek = data
+		c.mu.Unlock()
+		return nil
+	}
 	c.mu.Unlock()
 	return c.conn.do(setProperty, timePos, data)
 }
@@ -546,7 +632,8 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage) (*Client, error) {
+// New wires up one mpv. episodes is the length of its playlist, and 0 for a single file.
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, episodes int) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -561,6 +648,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		paused:   true,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
+		episodes: episodes,
 	}
 
 	go client.ProcessIncomingEvents(incoming)
@@ -579,6 +667,9 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 	}()
 
 	events := []string{pause, timePos, pausedForCache}
+	if episodes > 0 {
+		events = append(events, playlistPos)
+	}
 	for i, event := range events {
 		err := conn.do("observe_property_string", i+1, event)
 		if err != nil {

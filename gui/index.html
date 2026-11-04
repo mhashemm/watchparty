@@ -464,6 +464,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
             <input type="text" id="file" placeholder="Path to a video, .torrent or magnet link" required>
             <button type="button" data-pick="file">Browse</button>
           </div>
+          <label class="check" style="margin-top:10px"><input type="checkbox" id="playlist"> Also load the other videos in this folder</label>
         </div>
 
         <div class="field">
@@ -661,7 +662,7 @@ function setMode(m) {
 document.querySelectorAll("input[name=mode]").forEach(r => r.addEventListener("change", () => setMode(mode())));
 
 function collect() {
-  const f = { mode: mode(), file: $("file").value, local: $("local").checked };
+  const f = { mode: mode(), file: $("file").value, local: $("local").checked, playlist: $("playlist").checked };
   for (const k of FIELDS) f[k] = $(k).value;
   if (f.mode === "direct") f.secret = $("psecret").value;
   return f;
@@ -720,6 +721,7 @@ function renderHistory() {
 }
 function watchAgain(p) {
   $("file").value = p.file;
+  $("playlist").checked = !!p.playlist;
   if (p.mode === "direct") {
     setMode("direct");
     $("addrs").value = p.addrs || "";

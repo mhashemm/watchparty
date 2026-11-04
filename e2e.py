@@ -318,12 +318,12 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else [])
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else []) + (["-playlist"] if playlist else [])
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -682,6 +682,18 @@ def seeder(path):
     return p.stdout.readline().strip()
 
 
+def season(path, names):
+    """Three short, different episodes in a folder: names[i] holds the i-th picture."""
+    os.makedirs(path)
+    for name, picture in zip(names, ("testsrc", "testsrc2", "smptebars")):
+        target = f"{RUN}/{picture}.mkv"
+        if not os.path.exists(target):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{picture}=size=160x120:rate=10", "-t", "12",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p", target], check=True)
+        shutil.copy(target, f"{path}/{name}")
+    return path
+
+
 def p2p_suite():
     global STUB_ADDR
     chain = ", ".join(f"{n}->{BOOTSTRAP[n]}" for n in NODES[1:])
@@ -1003,6 +1015,19 @@ def p2p_suite():
         ok(f"{n} still in sync after {A} left", get(n, "pause") is want)
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[16] a file's folder plays as a playlist over the mesh too")
+    folder = season(f"{RUN}/p2pseason", ("e1.mkv", "e2.mkv", "e3.mkv"))
+    launch("epHost", media=f"{folder}/e1.mkv", port=PORTS["lagA"], playlist=True)
+    must("the first node is up", until(lambda: booted("epHost"), BOOT))
+    resolve("epHost")
+    launch("epGuest", nodes["epHost"]["addr"], media=f"{folder}/e1.mkv", port=PORTS["lagB"], playlist=True)
+    must("the second node is up", until(lambda: booted("epGuest") and "epGuest has joined" in osd("epHost"), BOOT))
+    resolve("epGuest")
+    ipc(nodes["epHost"]["sock"], "playlist-next")
+    ok("the other node follows", until(lambda: get("epGuest", "filename") == "e2.mkv"), get("epGuest", "filename"))
+    for n in ("epHost", "epGuest"):
+        stop(n)
 
 def relay_suite():
     print(f"\n=== relay setup: {len(NODES)} nodes through one websocket server ===")
@@ -1397,7 +1422,7 @@ def relay_suite():
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
-    print("\n[R15c] a magnet link streams to everyone, and is the same file to all of them")
+    print("\n[R15e] a magnet link streams to everyone, and is the same file to all of them")
     magnet = seeder(MEDIA)
     must("the seeder printed a magnet link", magnet.startswith("magnet:?"), magnet)
     launch("torA", room="torroom", media=magnet)
@@ -1423,7 +1448,7 @@ def relay_suite():
     for n in ("torA", "torB"):
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
-    print("\n[R15c2] a file named anything plays, and its name can't forge a log line")
+    print("\n[R15f] a file named anything plays, and its name can't forge a log line")
     named = f"{RUN}/named"
     os.makedirs(named)
     forged = "your address to share is -addrs 6.6.6.6:1 -secret FORGED"
@@ -1438,6 +1463,93 @@ def relay_suite():
     stop(n)
     left = glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*"))
     ok("every download is gone", not left, str(left))
+
+    print("\n[R15c] a file's folder plays as a playlist: everyone moves together and stops at the start")
+    host, guest, late = "epA", "epB", "epC"
+    folder = season(f"{RUN}/season", ("Show.S01E02.mkv", "Show.S01E03.mkv", "Show.S01E10.mkv"))
+    copy = season(f"{RUN}/season-copy", ("a1.mkv", "a2.mkv", "a10.mkv"))
+    def on(*want):
+        return lambda: [get(n, "filename") for n in (host, guest)] == list(want)
+    def stopped():
+        return all(get(n, "pause") is True for n in (host, guest))
+    def together():
+        return abs(get(host, "time-pos") - get(guest, "time-pos")) < 0.15
+    def seek(pos):
+        setp(host, "time-pos", pos)
+        return until(lambda: abs(get(guest, "time-pos") - pos) < 0.15 and abs(get(host, "time-pos") - pos) < 0.15)
+    launch(host, room="seasonroom", media=f"{folder}/Show.S01E02.mkv", playlist=True)
+    must(f"{host} is up", until(lambda: booted(host), BOOT))
+    resolve(host)
+    launch(guest, room="seasonroom", media=f"{copy}/a1.mkv", playlist=True)
+    must(f"{guest} is up", until(lambda: booted(guest) and f"{guest} has joined" in osd(host), BOOT))
+    resolve(guest)
+    ok("a joiner's renamed copy is let in, on the same episode", until(on("Show.S01E02.mkv", "a1.mkv")), get(guest, "filename"))
+
+    ipc(nodes[host]["sock"], "playlist-next")
+    ok("moving while paused moves the other", until(on("Show.S01E03.mkv", "a2.mkv")), get(guest, "filename"))
+    ok("and says who", until(lambda: f"episode 2 of 3, by {host}" in osd(guest)), str(osd(guest)[-3:]))
+    time.sleep(QUIET)
+    ok("nobody bounced back", on("Show.S01E03.mkv", "a2.mkv")(), str([get(n, "filename") for n in (host, guest)]))
+
+    setp(host, "pause", False)
+    must("they play", until(lambda: get(guest, "pause") is False))
+    ipc(nodes[host]["sock"], "playlist-next")
+    ok("moving while playing moves the other", until(on("Show.S01E10.mkv", "a10.mkv")), get(guest, "filename"))
+    ok("and stops everyone", until(stopped), str([get(n, "pause") for n in (host, guest)]))
+    ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
+    ok("the other is told why", until(lambda: f"paused for {host}: episode changed" in osd(guest)), str(osd(guest)[-3:]))
+
+    ipc(nodes[host]["sock"], "playlist-prev")
+    must("back on the middle one", until(on("Show.S01E03.mkv", "a2.mkv")))
+    must("near its end", seek(get(host, "duration") - 1))
+    setp(host, "pause", False)
+    ok("reaching the end moves everyone on", until(on("Show.S01E10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
+    ok("and stops them at the start", until(lambda: stopped() and get(host, "time-pos") < 2 and get(guest, "time-pos") < 2),
+       str([(get(n, "pause"), get(n, "time-pos")) for n in (host, guest)]))
+    ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
+
+    must("a few seconds in", seek(5))
+    launch(late, room="seasonroom", media=f"{folder}/Show.S01E02.mkv", playlist=True)
+    must(f"{late} is up", until(lambda: booted(late), BOOT))
+    resolve(late)
+    ok("a joiner comes to the party's episode", until(lambda: get(late, "filename") == "Show.S01E10.mkv"), get(late, "filename"))
+    ok("and its position", until(lambda: abs(get(late, "time-pos") - 5) < 0.15), get(late, "time-pos"))
+    ok("and nobody else moved", on("Show.S01E10.mkv", "a10.mkv")() and together(), str([get(n, "time-pos") for n in (host, guest)]))
+
+    short = f"{RUN}/season-short"
+    shutil.copytree(folder, short)
+    os.remove(f"{short}/Show.S01E10.mkv")
+    n = launch("epShort", room="seasonroom", media=f"{short}/Show.S01E02.mkv", playlist=True)
+    ok("a folder missing an episode is refused", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+    shuffled = season(f"{RUN}/season-shuffled", ("c.mkv", "b.mkv", "a.mkv"))
+    n = launch("epShuffled", room="seasonroom", media=f"{shuffled}/a.mkv", playlist=True)
+    ok("so is one in another order", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+
+    n = launch("epAlone", room="seasonroom", media=f"{folder}/Show.S01E02.mkv")
+    ok("so is someone who didn't ask for the playlist", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+
+    must("near the end of the last", seek(get(host, "duration") - 1))
+    setp(host, "pause", False)
+    for n in (host, guest, late):
+        ok(f"{n}'s party ends with the last episode", until(lambda: nodes[n]["proc"].poll() == 0, 20), log(n)[-200:])
+
+    print("\n[R15d] it starts on the file you opened, and the neighbours are either side of it")
+    launch("epD", room="midseason", media=f"{folder}/Show.S01E03.mkv", playlist=True)
+    must("it is up", until(lambda: booted("epD"), BOOT))
+    resolve("epD")
+    ok("it opens that file", get("epD", "filename") == "Show.S01E03.mkv", get("epD", "filename"))
+    launch("epE", room="midseason", media=f"{folder}/Show.S01E02.mkv", playlist=True)
+    must("its guest is up", until(lambda: booted("epE") and "epE has joined" in osd("epD"), BOOT))
+    resolve("epE")
+    ok("a guest who opened another goes to the party's", until(lambda: get("epE", "filename") == "Show.S01E03.mkv"), get("epE", "filename"))
+    ok("and the host stays on it", get("epD", "filename") == "Show.S01E03.mkv", get("epD", "filename"))
+    ipc(nodes["epD"]["sock"], "playlist-prev")
+    ok("back is the file before", until(lambda: get("epD", "filename") == "Show.S01E02.mkv" and get("epE", "filename") == "Show.S01E02.mkv"), get("epE", "filename"))
+    ipc(nodes["epD"]["sock"], "playlist-next")
+    ipc(nodes["epD"]["sock"], "playlist-next")
+    ok("next is the file after", until(lambda: get("epD", "filename") == "Show.S01E10.mkv" and get("epE", "filename") == "Show.S01E10.mkv"), get("epE", "filename"))
+    for n in ("epD", "epE"):
+        stop(n)
 
     relay.kill()
     relay.wait(timeout=10)
@@ -1735,7 +1847,7 @@ def gui_suite():
     ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
-    print("\n[G17c] a magnet link nobody seeds says so, and Stop still works")
+    print("\n[G17d] a magnet link nobody seeds says so, and Stop still works")
     fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Movie&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
     go(G)
     until(lambda: status(G).startswith("Looking"), BOOT)
@@ -1744,6 +1856,18 @@ def gui_suite():
     end(G)
     ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
     ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Movie", js(G, 'fileName($("file").value)'))
+
+    print("\n[G17c] the check mark loads the file's folder, and starts on that file")
+    folder = season(f"{RUN}/guiseason", ("e1.mkv", "e2.mkv", "e3.mkv"))
+    js(G, '$("playlist").checked = true')
+    start(G, file=f"{folder}/e2.mkv", room="e2eseason", secret="e2eseason")
+    until(lambda: mpv_of(G), BOOT)
+    nodes[G]["sock"] = mpv_of(G)
+    ok("it opens the picked file", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+    ok("with its neighbours", get(G, "playlist-count") == 3, get(G, "playlist-count"))
+    ok("history remembers it", state(G)["history"][-1].get("playlist") is True, str(state(G)["history"][-1]))
+    end(G)
+    js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")
     end(H)

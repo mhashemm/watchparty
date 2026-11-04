@@ -19,6 +19,7 @@ var version = "dev"
 func main() {
 	cfg := party.Config{}
 	flag.StringVar(&cfg.File, "file", "", "file path to play")
+	flag.BoolVar(&cfg.Playlist, "playlist", false, "also load the other videos in the file's folder, starting on this one")
 	flag.IntVar(&cfg.Port, "port", party.DefaultPort, "local port")
 	flag.IntVar(&cfg.PublicPort, "pport", party.DefaultPort, "public port")
 	flag.StringVar(&cfg.Addrs, "addrs", "", "comma separated list of addresses to connect to")

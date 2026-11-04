@@ -41,6 +41,7 @@ type form struct {
 	Secret    string `json:"secret"`
 	CreateKey string `json:"createKey"`
 	Local     bool   `json:"local"`
+	Playlist  bool   `json:"playlist"`
 	Port      string `json:"port"`
 	PPort     string `json:"pport"`
 	Addrs     string `json:"addrs"`
@@ -48,9 +49,7 @@ type form struct {
 	MpvFlags  string `json:"mpvFlags"`
 }
 
-var videoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
-
-var pickExts = append(slices.Clone(videoExts), ".torrent")
+var pickExts = append(slices.Clone(party.VideoExts), ".torrent")
 
 func (f form) config() (party.Config, error) {
 	cfg := party.Config{
@@ -74,6 +73,7 @@ func (f form) config() (party.Config, error) {
 	if cfg.File == "" {
 		return cfg, errors.New("pick a video first")
 	}
+	cfg.Playlist = f.Playlist
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)
 		cfg.Room = strings.TrimSpace(f.Room)

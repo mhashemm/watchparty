@@ -19,7 +19,7 @@ that line is load-bearing and holds the cross-cutting mindset and trust model.
   without an id with 0. An id nobody waits for anymore logs `Watch: dropped response`.
 - `do()` logs `do: sent request: <json>`. Every on-screen notice is recovered from that
   line (contract table in the root `CLAUDE.md`).
-- **`New` waits for `ready`**, the first `time-pos` with data, i.e. the file is loaded.
+- **`New` waits for `ready`**, the first `time-pos` with data, i.e. the first file is loaded.
   - Before `ready`, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run`
     reads mpv's real exit status. Cancelling would kill the exiting mpv and turn
     "exit status 2" into "signal: killed". **A hang-up doesn't prove mpv is exiting:** the
@@ -118,6 +118,30 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 4. Any resume or seek clears `joining`, so the room's first node stops being a joiner.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
+
+### Episodes (`episodes`, `followEpisode`)
+
+Only with `Config.Playlist` (`MPV.md`, "Playlists"), where everyone's list is identical
+(`party/CLAUDE.md`), so an index means the same file to all. `playlist-pos` moving, by hand
+or at the end of a file, goes out raw, and while playing also pauses the party with a
+reason: nobody starts the next one until someone resumes.
+
+- A peer's index is bounds-checked and only ever sets `playlist-pos`.
+- **`welcome` always names the episode**, even from a node still `joining`: the room's first
+  node has no position to give, and each person can open a different episode.
+- **`followEpisode` pauses first**, so the file opens stopped, and marks `applied`, so
+  mpv's report isn't sent back. It skips one it is on or already headed to: every member
+  answers a joiner, and two nodes often reach the end together.
+- **A switch resets `c.pos` and `seeks` to 0.** The old position would go out with the
+  pause, and the new file's `time-pos` 0 would go out as a seek.
+- **`loading` holds a seek until `file-loaded`** (`heldSeek`). Sent right after the
+  switch it lands on the old file, which then ends and loses it. A joiner hits this every
+  time: `welcome` sends the episode, then `start-pos`.
+- Accepted: two people moving at once can swap episodes, until the next move. A peer's
+  `time-pos` from the old episode can land on the new one; past its end, it stops on the
+  last frame.
+
+e2e `[16]`, `[R15c]`.
 
 ## Windows
 
