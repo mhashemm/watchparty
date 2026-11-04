@@ -67,9 +67,27 @@ func Run(parent context.Context, cfg Config) error {
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 
-	file, err := fingerprint(strings.TrimSpace(cfg.File))
-	if err != nil {
-		return err
+	target, file := strings.TrimSpace(cfg.File), ""
+	if isTorrent(target) {
+		cache, err := torrentCache()
+		if err != nil {
+			return err
+		}
+		stream, err := openTorrent(c, target, cache, torrentConfig())
+		if err != nil && parent.Err() != nil {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer stream.close()
+		target, file = stream.url, stream.id
+	} else {
+		var err error
+		file, err = fingerprint(target)
+		if err != nil {
+			return err
+		}
 	}
 	log.Printf("file fingerprint: %s\n", file)
 	if cfg.Secret == "" {
@@ -111,14 +129,14 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), strings.TrimSpace(cfg.File))
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket), target)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
 	out := &lineLog{l: log.Default()}
 	cmd.Stdout, cmd.Stderr = out, out
 
-	err = cmd.Start()
+	err := cmd.Start()
 	if err != nil {
 		return err
 	}

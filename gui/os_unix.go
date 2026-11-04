@@ -153,7 +153,7 @@ func openURL(url string) *exec.Cmd {
 func pickFile() (string, error) {
 	if runtime.GOOS == "darwin" {
 		types := `"public.movie"`
-		for _, ext := range videoExts {
+		for _, ext := range pickExts {
 			types += `, "` + ext[1:] + `"`
 		}
 		return dialog("osascript", "-e", "POSIX path of (choose file of type {"+types+"})")
@@ -173,7 +173,7 @@ type portalFilter struct {
 
 func videoFilter() portalFilter {
 	f := portalFilter{Name: "Videos", Rules: []portalRule{{1, "video/*"}}}
-	for _, ext := range videoExts {
+	for _, ext := range pickExts {
 		f.Rules = append(f.Rules, portalRule{0, "*" + ext}, portalRule{0, "*" + strings.ToUpper(ext)})
 	}
 	return f

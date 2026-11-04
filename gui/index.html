@@ -461,7 +461,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <div class="field">
           <label for="file">File</label>
           <div class="row">
-            <input type="text" id="file" placeholder="Full path to the video file" required>
+            <input type="text" id="file" placeholder="Path to a video, .torrent or magnet link" required>
             <button type="button" data-pick="file">Browse</button>
           </div>
         </div>
@@ -690,7 +690,9 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
   if (b.dataset.view === "history") loadState();
 }));
 
-const fileName = path => (path || "").split(/[\\/]/).pop() || path;
+const fileName = path => /^magnet:/i.test(path || "")
+  ? new URLSearchParams(path.split("?")[1]).get("dn") || "Magnet link"
+  : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
@@ -804,7 +806,7 @@ $("form").addEventListener("submit", async e => {
 
 let run = 0, from = 0, state = {};
 function reset() {
-  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false };
+  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false, finding: false };
   $("log").textContent = "";
   $("feed").innerHTML = '<li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li>';
   $("share").hidden = true;
@@ -839,6 +841,7 @@ function handle(line) {
   }
   if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
+  if (/^torrent: /.test(msg)) state.finding = /^torrent: finding/.test(msg);
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try { addFeed(JSON.parse(m[1]).command[1]); } catch {}
@@ -864,6 +867,8 @@ function render(exitErr) {
     text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;
   } else if (running && state.reconnecting) {
     text = "Lost the relay. Reconnecting…"; walking = true;
+  } else if (running && state.finding) {
+    text = "Looking for this torrent's peers. It can take a while…"; walking = true;
   } else if (running && !state.ready) {
     text = "Opening mpv. This takes a few seconds…"; walking = true;
   } else if (running && state.unreachable) {

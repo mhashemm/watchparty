@@ -93,8 +93,10 @@ jobs:
           $mpv.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Unit tests
-        run: go test -race ./...
+        run: go test -race -tags disable_libutp ./...
 
       - name: E2E
         if: ${{ !cancelled() }}
+        env:
+          CGO_ENABLED: "0"
         run: python e2e_windows.py

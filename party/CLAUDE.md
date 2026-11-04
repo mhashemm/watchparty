@@ -20,6 +20,29 @@ fetched. A joiner that differs gets 409 from the peer it bootstraps off (`/hi`) 
 the relay (against the room creator's) and its party ends. Older versions send no
 fingerprint and can't join.
 
+## Torrents (`torrent.go`)
+
+`-file` as a magnet link or a local `.torrent` starts a client, waits for the metadata
+with no time limit (Stop ends it, the GUI says it is looking), and serves the **largest
+file** to mpv over HTTP on loopback, at a path with a random token. So mpv's own range
+requests decide what downloads, with `Reader.SetResponsive`, and a slow swarm reaches
+the party as `paused-for-cache`, like any stream.
+
+- **Identity is the infohash plus the file's path:** the stream's URL has a local port and
+  a token. A magnet link and a `.torrent` for the same thing match; a plain copy of the
+  file doesn't, since there's nothing to fingerprint until it has downloaded.
+- **Torrent names are hostile input**, so a name goes through `flatten` before the log, or
+  it could forge a line the GUI reads. The library refuses a path that escapes its folder.
+- **Each party downloads to a new `torrent-*` folder** in the user cache, removed when it
+  ends, with a map for piece completion: a crash leaves that folder behind, not a database
+  that a second party would lock. Nothing is seeded after the party.
+- **No router port is opened** (`NoDefaultPortForwarding`): that would surprise someone who
+  only ever saw watchparty ask for one.
+- The library's logging is discarded, since log lines here are an API.
+- **Releases and e2e build with `CGO_ENABLED=0`.** With cgo the library compiles a C++ uTP
+  library, which would make the Linux binary need libstdc++. `-race` needs cgo, so tests
+  pass `-tags disable_libutp`.
+
 ## `Run`'s traps
 
 - **`parent` belongs to the caller** (CLI signal context, GUI per-party context). Run

@@ -116,8 +116,8 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 ## OS helpers (`os_unix.go`, `os_windows.go`)
 
-- **Pickers show only videos**, by extension from `videoExts` (Go's sniffer misses
-  `.mov` and `.ts`). Add an extension when a real video doesn't show up.
+- **Pickers show only videos** and `.torrent`, by extension from `pickExts` (Go's sniffer
+  misses `.mov` and `.ts`). Add an extension when a real video doesn't show up.
 - **Linux: only the XDG desktop portal** (`portalPick`), never a specific program;
   hard-coded zenity/kdialog broke on desktops without them. Subscribe to `Response` on
   the predicted request path *before* calling `FileChooser.OpenFile`. The filter type

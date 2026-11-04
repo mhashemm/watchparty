@@ -39,7 +39,7 @@ $d = New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos
 if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`
 
 func pickFile() (string, error) {
-	patterns := "*" + strings.Join(videoExts, ";*")
+	patterns := "*" + strings.Join(pickExts, ";*")
 	return dialog("powershell", "-NoProfile", "-STA", "-Command", strings.Replace(pickScript, "PATTERNS", patterns, 1))
 }
 

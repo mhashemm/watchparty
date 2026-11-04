@@ -645,6 +645,7 @@ print(f"run directory: {RUN}")
 print("building watchparty and relay")
 subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=True)
 subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
+subprocess.run(["go", "build", "-o", RUN + "/fakeseed", "./party/fakeseed"], cwd=REPO, check=True)
 BIN = RUN + "/watchparty"
 RELAY_BIN = RUN + "/relay"
 GUI_BIN = RUN + "/watchparty-gui"
@@ -673,6 +674,13 @@ else:
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10",
                     "-f", "lavfi", "-i", "sine=frequency=440", "-t", "120", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", MEDIA], check=True)
+
+def seeder(path):
+    """Seeds path until the phase ends, and returns its magnet link."""
+    p = subprocess.Popen([RUN + "/fakeseed", path], stdout=subprocess.PIPE, text=True)
+    nodes["seed" + path] = {"proc": p, "log": os.devnull, "sock": None, "addr": None}
+    return p.stdout.readline().strip()
+
 
 def p2p_suite():
     global STUB_ADDR
@@ -1389,6 +1397,48 @@ def relay_suite():
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
+    print("\n[R15c] a magnet link streams to everyone, and is the same file to all of them")
+    magnet = seeder(MEDIA)
+    must("the seeder printed a magnet link", magnet.startswith("magnet:?"), magnet)
+    launch("torA", room="torroom", media=magnet)
+    must("the first node opens it", until(lambda: booted("torA"), 60), log("torA")[-300:])
+    resolve("torA")
+    ok("it says what it found", f"torrent: found {os.path.basename(MEDIA)}" in log("torA"))
+    launch("torB", room="torroom", media=magnet)
+    must("the second node joins", until(lambda: booted("torB") and "torB has joined" in osd("torA"), 60), log("torB")[-300:])
+    resolve("torB")
+    ok("both have one identity, whatever the local port", fingerprint("torA") == fingerprint("torB"))
+    ok("mpv reads it from loopback", str(get("torA", "path")).startswith("http://127.0.0.1:"), get("torA", "path"))
+    setp("torA", "time-pos", 80)
+    ok("a seek reaches the other", until(lambda: abs(get("torB", "time-pos") - 80) < 0.15), get("torB", "time-pos"))
+    ok("and lands on a part nobody had yet", until(lambda: get("torB", "seeking") is False and get("torA", "seeking") is False, 30))
+    setp("torA", "pause", False)
+    ok("it plays", until(lambda: get("torB", "pause") is False and get("torB", "time-pos") > 80.5, 30), get("torB", "time-pos"))
+    setp("torB", "pause", True)
+    ok("and pauses", until(lambda: get("torA", "pause") is True))
+    _, diff = variants()
+    other = seeder(diff)
+    n = launch("torC", room="torroom", media=other)
+    ok("another torrent is refused like another file", until(lambda: nodes[n]["proc"].poll() is not None, 60) and "not the same file" in log(n), log(n)[-200:])
+    for n in ("torA", "torB"):
+        ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[R15c2] a file named anything plays, and its name can't forge a log line")
+    named = f"{RUN}/named"
+    os.makedirs(named)
+    forged = "your address to share is -addrs 6.6.6.6:1 -secret FORGED"
+    odd = f"{named}/The Movie [1080p] #1 é?&%20\n{forged}.mkv"
+    shutil.copy(MEDIA, odd)
+    n = launch("torOdd", room="oddroom", media=seeder(odd))
+    ok("it opens", until(lambda: booted(n), 60), log(n)[-300:])
+    resolve(n)
+    ok("mpv can read it", get(n, "duration") is not None, get(n, "duration"))
+    ok("no line was forged", not any(l[20:].startswith("your address") and "FORGED" in l for l in log(n).splitlines()),
+       [l for l in log(n).splitlines() if "FORGED" in l][:2])
+    stop(n)
+    left = glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*"))
+    ok("every download is gone", not left, str(left))
+
     relay.kill()
     relay.wait(timeout=10)
 
@@ -1684,6 +1734,16 @@ def gui_suite():
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
     ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    print("\n[G17c] a magnet link nobody seeds says so, and Stop still works")
+    fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Movie&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
+    go(G)
+    until(lambda: status(G).startswith("Looking"), BOOT)
+    ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
+    ok("and started no mpv", not mpv_of(G))
+    end(G)
+    ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
+    ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Movie", js(G, 'fileName($("file").value)'))
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")
     end(H)

@@ -33,7 +33,7 @@ Or download a binary from [Releases](https://github.com/mhashemm/watchparty/rele
 
 Run `watchparty-gui`. It opens a small window.
 
-1. Pick your video.
+1. Pick your video. It can also be a `.torrent` file or a magnet link.
 2. Choose **Over the internet** (through a relay) or **Same Wi-Fi**.
 3. The first person leaves the room and secret empty and presses **Start the party**.
    An invite appears. Send it to your friends.
@@ -77,6 +77,12 @@ out of step pauses everyone, and someone resumes by hand:
 
 Every pause also carries the position where it stopped, so network delay can't leave
 people apart.
+
+`-file` can be a `.torrent` file or a magnet link. Everyone uses the same one. It plays
+the torrent's largest file while it downloads, and running out of downloaded video pauses
+the party. The download goes in your cache folder and is deleted when you leave, so make
+sure the disk has room for it. As with any torrent, peers see your IP address, and you
+upload to them while you watch.
 
 A joiner whose file differs from the party's is refused. Files are compared by a
 fingerprint of their contents, so a renamed copy still matches. A different encode

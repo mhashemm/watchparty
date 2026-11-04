@@ -50,6 +50,8 @@ type form struct {
 
 var videoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
 
+var pickExts = append(slices.Clone(videoExts), ".torrent")
+
 func (f form) config() (party.Config, error) {
 	cfg := party.Config{
 		File:     strings.TrimSpace(f.File),
