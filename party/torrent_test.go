@@ -323,6 +323,15 @@ func TestTheDefaultCacheFolderIsTheSystems(t *testing.T) {
 	}
 }
 
+// WebRTC peers bring a large parser surface for little gain, as nearly every swarm has
+// regular peers. It also means a magnet link's wss:// tracker opens no connection.
+func TestWebRTCPeersAreOff(t *testing.T) {
+	t.Parallel()
+	if !torrentConfig().DisableWebtorrent {
+		t.Fatal("WebRTC peers are on")
+	}
+}
+
 func TestIsTorrent(t *testing.T) {
 	t.Parallel()
 	for target, want := range map[string]bool{

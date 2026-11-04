@@ -34,6 +34,7 @@ func torrentConfig() *torrent.ClientConfig {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.ListenPort = 0
 	cfg.NoDefaultPortForwarding = true
+	cfg.DisableWebtorrent = true
 	cfg.Slogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	return cfg
 }

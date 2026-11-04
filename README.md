@@ -91,7 +91,7 @@ while it downloads, a torrent of several videos plays as a playlist with only th
 one downloading, and running out of downloaded video pauses the party. What you watched stays in your system's cache folder until you
 leave, when it is deleted, so the disk needs room for it. **Cache folder** in Settings, or
 `-cacheDir`, puts it somewhere else. As with any torrent, peers see your IP address, and you
-upload to them while you watch.
+upload to them while you watch. Torrents seeded only over WebRTC won't play.
 
 A joiner whose file differs from the party's is refused. Files are compared by a
 fingerprint of their contents, so a renamed copy still matches. A different encode
