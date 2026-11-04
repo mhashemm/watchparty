@@ -384,7 +384,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 			if n == 2 {
 				<-load
 				fmt.Fprint(theirs, `{"event":"property-change","id":2,"name":"time-pos","data":"0.000000"}`+"\n")
-			} else if n > 3 {
+			} else if req.Command[0] != "observe_property_string" {
 				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
 			}
 		}
@@ -682,6 +682,124 @@ func TestJoiningNodeDoesNotAnswerAnotherJoiner(t *testing.T) {
 	}
 }
 
+// Everyone gets the notice at their own moment, so everyone pauses themselves, and any
+// one of those pauses is enough for a node that missed the notice.
+func TestMemberLeavingPausesTheParty(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := liveClient(t)
+	send(propertyChangeLine(timePos, "33.500000", 0))
+
+	go c.apply(peer("x", `{"name":"show-text","data":"x has left"}`))
+	if got := next(t, requests); got != "show-text x has left 5000" {
+		t.Fatalf("sent %q, want the notice", got)
+	}
+	if got := next(t, requests); got != "show-text paused for x: left 5000" {
+		t.Fatalf("sent %q, want the reason", got)
+	}
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want the party paused", got)
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	got := map[string]bool{}
+	for range 2 {
+		e := nextEvent(t, outgoing)
+		got[e.Name+"="+e.Data] = true
+	}
+	if !got[pause+"=yes"] || !got[pausedAt+"=33.500000"] {
+		t.Fatalf("broadcast %v, want the pause and the position", got)
+	}
+}
+
+func TestMemberLeavingChangesNothingWhileAlreadyPaused(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.paused = true
+
+	c.apply(peer("x", `{"name":"show-text","data":"x has left"}`))
+	c.apply(peer("x", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text x has left 5000" {
+		t.Fatalf("sent %q, want the notice", got)
+	}
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want no pause", got)
+	}
+	select {
+	case e := <-outgoing:
+		t.Fatalf("broadcast %s", e)
+	default:
+	}
+}
+
+// The video ending is how a party normally finishes. Each player reaches the end at
+// its own moment, and whoever gets there first leaves; a pause would hold the rest a
+// moment before the end, with nothing telling them why.
+func TestMemberLeavingNearTheEndDoesNotPause(t *testing.T) {
+	t.Parallel()
+	c, send, _, requests := liveClient(t)
+	send(propertyChangeLine(duration, "100.000000", 0))
+	send(propertyChangeLine(timePos, "96.000000", 0))
+	for !func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.pos == 96 }() {
+		time.Sleep(time.Millisecond)
+	}
+
+	go func() {
+		c.apply(peer("x", `{"name":"show-text","data":"x has left"}`))
+		c.apply(peer("x", `{"name":"show-text","data":"mark"}`))
+	}()
+	next(t, requests)
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want no pause", got)
+	}
+}
+
+// Only the notice about its own sender counts, which is the shape both transports send.
+func TestOnlyALeaveNoticePauses(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+
+	go func() {
+		c.apply(peer("x", `{"name":"show-text","data":"y has left"}`))
+		c.apply(peer("x", `{"name":"show-text","data":"x has joined"}`))
+		c.apply(peer("x", `{"name":"show-text","data":"mark"}`))
+	}()
+	next(t, requests)
+	next(t, requests)
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want no pause", got)
+	}
+}
+
+// Everyone stops a moment apart, so they settle on the earliest stop, or they would
+// resume that far apart and stay so.
+func TestPausesForALeaveSettleOnTheEarliest(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.leaving, c.pos = true, true, 40
+
+	go func() {
+		c.apply(peer("a", `{"event":"property-change","name":"paused-at","data":"41.000000"}`))
+		c.apply(peer("b", `{"event":"property-change","name":"paused-at","data":"39.000000"}`))
+	}()
+	if got := next(t, requests); got != "set_property time-pos 39.000000" {
+		t.Fatalf("sent %q, want only the earlier stop followed", got)
+	}
+}
+
+// Without a leave, a pause that isn't ours to follow stays ignored, earlier or not.
+func TestEarlierStopIsIgnoredWithoutALeave(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.pos = true, 40
+
+	go func() {
+		c.apply(peer("b", `{"event":"property-change","name":"paused-at","data":"39.000000"}`))
+		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want the earlier stop ignored", got)
+	}
+}
+
 // A joiner already where the party is skips the seek, but that still was its answer.
 func TestStartPosAlreadyThereStillCounts(t *testing.T) {
 	t.Parallel()
@@ -737,7 +855,7 @@ func playlistClient(t *testing.T) (*Client, func(string), chan []byte, chan stri
 	c, send, outgoing, requests := liveClient(t)
 	c.entries = 3
 	c.seen[playlistPos] = true
-	c.left = -1
+	c.movedFrom = -1
 	return c, send, outgoing, requests
 }
 
@@ -1092,7 +1210,7 @@ func TestATieIsSeenFromAnyEntry(t *testing.T) {
 func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
-	c.paused, c.current, c.left = true, 2, 1
+	c.paused, c.current, c.movedFrom = true, 2, 1
 
 	go c.apply(peer("a", move(2, 0)))
 	if got := next(t, requests); got != "set_property playlist-pos 0" {
@@ -1110,7 +1228,7 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
 	c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
 	c.conn.conn = ours
-	c.entries, c.left = 3, -1
+	c.entries, c.movedFrom = 3, -1
 	c.current = 1
 	c.seen[pause], c.seen[timePos], c.seen[playlistPos] = true, true, true
 	sent := make(chan string, 16)

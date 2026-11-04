@@ -119,6 +119,21 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
 
+### A member leaving (`left`)
+
+The transports' "X has left" notice, sent only for a member that says goodbye or that the
+relay loses, pauses the party. Reading the text means an already deployed relay works.
+P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's next send.
+
+- Each node pauses itself and it goes out as its own pause, so a node whose notice was
+  lost still stops. Nodes stop a moment apart, so until the next resume `leaving` makes
+  `align` follow any earlier `paused-at`: they settle on the earliest stop.
+- **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
+  and a pause would hold everyone else just short of it. So `duration` is observed.
+- A notice shows first, so the GUI can tell this pause from a person's in its feed.
+
+e2e `[14]`, `[R14]`, `[R15h]`.
+
 ### Playlists (`entries`, `followEntry`)
 
 Only with `Config.Playlist` (`MPV.md`, "Playlists"), where everyone's list is identical
@@ -144,7 +159,7 @@ reason: nobody starts the next one until someone resumes.
   entry is dropped, against where this node is `heading`, since it was sent before someone
   moved. A pause still counts. A table of who is on what can't do this: a follower doesn't
   announce its move, so the table would go stale and drop its later seeks.
-- **Two moves that left the same entry settle on the higher (`left`, `From`).** Each
+- **Two moves that left the same entry settle on the higher (`movedFrom`, `From`).** Each
   would otherwise follow the other and swap. Dropping them would strand both. Any other
   move is followed, lower or not, so someone who missed one catches up on the next.
 - Accepted: a seek reaching someone just before the move it depends on is lost. A node

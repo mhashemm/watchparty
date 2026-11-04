@@ -80,6 +80,7 @@ out of step pauses everyone, and someone resumes by hand:
 - a seek while playing
 - someone's player running out of buffered video
 - someone joining mid-way, who then starts at the party's position
+- someone leaving, unless the video is in its last few seconds
 - moving to another video in a playlist, by hand or when one ends, which stops everyone at its start
 
 Every pause also carries the position where it stopped, so network delay can't leave

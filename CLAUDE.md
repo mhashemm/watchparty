@@ -47,9 +47,9 @@ echo hack: it muted the peer, not the echo.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
-playing, running out of cache, a mid-party join, a new playlist entry) pauses the whole party,
-and someone resumes it by hand. Every pause carries where it stopped. **Same file, or no party:** a joiner whose
-fingerprint differs is refused with 409. `-playlist` loads the file's folder; entries move together.
+playing, running out of cache, a mid-party join, a member leaving, a new playlist entry) pauses
+the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
+or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
 
 ## Contracts between packages
 
@@ -67,7 +67,7 @@ fingerprint differs is refused with 409. `-playlist` loads the file's folder; en
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
-  `server/` and `relay/`, parsed by `gui/store.go` and e2e's `known()`. Change all or none.
+  `server/` and `relay/`, parsed by `mpv` (a leave pauses), `gui/store.go` and e2e's `known()`. Change all or none.
 - **The relay envelope** `{"hostname", "event": <raw mpv JSON>}` is declared in both
   `relay/main.go` and `party/ws.go`: importing `party` would pull upnp and server into
   the relay image. Keep them in sync by hand.

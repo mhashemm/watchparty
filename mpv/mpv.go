@@ -23,6 +23,7 @@ const (
 	pausedForCache = "paused-for-cache"
 	playlistPos    = "playlist-pos"
 	fileLoaded     = "file-loaded"
+	duration       = "duration"
 	propertyChange = "property-change"
 	seek           = "seek"
 	setProperty    = "set_property"
@@ -34,6 +35,7 @@ const (
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
+	endGraceSeconds         = 5
 	maxSeeks                = 16
 )
 
@@ -143,26 +145,28 @@ type Response struct {
 }
 
 type Client struct {
-	ctx      context.Context
-	ready    chan struct{}
-	outgoing chan<- []byte
-	conn     *connection
-	mu       sync.Mutex
-	paused   bool
-	applied  map[string]string
-	seeks    []float64
-	seen     map[string]bool
-	pos      float64
-	seeking  bool
-	stalled  bool
-	reason   string
-	joining  bool
-	pausedBy string
-	entries  int
-	current  int
-	left     int
-	loading  bool
-	heldSeek string
+	ctx       context.Context
+	ready     chan struct{}
+	outgoing  chan<- []byte
+	conn      *connection
+	mu        sync.Mutex
+	paused    bool
+	applied   map[string]string
+	seeks     []float64
+	seen      map[string]bool
+	pos       float64
+	duration  float64
+	seeking   bool
+	stalled   bool
+	reason    string
+	joining   bool
+	pausedBy  string
+	entries   int
+	current   int
+	movedFrom int
+	loading   bool
+	heldSeek  string
+	leaving   bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -221,6 +225,10 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
 				c.pos = pos
 			}
+		case duration:
+			if d, err := strconv.ParseFloat(event.Data, 64); err == nil {
+				c.duration = d
+			}
 		case pause:
 			if event.paused() {
 				extra = c.pauseExtras()
@@ -254,7 +262,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking, c.joining = false, false
+				c.seeking, c.joining, c.leaving = false, false, false
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
@@ -283,7 +291,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if !c.paused {
 				c.pauseParty("video changed")
 			}
-			c.left = previous
+			c.movedFrom = previous
 			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
 			return [][]byte{b}, errDoNotSend
 		default:
@@ -461,6 +469,9 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
+			if event.Data == e.HostName+" has left" {
+				err = errors.Join(err, c.left(e.HostName))
+			}
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
@@ -513,6 +524,19 @@ func (c *Client) welcome(hostname string) error {
 	return nil
 }
 
+func (c *Client) left(hostname string) error {
+	c.mu.Lock()
+	c.leaving = true
+	playing := !c.paused
+	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
+	c.mu.Unlock()
+	if !playing || ending {
+		return nil
+	}
+	c.showText(fmt.Sprintf("paused for %s: left", hostname))
+	return c.pauseReq(true)
+}
+
 func (c *Client) followEntry(event Event, hostname string) error {
 	i, err := strconv.Atoi(event.Data)
 	if err != nil {
@@ -523,7 +547,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	heading := c.heading()
-	lost := event.From != nil && *event.From == c.left && i < heading
+	lost := event.From != nil && *event.From == c.movedFrom && i < heading
 	c.mu.Unlock()
 	if i == heading || lost {
 		return nil
@@ -539,9 +563,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	}
 	c.loading = true
 	c.applied[playlistPos] = event.Data
-	c.left = heading
+	c.movedFrom = heading
 	if event.From != nil {
-		c.left = *event.From
+		c.movedFrom = *event.From
 	}
 	c.mu.Unlock()
 	err = c.conn.do(setProperty, playlistPos, i)
@@ -612,7 +636,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining = false
+		c.joining, c.leaving = false, false
 	}
 	c.mu.Unlock()
 
@@ -667,7 +691,7 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	follow := c.paused && c.pausedBy == hostname && !c.at(pos)
+	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.leaving && pos < c.pos)
 	c.mu.Unlock()
 	if !follow {
 		return nil
@@ -693,15 +717,15 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		closed:  make(chan struct{}),
 	}
 	client := &Client{
-		ctx:      c,
-		ready:    make(chan struct{}),
-		conn:     conn,
-		outgoing: outgoing,
-		paused:   true,
-		applied:  map[string]string{},
-		seen:     map[string]bool{},
-		entries:  entries,
-		left:     -1,
+		ctx:       c,
+		ready:     make(chan struct{}),
+		conn:      conn,
+		outgoing:  outgoing,
+		paused:    true,
+		applied:   map[string]string{},
+		seen:      map[string]bool{},
+		entries:   entries,
+		movedFrom: -1,
 	}
 
 	go client.ProcessIncomingEvents(incoming)
@@ -719,7 +743,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		}
 	}()
 
-	events := []string{pause, timePos, pausedForCache}
+	events := []string{pause, timePos, pausedForCache, duration}
 	if entries > 0 {
 		events = append(events, playlistPos)
 	}
