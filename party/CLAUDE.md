@@ -47,14 +47,14 @@ torrent of long videos. The check mark doesn't matter.
   a token. A magnet link and a `.torrent` for the same thing match; a plain copy of the
   file doesn't, since there's nothing to fingerprint until it has downloaded.
 - **Torrent names are hostile input**, so a name goes through `flatten` before the log, or
-  it could forge a line the GUI reads. The library refuses a path that escapes its folder.
+  it could forge a line the GUI reads.
 - **Each party downloads to a new `torrent-*` folder** in the user cache, removed when it
-  ends (retrying for up to 10s, since Windows can't remove a file the client's last reads
-  still hold), with a map for piece completion: a crash leaves that folder behind, not a database
-  that a second party would lock. Nothing is seeded after the party.
-- **Never close the storage.** `Client.Close` doesn't wait for its piece hashers, and closing
-  the store clears the piece map a hasher reads, so the library panics in its own goroutine,
-  which kills the GUI too. The store holds nothing else, and the garbage collector takes it.
+  ends: one sparse file named `data`, with piece state in memory (`torrentStore`). A crash
+  leaves that folder behind. Nothing is seeded after the party.
+- **Don't go back to the library's file store.** It memory-maps and never unmaps, so Windows
+  couldn't delete a partly downloaded file and a full disk would crash the app. Its piece map
+  also panicked if closed while a hasher ran, in a goroutine, killing the GUI. Ours returns
+  errors, a full disk stalls the stream, and nothing on disk is named by the torrent.
 - **No router port is opened** (`NoDefaultPortForwarding`): that would surprise someone who
   only ever saw watchparty ask for one.
 - The library's logging is discarded, since log lines here are an API.

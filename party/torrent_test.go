@@ -267,6 +267,27 @@ func TestClosingAStreamRemovesItsDownload(t *testing.T) {
 	}
 }
 
+// Nothing on disk is named by the torrent, so a hostile name has nothing to escape from.
+func TestTheDownloadTakesNoNamesFromTheTorrent(t *testing.T) {
+	t.Parallel()
+	magnet, _ := seed(t, severalVideos())
+	cache := t.TempDir()
+	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	stream, err := openTorrent(c, magnet, cache, testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.close()
+	if got := read(t, stream.urls[1], 800, 802); string(got) != "two" {
+		t.Fatalf("got %q", got)
+	}
+	found, _ := filepath.Glob(filepath.Join(cache, "torrent-*", "*"))
+	if len(found) != 1 || filepath.Base(found[0]) != "data" {
+		t.Fatalf("on disk: %q", found)
+	}
+}
+
 func TestIsTorrent(t *testing.T) {
 	t.Parallel()
 	for target, want := range map[string]bool{
@@ -286,8 +307,9 @@ func TestIsTorrent(t *testing.T) {
 }
 
 // Leaving mid-download is the normal way a party ends. The client doesn't wait for its
-// piece hashers when it closes, so one can finish after everything else has gone, and a
-// panic there would take the whole app with it.
+// piece hashers when it closes, so one can finish after everything else has gone. The
+// library's own store panicked there, taking the whole app with it, and on Windows left
+// the half-downloaded file behind because it was still mapped.
 func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
 	t.Parallel()
 	magnet, _ := seed(t, severalVideos())
