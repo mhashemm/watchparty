@@ -47,7 +47,7 @@ type torrentStream struct {
 }
 
 // playable picks what a torrent plays: its videos in natural order, without samples, or
-// anything under a tenth of the largest, which keeps a trailer from playing before a movie.
+// anything under a tenth of the largest, which keeps a trailer from playing before the main video.
 // ponytail: a size guess, so a short video among long ones is dropped too; a
 // way to choose files is the upgrade. A torrent with no videos plays its largest file and
 // leaves the failing to mpv.

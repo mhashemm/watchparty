@@ -42,7 +42,7 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 	}
 
 	for _, size := range []int64{1000, 64 << 20} {
-		orig := sum(write("movie.mkv", size))
+		orig := sum(write("video.mkv", size))
 		os.Mkdir(filepath.Join(dir, "elsewhere"), 0o755)
 		copied := write("elsewhere/renamed.mp4", size)
 		os.Chtimes(copied, time.Unix(0, 0), time.Unix(0, 0))
@@ -67,11 +67,11 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 // mpv plays URLs too. Nothing is fetched: the same URL is the same video.
 func TestFingerprintOfAURLIsTheURL(t *testing.T) {
 	t.Parallel()
-	a, err := fingerprint("https://example.com/movie.mkv")
+	a, err := fingerprint("https://example.com/video.mkv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := fingerprint("https://example.com/movie.mkv")
+	b, _ := fingerprint("https://example.com/video.mkv")
 	c, _ := fingerprint("https://example.com/other.mkv")
 	if a != b || a == c {
 		t.Errorf("same URL matched: %v, different URL matched: %v", a == b, a == c)
@@ -104,7 +104,7 @@ func TestWaitExitDoesNotWaitForever(t *testing.T) {
 	exited := make(chan error, 1)
 	failed := errors.New("exit status 2")
 	exited <- failed
-	if err := waitExit(exited, time.Minute); !errors.Is(err, failed) || !strings.Contains(err.Error(), "before the movie was ready") {
+	if err := waitExit(exited, time.Minute); !errors.Is(err, failed) || !strings.Contains(err.Error(), "before the video was ready") {
 		t.Errorf("an exiting mpv: got %v, want its status", err)
 	}
 	exited <- nil

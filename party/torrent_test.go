@@ -83,11 +83,11 @@ func repeated(s string, size int) []byte {
 	return []byte(strings.Repeat(s, size/len(s)))
 }
 
-func aMovie() map[string][]byte {
-	return map[string][]byte{"a.trailer.mkv": []byte("short"), "movie.mkv": repeated("the movie ", 2_000_000), "movie.nfo": []byte("notes"), "movie.sample.mkv": repeated("x", 1_000_000)}
+func oneVideo() map[string][]byte {
+	return map[string][]byte{"a.trailer.mkv": []byte("short"), "video.mkv": repeated("the video ", 2_000_000), "video.nfo": []byte("notes"), "video.sample.mkv": repeated("x", 1_000_000)}
 }
 
-func aPack() map[string][]byte {
+func severalVideos() map[string][]byte {
 	return map[string][]byte{"e10.mkv": repeated("ten ", 2_000_000), "e2.mkv": repeated("two ", 2_000_000), "e1.mkv": repeated("one ", 2_000_000), "sample.mkv": repeated("x", 1000), "cover.jpg": repeated("c", 3_000_000)}
 }
 
@@ -125,23 +125,23 @@ func openOrFail(t *testing.T, target string) *torrentStream {
 }
 
 // mpv reads a stream with range requests from wherever it needs: a seek, or the index
-// at the end of the file. A movie's sample and notes aren't something to play.
-func TestAMoviePlaysAloneWithRanges(t *testing.T) {
+// at the end of the file. A video's sample and notes aren't something to play.
+func TestOneVideoPlaysAloneWithRanges(t *testing.T) {
 	t.Parallel()
-	magnet, _ := seed(t, aMovie())
+	magnet, _ := seed(t, oneVideo())
 	stream := openOrFail(t, magnet)
 
-	if len(stream.urls) != 1 || !strings.HasSuffix(stream.urls[0], "/movie.mkv") {
+	if len(stream.urls) != 1 || !strings.HasSuffix(stream.urls[0], "/video.mkv") {
 		t.Fatalf("plays %q", stream.urls)
 	}
-	if got := read(t, stream.urls[0], 1000000, 1000008); string(got) != "the movie" {
+	if got := read(t, stream.urls[0], 1000000, 1000008); string(got) != "the video" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestSeveralVideosPlayInOrder(t *testing.T) {
 	t.Parallel()
-	magnet, _ := seed(t, aPack())
+	magnet, _ := seed(t, severalVideos())
 	stream := openOrFail(t, magnet)
 
 	want := []string{"/e1.mkv", "/e2.mkv", "/e10.mkv"}
@@ -162,7 +162,7 @@ func TestSeveralVideosPlayInOrder(t *testing.T) {
 // video. A file's last piece can be shared with its neighbour, so read the middle.
 func TestOnlyThePlayingVideoBuffers(t *testing.T) {
 	t.Parallel()
-	magnet, _ := seed(t, aPack())
+	magnet, _ := seed(t, severalVideos())
 	stream := openOrFail(t, magnet)
 
 	read(t, stream.urls[1], 1_000_000, 1_000_100)
@@ -179,7 +179,7 @@ func TestOnlyThePlayingVideoBuffers(t *testing.T) {
 // The stream's address is a local port and a random token, so identity can't come from it.
 func TestEveryWayToNameATorrentHasOneIdentity(t *testing.T) {
 	t.Parallel()
-	magnet, file := seed(t, aPack())
+	magnet, file := seed(t, severalVideos())
 	byMagnet := openOrFail(t, magnet)
 	byFile := openOrFail(t, file)
 	if byMagnet.id != byFile.id || byMagnet.urls[0] == byFile.urls[0] {
@@ -195,7 +195,7 @@ func TestEveryWayToNameATorrentHasOneIdentity(t *testing.T) {
 // read the stream without the random token.
 func TestStreamNeedsItsToken(t *testing.T) {
 	t.Parallel()
-	magnet, _ := seed(t, aMovie())
+	magnet, _ := seed(t, oneVideo())
 	stream := openOrFail(t, magnet)
 	url := stream.urls[0]
 	res, err := http.Get(url[:strings.LastIndex(url, "/")+1] + "other.mkv")
@@ -246,7 +246,7 @@ func TestStopWhileFindingPeersLeavesNothingBehind(t *testing.T) {
 
 func TestClosingAStreamRemovesItsDownload(t *testing.T) {
 	t.Parallel()
-	magnet, _ := seed(t, aMovie())
+	magnet, _ := seed(t, oneVideo())
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cache := t.TempDir()
@@ -274,10 +274,10 @@ func TestIsTorrent(t *testing.T) {
 		"MAGNET:?xt=urn:btih:abc":       true,
 		"/videos/Show.torrent":          true,
 		"Show.TORRENT":                  true,
-		"/videos/movie.mkv":             false,
+		"/videos/video.mkv":             false,
 		"https://example.com/a.torrent": false,
-		"https://example.com/movie.mp4": false,
-		"/videos/magnet:movie.mkv":      false,
+		"https://example.com/video.mp4": false,
+		"/videos/magnet:video.mkv":      false,
 	} {
 		if got := isTorrent(target); got != want {
 			t.Errorf("%s: got %v", target, got)

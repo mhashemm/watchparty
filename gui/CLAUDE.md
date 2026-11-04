@@ -33,7 +33,7 @@ Drive a party with the token from the page:
 
 ```sh
 T=$(curl -s $U/ | grep -o 'const TOKEN = "[^"]*"' | cut -d'"' -f2)
-curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/movie.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null"}'
+curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null"}'
 ```
 
 - **Isolate the store:** `XDG_CONFIG_HOME=<tmp>/cN`, one folder per GUI. Restarting on

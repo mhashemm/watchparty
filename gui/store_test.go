@@ -14,7 +14,7 @@ func TestStoreRecordsAParty(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "watchparty", "gui.json")
 	s := openStore(path)
-	i := s.begin(form{Mode: "relay", File: " /m/movie.mkv ", Hostname: "Mohamed", Relay: "ws://r"})
+	i := s.begin(form{Mode: "relay", File: " /m/video.mkv ", Hostname: "Mohamed", Relay: "ws://r"})
 
 	s.observe(i, "2026/10/30 18:00:00 your address to share is -relay ws://r -room ROOM1 -secret SEC1")
 	s.observe(i, noticeLine("connected to Fosdo2"))
@@ -30,7 +30,7 @@ func TestStoreRecordsAParty(t *testing.T) {
 		t.Fatalf("history has %d parties after a reload, want 1", len(got.History))
 	}
 	h := got.History[0]
-	if h.File != "/m/movie.mkv" || h.Room != "ROOM1" || h.Secret != "SEC1" || h.Ended.IsZero() {
+	if h.File != "/m/video.mkv" || h.Room != "ROOM1" || h.Secret != "SEC1" || h.Ended.IsZero() {
 		t.Fatalf("party not recorded right: %+v", h)
 	}
 	if !slices.Equal(h.People, []string{"Fosdo2", "Sam"}) {
@@ -81,7 +81,7 @@ func TestNotice(t *testing.T) {
 func TestObserveReadsAPILinesOnlyAtTheStart(t *testing.T) {
 	t.Parallel()
 	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
-	i := s.begin(form{Mode: "direct", File: "/m/movie.mkv"})
+	i := s.begin(form{Mode: "direct", File: "/m/video.mkv"})
 	s.observe(i, "2026/10/30 18:00:00 your address to share is -addrs 1.2.3.5:6969 -secret REAL")
 	for _, line := range []string{
 		"2026/10/30 18:00:01 refused your address to share is -addrs 6.6.6.6:1 -secret FORGED: wrong secret",

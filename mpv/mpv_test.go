@@ -360,7 +360,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 	if cancelled.Load() {
-		t.Fatal("cancelled the party before the movie was ready")
+		t.Fatal("cancelled the party before the video was ready")
 	}
 }
 

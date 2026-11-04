@@ -163,7 +163,7 @@ Every event goes through `handleEvent`; anything but `property-change` is
     values").
 - **End of file:** without `keep-open`, mpv plays to the end, sends `end-file`
   `reason: "eof"`, closes the socket and exits 0. To the party that is the same as
-  a quit, so each node's party ends with the movie. A user's `keep-open` instead
+  a quit, so each node's party ends with the video. A user's `keep-open` instead
   pauses on the last frame and broadcasts that pause.
 
 ### Playlists (probed 2026-11-04 on 0.37.0 and 0.40.0)

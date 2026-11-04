@@ -40,7 +40,7 @@ stays on disk until the party ends, and a slow swarm reaches the party as
 
 **What plays (`playable`):** its videos, without anything named `sample` or under a tenth of
 the largest, in natural order from the first, as a playlist if there's more than one. The
-size rule keeps a trailer from playing before a movie, and also drops a short special in a
+size rule keeps a trailer from playing before the main video, and also drops a short special in a
 torrent of long videos. The check mark doesn't matter.
 
 - **Identity is the infohash plus the paths it plays:** a stream's URL has a local port and
@@ -88,9 +88,9 @@ torrent of long videos. The check mark doesn't matter.
 | Something inside cancelled `c` (relay rejection, failed bind) | `errStopped` |
 | Setup failed (unreadable file, no mpv, UPNP, no LAN IP) | that error |
 | P2P bootstrap plays another file / refuses the secret | `server.ErrDifferentFile` / `ErrWrongSecret` |
-| mpv exited before the movie was ready | `mpv exited before the movie was ready: exit status N`; the reason is in the `mpv:` lines just before |
+| mpv exited before the video was ready | `mpv exited before the video was ready: exit status N`; the reason is in the `mpv:` lines just before |
 | mpv's own `Wait` error, nothing cancelled | that error |
-| mpv's socket dropped before the movie was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
+| mpv's socket dropped before the video was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
 
 **The mpv-quit case was a real bug.** Quitting closes mpv's socket first, `watch()`
 sees EOF and cancels, and `exec.CommandContext` then kills the already-exiting mpv, so

@@ -54,7 +54,7 @@ type Config struct {
 
 var (
 	errStopped = errors.New("the party stopped unexpectedly")
-	errHungUp  = errors.New("mpv stopped answering before the movie was ready, though it was still running")
+	errHungUp  = errors.New("mpv stopped answering before the video was ready, though it was still running")
 )
 
 const mpvExitGrace = 10 * time.Second
@@ -230,13 +230,13 @@ func (w *lineLog) Write(p []byte) (int, error) {
 	}
 }
 
-// notReady reports mpv exiting before the movie was loaded. Exit 0 is the user
+// notReady reports mpv exiting before the video was loaded. Exit 0 is the user
 // closing it, which is a normal end; mpv exits non-zero for a bad file or flag.
 func notReady(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("mpv exited before the movie was ready: %w", err)
+	return fmt.Errorf("mpv exited before the video was ready: %w", err)
 }
 
 func waitExit(exited <-chan error, grace time.Duration) error {
