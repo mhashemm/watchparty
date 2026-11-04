@@ -80,7 +80,8 @@ func Run(parent context.Context, cfg Config) error {
 		if cfg.Hostname == "" {
 			cfg.Hostname, _ = os.Hostname()
 		}
-		if cfg.Room == "" {
+		creating := cfg.Room == ""
+		if creating {
 			cfg.Room = rand.Text()
 		}
 		conn := &relayConn{
@@ -88,6 +89,7 @@ func Run(parent context.Context, cfg Config) error {
 			room:      cfg.Room,
 			secret:    cfg.Secret,
 			createKey: cfg.CreateKey,
+			creating:  creating,
 			hostname:  cfg.Hostname,
 			session:   rand.Text(),
 			file:      file,

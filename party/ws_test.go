@@ -101,6 +101,32 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 	}
 }
 
+// A generated room is known to nobody else, so no host is coming to open it: waiting
+// would look like a working party that no one can ever join.
+func TestOpeningARoomWithoutTheKeyEndsTheParty(t *testing.T) {
+	t.Parallel()
+	addr := stub(t, func(_ int, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+	r := newRelayConn(addr, nil)
+	r.creating = true
+
+	_, err := r.dial(context.Background())
+	if !errors.Is(err, errRejected) || !strings.Contains(err.Error(), "-createKey") {
+		t.Fatalf("got %v, want errRejected naming -createKey", err)
+	}
+
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan struct{})
+	go func() {
+		r.Connect(c, cancel)
+		close(returned)
+	}()
+	waitDone(t, returned, "Connect kept retrying a room nobody else can open")
+	if c.Err() == nil {
+		t.Fatal("Connect gave up without ending the party")
+	}
+}
+
 // After a dropped connection the node redials with the same session, which is
 // what lets the relay swap it in silently, and frames from both connections
 // reach mpv. The secret travels in a header, never the query string.

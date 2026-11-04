@@ -40,6 +40,7 @@ type relayConn struct {
 	room      string
 	secret    string
 	createKey string
+	creating  bool
 	hostname  string
 	session   string
 	file      string
@@ -69,6 +70,9 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 		case http.StatusConflict:
 			return nil, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
 		case http.StatusUnauthorized:
+			if r.creating {
+				return nil, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
+			}
 			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
 	}
