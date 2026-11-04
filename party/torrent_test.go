@@ -60,7 +60,7 @@ func seed(t *testing.T, contents map[string][]byte) (magnet, file string) {
 
 	cfg := testConfig(t)
 	cfg.Seed = true
-	cfg.DefaultStorage = storage.NewFile(root)
+	cfg.DefaultStorage = storage.NewFileWithCompletion(root, storage.NewMapPieceCompletion())
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -282,5 +282,33 @@ func TestIsTorrent(t *testing.T) {
 		if got := isTorrent(target); got != want {
 			t.Errorf("%s: got %v", target, got)
 		}
+	}
+}
+
+// Leaving mid-download is the normal way a party ends. The client doesn't wait for its
+// piece hashers when it closes, so one can finish after everything else has gone, and a
+// panic there would take the whole app with it.
+func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
+	t.Parallel()
+	magnet, _ := seed(t, severalVideos())
+	for range 5 {
+		c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		stream, err := openTorrent(c, magnet, t.TempDir(), testConfig(t))
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			res, err := http.Get(stream.urls[0])
+			if err == nil {
+				io.Copy(io.Discard, res.Body)
+				res.Body.Close()
+			}
+		}()
+		time.Sleep(10 * time.Millisecond)
+		stream.close()
+		<-done
 	}
 }

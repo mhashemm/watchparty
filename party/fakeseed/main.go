@@ -29,7 +29,7 @@ func main() {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.Seed, cfg.NoDHT, cfg.DisableTrackers, cfg.NoDefaultPortForwarding = true, true, true, true
 	cfg.ListenPort = 0
-	cfg.DefaultStorage = storage.NewFile(filepath.Dir(path))
+	cfg.DefaultStorage = storage.NewFileWithCompletion(filepath.Dir(path), storage.NewMapPieceCompletion())
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		log.Fatal(err)

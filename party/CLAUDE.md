@@ -51,6 +51,9 @@ torrent of long videos. The check mark doesn't matter.
 - **Each party downloads to a new `torrent-*` folder** in the user cache, removed when it
   ends, with a map for piece completion: a crash leaves that folder behind, not a database
   that a second party would lock. Nothing is seeded after the party.
+- **Never close the storage.** `Client.Close` doesn't wait for its piece hashers, and closing
+  the store clears the piece map a hasher reads, so the library panics in its own goroutine,
+  which kills the GUI too. The store holds nothing else, and the garbage collector takes it.
 - **No router port is opened** (`NoDefaultPortForwarding`): that would surprise someone who
   only ever saw watchparty ask for one.
 - The library's logging is discarded, since log lines here are an API.

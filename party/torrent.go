@@ -81,15 +81,13 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 	if err != nil {
 		return nil, err
 	}
-	store := storage.NewFileWithCompletion(dir, storage.NewMapPieceCompletion())
-	cfg.DefaultStorage = store
+	cfg.DefaultStorage = storage.NewFileWithCompletion(dir, storage.NewMapPieceCompletion())
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
-		store.Close()
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	closers := []func(){func() { os.RemoveAll(dir) }, func() { store.Close() }, func() { client.Close() }}
+	closers := []func(){func() { os.RemoveAll(dir) }, func() { client.Close() }}
 	closeAll := func() {
 		for _, f := range slices.Backward(closers) {
 			f()
