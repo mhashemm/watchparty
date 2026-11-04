@@ -124,6 +124,8 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
+	Episode   *int   `json:"episode,omitempty"`
+	From      *int   `json:"from,omitempty"`
 	Response
 }
 
@@ -158,6 +160,7 @@ type Client struct {
 	pausedBy string
 	episodes int
 	current  int
+	left     int
 	loading  bool
 	heldSeek string
 }
@@ -212,7 +215,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			return nil, errDoNotSend
 		}
 		var extra [][]byte
-		changed := false
+		changed, previous := false, c.current
 		switch event.Name {
 		case timePos:
 			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
@@ -280,7 +283,9 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if !c.paused {
 				c.pauseParty("episode changed")
 			}
-			return nil, nil
+			c.left = previous
+			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
+			return [][]byte{b}, errDoNotSend
 		default:
 			return nil, errDoNotSend
 		}
@@ -290,6 +295,39 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		return extra, nil
 	}
 	return nil, errDoNotSend
+}
+
+// tagged says which episode a message belongs to, so a peer that has moved on can drop
+// it. Only this node knows, at the moment it sends.
+func (c *Client) tagged(b []byte) []byte {
+	if c.episodes == 0 {
+		return b
+	}
+	c.mu.Lock()
+	current := c.current
+	c.mu.Unlock()
+	return append(fmt.Appendf(nil, `{"episode":%d,`, current), b[1:]...)
+}
+
+// heading is the episode this node is on, or on its way to.
+func (c *Client) heading() int {
+	if target, ok := c.applied[playlistPos]; ok {
+		if i, err := strconv.Atoi(target); err == nil {
+			return i
+		}
+	}
+	return c.current
+}
+
+// fromAnotherEpisode is a position or a resume sent before its sender moved, or before
+// we did. A pause still counts, since stopping is always safe.
+func (c *Client) fromAnotherEpisode(event Event) bool {
+	if event.Episode == nil || (event.Name != timePos && event.Name != pausedAt && event.Name != startPos && (event.Name != pause || event.paused())) {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *event.Episode != c.heading()
 }
 
 func (c *Client) pauseExtras() [][]byte {
@@ -347,6 +385,7 @@ func (c *Client) watch() error {
 			out = append([][]byte{bytes.Clone(scanner.Bytes())}, extra...)
 		}
 		for _, b := range out {
+			b = c.tagged(b)
 			select {
 			case c.outgoing <- b:
 				log.Printf("Watch: broadcasted event: %s\n", b)
@@ -410,6 +449,10 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 func (c *Client) apply(e IncomingMessage) {
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
+	if err == nil && c.fromAnotherEpisode(event) {
+		log.Printf("ProcessIncomingEvents: from another episode [event=%s] [host=%s]\n", e.Event, e.HostName)
+		return
+	}
 	if err == nil {
 		switch event.Name {
 		case pause:
@@ -464,7 +507,7 @@ func (c *Client) welcome(hostname string) error {
 	b := position(startPos, c.pos)
 	c.mu.Unlock()
 	select {
-	case c.outgoing <- b:
+	case c.outgoing <- c.tagged(b):
 	case <-c.ctx.Done():
 	}
 	return nil
@@ -479,9 +522,10 @@ func (c *Client) followEpisode(event Event, hostname string) error {
 		return errors.New("no such episode")
 	}
 	c.mu.Lock()
-	there := i == c.current || c.applied[playlistPos] == event.Data
+	heading := c.heading()
+	lost := event.From != nil && *event.From == c.left && i < heading
 	c.mu.Unlock()
-	if there {
+	if i == heading || lost {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -489,8 +533,16 @@ func (c *Client) followEpisode(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
+	if i == c.current {
+		c.mu.Unlock()
+		return nil
+	}
 	c.loading = true
 	c.applied[playlistPos] = event.Data
+	c.left = heading
+	if event.From != nil {
+		c.left = *event.From
+	}
 	c.mu.Unlock()
 	err = c.conn.do(setProperty, playlistPos, i)
 	if err != nil {
@@ -541,7 +593,7 @@ func (c *Client) pause(event Event, hostname string) error {
 		c.mu.Unlock()
 		for _, b := range out {
 			select {
-			case c.outgoing <- b:
+			case c.outgoing <- c.tagged(b):
 			case <-c.ctx.Done():
 				return nil
 			}
@@ -649,6 +701,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
 		episodes: episodes,
+		left:     -1,
 	}
 
 	go client.ProcessIncomingEvents(incoming)
