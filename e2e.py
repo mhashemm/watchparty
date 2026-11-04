@@ -674,6 +674,11 @@ else:
                     "-f", "lavfi", "-i", "sine=frequency=440", "-t", "120", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", MEDIA], check=True)
 
+NOT_THE_SAME_VIDEO = ("Diagnosis: your video is not the same file as the party's. Pick the same video and start again. "
+                      "If the party is watching a whole folder, tick the box under File.")
+NOT_THE_SAME_FOLDER = "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
+
+
 def season(path, names):
     """Three short, different episodes in a folder: names[i] holds the i-th picture."""
     os.makedirs(path)
@@ -1018,6 +1023,7 @@ def p2p_suite():
     resolve("epGuest")
     ipc(nodes["epHost"]["sock"], "playlist-next")
     ok("the other node follows", until(lambda: get("epGuest", "filename") == "e2.mkv"), get("epGuest", "filename"))
+    ok("the invite asks for the playlist", re.search(r"share is -addrs \S+ -secret \S+ -playlist\n", log("epHost")), log("epHost")[:300])
     for n in ("epHost", "epGuest"):
         stop(n)
 
@@ -1433,6 +1439,7 @@ def relay_suite():
     launch(guest, room="seasonroom", media=f"{copy}/a1.mkv", playlist=True)
     must(f"{guest} is up", until(lambda: booted(guest) and f"{guest} has joined" in osd(host), BOOT))
     resolve(guest)
+    ok("the invite asks for the playlist", nodes[host]["addr"].endswith(" -playlist"), nodes[host]["addr"])
     ok("a joiner's renamed copy is let in, on the same episode", until(on("Show.S01E02.mkv", "a1.mkv")), get(guest, "filename"))
 
     ipc(nodes[host]["sock"], "playlist-next")
@@ -1787,7 +1794,7 @@ def gui_suite():
     fill(G, secret=secret, file=diff)
     go(G)
     until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
-    ok("the relay rejected the file", status(G) == "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.", status(G))
+    ok("the relay rejected the file", status(G) == NOT_THE_SAME_VIDEO, status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
     print("\n[G17b] opening a new party without the create key is diagnosed, not left waiting")
@@ -1830,6 +1837,44 @@ def gui_suite():
     for n in (G, H):
         end(n)
 
+    print("\n[G19b] an invite ticks the box, so a playlist party can't be missed by accident")
+    fill(H, room="", secret="")
+    js(H, '$("playlist").checked = true')
+    start(H, file=f"{folder}/e2.mkv")
+    must(f"{H} is in", joined(H), status(H))
+    until(lambda: js(H, '$("share-text").textContent'))
+    invite = js(H, '$("share-text").textContent')
+    ok("the invite asks for the playlist", invite.endswith(" -playlist"), invite)
+    relay_addr = js(G, '$("relay").value')
+    def paste(text):
+        js(G, f'$("invite").value = {json.dumps(text)}; $("invite").dispatchEvent(new Event("input"))')
+    paste(invite)
+    ok(f"pasting it ticks {G}'s box", js(G, '$("playlist").checked'))
+    start(G, file=f"{folder}/e1.mkv")
+    must(f"{G} is in", joined(G), status(G))
+    ok(f"{G} goes to {H}'s episode", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+    end(G)
+    js(G, '$("playlist").checked = false')
+    fill(G, file=f"{folder}/e2.mkv")
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("with the box unticked, it says to tick it", status(G) == NOT_THE_SAME_VIDEO, status(G))
+    short = f"{RUN}/guishort"
+    shutil.copytree(folder, short)
+    os.remove(f"{short}/e3.mkv")
+    js(G, '$("playlist").checked = true')
+    fill(G, file=f"{short}/e2.mkv")
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis: this folder"), BOOT)
+    ok("with another folder, it says the folders differ", status(G) == NOT_THE_SAME_FOLDER, status(G))
+    paste("-relay ws://example.invalid -room r -secret s")
+    ok("an invite with no playlist unticks it", not js(G, '$("playlist").checked'))
+    fill(G, relay=relay_addr, room="", secret="", file=MEDIA)
+    js(G, '$("invite").value = ""')
+    end(H)
+    js(H, '$("playlist").checked = false')
+    fill(H, file=MEDIA)
+
     print("\n[G20] a Wi-Fi party: the invite switches the guest to Same Wi-Fi")
     js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
     start(H, port=str(PORTS["wifiHost"]))
@@ -1851,6 +1896,11 @@ def gui_suite():
 
     js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
     ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
+    _, diff = variants()
+    start(G, file=diff, port=str(PORTS["wifiGuest"]))
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("over Wi-Fi, another file gets the same diagnosis", status(G) == NOT_THE_SAME_VIDEO, status(G))
+    fill(G, file=MEDIA)
     start(G, port=str(PORTS["wifiGuest"]))
     must(f"{G} is in", joined(G), status(G))
     until(lambda: f"{G} has joined" in feed(H) or f"connected to {G}" in feed(H))

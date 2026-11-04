@@ -23,7 +23,8 @@ fingerprint and can't join.
 **`Config.Playlist` loads the file's folder (`media`):** its videos, not its subfolders, in
 natural order (`E2` before `E10`), starting on the file. Its identity is the hash of its
 fingerprints **in that order**: names may differ and each person can pick a different
-episode, but another order is refused like a different file. Each player moves on by
+episode, but another order is refused like a different file. The invite carries
+`-playlist` so a guest can't miss it, and the GUI ticks its box from that. Each player moves on by
 itself at the end of an episode; with different orders each went to its own next one and
 then followed the other's. Each file costs one `fingerprint`, so a season on a slow disk
 takes a moment before mpv opens.

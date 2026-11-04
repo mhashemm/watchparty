@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	ErrDifferentFile = errors.New("your video is not the same file as the party's")
+	ErrDifferentFile = errors.New("your video is not the same file as the party's, or only one of you passed -playlist")
 	ErrWrongSecret   = errors.New("the party refused your secret")
 )
 
