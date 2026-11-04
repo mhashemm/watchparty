@@ -33,7 +33,7 @@ Or download a binary from [Releases](https://github.com/mhashemm/watchparty/rele
 
 Run `watchparty-gui`. It opens a small window.
 
-1. Pick your video. To watch a season, tick **Also load the other videos in this folder**.
+1. Pick your video. To play the rest of its folder too, tick **Also load the other videos in this folder**.
 2. Choose **Over the internet** (through a relay) or **Same Wi-Fi**.
 3. The first person leaves the room and secret empty and presses **Start the party**.
    An invite appears. Send it to your friends.
@@ -66,8 +66,8 @@ watchparty -relay wss://relay.example.com -room ROOM -secret SECRET -file movie.
 `watchparty -h` lists every flag. `-mpvFlags` passes extra options to mpv. `-update`
 installs the latest release over the binary, and `-version` prints the one you have.
 
-To watch a season, add `-playlist`. It starts on `-file` and loads the other videos in its
-folder, so back and next in mpv go to the episodes either side of it. Everyone needs the
+To play several videos, add `-playlist`. It starts on `-file` and loads the other videos in
+its folder, so back and next in mpv go to the videos either side of it. Everyone needs the
 same videos in the same order, though names can differ. The invite includes `-playlist`,
 and pasting it in the app ticks the box.
 
@@ -79,7 +79,7 @@ out of step pauses everyone, and someone resumes by hand:
 - a seek while playing
 - someone's player running out of buffered video
 - someone joining mid-way, who then starts at the party's position
-- moving to another episode, by hand or when one ends, which stops everyone at its start
+- moving to another video in a playlist, by hand or when one ends, which stops everyone at its start
 
 Every pause also carries the position where it stopped, so network delay can't leave
 people apart.

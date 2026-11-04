@@ -124,7 +124,7 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
-	Episode   *int   `json:"episode,omitempty"`
+	Entry   *int   `json:"entry,omitempty"`
 	From      *int   `json:"from,omitempty"`
 	Response
 }
@@ -158,7 +158,7 @@ type Client struct {
 	reason   string
 	joining  bool
 	pausedBy string
-	episodes int
+	entries int
 	current  int
 	left     int
 	loading  bool
@@ -281,7 +281,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 				return nil, errDoNotSend
 			}
 			if !c.paused {
-				c.pauseParty("episode changed")
+				c.pauseParty("video changed")
 			}
 			c.left = previous
 			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
@@ -297,19 +297,19 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 	return nil, errDoNotSend
 }
 
-// tagged says which episode a message belongs to, so a peer that has moved on can drop
+// tagged says which entry a message belongs to, so a peer that has moved on can drop
 // it. Only this node knows, at the moment it sends.
 func (c *Client) tagged(b []byte) []byte {
-	if c.episodes == 0 {
+	if c.entries == 0 {
 		return b
 	}
 	c.mu.Lock()
 	current := c.current
 	c.mu.Unlock()
-	return append(fmt.Appendf(nil, `{"episode":%d,`, current), b[1:]...)
+	return append(fmt.Appendf(nil, `{"entry":%d,`, current), b[1:]...)
 }
 
-// heading is the episode this node is on, or on its way to.
+// heading is the entry this node is on, or on its way to.
 func (c *Client) heading() int {
 	if target, ok := c.applied[playlistPos]; ok {
 		if i, err := strconv.Atoi(target); err == nil {
@@ -319,15 +319,15 @@ func (c *Client) heading() int {
 	return c.current
 }
 
-// fromAnotherEpisode is a position or a resume sent before its sender moved, or before
+// fromAnotherEntry is a position or a resume sent before its sender moved, or before
 // we did. A pause still counts, since stopping is always safe.
-func (c *Client) fromAnotherEpisode(event Event) bool {
-	if event.Episode == nil || (event.Name != timePos && event.Name != pausedAt && event.Name != startPos && (event.Name != pause || event.paused())) {
+func (c *Client) fromAnotherEntry(event Event) bool {
+	if event.Entry == nil || (event.Name != timePos && event.Name != pausedAt && event.Name != startPos && (event.Name != pause || event.paused())) {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return *event.Episode != c.heading()
+	return *event.Entry != c.heading()
 }
 
 func (c *Client) pauseExtras() [][]byte {
@@ -449,8 +449,8 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 func (c *Client) apply(e IncomingMessage) {
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
-	if err == nil && c.fromAnotherEpisode(event) {
-		log.Printf("ProcessIncomingEvents: from another episode [event=%s] [host=%s]\n", e.Event, e.HostName)
+	if err == nil && c.fromAnotherEntry(event) {
+		log.Printf("ProcessIncomingEvents: from another entry [event=%s] [host=%s]\n", e.Event, e.HostName)
 		return
 	}
 	if err == nil {
@@ -470,7 +470,7 @@ func (c *Client) apply(e IncomingMessage) {
 		case pausedAt:
 			err = c.align(event, e.HostName)
 		case playlistPos:
-			err = c.followEpisode(event, e.HostName)
+			err = c.followEntry(event, e.HostName)
 		}
 	}
 	if err != nil {
@@ -481,14 +481,14 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
-	var episode []byte
-	if c.episodes > 0 {
-		episode, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
+	var entry []byte
+	if c.entries > 0 {
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
 	}
 	c.mu.Unlock()
-	if episode != nil {
+	if entry != nil {
 		select {
-		case c.outgoing <- episode:
+		case c.outgoing <- entry:
 		case <-c.ctx.Done():
 			return nil
 		}
@@ -513,13 +513,13 @@ func (c *Client) welcome(hostname string) error {
 	return nil
 }
 
-func (c *Client) followEpisode(event Event, hostname string) error {
+func (c *Client) followEntry(event Event, hostname string) error {
 	i, err := strconv.Atoi(event.Data)
 	if err != nil {
 		return err
 	}
-	if i < 0 || i >= c.episodes {
-		return errors.New("no such episode")
+	if i < 0 || i >= c.entries {
+		return errors.New("no such entry")
 	}
 	c.mu.Lock()
 	heading := c.heading()
@@ -552,7 +552,7 @@ func (c *Client) followEpisode(event Event, hostname string) error {
 		c.mu.Unlock()
 		return err
 	}
-	return c.showText(fmt.Sprintf("episode %d of %d, by %s", i+1, c.episodes, hostname))
+	return c.showText(fmt.Sprintf("video %d of %d, by %s", i+1, c.entries, hostname))
 }
 
 func (c *Client) arrive(event Event, hostname string) error {
@@ -684,8 +684,8 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-// New wires up one mpv. episodes is the length of its playlist, and 0 for a single file.
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, episodes int) (*Client, error) {
+// New wires up one mpv. entries is the length of its playlist, and 0 for a single file.
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, entries int) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -700,7 +700,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		paused:   true,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
-		episodes: episodes,
+		entries: entries,
 		left:     -1,
 	}
 
@@ -720,7 +720,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 	}()
 
 	events := []string{pause, timePos, pausedForCache}
-	if episodes > 0 {
+	if entries > 0 {
 		events = append(events, playlistPos)
 	}
 	for i, event := range events {

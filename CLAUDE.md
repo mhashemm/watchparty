@@ -46,10 +46,10 @@ its first reply to an observe, P2P counters stale requests. Don't bring back a `
 echo hack: it muted the peer, not the echo.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
-the episode go over the wire. Anything that would put nodes out of step (a seek while
-playing, running out of cache, a mid-party join, a new episode) pauses the whole party,
+the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
+playing, running out of cache, a mid-party join, a new playlist entry) pauses the whole party,
 and someone resumes it by hand. Every pause carries where it stopped. **Same file, or no party:** a joiner whose
-fingerprint differs is refused with 409. `-playlist` loads the file's folder; episodes move together.
+fingerprint differs is refused with 409. `-playlist` loads the file's folder; entries move together.
 
 ## Contracts between packages
 
@@ -63,7 +63,7 @@ fingerprint differs is refused with 409. `-playlist` loads the file's folder; ep
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
-  | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `episode`>` | GUI feed (your own pause/resume), e2e |
+  | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `entry`>` | GUI feed (your own pause/resume), e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both

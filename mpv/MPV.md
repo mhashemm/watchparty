@@ -69,7 +69,7 @@ config still applies, for example `keep-open` (see "Ending").
 | `["observe_property_string", id, name]` | `New`, ids 1 = `pause`, 2 = `time-pos`, 3 = `paused-for-cache` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
 | `["set_property", "pause", bool]` | `pause()` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. |
 | `["set_property", "time-pos", "<string>"]` | `sync()` | A string is accepted, so the received event's `data` is forwarded as is. This is an **absolute seek**. |
-| `["set_property", "playlist-pos", n]` | `followEpisode()` | Observed with id 4, playlists only. A no-op set emits nothing. |
+| `["set_property", "playlist-pos", n]` | `followEntry()` | Observed with id 4, playlists only. A no-op set emits nothing. |
 | `["show-text", text, ms]` | `showText()` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Its log line is how e2e and the GUI read notices. |
 
 By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absolute"]`.

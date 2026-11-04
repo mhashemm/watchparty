@@ -20,8 +20,8 @@ func writeFiles(t *testing.T, files map[string]string) string {
 
 func TestNaturalOrder(t *testing.T) {
 	t.Parallel()
-	want := []string{"E1.mkv", "e2.mkv", "E02.x.mkv", "E10.mkv", "Show S2 E1.mkv", "Show S10 E1.mkv", "z"}
-	got := []string{"z", "Show S10 E1.mkv", "E10.mkv", "E02.x.mkv", "Show S2 E1.mkv", "e2.mkv", "E1.mkv"}
+	want := []string{"Part 2 a.mkv", "Part 10 a.mkv", "V1.mkv", "v2.mkv", "V02.x.mkv", "V10.mkv", "z"}
+	got := []string{"z", "Part 10 a.mkv", "V10.mkv", "V02.x.mkv", "Part 2 a.mkv", "v2.mkv", "V1.mkv"}
 	slices.SortStableFunc(got, naturalCompare)
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
@@ -50,9 +50,9 @@ func TestPlaylistHoldsTheFoldersVideosAndStartsOnTheFile(t *testing.T) {
 	}
 }
 
-// Each player moves on by itself at the end of an episode. If their orders differed,
+// Each player moves on by itself at the end of an entry. If their orders differed,
 // each would go to its own next one, and then follow the other's. Which file each person
-// picked doesn't matter: a joiner goes to the party's episode.
+// picked doesn't matter: a joiner goes to the party's entry.
 func TestPlaylistIdentityIsTheVideosInOrder(t *testing.T) {
 	t.Parallel()
 	id := func(pick string, files map[string]string) string {
@@ -65,7 +65,7 @@ func TestPlaylistIdentityIsTheVideosInOrder(t *testing.T) {
 	}
 	base := id("e1.mkv", map[string]string{"e1.mkv": "a", "e2.mkv": "b"})
 	if got := id("e2.mkv", map[string]string{"e1.mkv": "a", "e2.mkv": "b"}); got != base {
-		t.Fatal("picking another episode should still match")
+		t.Fatal("picking another entry should still match")
 	}
 	if got := id("x1.mkv", map[string]string{"x1.mkv": "a", "x2.mkv": "b", "cover.txt": "x"}); got != base {
 		t.Fatal("a renamed copy in the same order should match")
@@ -74,10 +74,10 @@ func TestPlaylistIdentityIsTheVideosInOrder(t *testing.T) {
 		t.Fatal("the same videos in another order should not match")
 	}
 	if got := id("e1.mkv", map[string]string{"e1.mkv": "a"}); got == base {
-		t.Fatal("a folder missing an episode should not match")
+		t.Fatal("a folder missing an entry should not match")
 	}
 	if got := id("e1.mkv", map[string]string{"e1.mkv": "a", "e2.mkv": "other"}); got == base {
-		t.Fatal("a different episode should not match")
+		t.Fatal("a different entry should not match")
 	}
 }
 
