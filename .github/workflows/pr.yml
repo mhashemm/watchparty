@@ -61,6 +61,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=e2e
 
       - name: Test
+        timeout-minutes: 15
         run: make -j test E2E_PREBUILT=1
 
       - name: Keep the e2e logs

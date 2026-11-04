@@ -678,7 +678,7 @@ else:
 def seeder(path):
     """Seeds path until the phase ends, and returns its magnet link."""
     p = subprocess.Popen([RUN + "/fakeseed", path], stdout=subprocess.PIPE, text=True)
-    nodes["seed" + path] = {"proc": p, "log": os.devnull, "sock": None, "addr": None}
+    nodes[f"seed{len(nodes)}"] = {"proc": p, "log": os.devnull, "sock": None, "addr": None}
     return p.stdout.readline().strip()
 
 
