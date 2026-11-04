@@ -461,10 +461,10 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <div class="field">
           <label for="file">File</label>
           <div class="row">
-            <input type="text" id="file" placeholder="Path to a video or a folder" required>
+            <input type="text" id="file" placeholder="Full path to the video file" required>
             <button type="button" data-pick="file">Browse</button>
-            <button type="button" data-pick="file" data-folder="1">Folder</button>
           </div>
+          <label class="check" style="margin-top:10px"><input type="checkbox" id="playlist"> Also load the other videos in this folder</label>
         </div>
 
         <div class="field">
@@ -662,7 +662,7 @@ function setMode(m) {
 document.querySelectorAll("input[name=mode]").forEach(r => r.addEventListener("change", () => setMode(mode())));
 
 function collect() {
-  const f = { mode: mode(), file: $("file").value, local: $("local").checked };
+  const f = { mode: mode(), file: $("file").value, local: $("local").checked, playlist: $("playlist").checked };
   for (const k of FIELDS) f[k] = $(k).value;
   if (f.mode === "direct") f.secret = $("psecret").value;
   return f;
@@ -719,6 +719,7 @@ function renderHistory() {
 }
 function watchAgain(p) {
   $("file").value = p.file;
+  $("playlist").checked = !!p.playlist;
   if (p.mode === "direct") {
     setMode("direct");
     $("addrs").value = p.addrs || "";
@@ -768,7 +769,7 @@ document.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click"
   const target = $(b.dataset.pick);
   b.disabled = true;
   try {
-    const res = await api(b.dataset.folder ? "/pick?folder=1" : "/pick", {});
+    const res = await api("/pick", {});
     const path = (await res.text()).trim();
     if (!res.ok) throw new Error(path);
     if (path) target.value = path;

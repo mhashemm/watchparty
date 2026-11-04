@@ -33,7 +33,7 @@ Or download a binary from [Releases](https://github.com/mhashemm/watchparty/rele
 
 Run `watchparty-gui`. It opens a small window.
 
-1. Pick your video, or with **Folder**, a folder of episodes.
+1. Pick your video. To watch a season, tick **Also load the other videos in this folder**.
 2. Choose **Over the internet** (through a relay) or **Same Wi-Fi**.
 3. The first person leaves the room and secret empty and presses **Start the party**.
    An invite appears. Send it to your friends.
@@ -66,8 +66,9 @@ watchparty -relay wss://relay.example.com -room ROOM -secret SECRET -file movie.
 `watchparty -h` lists every flag. `-mpvFlags` passes extra options to mpv. `-update`
 installs the latest release over the binary, and `-version` prints the one you have.
 
-To watch a season, pass `-file` a folder instead of a video. Its videos play in order,
-and `-mpvFlags --playlist-start=4` starts on the fifth.
+To watch a season, add `-playlist`. It starts on `-file` and loads the other videos in its
+folder, so back and next in mpv go to the episodes either side of it. Everyone needs the
+same videos in the same order, and `-playlist` too; names can differ.
 
 ## How it stays in sync
 

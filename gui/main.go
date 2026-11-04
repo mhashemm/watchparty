@@ -41,6 +41,7 @@ type form struct {
 	Secret    string `json:"secret"`
 	CreateKey string `json:"createKey"`
 	Local     bool   `json:"local"`
+	Playlist  bool   `json:"playlist"`
 	Port      string `json:"port"`
 	PPort     string `json:"pport"`
 	Addrs     string `json:"addrs"`
@@ -70,6 +71,7 @@ func (f form) config() (party.Config, error) {
 	if cfg.File == "" {
 		return cfg, errors.New("pick a video first")
 	}
+	cfg.Playlist = f.Playlist
 	if f.Mode == "relay" {
 		cfg.Relay = strings.TrimSpace(f.Relay)
 		cfg.Room = strings.TrimSpace(f.Room)
@@ -139,7 +141,7 @@ func (g *gui) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *gui) pick(w http.ResponseWriter, r *http.Request) {
-	path, err := pickFile(r.URL.Query().Has("folder"))
+	path, err := pickFile()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

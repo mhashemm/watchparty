@@ -49,7 +49,7 @@ echo hack: it muted the peer, not the echo.
 the episode go over the wire. Anything that would put nodes out of step (a seek while
 playing, running out of cache, a mid-party join, a new episode) pauses the whole party,
 and someone resumes it by hand. Every pause carries where it stopped. **Same file, or no party:** a joiner whose
-fingerprint differs is refused with 409. A folder is a playlist; episodes move together.
+fingerprint differs is refused with 409. `-playlist` loads the file's folder; episodes move together.
 
 ## Contracts between packages
 

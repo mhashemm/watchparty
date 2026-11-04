@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ const (
 
 type Config struct {
 	File       string
+	Playlist   bool
 	Mpv        string
 	MpvFlags   string
 	Hostname   string
@@ -67,7 +69,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 
-	files, playlist, file, err := media(strings.TrimSpace(cfg.File))
+	files, start, playlist, file, err := media(strings.TrimSpace(cfg.File), cfg.Playlist)
 	if err != nil {
 		return err
 	}
@@ -115,7 +117,7 @@ func Run(parent context.Context, cfg Config) error {
 	episodes := 0
 	if playlist {
 		episodes = len(files)
-		args = append(args, "--no-shuffle")
+		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	}
 	args = append(args, files...)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)

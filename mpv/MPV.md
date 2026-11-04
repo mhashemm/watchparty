@@ -24,7 +24,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--cache-pause=yes` | **Pinned.** When the cache runs dry, mpv waits and reports `paused-for-cache`, which pauses the party. With `no` it plays through stalls with no signal, and the node falls behind: `[R11f]` measured 16.9s without the pin. |
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
-| `--no-shuffle` | **Pinned, folders only.** Peers can start on the same entry only if the order is ours. |
+| `--no-shuffle --playlist-start=<n>` | **Pinned, playlists only.** An index only means the same file to everyone in our order, and it starts on the file that was picked. |
 | `--vo=null --ao=null` | Tests only (e2e, GUI checks): no window, no sound. |
 
 **We don't pass `--no-config`, on purpose:** people keep their subtitle languages,
@@ -69,7 +69,7 @@ config still applies, for example `keep-open` (see "Ending").
 | `["observe_property_string", id, name]` | `New`, ids 1 = `pause`, 2 = `time-pos`, 3 = `paused-for-cache` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
 | `["set_property", "pause", bool]` | `pause()` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. |
 | `["set_property", "time-pos", "<string>"]` | `sync()` | A string is accepted, so the received event's `data` is forwarded as is. This is an **absolute seek**. |
-| `["set_property", "playlist-pos", n]` | `followEpisode()` | Observed with id 4, folders only. A no-op set emits nothing. |
+| `["set_property", "playlist-pos", n]` | `followEpisode()` | Observed with id 4, playlists only. A no-op set emits nothing. |
 | `["show-text", text, ms]` | `showText()` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Its log line is how e2e and the GUI read notices. |
 
 By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absolute"]`.

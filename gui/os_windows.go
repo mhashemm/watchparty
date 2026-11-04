@@ -36,15 +36,12 @@ $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowI
 $owner.Show()
 $owner.Activate()
 $owner.TopMost = $false
-$d = DIALOG
-if ($d.ShowDialog($owner) -eq 'OK') { $d.RESULT }`
+$d = New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos|PATTERNS'}
+if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`
 
-func pickFile(folder bool) (string, error) {
-	box, result := "New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos|*"+strings.Join(party.VideoExts, ";*")+"'}", "FileName"
-	if folder {
-		box, result = "New-Object System.Windows.Forms.FolderBrowserDialog", "SelectedPath"
-	}
-	return dialog("powershell", "-NoProfile", "-STA", "-Command", strings.NewReplacer("DIALOG", box, "RESULT", result).Replace(pickScript))
+func pickFile() (string, error) {
+	patterns := "*" + strings.Join(party.VideoExts, ";*")
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", strings.Replace(pickScript, "PATTERNS", patterns, 1))
 }
 
 func hide(cmd *exec.Cmd) {

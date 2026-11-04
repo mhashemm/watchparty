@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,34 +13,48 @@ import (
 // VideoExts is what counts as a video, in a folder and in the GUI's pickers.
 var VideoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
 
-// media resolves -file: one file or URL, or a folder played as a playlist. A folder's
-// identity is its videos in order, so everyone's next episode is the same one.
-func media(path string) (files []string, playlist bool, id string, err error) {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		id, err = fingerprint(path)
-		return []string{path}, false, id, err
+// media resolves -file. With siblings, a file also brings the other videos in its folder,
+// starting on it. That list's identity is its videos in order, so everyone's next episode
+// is the same one. A URL or a file the list wouldn't hold plays alone.
+func media(path string, siblings bool) (files []string, start int, playlist bool, id string, err error) {
+	if siblings {
+		files, start = neighbours(path)
 	}
-	files, err = videos(path)
-	if err != nil {
-		return nil, false, "", err
+	if files == nil {
+		id, err = fingerprint(path)
+		return []string{path}, 0, false, id, err
 	}
 	h := sha256.New()
 	for _, f := range files {
 		sum, err := fingerprint(f)
 		if err != nil {
-			return nil, false, "", err
+			return nil, 0, false, "", err
 		}
 		h.Write([]byte(sum))
 	}
-	return files, true, hex.EncodeToString(h.Sum(nil)), nil
+	return files, start, true, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func neighbours(path string) ([]string, int) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, 0
+	}
+	if info, err := os.Stat(abs); err != nil || info.IsDir() {
+		return nil, 0
+	}
+	files, err := videos(filepath.Dir(abs))
+	if err != nil {
+		return nil, 0
+	}
+	start := slices.Index(files, abs)
+	if start < 0 {
+		return nil, 0
+	}
+	return files, start
 }
 
 func videos(dir string) ([]string, error) {
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -51,9 +64,6 @@ func videos(dir string) ([]string, error) {
 		if !e.IsDir() && slices.Contains(VideoExts, strings.ToLower(filepath.Ext(e.Name()))) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
-	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("no videos in %s", dir)
 	}
 	slices.SortStableFunc(files, naturalCompare)
 	return files, nil
