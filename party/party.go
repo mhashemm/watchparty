@@ -50,7 +50,12 @@ type Config struct {
 	EvictAfter time.Duration
 }
 
-var errStopped = errors.New("the party stopped unexpectedly")
+var (
+	errStopped = errors.New("the party stopped unexpectedly")
+	errHungUp  = errors.New("mpv stopped answering before the movie was ready, though it was still running")
+)
+
+const mpvExitGrace = 10 * time.Second
 
 // Run blocks until mpv exits or parent is cancelled. Cancelling parent is a normal
 // stop and returns nil; every cleanup (/bye, the UPNP mapping) has run by the time
@@ -95,6 +100,9 @@ func Run(parent context.Context, cfg Config) error {
 		log.Printf("your address to share is -relay %s -room %s -secret %s\n", conn.addr, cfg.Room, cfg.Secret)
 	} else {
 		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, file)
+		if err != nil && parent.Err() != nil {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -144,7 +152,11 @@ func Run(parent context.Context, cfg Config) error {
 		case c.Err() != nil:
 			return stopReason(parent)
 		case errors.Is(err, mpv.ErrClosed):
-			return notReady(<-exited)
+			err = waitExit(exited, mpvExitGrace)
+			if parent.Err() != nil {
+				return nil
+			}
+			return err
 		}
 		return err
 	}
@@ -191,6 +203,15 @@ func notReady(err error) error {
 		return nil
 	}
 	return fmt.Errorf("mpv exited before the movie was ready: %w", err)
+}
+
+func waitExit(exited <-chan error, grace time.Duration) error {
+	select {
+	case err := <-exited:
+		return notReady(err)
+	case <-time.After(grace):
+		return errHungUp
+	}
 }
 
 func stopReason(parent context.Context) error {
@@ -250,7 +271,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		address = fmt.Sprintf("%s:%d", localIP, cfg.Port)
 	} else {
 		upnp.Logger = slog.New(upnpLogger{l: log.Default()})
-		upnpClient, err := upnp.New()
+		upnpClient, err := upnp.NewContext(c)
 		if err != nil {
 			return nil, fmt.Errorf("upnp: %w", err)
 		}

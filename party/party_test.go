@@ -2,9 +2,11 @@ package party
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -89,5 +91,24 @@ func TestLineLogSplitsLines(t *testing.T) {
 	want := "mpv: Failed to recognize file format.\nmpv: Exiting... (Errors when loading file)\n"
 	if out.String() != want {
 		t.Fatalf("logged %q, want %q", out.String(), want)
+	}
+}
+
+// A hang-up before the file loads usually means mpv is exiting, so its exit status is
+// worth waiting for. But the socket can also drop with mpv alive, and it never exits.
+func TestWaitExitDoesNotWaitForever(t *testing.T) {
+	t.Parallel()
+	if err := waitExit(make(chan error), time.Millisecond); !errors.Is(err, errHungUp) {
+		t.Errorf("a live mpv: got %v, want errHungUp", err)
+	}
+	exited := make(chan error, 1)
+	failed := errors.New("exit status 2")
+	exited <- failed
+	if err := waitExit(exited, time.Minute); !errors.Is(err, failed) || !strings.Contains(err.Error(), "before the movie was ready") {
+		t.Errorf("an exiting mpv: got %v, want its status", err)
+	}
+	exited <- nil
+	if err := waitExit(exited, time.Minute); err != nil {
+		t.Errorf("mpv closed by the user: got %v, want nil", err)
 	}
 }

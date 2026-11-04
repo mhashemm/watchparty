@@ -52,6 +52,7 @@ fingerprint and can't join.
 | P2P bootstrap plays another file / refuses the secret | `server.ErrDifferentFile` / `ErrWrongSecret` |
 | mpv exited before the movie was ready | `mpv exited before the movie was ready: exit status N`; the reason is in the `mpv:` lines just before |
 | mpv's own `Wait` error, nothing cancelled | that error |
+| mpv's socket dropped before the movie was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
 
 **The mpv-quit case was a real bug.** Quitting closes mpv's socket first, `watch()`
 sees EOF and cancels, and `exec.CommandContext` then kills the already-exiting mpv, so

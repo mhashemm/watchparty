@@ -22,7 +22,8 @@ that line is load-bearing and holds the cross-cutting mindset and trust model.
 - **`New` waits for `ready`**, the first `time-pos` with data, i.e. the file is loaded.
   - Before `ready`, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run`
     reads mpv's real exit status. Cancelling would kill the exiting mpv and turn
-    "exit status 2" into "signal: killed".
+    "exit status 2" into "signal: killed". **A hang-up doesn't prove mpv is exiting:** the
+    socket has dropped with mpv alive and well, so that wait has to be bounded.
   - After `ready`, `watch` ending (EOF on quit) calls `cancel`: that is how the party
     learns mpv is gone. `party.Run` wraps that cancel to tell a quit from other stops.
 - `watch` sends **`bytes.Clone(scanner.Bytes())`**: `Scan()` reuses the buffer.

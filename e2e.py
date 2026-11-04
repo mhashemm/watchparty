@@ -318,12 +318,12 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpvflags="", port=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
     path = f"{RUN}/{key}.log"
-    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"]
+    cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else [])
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
         if create_key:
@@ -1883,9 +1883,21 @@ def gui_suite():
         ok("and nothing it sent starts a line", not [l for l in log(n).splitlines() if l.startswith("2026/01/01")], log(n))
         stop(n)
 
+        print("\n[G34d] stopping during discovery doesn't wait out the search, and isn't an error")
+        calls = len(gw.actions)
+        n = launch("upnpStopped", port=PORTS["upnpNode"], local=False)
+        must("it reached discovery", until(lambda: "file fingerprint" in log(n), BOOT), log(n))
+        began = time.time()
+        stop(n)
+        took = time.time() - began
+        ok("it stops well inside the 6.5s search", took < 4, f"{took:.1f}s")
+        ok("with exit code 0", nodes[n]["proc"].returncode == 0, str(nodes[n]["proc"].returncode))
+        ok("and no error, and nothing mapped", "canceled" not in log(n) and "AddPortMapping" not in gw.actions[calls:], log(n))
+
         print("\n[G35] the GUI says so too, and only for the party it's true of")
         gw.ip = "10.172.178.175"
         P = launch_gui("guiUpnp")
+        ok(f"{P} saved", save_settings(P, mpvFlags=MPVFLAGS) == "Saved.", js(P, '$("settings-saved").textContent'))
         js(P, 'setMode("direct"); $("local").checked = false')
         start(P, hostname=P, file=MEDIA, port=str(PORTS["upnpNode"]))
         must("it starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
@@ -1898,7 +1910,44 @@ def gui_suite():
         must("the next party starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
         ok("with a public address it doesn't warn", status(P) == "You're in. Pause or seek in mpv and everyone follows.", status(P))
         end(P)
+
+        print("\n[G35b] the GUI's Stop during discovery ends the party, without a diagnosis")
+        go(P)
+        began = time.time()
+        end(P)
+        took = time.time() - began
+        ok("it says it ended", status(P) == "The party has ended.", status(P))
+        ok("well inside the 6.5s search", took < 4, f"{took:.1f}s")
         stop(P)
+
+    print("\n[G36] mpv's socket dropping while mpv stays alive ends the party with a reason, not a hang")
+    pidfile = f"{RUN}/hungup.pid"
+    with open(f"{RUN}/hungup.py", "w") as f:
+        f.write(f"""import json, os, socket, sys, time
+open({pidfile!r}, "w").write(str(os.getpid()))
+path = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--input-ipc-server="))
+s = socket.socket(socket.AF_UNIX)
+s.bind(path)
+s.listen()
+c = s.accept()[0]
+r = c.makefile("rb")
+for _ in range(3):
+    c.sendall(json.dumps({{"request_id": json.loads(r.readline())["request_id"], "error": "success"}}).encode() + b"\\n")
+r.close()
+c.close()
+time.sleep(600)
+""")
+    script(f"{RUN}/hungup", f'exec python3 {RUN}/hungup.py "$@"')
+    n = launch("hungUp", port=PORTS["upnpNode"], mpv=f"{RUN}/hungup")
+    ok("it exits with an error", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and nodes[n]["proc"].returncode == 1, str(nodes[n]["proc"].poll()))
+    ok("that says what happened", "mpv stopped answering" in log(n), log(n))
+    def gone(pid):
+        try:
+            os.kill(pid, 0)
+            return open(f"/proc/{pid}/stat").read().split(")")[-1].split()[0] == "Z"
+        except OSError:
+            return True
+    ok("and takes mpv with it", until(lambda: gone(int(open(pidfile).read()))))
 
     install_suite()
 
