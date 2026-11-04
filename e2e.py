@@ -1411,7 +1411,7 @@ def relay_suite():
     ipc(nodes["nodeEnd1"]["sock"], "quit")
     until(lambda: "nodeEnd1 has left" in osd("nodeEnd2"))
     ok("the other was told", "nodeEnd1 has left" in osd("nodeEnd2"))
-    ok("and reached the end by itself", nodes["nodeEnd2"]["proc"].wait(timeout=20) == 0, log("nodeEnd2")[-200:])
+    ok("and reached the end by itself", until(lambda: nodes["nodeEnd2"]["proc"].poll() == 0, 20), log("nodeEnd2")[-200:])
 
     relay.kill()
     relay.wait(timeout=10)
@@ -1674,12 +1674,16 @@ def gui_suite():
     ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
     ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
 
-    print(f"\n[G15] {G} ends the party from the page")
+    print(f"\n[G15] {G} ends the party from the page, which pauses {H}")
+    setp(H, "pause", False)
+    must("the party is playing", until(lambda: get(G, "pause") is False and feed(H)[:1] == ["resumed by you"]))
     asked = end(G)
     ok("it asked first", asked == "End the party? mpv closes for you, and everyone else keeps watching.", str(asked))
     ok(f"{G} shows the form again", js(G, '!$("fields").hidden && $("go-label").textContent == "Start the party"'))
     ok(f"{G}'s mpv closed", until(lambda: not mpv_of(G)))
     ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+    ok(f"{H} paused and says why", until(lambda: get(H, "pause") is True and f"paused for {G}: left" in feed(H)), str(feed(H)))
+    ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
     ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
 
     print("\n[G16] a missing mpv is diagnosed as one")
