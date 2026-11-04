@@ -74,7 +74,7 @@ out of step pauses everyone, and someone resumes by hand:
 - a seek while playing
 - someone's player running out of buffered video
 - someone joining mid-way, who then starts at the party's position
-- someone leaving, unless the movie is in its last few seconds
+- someone leaving, unless the video is in its last few seconds
 
 Every pause also carries the position where it stopped, so network delay can't leave
 people apart.

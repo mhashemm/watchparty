@@ -730,7 +730,7 @@ func TestMemberLeavingChangesNothingWhileAlreadyPaused(t *testing.T) {
 	}
 }
 
-// The movie ending is how a party normally finishes. Each player reaches the end at
+// The video ending is how a party normally finishes. Each player reaches the end at
 // its own moment, and whoever gets there first leaves; a pause would hold the rest a
 // moment before the end, with nothing telling them why.
 func TestMemberLeavingNearTheEndDoesNotPause(t *testing.T) {
