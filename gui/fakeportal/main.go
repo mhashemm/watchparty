@@ -55,5 +55,5 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("ready")
-	select {}
+	<-conn.Context().Done()
 }

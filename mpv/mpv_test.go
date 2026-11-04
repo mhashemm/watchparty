@@ -1255,3 +1255,24 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 		}
 	}
 }
+
+// mpv's first report of where it started can land after a peer already sent this node to
+// another video. That report isn't the echo of the move, so it mustn't use up the marker,
+// or the real echo goes out as this node moving the party.
+func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := playlistClient(t)
+	c.paused = true
+	delete(c.seen, playlistPos)
+
+	go c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+	if got := next(t, requests); got != "set_property playlist-pos 1" {
+		t.Fatalf("sent %q", got)
+	}
+	send(propertyChangeLine(playlistPos, "0", 0))
+	send(propertyChangeLine(playlistPos, "1", 0))
+	send(propertyChangeLine(pause, "no", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause {
+		t.Fatalf("broadcast %+v, want nothing before the resume", e)
+	}
+}

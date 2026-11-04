@@ -1628,8 +1628,9 @@ def relay_suite():
         stop(n)
 
     print("\n[R15h] whoever reaches the end first doesn't freeze the others on the last seconds")
-    for n in ("nodeEnd1", "nodeEnd2"):
-        launch(n, room="endroom")
+    launch("nodeEnd1", room="endroom")
+    must("the first is in", until(lambda: connected("nodeEnd1"), BOOT))
+    launch("nodeEnd2", room="endroom")
     must("both are in", until(lambda: booted("nodeEnd1") and booted("nodeEnd2") and "nodeEnd2 has joined" in osd("nodeEnd1"), BOOT))
     for n in ("nodeEnd1", "nodeEnd2"):
         resolve(n)
