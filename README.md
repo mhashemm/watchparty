@@ -49,8 +49,8 @@ Each command prints `your address to share is …`. Pass those flags to your fri
 Same network:
 
 ```sh
-watchparty -local -file movie.mkv                       # prints -addrs 192.168.1.5:6969 -secret XYZ
-watchparty -local -file movie.mkv -port 6970 -addrs 192.168.1.5:6969 -secret XYZ
+watchparty -local -file video.mkv                       # prints -addrs 192.168.1.5:6969 -secret XYZ
+watchparty -local -file video.mkv -port 6970 -addrs 192.168.1.5:6969 -secret XYZ
 ```
 
 Over the internet, without `-local`, the program opens a port on your router through
@@ -60,11 +60,11 @@ public address: behind carrier NAT, common on mobile routers, it warns you to us
 Through a relay, which works behind any NAT:
 
 ```sh
-watchparty -relay wss://relay.example.com -file movie.mkv                         # prints -room … -secret …
-watchparty -relay wss://relay.example.com -room ROOM -secret SECRET -file movie.mkv
+watchparty -relay wss://relay.example.com -file video.mkv                         # prints -room … -secret …
+watchparty -relay wss://relay.example.com -room ROOM -secret SECRET -file video.mkv
 ```
 
-`watchparty -h` lists every flag. `-mpvFlags` passes extra options to mpv. `-update`
+`watchparty -h` explains each feature and lists every flag. `-mpvFlags` passes extra options to mpv. `-update`
 installs the latest release over the binary, and `-version` prints the one you have.
 
 To play several videos, add `-playlist`. It starts on `-file` and loads the other videos in

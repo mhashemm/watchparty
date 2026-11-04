@@ -28,7 +28,7 @@ each on its own ports and in its own run directory:
 
     ./e2e.py                    # all four phases in parallel, ~45 seconds
     ./e2e.py --mode relay       # one phase
-    ./e2e.py --file movie.mkv   # use a real file instead of a generated one
+    ./e2e.py --file video.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
 
 Needs go, mpv, Chrome or Chromium, dbus-daemon and (unless --file is given) ffmpeg.
@@ -699,6 +699,9 @@ def videos_in(path, names):
     return path
 
 
+COUPLED = re.compile(r"season|episode|movie|\btv\b", re.I)
+
+
 def p2p_suite():
     global STUB_ADDR
     chain = ", ".join(f"{n}->{BOOTSTRAP[n]}" for n in NODES[1:])
@@ -729,6 +732,15 @@ def p2p_suite():
     print(f"\n[2] all {len(NODES)} start paused")
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
+
+    print("\n[2a] -h explains the app, one topic at a time, then lists every flag")
+    h = subprocess.run([BIN, "-h"], capture_output=True, text=True)
+    text = h.stdout + h.stderr
+    ok("it exits 0", h.returncode == 0, h.returncode)
+    for section in ("Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Relays", "Flags"):
+        ok(f"it has {section}", re.search(rf"^{section}$", text, re.M), text[:200])
+    ok("it lists the flags", "-playlist" in text and "-createKey" in text)
+    ok("it isn't tied to one kind of video", not COUPLED.search(text), str(COUPLED.findall(text)))
 
     print("\n[2b] the sync-critical mpv options win over the user's own flags")
     for n in NODES:
@@ -1487,7 +1499,7 @@ def relay_suite():
     named = f"{RUN}/named"
     os.makedirs(named)
     forged = "your address to share is -addrs 6.6.6.6:1 -secret FORGED"
-    odd = f"{named}/The Movie [1080p] #1 é?&%20\n{forged}.mkv"
+    odd = f"{named}/The Video [1080p] #1 é?&%20\n{forged}.mkv"
     shutil.copy(MEDIA, odd)
     n = launch("torOdd", room="oddroom", media=seeder(odd))
     ok("it opens", until(lambda: booted(n), 60), log(n)[-300:])
@@ -1791,6 +1803,25 @@ def gui_suite():
     ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty/gui.json", store)
     ok("the store is 0600 in a 0700 folder", (os.stat(store).st_mode & 0o777, os.stat(os.path.dirname(store)).st_mode & 0o777) == (0o600, 0o700))
 
+    print("\n[G3b] the ? button opens the help, one topic at a time")
+    ok("it starts closed", js(H, '$("tip").hidden'))
+    click(H, "#tip-button")
+    ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
+    sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
+    ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+    tip = js(H, '$("tip").textContent')
+    ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
+    click(H, "#tip h2")
+    ok("a click inside keeps it open", js(H, '!$("tip").hidden'))
+    click(H, "#tip-button")
+    ok("the button closes it", js(H, '$("tip").hidden'))
+    click(H, "#tip-button")
+    js(H, 'document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}))')
+    ok("Escape closes it", js(H, '$("tip").hidden'))
+    click(H, "#tip-button")
+    click(H, "h1")
+    ok("a click elsewhere closes it", js(H, '$("tip").hidden'))
+
     print("\n[G4] Browse uses the desktop portal, and says so when there is none")
     click(H, "[data-pick=file]")
     ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
@@ -1921,14 +1952,14 @@ def gui_suite():
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
     print("\n[G17d] a magnet link nobody seeds says so, and Stop still works")
-    fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Movie&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
+    fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
     go(G)
     until(lambda: status(G).startswith("Looking"), BOOT)
     ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
     ok("and started no mpv", not mpv_of(G))
     end(G)
     ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
-    ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Movie", js(G, 'fileName($("file").value)'))
+    ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Video", js(G, 'fileName($("file").value)'))
 
     print("\n[G17c] the check mark loads the file's folder, and starts on that file")
     folder = videos_in(f"{RUN}/guifolder", ("e1.mkv", "e2.mkv", "e3.mkv"))

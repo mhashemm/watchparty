@@ -59,6 +59,39 @@ main {
   margin: 190px 0 150px;
   position: relative;
 }
+.tip-button {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--paper);
+  font: 700 1rem var(--display);
+}
+.tip {
+  position: absolute;
+  top: 52px;
+  left: 14px;
+  right: 14px;
+  z-index: 5;
+  max-height: min(600px, calc(100vh - 340px));
+  overflow-y: auto;
+  padding: 16px 16px 8px;
+  background: var(--paper);
+  border: 2px solid var(--bark);
+  border-radius: 16px;
+  box-shadow: 0 6px 0 var(--bark);
+  font-size: .9rem;
+  line-height: 1.4;
+}
+.tip h2 { margin: 14px 0 4px; font: 700 1rem var(--display); color: var(--soil); }
+.tip h2:first-child { margin-top: 0; }
+.tip p { margin: 0 0 4px; }
+.tip ul { margin: 0 0 8px; padding-left: 18px; }
+.tip li { margin: 3px 0; }
 .cat {
   position: absolute;
   width: 180px;
@@ -347,6 +380,55 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
 </head>
 <body data-mood="sleep">
 <main>
+  <button type="button" class="tip-button" id="tip-button" aria-label="How to use this" aria-expanded="false" aria-controls="tip">?</button>
+  <section class="tip" id="tip" hidden>
+        <h2>Start a party</h2>
+        <ul>
+          <li>Pick a video and press <b>Start the party</b>.</li>
+          <li>Send your friends the invite that appears.</li>
+        </ul>
+        <h2>Join a party</h2>
+        <ul>
+          <li>Paste the invite into <b>Got an invite?</b>, pick the same video, and start.</li>
+          <li>Everyone needs the same file. A renamed copy is fine; a different encode or cut is refused.</li>
+        </ul>
+        <h2>Watch together</h2>
+        <ul>
+          <li>Pause, seek and resume in mpv as usual, and everyone follows.</li>
+          <li>There is no host, so anyone can drive.</li>
+        </ul>
+        <h2>Automatic pauses</h2>
+        <p>The party pauses by itself, and anyone can resume, when someone:</p>
+        <ul>
+          <li>seeks while playing</li>
+          <li>runs out of loaded video</li>
+          <li>joins, and they start where the party is</li>
+          <li>leaves, unless the video is in its last few seconds</li>
+          <li>moves to another video in a playlist</li>
+        </ul>
+        <h2>Links</h2>
+        <ul>
+          <li>File also takes a video's URL. Everyone uses the same URL.</li>
+        </ul>
+        <h2>Playlists</h2>
+        <ul>
+          <li>Open a video and tick the box under File. It starts on that video, with the rest of its folder before and after it.</li>
+          <li>Back and next in mpv move everyone, and everyone stops at the start of the new video.</li>
+          <li>Everyone needs the same videos in the same order. An invite ticks the box for you.</li>
+        </ul>
+        <h2>Torrents</h2>
+        <ul>
+          <li>File also takes a <b>.torrent</b> or a magnet link. Everyone uses the same one.</li>
+          <li>It plays while it downloads. Several videos play as a playlist, and only the current one downloads.</li>
+          <li>What you watched is deleted when you leave, so make sure the disk has room until then.</li>
+          <li>Other people on the torrent can see your IP address, and you upload to them while you watch.</li>
+        </ul>
+        <h2>Connecting</h2>
+        <ul>
+          <li><b>Over the internet</b> goes through a relay, and works from anywhere. A relay can ask for a create key to open a party: add it in Settings.</li>
+          <li><b>Same Wi-Fi</b> connects straight to your friends. Untick the box there to reach them through your router instead.</li>
+        </ul>
+  </section>
   <svg class="cat" viewBox="0 0 200 220" role="img" aria-label="Fosdo2 the cat">
     <title>Fosdo2</title>
     <defs>
@@ -738,6 +820,16 @@ $("clear-history").addEventListener("click", async () => {
   if (!confirm("Clear the whole party history?")) return;
   await api("/history/clear", {});
   await loadState();
+});
+
+const showTip = open => {
+  $("tip").hidden = !open;
+  $("tip-button").setAttribute("aria-expanded", open);
+};
+$("tip-button").addEventListener("click", () => showTip($("tip").hidden));
+document.addEventListener("keydown", e => { if (e.key === "Escape") showTip(false); });
+document.addEventListener("click", e => {
+  if (!e.target.closest("#tip, #tip-button")) showTip(false);
 });
 
 $("settings-form").addEventListener("submit", async e => {
