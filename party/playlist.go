@@ -14,7 +14,7 @@ import (
 var VideoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
 
 // media resolves -file. With siblings, a file also brings the other videos in its folder,
-// starting on it. That list's identity is its videos in order, so everyone's next episode
+// starting on it. That list's identity is its videos in order, so everyone's next entry
 // is the same one. A URL or a file the list wouldn't hold plays alone.
 func media(path string, siblings bool) (files []string, start int, playlist bool, id string, err error) {
 	if siblings {
@@ -69,7 +69,7 @@ func videos(dir string) ([]string, error) {
 	return files, nil
 }
 
-// naturalCompare orders runs of digits by value, so episode 2 comes before episode 10.
+// naturalCompare orders runs of digits by value, so entry 2 comes before entry 10.
 func naturalCompare(a, b string) int {
 	a, b = strings.ToLower(a), strings.ToLower(b)
 	for a != "" && b != "" {

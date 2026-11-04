@@ -33,7 +33,7 @@ Or download a binary from [Releases](https://github.com/mhashemm/watchparty/rele
 
 Run `watchparty-gui`. It opens a small window.
 
-1. Pick your video, a `.torrent` file or a magnet link. To watch a season from a video, tick
+1. Pick your video, a `.torrent` file or a magnet link. To play the rest of a video's folder too, tick
    **Also load the other videos in this folder**.
 2. Choose **Over the internet** (through a relay) or **Same Wi-Fi**.
 3. The first person leaves the room and secret empty and presses **Start the party**.
@@ -67,8 +67,8 @@ watchparty -relay wss://relay.example.com -room ROOM -secret SECRET -file movie.
 `watchparty -h` lists every flag. `-mpvFlags` passes extra options to mpv. `-update`
 installs the latest release over the binary, and `-version` prints the one you have.
 
-To watch a season, add `-playlist`. It starts on `-file` and loads the other videos in its
-folder, so back and next in mpv go to the episodes either side of it. Everyone needs the
+To play several videos, add `-playlist`. It starts on `-file` and loads the other videos in
+its folder, so back and next in mpv go to the videos either side of it. Everyone needs the
 same videos in the same order, though names can differ. The invite includes `-playlist`,
 and pasting it in the app ticks the box.
 
@@ -80,14 +80,14 @@ out of step pauses everyone, and someone resumes by hand:
 - a seek while playing
 - someone's player running out of buffered video
 - someone joining mid-way, who then starts at the party's position
-- moving to another episode, by hand or when one ends, which stops everyone at its start
+- moving to another video in a playlist, by hand or when one ends, which stops everyone at its start
 
 Every pause also carries the position where it stopped, so network delay can't leave
 people apart.
 
 `-file` can be a `.torrent` file or a magnet link. Everyone uses the same one. It plays
-while it downloads, a pack of episodes plays as a playlist with only the current one
-downloading, and running out of downloaded video pauses the party. What you watched stays in your cache folder until you leave, when it is deleted, so make
+while it downloads, a torrent of several videos plays as a playlist with only the current
+one downloading, and running out of downloaded video pauses the party. What you watched stays in your cache folder until you leave, when it is deleted, so make
 sure the disk has room for it. As with any torrent, peers see your IP address, and you
 upload to them while you watch.
 

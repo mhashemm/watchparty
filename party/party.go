@@ -138,9 +138,9 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
-	episodes := 0
+	entries := 0
 	if playlist {
-		episodes = len(files)
+		entries = len(files)
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	}
 	args = append(args, files...)
@@ -178,7 +178,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, episodes)
+	}, conn, outgoing, incoming, entries)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():

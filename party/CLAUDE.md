@@ -21,12 +21,12 @@ the relay (against the room creator's) and its party ends. Older versions send n
 fingerprint and can't join.
 
 **`Config.Playlist` loads the file's folder (`media`):** its videos, not its subfolders, in
-natural order (`E2` before `E10`), starting on the file. Its identity is the hash of its
+natural order (`v2` before `v10`), starting on the file. Its identity is the hash of its
 fingerprints **in that order**: names may differ and each person can pick a different
-episode, but another order is refused like a different file. The invite carries
+entry, but another order is refused like a different file. The invite carries
 `-playlist` so a guest can't miss it, and the GUI ticks its box from that. Each player moves on by
-itself at the end of an episode; with different orders each went to its own next one and
-then followed the other's. Each file costs one `fingerprint`, so a season on a slow disk
+itself at the end of an entry; with different orders each went to its own next one and
+then followed the other's. Each file costs one `fingerprint`, so a big folder on a slow disk
 takes a moment before mpv opens.
 
 ## Torrents (`torrent.go`)
@@ -34,14 +34,14 @@ takes a moment before mpv opens.
 `-file` as a magnet link or a local `.torrent` starts a client, waits for the metadata
 with no time limit (Stop ends it, the GUI says it is looking), and serves each file it
 plays to mpv over HTTP on loopback, at a path with a random token. **Nothing asks to download
-but mpv's own range requests**, so only the playing episode buffers, what's already played
+but mpv's own range requests**, so only the playing video buffers, what's already played
 stays on disk until the party ends, and a slow swarm reaches the party as
 `paused-for-cache`, like any stream.
 
 **What plays (`playable`):** its videos, without anything named `sample` or under a tenth of
 the largest, in natural order from the first, as a playlist if there's more than one. The
 size rule keeps a trailer from playing before a movie, and also drops a short special in a
-pack of long episodes. The check mark doesn't matter.
+torrent of long videos. The check mark doesn't matter.
 
 - **Identity is the infohash plus the paths it plays:** a stream's URL has a local port and
   a token. A magnet link and a `.torrent` for the same thing match; a plain copy of the

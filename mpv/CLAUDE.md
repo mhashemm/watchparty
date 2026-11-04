@@ -119,7 +119,7 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
 
-### Episodes (`episodes`, `followEpisode`)
+### Playlists (`entries`, `followEntry`)
 
 Only with `Config.Playlist` (`MPV.md`, "Playlists"), where everyone's list is identical
 (`party/CLAUDE.md`), so an index means the same file to all. `playlist-pos` moving, by hand
@@ -127,28 +127,28 @@ or at the end of a file, goes out raw, and while playing also pauses the party w
 reason: nobody starts the next one until someone resumes.
 
 - A peer's index is bounds-checked and only ever sets `playlist-pos`.
-- **`followEpisode` checks again after pausing, under the lock that sets `loading`.** Two
+- **`followEntry` checks again after pausing, under the lock that sets `loading`.** Two
   players reach the end together, and its own move can arrive during the pause. Setting
-  the same episode then emits nothing, and `loading` waits for a load that already happened.
-- **`welcome` always names the episode**, even from a node still `joining`: the room's first
-  node has no position to give, and each person can open a different episode.
-- **`followEpisode` pauses first**, so the file opens stopped, and marks `applied`, so
+  the same entry then emits nothing, and `loading` waits for a load that already happened.
+- **`welcome` always names the entry**, even from a node still `joining`: the room's first
+  node has no position to give, and each person can open a different entry.
+- **`followEntry` pauses first**, so the file opens stopped, and marks `applied`, so
   mpv's report isn't sent back. It skips one it is on or already headed to: every member
   answers a joiner, and two nodes often reach the end together.
 - **A switch resets `c.pos` and `seeks` to 0.** The old position would go out with the
   pause, and the new file's `time-pos` 0 would go out as a seek.
 - **`loading` holds a seek until `file-loaded`** (`heldSeek`). Sent right after the
   switch it lands on the old file, which then ends and loses it. A joiner hits this every
-  time: `welcome` sends the episode, then `start-pos`.
-- **Every message says its episode (`tagged`).** A position or a resume for another
-  episode is dropped, against where this node is `heading`, since it was sent before someone
+  time: `welcome` sends the entry, then `start-pos`.
+- **Every message says its entry (`tagged`).** A position or a resume for another
+  entry is dropped, against where this node is `heading`, since it was sent before someone
   moved. A pause still counts. A table of who is on what can't do this: a follower doesn't
   announce its move, so the table would go stale and drop its later seeks.
-- **Two moves that left the same episode settle on the higher (`left`, `From`).** Each
+- **Two moves that left the same entry settle on the higher (`left`, `From`).** Each
   would otherwise follow the other and swap. Dropping them would strand both. Any other
   move is followed, lower or not, so someone who missed one catches up on the next.
 - Accepted: a seek reaching someone just before the move it depends on is lost. A node
-  that really is on another episode stays paused until the next move, since its resumes
+  that really is on another entry stays paused until the next move, since its resumes
   and everyone else's are dropped.
 
 e2e `[16]`, `[R15c]`.

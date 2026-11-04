@@ -48,7 +48,7 @@ type torrentStream struct {
 
 // playable picks what a torrent plays: its videos in natural order, without samples, or
 // anything under a tenth of the largest, which keeps a trailer from playing before a movie.
-// ponytail: a size guess, so a short special in a pack of long episodes is dropped too; a
+// ponytail: a size guess, so a short video among long ones is dropped too; a
 // way to choose files is the upgrade. A torrent with no videos plays its largest file and
 // leaves the failing to mpv.
 func playable(files []*torrent.File) []*torrent.File {
@@ -74,7 +74,7 @@ func torrentCache() (string, error) {
 }
 
 // openTorrent waits for the torrent's metadata, then serves what it plays to mpv on
-// loopback. Nothing downloads but what mpv reads, so only the episode playing buffers. It
+// loopback. Nothing downloads but what mpv reads, so only the video playing buffers. It
 // downloads into a new folder in cache, which close removes.
 func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig) (*torrentStream, error) {
 	dir, err := os.MkdirTemp(cache, "torrent-*")

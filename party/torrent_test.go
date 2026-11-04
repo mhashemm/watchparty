@@ -139,7 +139,7 @@ func TestAMoviePlaysAloneWithRanges(t *testing.T) {
 	}
 }
 
-func TestAPackPlaysItsEpisodesInOrder(t *testing.T) {
+func TestSeveralVideosPlayInOrder(t *testing.T) {
 	t.Parallel()
 	magnet, _ := seed(t, aPack())
 	stream := openOrFail(t, magnet)
@@ -158,20 +158,20 @@ func TestAPackPlaysItsEpisodesInOrder(t *testing.T) {
 	}
 }
 
-// Only what mpv reads downloads, or a whole season would fill the disk behind the first
-// episode. A file's last piece can be shared with its neighbour, so read the middle.
-func TestOnlyThePlayingEpisodeBuffers(t *testing.T) {
+// Only what mpv reads downloads, or a whole torrent would fill the disk behind the first
+// video. A file's last piece can be shared with its neighbour, so read the middle.
+func TestOnlyThePlayingVideoBuffers(t *testing.T) {
 	t.Parallel()
 	magnet, _ := seed(t, aPack())
 	stream := openOrFail(t, magnet)
 
 	read(t, stream.urls[1], 1_000_000, 1_000_100)
 	if got := stream.files[1].BytesCompleted(); got == 0 {
-		t.Fatal("the playing episode has nothing")
+		t.Fatal("the playing video has nothing")
 	}
 	for _, i := range []int{0, 2} {
 		if got := stream.files[i].BytesCompleted(); got != 0 {
-			t.Fatalf("episode %d buffered %d bytes", i, got)
+			t.Fatalf("video %d buffered %d bytes", i, got)
 		}
 	}
 }
