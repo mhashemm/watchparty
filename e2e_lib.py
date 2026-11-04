@@ -79,7 +79,9 @@ class Page(CDP):
         if downloads:
             self.call("Browser.setDownloadBehavior", behavior="allow", downloadPath=downloads)
         # the first loadState fills the form; filling it before then would be overwritten
-        until(lambda: self.js('document.getElementById("store-path")?.textContent') not in (None, ""), timeout)
+        if not until(lambda: self.js('document.getElementById("store-path")?.textContent') not in (None, ""), timeout):
+            raise RuntimeError(f"the page's script hadn't finished its first load after {timeout}s: readyState={self.js('document.readyState')}, "
+                               f"resources still loading: {self.js('performance.getEntriesByType(`resource`).filter(r => !r.responseEnd).map(r => r.name)')}")
         # a real confirm() waits for a click forever; this one says yes and keeps the question.
         # loadState()s in flight are counted: a late one refills the form with what the
         # store had when it asked, over anything filled in since, so tab() waits for them.
