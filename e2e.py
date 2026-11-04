@@ -977,7 +977,9 @@ def p2p_suite():
        f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
     stop("nodeKeep")
 
-    print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor")
+    print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor, which pauses the party")
+    setp(survivors[1], "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in survivors)))
     clean = stop(A)
     ok(f"{A} exited cleanly", clean and nodes[A]["proc"].returncode == 0, f"rc={nodes[A]['proc'].returncode}")
     until(lambda: all(f"{A} has left" in osd(n) for n in survivors[1:]))
@@ -985,6 +987,9 @@ def p2p_suite():
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n),
            "Shutdown must not derive its timeout from the cancelled signal context")
         ok(f"{n} did not error on {A}'s departure", "does not exists" not in log(n))
+    until(lambda: all(get(n, "pause") is True for n in survivors[1:]))
+    for n in survivors[1:]:
+        ok(f"{n} paused for {A}", get(n, "pause") is True and f"paused for {A}: left" in osd(n), str(osd(n)[-3:]))
 
     print("\n[15] the remaining mesh keeps working without the node that bootstrapped it")
     rest = survivors[1:]
@@ -1360,13 +1365,17 @@ def relay_suite():
     for n in others(A):
         ok(f"{A} drives {n} again after the relay came back", get(n, "pause") is False)
 
-    print("\n[R14] clean leave: SIGTERM tells the room")
+    print("\n[R14] clean leave: SIGTERM tells the room, which pauses the party")
     survivors = others(A)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
     ok(f"{A} exited cleanly", stop(A) and nodes[A]["proc"].returncode == 0,
        f"rc={nodes[A]['proc'].returncode}")
     until(lambda: all(f"{A} has left" in osd(n) for n in survivors))
     for n in survivors:
         ok(f"{n} was told {A} left", f"{A} has left" in osd(n))
+    until(lambda: all(get(n, "pause") is True for n in survivors))
+    for n in survivors:
+        ok(f"{n} paused for {A}", get(n, "pause") is True and f"paused for {A}: left" in osd(n), str(osd(n)[-3:]))
 
     print("\n[R15] the room keeps working without the node that opened it")
     setp(survivors[0], "pause", True)
@@ -1388,6 +1397,21 @@ def relay_suite():
         ok(f"{n} was told {quitter} left", f"{quitter} has left" in osd(n))
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    print("\n[R15c] whoever reaches the end first doesn't freeze the others on the last seconds")
+    for n in ("nodeEnd1", "nodeEnd2"):
+        launch(n, room="endroom")
+    must("both are in", until(lambda: booted("nodeEnd1") and booted("nodeEnd2") and "nodeEnd2 has joined" in osd("nodeEnd1"), BOOT))
+    for n in ("nodeEnd1", "nodeEnd2"):
+        resolve(n)
+    setp("nodeEnd1", "time-pos", get("nodeEnd1", "duration") - 3)
+    until(lambda: abs(get("nodeEnd2", "time-pos") - get("nodeEnd1", "time-pos")) < 0.1)
+    setp("nodeEnd1", "pause", False)
+    must("they play", until(lambda: get("nodeEnd2", "pause") is False))
+    ipc(nodes["nodeEnd1"]["sock"], "quit")
+    until(lambda: "nodeEnd1 has left" in osd("nodeEnd2"))
+    ok("the other was told", "nodeEnd1 has left" in osd("nodeEnd2"))
+    ok("and reached the end by itself", nodes["nodeEnd2"]["proc"].wait(timeout=20) == 0, log("nodeEnd2")[-200:])
 
     relay.kill()
     relay.wait(timeout=10)
@@ -1941,7 +1965,7 @@ s.bind(path)
 s.listen()
 c = s.accept()[0]
 r = c.makefile("rb")
-for _ in range(3):
+for _ in range(4):
     c.sendall(json.dumps({{"request_id": json.loads(r.readline())["request_id"], "error": "success"}}).encode() + b"\\n")
 r.close()
 c.close()

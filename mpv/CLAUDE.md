@@ -119,6 +119,21 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
 
+### A member leaving (`left`)
+
+The transports' "X has left" notice, sent only for a member that says goodbye or that the
+relay loses, pauses the party. Reading the text means an already deployed relay works.
+P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's next send.
+
+- Each node pauses itself and it goes out as its own pause, so a node whose notice was
+  lost still stops. Nodes stop a moment apart, so until the next resume `leaving` makes
+  `align` follow any earlier `paused-at`: they settle on the earliest stop.
+- **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
+  and a pause would hold everyone else just short of it. So `duration` is observed.
+- A notice shows first, so the GUI can tell this pause from a person's in its feed.
+
+e2e `[14]`, `[R14]`, `[R15c]`.
+
 ## Windows
 
 - The pipe is `\\.\pipe\mpv<random>`, dialed with `go-winio`.
