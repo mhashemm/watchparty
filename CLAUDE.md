@@ -58,7 +58,7 @@ file fingerprint differs is refused with 409.
   | Printed by | Line | Read by |
   |---|---|---|
   | party | `your address to share is <invite>` | GUI invite box, `gui/store.go` (real room and secret), e2e |
-  | party | `init done` | GUI "You're in", e2e |
+  | party | `init done`, `unreachable address: …` | GUI "You're in" and its warning, e2e |
   | party | `file fingerprint: <hex>` | e2e |
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file` | GUI diagnosis |

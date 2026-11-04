@@ -6,6 +6,6 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/coder/websocket v1.8.15
 	github.com/godbus/dbus/v5 v5.1.0
-	github.com/mhashemm/upnp v0.5.0
+	github.com/mhashemm/upnp v0.5.1
 	golang.org/x/sys v0.10.0
 )

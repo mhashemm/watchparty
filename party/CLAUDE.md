@@ -68,7 +68,11 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 ## `runMesh` (P2P)
 
 - `-local` uses the LAN IP. Otherwise UPNP maps `PublicPort` → `Port` with a 24h lease,
-  and retries with 0 (permanent) when the router answers `ErrOnlyPermanentLease`.
+  and upnp itself retries with 0 (permanent) when the router answers
+  `ErrOnlyPermanentLease`.
+- **A mapping can succeed and the address still be useless:** behind carrier NAT the
+  router reports a private address. `upnp.IPClass` decides; don't copy its ranges here.
+  The party still starts, as friends on the LAN can join, and logs `unreachable address`.
 - **It returns its cleanup instead of deferring it**, so `/bye` → `http.Server.Shutdown`
   → `DeletePortMapping` run when `Run` ends, not when `runMesh` returns. On an error it
   runs the cleanup collected so far, so a half-done setup never leaks a router mapping.

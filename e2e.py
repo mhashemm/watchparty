@@ -40,7 +40,7 @@ import argparse, functools, glob, http.client, http.server, json, os, re, shutil
 import plistlib, queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
-from e2e_lib import Page, Release, find_page, sha
+from e2e_lib import Gateway, Page, Release, find_page, sha
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
@@ -141,6 +141,8 @@ PORTS["release"] = args.port_base + len(NODES) + 8
 PORTS["wifiHost"] = args.port_base + len(NODES) + 9
 PORTS["wifiGuest"] = args.port_base + len(NODES) + 10
 PORTS["cliRelease"] = args.port_base + len(NODES) + 11
+PORTS["gateway"] = args.port_base + len(NODES) + 12
+PORTS["upnpNode"] = args.port_base + len(NODES) + 13
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -316,7 +318,7 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", mpvflags="", port=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpvflags="", port=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
@@ -327,7 +329,8 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
         if create_key:
             cmd += ["-createKey", create_key]
     else:
-        cmd += ["-local", "-port", str(port or PORTS[name]), "-secret", secret or SECRET]
+        cmd += ["-local"] if local else []
+        cmd += ["-port", str(port or PORTS[name]), "-secret", secret or SECRET]
         if evict:
             cmd += ["-evictAfter", evict]
         if addrs:
@@ -1851,6 +1854,52 @@ def gui_suite():
         pass  # the page can go before it answers
     ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
     ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
+    if not os.environ.get("E2E_NO_SANDBOX"):
+        print("\n[G34] skipped outside the container: a real router on this LAN would answer and map ports")
+    else:
+        print("\n[G34] UPnP behind carrier NAT: the party starts, warns, and removes its mapping")
+        gw = Gateway(PORTS["gateway"], "10.172.178.175")
+        n = launch("upnpCarrier", port=PORTS["upnpNode"], local=False)
+        must("it starts", until(lambda: booted(n), BOOT), log(n))
+        ok("the mapping was added", "AddPortMapping" in gw.actions, str(gw.actions))
+        ok("it warns", "unreachable address: 10.172.178.175 " in log(n), log(n))
+        ok("and still prints the invite, for friends on the LAN", "your address to share is -addrs 10.172.178.175:" in log(n), log(n))
+        stop(n)
+        ok("quitting removes the mapping", "DeletePortMapping" in gw.actions and "upnp: port mapping deleted" in log(n), str(gw.actions))
+
+        print("\n[G34b] a public address gets no warning")
+        gw.ip = "203.0.113.7"
+        n = launch("upnpPublic", port=PORTS["upnpNode"], local=False)
+        must("it starts", until(lambda: booted(n), BOOT), log(n))
+        ok("the invite has it", "your address to share is -addrs 203.0.113.7:" in log(n), log(n))
+        ok("and no warning", "unreachable address" not in log(n), log(n))
+        stop(n)
+
+        print("\n[G34c] a gateway can't start a log line of its own through the address it reports")
+        gw.ip = "10.0.0.1&#10;2026/01/01 00:00:00 FORGED"
+        n = launch("upnpForged", port=PORTS["upnpNode"], local=False)
+        must("it starts", until(lambda: booted(n), BOOT), log(n))
+        ok("an address that isn't one warns too", "unreachable address: 10.0.0.1 2026/01/01" in log(n), log(n))
+        ok("and nothing it sent starts a line", not [l for l in log(n).splitlines() if l.startswith("2026/01/01")], log(n))
+        stop(n)
+
+        print("\n[G35] the GUI says so too, and only for the party it's true of")
+        gw.ip = "10.172.178.175"
+        P = launch_gui("guiUpnp")
+        js(P, 'setMode("direct"); $("local").checked = false')
+        start(P, hostname=P, file=MEDIA, port=str(PORTS["upnpNode"]))
+        must("it starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
+        ok("the status warns", status(P) == "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.", status(P))
+        until(lambda: js(P, '$("share-text").textContent'))
+        ok("and the invite still shows", js(P, '$("share-text").textContent').startswith("-addrs 10.172.178.175:"), js(P, '$("share-text").textContent'))
+        end(P)
+        gw.ip = "203.0.113.7"
+        go(P)
+        must("the next party starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
+        ok("with a public address it doesn't warn", status(P) == "You're in. Pause or seek in mpv and everyone follows.", status(P))
+        end(P)
+        stop(P)
+
     install_suite()
 
 
