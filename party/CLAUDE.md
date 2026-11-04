@@ -54,7 +54,10 @@ torrent of long videos. The check mark doesn't matter.
 - **No router port is opened** (`NoDefaultPortForwarding`): that would surprise someone who
   only ever saw watchparty ask for one.
 - The library's logging is discarded, since log lines here are an API.
-- **Releases and e2e build with `CGO_ENABLED=0`.** With cgo the library compiles a C++ uTP
+- **`publisher.yml` builds releases itself, not through `make`,** so build settings go in
+  both. Both strip debug info (`-s -w`), about 30% of a binary. Crash reports keep function
+  names and files; debug with a plain `go build`.
+- **Releases, `make` and e2e build with `CGO_ENABLED=0`.** With cgo the library compiles a C++ uTP
   library, which would make the Linux binary need libstdc++. `-race` needs cgo, so tests
   pass `-tags disable_libutp`.
 
