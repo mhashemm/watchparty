@@ -1443,6 +1443,9 @@ def caps_suite():
     print("\n[R19] -createKey: only the key holder opens a room, the rest just join")
     relay = launch_relay({"CREATE_KEY": "k"})
     until(lambda: listening(PORTS["relay"]))
+    launch("nodeB", room="", tag="k0")
+    nodes["k0"]["proc"].wait(timeout=30)
+    ok("opening a new room without the key is refused, and the node exits", "needs -createKey" in log("k0") and "not open yet" not in log("k0") and nodes["k0"]["proc"].returncode != 0, log("k0")[-300:])
     launch("nodeB", room="keyroom", tag="k1")
     until(lambda: "not open yet" in log("k1"), BOOT)
     ok("a keyless node waits for the room instead of giving up",
@@ -1673,6 +1676,13 @@ def gui_suite():
     go(G)
     until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
     ok("the relay rejected the file", status(G) == "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.", status(G))
+    ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    print("\n[G17b] opening a new party without the create key is diagnosed, not left waiting")
+    fill(G, file=MEDIA, room="", secret="")
+    go(G)
+    until(lambda: status(G).startswith("Diagnosis"), BOOT)
+    ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")

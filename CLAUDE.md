@@ -61,7 +61,7 @@ file fingerprint differs is refused with 409.
   | party | `init done`, `unreachable address: …` | GUI "You're in" and its warning, e2e |
   | party | `file fingerprint: <hex>` | e2e |
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
-  | party/ws.go | `rejected by relay`, plus `not the same file` | GUI diagnosis |
+  | party/ws.go | `rejected by relay`, plus `not the same file` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON>` | GUI feed (your own pause/resume), e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |

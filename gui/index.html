@@ -837,7 +837,7 @@ function handle(line) {
     state.reconnecting = true;
     state.waiting = /is not open yet/.test(msg);
   }
-  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : "secret";
+  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
@@ -856,6 +856,8 @@ function render(exitErr) {
   let text, bad = false, mood = "awake", walking = false;
   if (state.rejected === "file") {
     text = "Diagnosis: your video is not the same file as the party's. Pick the same video and start again."; bad = true;
+  } else if (state.rejected === "key") {
+    text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
   } else if (state.rejected) {
     text = "Diagnosis: the relay rejected this room or secret. Check the invite and start again."; bad = true;
   } else if (running && state.waiting) {
