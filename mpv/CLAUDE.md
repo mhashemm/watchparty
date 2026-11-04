@@ -127,6 +127,9 @@ or at the end of a file, goes out raw, and while playing also pauses the party w
 reason: nobody starts the next one until someone resumes.
 
 - A peer's index is bounds-checked and only ever sets `playlist-pos`.
+- **`followEpisode` checks again after pausing, under the lock that sets `loading`.** Two
+  players reach the end together, and its own move can arrive during the pause. Setting
+  the same episode then emits nothing, and `loading` waits for a load that already happened.
 - **`welcome` always names the episode**, even from a node still `joining`: the room's first
   node has no position to give, and each person can open a different episode.
 - **`followEpisode` pauses first**, so the file opens stopped, and marks `applied`, so

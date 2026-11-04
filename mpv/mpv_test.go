@@ -1099,3 +1099,41 @@ func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
 		t.Fatalf("sent %q, want it followed", got)
 	}
 }
+
+// Two players reach the end of an episode together. One decides to follow the other, and
+// its own move arrives while it is pausing. The set that follows would change nothing, so
+// mpv would never answer it with an event, and it would wait for a load that has passed,
+// holding every later seek forever.
+func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
+	t.Parallel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
+	c.conn.conn = ours
+	c.episodes, c.left = 3, -1
+	c.current = 1
+	c.seen[pause], c.seen[timePos], c.seen[playlistPos] = true, true, true
+	sent := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			command := strings.TrimSpace(fmt.Sprintln(req.Command...))
+			sent <- command
+			if command == "set_property pause true" {
+				fmt.Fprint(theirs, propertyChangeLine(playlistPos, "2", 0), `{"event":"file-loaded"}`+"\n")
+			}
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		}
+	}()
+	go c.watch()
+
+	c.apply(peer("a", move(1, 2)))
+	c.apply(peer("a", tagged(2, `{"event":"property-change","name":"time-pos","data":"5.000000"}`)))
+	for got := next(t, sent); got != "set_property time-pos 5.000000"; got = next(t, sent) {
+		if got == "set_property playlist-pos 2" {
+			t.Fatal("set the episode it was already on")
+		}
+	}
+}

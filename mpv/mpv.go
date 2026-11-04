@@ -533,6 +533,10 @@ func (c *Client) followEpisode(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
+	if i == c.current {
+		c.mu.Unlock()
+		return nil
+	}
 	c.loading = true
 	c.applied[playlistPos] = event.Data
 	c.left = heading
