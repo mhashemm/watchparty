@@ -818,6 +818,12 @@ function videoList(videos, title) {
   }));
   return ul;
 }
+function partyTitle(p, files) {
+  if (files === 0) return fileName(p.file);
+  if (files === 1) return p.videos[0].name;
+  const place = /^magnet:|\.torrent$/i.test(p.file) ? fileName(p.file) : p.file.split(/[\\/]/).at(-2);
+  return place ? `${place} (${files} videos)` : `${files} videos`;
+}
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
   $("history-empty").hidden = parties.length > 0;
@@ -826,8 +832,7 @@ function renderHistory() {
     const li = document.createElement("li");
     const title = document.createElement("b");
     const videos = p.videos || [];
-    const files = new Set(videos.map(v => v.name)).size;
-    title.textContent = files > 1 ? `${files} videos` : files ? videos[0].name : fileName(p.file);
+    title.textContent = partyTitle(p, new Set(videos.map(v => v.name)).size);
     title.title = p.file;
     const meta = document.createElement("span");
     meta.className = "meta";

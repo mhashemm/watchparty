@@ -2187,7 +2187,10 @@ def gui_suite():
     tab(G, "history")
     until(lambda: js(G, '$("history-list").querySelector(".videos") !== null'))
     shown = js(G, '$("history-list").firstElementChild.textContent')
-    ok("the History page counts files, not plays, and shows each with its times", "2 videos" in shown and "e3.mkv" in shown and " to " in shown, shown)
+    ok("the History page names the folder, counts files rather than plays, and shows each with its times", "guifolder (2 videos)" in shown and "e3.mkv" in shown and " to " in shown, shown)
+    title = lambda file: js(G, f'partyTitle({{file: {json.dumps(file)}}}, 2)')
+    ok("a torrent has no folder of its own, so it's named for itself", (title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent")) == ("The.Pack (2 videos)", "pack.torrent (2 videos)"), str((title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent"))))
+    ok("a Windows path works, and a path with no folder just counts", (title("C:\\v\\trip\\a.mkv"), title("a.mkv")) == ("trip (2 videos)", "2 videos"), str((title("C:\\v\\trip\\a.mkv"), title("a.mkv"))))
     tab(G, "party")
     line = lambda m, at="18:00:00": f"2026/11/05 {at} {m}"
     notice = lambda text, at="18:00:00": line("do: sent request: " + json.dumps({"command": ["show-text", text, 5000]}, separators=(",", ":")), at)
