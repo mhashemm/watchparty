@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"hash/maphash"
 	"log"
+	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -83,10 +85,12 @@ func (l *limiter) allow(key string, cap int) bool {
 }
 
 type member struct {
+	id       string
 	hostname string
 	session  string
 	ch       chan []byte
 	conn     *websocket.Conn
+	log      *slog.Logger
 }
 
 type room struct {
@@ -161,7 +165,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 		case m.ch <- b:
 		default:
 			// 64 frames behind is not a slow client, it is a dead one
-			log.Printf("%s: send buffer full, dropping\n", m.hostname)
+			m.log.Warn("send buffer full, closing")
 			m.conn.CloseNow()
 		}
 	}
@@ -247,13 +251,14 @@ func queue(m *member, b []byte) {
 }
 
 // leave removes m and reaps the room once it is empty. A nil m only reaps, and so
-// does an m that add already replaced: the room was never told it left.
-func (r *relay) leave(name string, m *member) {
+// does an m that add already replaced: the room was never told it left. It reports
+// whether m was still a member.
+func (r *relay) leave(name string, m *member) bool {
 	r.mu.Lock()
 	rm, ok := r.rooms[name]
 	if !ok {
 		r.mu.Unlock()
-		return
+		return false
 	}
 	_, present := rm.members[m]
 	delete(rm.members, m)
@@ -264,6 +269,16 @@ func (r *relay) leave(name string, m *member) {
 	if present {
 		r.broadcast(name, m, notice(m.hostname, fmt.Sprintf("%s has left", m.hostname)))
 	}
+	return present
+}
+
+func (r *relay) counts(name string) (members, rooms int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rm, ok := r.rooms[name]; ok {
+		members = len(rm.members)
+	}
+	return members, len(r.rooms)
 }
 
 func (r *relay) write(c context.Context, m *member) {
@@ -279,6 +294,7 @@ func (r *relay) write(c context.Context, m *member) {
 			err := m.conn.Write(ctx, websocket.MessageText, b)
 			cancel()
 			if err != nil {
+				m.log.Info("write failed", "err", err)
 				return
 			}
 		case <-ticker.C:
@@ -288,43 +304,51 @@ func (r *relay) write(c context.Context, m *member) {
 			err := m.conn.Ping(ctx)
 			cancel()
 			if err != nil {
+				m.log.Info("ping failed", "err", err)
 				return
 			}
 		}
 	}
 }
 
+func refuse(res http.ResponseWriter, l *slog.Logger, code int, reason string) {
+	l.Info("refused", "status", code, "reason", reason)
+	http.Error(res, reason, code)
+}
+
 func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
+	// random, not a counter: the same id must not mean two connections across a restart
+	id := strconv.FormatUint(rand.Uint64(), 36)
 	// reserve first: a flood would otherwise all pass a Load() check before any of
 	// them incremented
 	if r.conns.Add(1) > r.maxConns {
 		r.conns.Add(-1)
-		http.Error(res, "too many connections", http.StatusServiceUnavailable)
+		refuse(res, slog.With("conn", id, "ip", r.ip(req)), http.StatusServiceUnavailable, "too many connections")
 		return
 	}
 	defer r.conns.Add(-1)
 
 	name := req.URL.Query().Get("room")
 	hostname := clean(req.URL.Query().Get("hostname"))
+	ip := r.ip(req)
+	l := slog.With("conn", id, "ip", ip, "room", clean(name), "hostname", hostname)
 	if name == "" || hostname == "" {
-		http.Error(res, "room and hostname are required", http.StatusBadRequest)
+		refuse(res, l, http.StatusBadRequest, "room and hostname are required")
 		return
 	}
-	ip := r.ip(req)
 
 	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file"), ip)
 	if err != nil {
-		log.Printf("%s %s: %s\n", ip, clean(name), err)
-		http.Error(res, err.Error(), code)
+		refuse(res, l, code, err.Error())
 		return
 	}
 
-	m := &member{hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer)}
+	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer), log: l}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
 		r.leave(name, nil)
-		log.Printf("%s: %s\n", ip, err)
+		l.Info("upgrade failed", "err", err)
 		return
 	}
 	conn.SetReadLimit(readLimit)
@@ -332,29 +356,41 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	stale, ok := r.add(name, m)
 	if !ok {
 		// the redial goes through admit again, which recreates the room or waits
+		l.Info("room closed before the join landed, sent back to redial")
 		conn.Close(websocket.StatusTryAgainLater, "room closed")
 		return
 	}
+	replaces := ""
 	if stale != nil {
 		stale.conn.CloseNow()
+		replaces = stale.id
 	}
 
+	start, frames := time.Now(), 0
+	var readErr error
 	c, cancel := context.WithCancel(req.Context())
 	defer func() {
 		cancel()
 		conn.CloseNow()
-		r.leave(name, m)
+		msg := "replaced by its reconnect"
+		if r.leave(name, m) {
+			msg = "left"
+		}
+		members, rooms := r.counts(name)
+		l.Info(msg, "seconds", int(time.Since(start).Seconds()), "frames", frames, "reason", readErr, "members", members, "rooms", rooms)
 	}()
 
 	go r.write(c, m)
-	log.Printf("%s joined %s from %s\n", hostname, clean(name), ip)
+	members, rooms := r.counts(name)
+	l.Info("joined", "replaces", replaces, "members", members, "rooms", rooms)
 
 	for {
-		_, b, err := conn.Read(c)
-		if err != nil {
-			log.Printf("%s: %s\n", hostname, err)
+		var b []byte
+		_, b, readErr = conn.Read(c)
+		if readErr != nil {
 			return
 		}
+		frames++
 		r.broadcast(name, m, b)
 	}
 }
@@ -376,6 +412,9 @@ func env[T any](key string, def T, parse func(string) (T, error)) T {
 func main() {
 	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	// also routes the log package, so net/http's own errors land here too
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	addr := env("ADDR", ":8080", str)
 	r := &relay{
@@ -411,6 +450,7 @@ func main() {
 		s.Shutdown(shutdown)
 	}()
 
-	log.Printf("relay listening on %s\n", addr)
-	log.Println(s.ListenAndServe())
+	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "trust_proxy", r.trusted,
+		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns)
+	slog.Info("stopped", "reason", s.ListenAndServe())
 }
