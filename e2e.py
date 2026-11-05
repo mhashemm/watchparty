@@ -576,7 +576,7 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
             if browser == "xvfb":
                 flags = flags.replace("--headless=new", "--ozone-platform=x11")
             run = "exit 0" if browser == "handoff" else f'PATH=/usr/bin:/bin exec {"xvfb-run -a " if browser == "xvfb" else ""}{BROWSER} {flags} "$@"'
-            script(f"{home}/browser.sh", f'echo "$@" >> {home}/browser.args\n{run}')
+            script(f"{home}/browser.sh", f'echo "$@" >> {home}/browser.args\necho "$GOOGLE_API_KEY" > {home}/browser.key\n{run}')
             with open(f"{home}/data/applications/e2e-chromium.desktop", "w") as f:
                 f.write(f"[Desktop Entry]\nType=Application\nName=e2e\nExec={home}/browser.sh %U\nMimeType=x-scheme-handler/https;\n")
             with open(f"{home}/config/mimeapps.list", "w") as f:
@@ -1902,6 +1902,17 @@ def gui_suite():
         ok(f"{n} asked for 560x940", "--window-size=560,940" in argv)
     until(lambda: js(H, '$("version-text").textContent') != "Checking the version…")
     ok("a dev build says so and offers no update", js(H, '$("version-text").textContent == "Development build" && $("update").hidden'))
+
+    print("\n[G1b] the window asks for no Google keys, and doesn't invite selecting or inspecting")
+    ok("the browser is told there are no keys", open(f"{nodes[H]['home']}/browser.key").read().strip() == "no")
+    ok("text can't be selected", js(H, 'getComputedStyle(document.body).userSelect') == "none")
+    ok("but the invite can", js(H, 'getComputedStyle($("share-text")).userSelect') == "text")
+    prevented = lambda target, event: js(H, f'!{target}.dispatchEvent(new {event})')
+    ok("no right-click menu on the page", prevented("document.body", 'MouseEvent("contextmenu", {bubbles: true, cancelable: true})'))
+    ok("but there is in a field, to paste", not prevented('$("invite")', 'MouseEvent("contextmenu", {bubbles: true, cancelable: true})'))
+    for name, keys in (("F12", 'key: "F12"'), ("Ctrl+Shift+I", 'key: "I", ctrlKey: true, shiftKey: true'), ("Cmd+Alt+J", 'key: "j", metaKey: true, altKey: true'), ("Ctrl+U", 'key: "u", ctrlKey: true')):
+        ok(f"{name} is blocked", prevented("document.body", f'KeyboardEvent("keydown", {{{keys}, bubbles: true, cancelable: true}})'))
+    ok("Ctrl+V isn't", not prevented('$("invite")', 'KeyboardEvent("keydown", {key: "v", ctrlKey: true, bubbles: true, cancelable: true})'))
 
     print("\n[G2] the tabs switch views and the address remembers which")
     for view in ("history", "settings", "party"):

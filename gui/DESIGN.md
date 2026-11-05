@@ -124,7 +124,8 @@ what is asked, and show options before changing his face.**
 - **Moods** from `body[data-mood]`, set in `render()`: `sleep` (idle or ended: closed
   eyes, `z`s, slow tail) and `awake` (running and on errors). **There is deliberately
   no worried or sad face;** errors are carried by the red "Diagnosis:" text.
-- Clicking him spawns a `.heart` in `main` that removes itself on `animationend`.
+- Clicking him spawns a `.heart` in `main` that removes itself on `animationend`. Text can't be
+  selected, or petting him fast selects the hearts; only `code` and `.status` can, to copy them.
 
 ## Ground, mushrooms and turtles (`svg.ground`)
 
