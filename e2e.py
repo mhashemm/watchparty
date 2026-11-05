@@ -1519,6 +1519,13 @@ def relay_suite():
            f"{osd(n).count('nodeFlaky has joined')} joins")
         ok(f"{n} was not told the stale nodeFlaky left", "nodeFlaky has left" not in osd(n))
     ok("nodeFlaky was not told it is in the room", "connected to nodeFlaky" not in osd("flaky"))
+    def flaky_lines(msg):
+        return [e for e in relay_events() if e.get("hostname") == "nodeFlaky" and e.get("msg") == msg]
+    until(lambda: flaky_lines("replaced by its reconnect"))
+    joins, gone = flaky_lines("joined"), flaky_lines("replaced by its reconnect")
+    ok("the relay's log links the reconnect to the conn it replaced",
+       len(joins) == 2 and len(gone) == 1 and joins[0]["replaces"] == "" and joins[1]["replaces"] == joins[0]["conn"] == gone[0]["conn"],
+       f"{joins} {gone}")
     stop("flaky")
     until(lambda: all("nodeFlaky has left" in osd(n) for n in NODES))
     for n in NODES:

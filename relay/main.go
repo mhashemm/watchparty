@@ -85,6 +85,7 @@ func (l *limiter) allow(key string, cap int) bool {
 }
 
 type member struct {
+	id       string
 	hostname string
 	session  string
 	ch       chan []byte
@@ -342,7 +343,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	m := &member{hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer), log: l}
+	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer), log: l}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
@@ -359,8 +360,10 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		conn.Close(websocket.StatusTryAgainLater, "room closed")
 		return
 	}
+	replaces := ""
 	if stale != nil {
 		stale.conn.CloseNow()
+		replaces = stale.id
 	}
 
 	start, frames := time.Now(), 0
@@ -379,7 +382,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 
 	go r.write(c, m)
 	members, rooms := r.counts(name)
-	l.Info("joined", "reconnect", stale != nil, "members", members, "rooms", rooms)
+	l.Info("joined", "replaces", replaces, "members", members, "rooms", rooms)
 
 	for {
 		var b []byte
