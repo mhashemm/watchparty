@@ -305,6 +305,7 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 #feed details[open] summary { margin-bottom: 6px; color: var(--forest); }
 #feed summary { word-break: break-word; }
 #feed ul { list-style: none; padding: 0; margin: 0; }
+#feed ul:empty::before { content: "Nothing yet."; color: var(--ink-soft); }
 #feed li:last-child { border-bottom: 0; }
 #feed li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
 #feed time { color: var(--ink-soft); font-size: .875rem; min-width: 3.2em; padding-top: 1px; }
@@ -798,8 +799,8 @@ const fileName = path => /^magnet:/i.test(path || "")
   ? new URLSearchParams(path.split("?")[1]).get("dn") || "Magnet link"
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
+const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
 function videoList(videos, title) {
-  const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
   const ul = document.createElement("ul");
   ul.className = "videos";
   ul.append(...videos.map(v => {
@@ -974,18 +975,24 @@ function feedGroup(name) {
   return group;
 }
 
-function nowPlaying(name) {
+function nowPlaying(name, at) {
   const previous = $("feed").querySelector("details");
   const group = feedGroup(name);
-  const last = previous?.querySelector("li");
-  if (previous !== group && /^video \d+ of \d+, by |: video changed$/.test(last?.lastChild.textContent)) group.lastChild.prepend(last);
+  if (previous === group || !previous) return;
+  const moving = [];
+  for (const li of previous.querySelectorAll("li")) {
+    if (at - li.dataset.at > 1000 || !/^video \d+ of \d+, by |: video changed$|^synced by /.test(li.lastChild.textContent)) break;
+    moving.push(li);
+  }
+  if (moving.some(li => !li.lastChild.textContent.startsWith("synced by "))) group.lastChild.prepend(...moving);
 }
 
-function addFeed(text) {
+function addFeed(text, at) {
   const list = ($("feed").querySelector("details") || feedGroup(fileName($("file").value))).lastChild;
   const li = document.createElement("li");
   const time = document.createElement("time");
-  time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  time.textContent = clock(at);
+  li.dataset.at = +at;
   li.append(time, text);
   list.prepend(li);
   while (list.children.length > 20) list.lastChild.remove();
@@ -996,7 +1003,7 @@ function handle(line) {
   log.textContent += line + "\n";
   if (log.textContent.length > 200000) log.textContent = log.textContent.slice(-150000);
 
-  const msg = line.slice(20);
+  const msg = line.slice(20), at = new Date(line.slice(0, 19));
   let m;
   if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
@@ -1013,18 +1020,18 @@ function handle(line) {
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try {
       const text = JSON.parse(m[1]).command[1];
-      addFeed(text);
+      addFeed(text, at);
       if (/^paused for .*: left$/.test(text)) state.leftPause = true;
     } catch {}
   }
   if ((m = msg.match(/^now playing: (".*")$/))) {
-    try { nowPlaying(JSON.parse(m[1])); } catch {}
+    try { nowPlaying(JSON.parse(m[1]), at); } catch {}
   }
   if ((m = msg.match(/^Watch: broadcasted event: (\{.*\})$/))) {
     try {
       const e = JSON.parse(m[1]);
       if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
-      else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");
+      else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you", at);
       if (e.name === "pause-reason") [...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
   }
