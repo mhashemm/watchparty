@@ -79,13 +79,30 @@ func openStore(path string) *store {
 	if err == nil {
 		var history []session
 		if json.Unmarshal(b, &history) == nil {
-			s.History = history
+			s.History = mergeHistory(history, s.History)
 		}
 	}
+	s.trimHistory()
 	if inSettings && s.saveHistory() == nil {
 		s.saveSettings()
 	}
 	return s
+}
+
+func mergeHistory(history, others []session) []session {
+	for _, o := range others {
+		if !slices.ContainsFunc(history, func(h session) bool { return h.Started.Equal(o.Started) && h.File == o.File }) {
+			history = append(history, o)
+		}
+	}
+	slices.SortStableFunc(history, func(a, b session) int { return a.Started.Compare(b.Started) })
+	return history
+}
+
+func (s *store) trimHistory() {
+	if over := len(s.History) - maxHistory; over > 0 {
+		s.History = slices.Delete(s.History, 0, over)
+	}
 }
 
 func (s *store) saveSettings() error {
@@ -142,9 +159,7 @@ func (s *store) begin(f form) int {
 		sess.Addrs = strings.TrimSpace(f.Addrs)
 	}
 	s.History = append(s.History, sess)
-	if over := len(s.History) - maxHistory; over > 0 {
-		s.History = slices.Delete(s.History, 0, over)
-	}
+	s.trimHistory()
 	s.saveSettings()
 	s.saveHistory()
 	return len(s.History) - 1

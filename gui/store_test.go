@@ -100,11 +100,12 @@ func TestStoreKeepsHistoryOutOfTheSettingsFile(t *testing.T) {
 
 func TestStoreMovesAnOldHistoryToItsOwnFile(t *testing.T) {
 	t.Parallel()
-	old := `{"settings":{"hostname":"Sam","local":true},"history":[{"file":"/m/old.mkv","mode":"direct","people":[]}]}`
+	old := `{"settings":{"hostname":"Sam","local":true},"history":[{"started":"2026-01-02T00:00:00Z","file":"/m/old.mkv","mode":"direct","people":[]}]}`
 	for name, existing := range map[string]string{
-		"first start":                "",
-		"a broken history file":      "not json",
-		"stopped halfway through it": `[{"file":"/m/old.mkv","mode":"direct","people":[]},{"file":"/m/newer.mkv","mode":"direct","people":[]}]`,
+		"first start":                 "",
+		"a broken history file":       "not json",
+		"stopped halfway through it":  `[{"started":"2026-01-02T00:00:00Z","file":"/m/old.mkv","mode":"direct","people":[]},{"started":"2026-01-03T00:00:00Z","file":"/m/newer.mkv","mode":"direct","people":[]}]`,
+		"a party on an older version": `[{"started":"2026-01-01T00:00:00Z","file":"/m/first.mkv","mode":"direct","people":[]}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -124,7 +125,7 @@ func TestStoreMovesAnOldHistoryToItsOwnFile(t *testing.T) {
 			}
 			for range 2 {
 				s := openStore(path)
-				if s.Settings.Hostname != "Sam" || len(s.History) != want || s.History[0].File != "/m/old.mkv" {
+				if s.Settings.Hostname != "Sam" || len(s.History) != want || !slices.ContainsFunc(s.History, func(h session) bool { return h.File == "/m/old.mkv" }) || !slices.IsSortedFunc(s.History, func(a, b session) int { return a.Started.Compare(b.Started) }) {
 					t.Fatalf("opened %+v", s)
 				}
 			}
