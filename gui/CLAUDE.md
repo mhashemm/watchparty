@@ -54,7 +54,7 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   with user-supplied flags:** `r.Host` must equal the exact `ip:port` (DNS rebinding),
   and every path except `GET /` needs `X-Token`, the `rand.Text()` token templated into
   the page as `{{TOKEN}}` and compared in constant time (CSRF).
-- Routes: `GET /`, `POST /pick`, `/start` (400 bad form, 409 party running), `/stop`,
+- Routes: `GET /`, `POST /pick`, `/pick-folder`, `/start` (400 bad form, 409 party running), `/stop`,
   `GET /log?from=N&run=R`, `GET /state`, `POST /settings`, `/history/clear`, `GET`/`POST
   /update`, `POST /restart`.
 - **`form.config()`** trims every field; an empty port is `party.DefaultPort`. It
@@ -118,14 +118,15 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 ## OS helpers (`os_unix.go`, `os_windows.go`)
 
-- **Pickers show only videos** and `.torrent`, by extension from `pickExts`, built on
+- **File pickers show only videos** and `.torrent`, by extension from `pickExts`, built on
   `party.VideoExts` (Go's sniffer misses `.mov` and `.ts`), which also decides what a
   playlist holds. Add an extension when a real video doesn't show up.
 - **Linux: only the XDG desktop portal** (`portalPick`), never a specific program;
   hard-coded zenity/kdialog broke on desktops without them. Subscribe to `Response` on
   the predicted request path *before* calling `FileChooser.OpenFile`. The filter type
   is `a(sa(us))`, and a wrong type refuses the whole call
-  (`TestVideoFilterIsWhatThePortalExpects`). Any portal error asks the user to type the
+  (`TestVideoFilterIsWhatThePortalExpects`). A folder is `OpenFile` with `directory`
+  (portal version 3 and up) and no filter. Any portal error asks the user to type the
   path. Check a desktop with `busctl --user introspect org.freedesktop.portal.Desktop
   /org/freedesktop/portal/desktop org.freedesktop.portal.FileChooser` (`.OpenFile
   ssa{sv}`).

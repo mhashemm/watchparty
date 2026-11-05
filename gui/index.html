@@ -625,9 +625,9 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <p class="hint">Filled in for you on the Party page.</p>
         </div>
         <div class="field">
-          <label for="mpv">mpv program</label>
+          <label for="mpv">mpv path</label>
           <div class="row">
-            <input type="text" id="mpv" placeholder="Found automatically">
+            <input type="text" id="mpv">
             <button type="button" data-pick="mpv">Browse</button>
           </div>
         </div>
@@ -646,7 +646,11 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           </div>
           <div class="field wide">
             <label for="cacheDir">Cache folder</label>
-            <input type="text" id="cacheDir" placeholder="Where torrents download. Your system's cache if empty">
+            <div class="row">
+              <input type="text" id="cacheDir">
+              <button type="button" data-pick="cacheDir" data-route="/pick-folder">Browse</button>
+            </div>
+            <p class="hint">Where torrents download.</p>
           </div>
         </div>
         <button type="submit">Save settings</button>
@@ -773,6 +777,8 @@ async function loadState() {
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) $(k).value = s[k] || "";
+  $("mpv").placeholder = saved.defaultMpv;
+  $("cacheDir").placeholder = saved.defaultCacheDir;
   $("set-relay").value = s.relay || "";
   $("store-path").textContent = saved.path;
   renderHistory();
@@ -906,7 +912,7 @@ document.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click"
   const target = $(b.dataset.pick);
   b.disabled = true;
   try {
-    const res = await api("/pick", {});
+    const res = await api(b.dataset.route || "/pick", {});
     const path = (await res.text()).trim();
     if (!res.ok) throw new Error(path);
     if (path) target.value = path;

@@ -70,14 +70,22 @@ func removeDownload(dir string) {
 	}
 }
 
-// torrentCache is where downloads go: a folder the user chose, or their system's cache.
+// DefaultCacheDir is where downloads go unless the user chose a folder.
+func DefaultCacheDir() (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cache, "watchparty"), nil
+}
+
 func torrentCache(chosen string) (string, error) {
 	if chosen == "" {
-		cache, err := os.UserCacheDir()
+		var err error
+		chosen, err = DefaultCacheDir()
 		if err != nil {
 			return "", err
 		}
-		chosen = filepath.Join(cache, "watchparty")
 	}
 	return chosen, os.MkdirAll(chosen, 0o700)
 }

@@ -1981,6 +1981,9 @@ def gui_suite():
     ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty", store)
     ok("the settings are 0600 in a 0700 folder", (os.stat(f"{store}/gui.json").st_mode & 0o777, os.stat(store).st_mode & 0o777) == (0o600, 0o700))
 
+    ok("the mpv path shows the one it will use", js(H, '$("mpv").placeholder') == f"{nodes[H]['home']}/bin/mpv" and js(H, 'document.querySelector("label[for=mpv]").textContent') == "mpv path", js(H, '$("mpv").placeholder'))
+    ok("the cache folder shows the one it will use", js(H, '$("cacheDir").placeholder') == f"{nodes[H]['home']}/.cache/watchparty", js(H, '$("cacheDir").placeholder'))
+
     print("\n[G3b] the ? button opens the help, one topic at a time")
     ok("it starts closed", js(H, '$("tip").hidden'))
     click(H, "#tip-button")
@@ -2003,6 +2006,9 @@ def gui_suite():
     print("\n[G4] Browse uses the desktop portal, and says so when there is none")
     click(H, "[data-pick=file]")
     ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
+    click(H, "[data-pick=cacheDir]")
+    ok(f"{H} picked a folder through it too", until(lambda: js(H, '$("cacheDir").value') == os.path.dirname(MEDIA)), js(H, '$("cacheDir").value'))
+    js(H, '$("cacheDir").value = ""')
     click(G, "[data-pick=file]")
     until(lambda: js(G, '!$("error").hidden'))
     ok(f"{G}, with no portal, is told to type the path", js(G, '$("error").textContent').startswith("No file picker found"), js(G, '$("error").textContent'))

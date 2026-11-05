@@ -321,6 +321,9 @@ func TestTheDefaultCacheFolderIsTheSystems(t *testing.T) {
 	if got, err := torrentCache(""); err != nil || got != filepath.Join(system, "watchparty") {
 		t.Fatalf("got %q %v", got, err)
 	}
+	if got, err := DefaultCacheDir(); err != nil || got != filepath.Join(system, "watchparty") {
+		t.Fatalf("what the Settings page shows: got %q %v", got, err)
+	}
 }
 
 // WebRTC peers bring a large parser surface for little gain, as nearly every swarm has

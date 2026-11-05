@@ -1,10 +1,12 @@
-// Command fakeportal answers FileChooser.OpenFile on a private bus for e2e.py: it
-// picks os.Args[1], and refuses a filter that isn't the portal's a(sa(us)).
+// Command fakeportal answers FileChooser.OpenFile on a private bus for e2e.py: it picks
+// os.Args[1], or its folder when asked for one. It refuses a filter that isn't the
+// portal's a(sa(us)), and a folder request with a filter or a directory option that isn't a bool.
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -22,9 +24,20 @@ func (c chooser) OpenFile(sender dbus.Sender, parent, title string, options map[
 			Pattern string
 		}
 	}
-	err := dbus.Store([]any{options["filters"].Value()}, &filters)
-	if err != nil || len(filters) == 0 || len(filters[0].Rules) == 0 {
-		return "", dbus.MakeFailedError(fmt.Errorf("filters is not a(sa(us)): %v", err))
+	picked := c.file
+	if option, ok := options["directory"]; ok {
+		if folder, isBool := option.Value().(bool); !isBool || !folder {
+			return "", dbus.MakeFailedError(fmt.Errorf("directory is not true: %v", option))
+		}
+		if _, ok := options["filters"]; ok {
+			return "", dbus.MakeFailedError(fmt.Errorf("a filter on a folder request"))
+		}
+		picked = filepath.Dir(c.file)
+	} else {
+		err := dbus.Store([]any{options["filters"].Value()}, &filters)
+		if err != nil || len(filters) == 0 || len(filters[0].Rules) == 0 {
+			return "", dbus.MakeFailedError(fmt.Errorf("filters is not a(sa(us)): %v", err))
+		}
 	}
 	token, _ := options["handle_token"].Value().(string)
 	name := []byte(string(sender)[1:])
@@ -35,7 +48,7 @@ func (c chooser) OpenFile(sender dbus.Sender, parent, title string, options map[
 	}
 	request := dbus.ObjectPath("/org/freedesktop/portal/desktop/request/" + string(name) + "/" + token)
 	go c.conn.Emit(request, "org.freedesktop.portal.Request.Response", uint32(0),
-		map[string]dbus.Variant{"uris": dbus.MakeVariant([]string{"file://" + c.file})})
+		map[string]dbus.Variant{"uris": dbus.MakeVariant([]string{"file://" + picked})})
 	fmt.Printf("picked for %q\n", title)
 	return request, nil
 }
