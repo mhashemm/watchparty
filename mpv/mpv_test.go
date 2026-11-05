@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -348,21 +349,23 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 // cancel the party: that would kill mpv and hide its real exit status.
 func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 	t.Parallel()
-	ours, theirs := net.Pipe()
-	defer ours.Close()
-	go fakeMpv(theirs, 2)
-	cancelled := atomic.Bool{}
-	start := time.Now()
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), 0)
-	if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
-		t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
-	}
-	time.Sleep(50 * time.Millisecond)
-	if cancelled.Load() {
-		t.Fatal("cancelled the party before the video was ready")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		go fakeMpv(theirs, 2)
+		cancelled := atomic.Bool{}
+		start := time.Now()
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), 0)
+		if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
+			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
+		}
+		synctest.Wait()
+		if cancelled.Load() {
+			t.Fatal("cancelled the party before the video was ready")
+		}
+	})
 }
 
 // A peer must never wait on a file that is slow to load (a stream): every send

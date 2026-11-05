@@ -62,7 +62,7 @@ injected delay before fixing it. No retries in CI, and raising a ceiling is not 
 and `/log` answers, for a random time. CI runs it on every PR with a new seed. A seed fixes
 the delays, not the run: threads still race, so a failure may not repeat on replay.
 It can't reorder what stays in order on one connection or happens inside one process, so
-those orders need a Go test. It covers `relay` and `gui`; `p2p` peers dial each other directly.
+those orders need a Go test (`mpv/party_test.go`). It covers `relay` and `gui`; `p2p` peers dial each other directly.
 A case that can't work under it says why and is left out by name; none needs to today.
 
 ## Windows (`e2e_windows.py`)

@@ -9,6 +9,9 @@ Security: the wire carries raw mpv JSON, but `apply` must dispatch only the fixe
 below, never write a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why
 that line is load-bearing and holds the cross-cutting mindset and trust model.
 
+**`party_test.go` runs whole parties in a `synctest` bubble,** through every order a seed picks.
+A new message or rule that nodes must agree on gets a check there.
+
 ## The connection
 
 - **`watch()` is the only reader of the socket**, and `do()` waits for a reply only
