@@ -41,6 +41,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: "1.27.3"
+          # a key of its own: the build jobs share the plain one, and the first to finish saves it
+          cache-dependency-path: |
+            go.sum
+            e2e.Dockerfile
 
       - name: Download
         run: go mod download
