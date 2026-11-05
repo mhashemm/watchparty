@@ -819,6 +819,7 @@ def p2p_suite():
         ok(f"{n} waits for its cache", get(n, "cache-pause") is True)
 
     print(f"\n[3] resume on {A} propagates to all {len(NODES) - 1} others")
+    must("the joins are over", quiet(NODES))
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES)
           and all(f"resumed by {A}" in osd(n) for n in others(A)))
@@ -1457,6 +1458,7 @@ def relay_suite():
     resolve("nodeLagB")
     lagged = ("nodeLagA", "nodeLagB")
     gap = lambda: abs((get("nodeLagA", "time-pos") or 0) - (get("nodeLagB", "time-pos") or 0))
+    must("the join is over", quiet(lagged))
     for i, (resumer, pauser) in enumerate([("nodeLagA", "nodeLagB"), ("nodeLagB", "nodeLagA")] * 2):
         setp(resumer, "pause", False)
         until(lambda: all(get(n, "pause") is False for n in lagged))
@@ -2021,6 +2023,7 @@ def gui_suite():
     ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
 
     print(f"\n[G10] a resume in {G}'s mpv: the feeds say who did it")
+    must("the join is over", quiet((H, G)))
     setp(G, "pause", False)
     until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
     ok(f"{H}'s mpv resumed", get(H, "pause") is False)

@@ -61,7 +61,8 @@ injected delay before fixing it. No retries in CI, and raising a ceiling is not 
 `--jitter SEED` holds each direction of each relay connection, and each page's `/state`
 and `/log` answers, for a random time. CI runs it on every PR with a new seed. A seed fixes
 the delays, not the run: threads still race, so a failure may not repeat on replay.
-It can't reorder what stays in order on one connection or happens inside one process, so
+A case with its own proxy, like `[R11g]` or `[R12]`, skips it unless pointed at it. It
+can't reorder what stays in order on one connection or happens inside one process, so
 those orders need a Go test (`mpv/party_test.go`). It covers `relay`, `media` and `gui`; `p2p` peers dial each other directly.
 A case that can't work under it says why and is left out by name; none needs to today.
 
