@@ -1,6 +1,9 @@
 name: pr
 on:
   pull_request:
+  # a PR can only read caches saved by itself or by master
+  push:
+    branches: [master]
 
 permissions:
   contents: read
@@ -42,31 +45,13 @@ jobs:
       - name: Download
         run: go mod download
 
-      - name: Who runs the e2e container
-        id: user
-        run: printf 'uid=%s\ngid=%s\n' "$(id -u)" "$(id -g)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Build the e2e image
-        uses: docker/build-push-action@v7
-        with:
-          file: e2e.Dockerfile
-          tags: watchparty-e2e
-          load: true
-          build-args: |
-            UID=${{ steps.user.outputs.uid }}
-            GID=${{ steps.user.outputs.gid }}
-          cache-from: type=gha,scope=e2e
-          cache-to: type=gha,mode=max,scope=e2e
-
       - name: Test
         timeout-minutes: 15
-        run: make -j test E2E_PREBUILT=1
+        run: make -j test
 
       - name: Test with random delays
         timeout-minutes: 15
-        run: make e2e E2E_PREBUILT=1 E2E="--jitter ${{ github.run_id }}-${{ github.run_attempt }}"
+        run: make e2e E2E="--jitter ${{ github.run_id }}-${{ github.run_attempt }}"
 
       - name: Stress the unit tests
         timeout-minutes: 15

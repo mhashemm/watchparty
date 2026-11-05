@@ -6,8 +6,8 @@ drives them by writing to one node's mpv IPC socket, then asserts the result on
 the other nodes' mpv. OSD notices are read back out of each node's log, since
 every show-text command appears there verbatim.
 
-Four phases, run by default at the same time as four copies of this script,
-each on its own ports and in its own run directory:
+Six phases, run by default at the same time as copies of this script, each on its
+own ports and in its own run directory:
 
   p2p    the direct HTTP mesh. Nobody is given the full peer list: each node
          bootstraps off one earlier node (A <- B,C; B <- D,E), so most of the
@@ -18,6 +18,7 @@ each on its own ports and in its own run directory:
          room isolation, the secret, and reconnect after the relay dies.
          Both of these also check that a joiner playing a different file is
          refused, and that the same file renamed, moved and re-dated is not.
+  media  through a relay too: torrents, odd file names, and a folder as a playlist.
   caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
          client that never answers pings.
   gui    real GUIs, each opening its own page in headless Chromium, driven
@@ -25,12 +26,14 @@ each on its own ports and in its own run directory:
          feed, Browse through a fake portal, Settings, history, persistence,
          self-update against a local release, and the window's lifetime,
          including a real window on Xvfb closing itself.
+  upnp   a fake router on the LAN: CLI and GUI behind carrier NAT, and an mpv that
+         hangs up. Slow by nature: each search waits out its 6.5s.
 
-    ./e2e.py                    # all four phases in parallel, ~45 seconds
+    ./e2e.py                    # all six phases in parallel
     ./e2e.py --mode relay       # one phase
     ./e2e.py --file video.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
-    ./e2e.py --jitter 7         # the relay and each page answer late, by seed 7's random delays
+    ./e2e.py --jitter 7         # the phases it can delay, with seed 7's random delays
 
 Needs go, mpv, Chrome or Chromium, dbus-daemon and (unless --file is given) ffmpeg.
 All run headless.
@@ -101,11 +104,13 @@ if len(sys.argv) > 1 and sys.argv[1] == "--stub":
 
 
 # ------------------------------------------------------------------- runner --
+PHASES = ("p2p", "relay", "media", "caps", "gui", "upnp")
+JITTER_PHASES = ("relay", "media", "gui")
 ap = argparse.ArgumentParser()
 ap.add_argument("--file", help="media file to play (default: generate one with ffmpeg)")
 ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
-ap.add_argument("--mode", choices=("p2p", "relay", "caps", "gui", "all"), default="all")
+ap.add_argument("--mode", choices=PHASES + ("all",), default="all")
 ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
 ap.add_argument("--jitter", metavar="SEED", help="random delays on the relay and gui phases' connections, replayable by seed")
 args = ap.parse_args()
@@ -120,7 +125,7 @@ if args.mode == "all":
     flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else []) + (["--jitter", args.jitter] if args.jitter else [])
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
-             for i, m in enumerate(("p2p", "relay", "caps", "gui"))]
+             for i, m in enumerate(PHASES) if not args.jitter or m in JITTER_PHASES]
     for m, p in procs:
         print(f"\n######## {m} ########\n" + p.communicate()[0], end="")
     bad = [m for m, p in procs if p.returncode]
@@ -147,7 +152,7 @@ PORTS["cliRelease"] = args.port_base + len(NODES) + 11
 PORTS["gateway"] = args.port_base + len(NODES) + 12
 PORTS["upnpNode"] = args.port_base + len(NODES) + 13
 PORTS["jitter"] = args.port_base + len(NODES) + 14
-JITTERED = args.jitter if args.mode in ("relay", "gui") else None
+JITTERED = args.jitter if args.mode in JITTER_PHASES else None
 RELAY_URL = f"ws://127.0.0.1:{PORTS['jitter' if JITTERED else 'relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
@@ -646,6 +651,22 @@ def state(n):
     return nodes[n]["page"].state()
 
 
+def go(n):
+    nodes[n]["page"].go(BOOT)
+
+
+def start(n, **fields):
+    fill(n, **fields)
+    go(n)
+
+
+def end(n):
+    js(n, "window.asked = null")
+    click(n, "#go")
+    until(lambda: status(n) == "The party has ended.")
+    return js(n, "window.asked")
+
+
 def save_settings(n, **fields):
     tab(n, "settings")
     fill(n, **fields)
@@ -684,7 +705,7 @@ BIN = RUN + "/watchparty"
 RELAY_BIN = RUN + "/relay"
 GUI_BIN = RUN + "/watchparty-gui"
 PORTAL_BIN = RUN + "/fakeportal"
-if args.mode == "gui":
+if args.mode in ("gui", "upnp"):
     BROWSER = next(filter(None, map(shutil.which, ("google-chrome", "chromium", "google-chrome-stable"))), None)
     if not BROWSER:
         sys.exit("the gui phase needs Chrome or Chromium on PATH")
@@ -1252,9 +1273,13 @@ def relay_suite():
     must("the last joiner's leave is over", quiet(NODES))
     setp(A, "pause", False)
     must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
-    far = lag(0, PORTS["relay"], 1)
-    launch("nodeFar", room=ROOM, tag="far", relay=f"ws://127.0.0.1:{far.getsockname()[1]}")
-    must("mpv loaded before the relay answered", until(lambda: booted("far") and connected("far"), BOOT) and log("far").index("init done") < log("far").index("relay: connected"), log("far"))
+    spare = socket.create_server(("127.0.0.1", 0))
+    port = spare.getsockname()[1]
+    spare.close()
+    launch("nodeFar", room=ROOM, tag="far", relay=f"ws://127.0.0.1:{port}")
+    must("mpv loads with no relay to reach", until(lambda: booted("far"), BOOT) and not connected("far"), log("far"))
+    far = lag(port, PORTS["relay"], 0)
+    must("then it connects", until(lambda: connected("far")), log("far"))
     resolve("far")
     ok("the party paused for it", until(lambda: all(get(n, "pause") is True for n in NODES + ["far"]) and all("paused for nodeFar: joining" in osd(n) for n in NODES)), str([get(n, "pause") for n in NODES]))
     ok("it starts where the party stopped", until(lambda: near(get("far", "time-pos"), get(A, "time-pos"), 0.3)), f"{get('far', 'time-pos')} and {get(A, 'time-pos')}")
@@ -1515,6 +1540,15 @@ def relay_suite():
         ok(f"{n} was told {quitter} left", f"{quitter} has left" in osd(n))
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
+
+    relay.kill()
+    relay.wait(timeout=10)
+
+
+def media_suite():
+    print("\n=== media setup: one websocket server ===")
+    relay = launch_relay()
+    until(lambda: listening(PORTS["relay"]))
 
     print("\n[R15e] a magnet link streams to everyone, and is the same file to all of them")
     magnet = seeder(MEDIA)
@@ -1851,19 +1885,6 @@ def gui_suite():
 
     def mpv_of(n):
         return child_mpv_socket(nodes[n]["proc"].pid)
-
-    def go(n):
-        nodes[n]["page"].go(BOOT)
-
-    def start(n, **fields):
-        fill(n, **fields)
-        go(n)
-
-    def end(n):
-        js(n, "window.asked = null")
-        click(n, "#go")
-        until(lambda: status(n) == "The party has ended.")
-        return js(n, "window.asked")
 
     def read_all(n):
         """The page has handled every log line its GUI has, so the feed isn't half a burst."""
@@ -2299,6 +2320,13 @@ def gui_suite():
         pass  # the page can go before it answers
     ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
     ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
+    install_suite()
+
+
+def upnp_suite():
+    global BUS
+    print("\n=== upnp: a fake router on the LAN ===")
+    BUS = private_bus()
     if not os.environ.get("E2E_NO_SANDBOX"):
         print("\n[G34] skipped outside the container: a real router on this LAN would answer and map ports")
     else:
@@ -2394,8 +2422,6 @@ time.sleep(600)
             return True
     ok("and takes mpv with it", until(lambda: gone(int(open(pidfile).read()))))
 
-    install_suite()
-
 
 def install_suite():
     print("\n[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
@@ -2478,7 +2504,7 @@ if JITTERED:
     print(f"jitter seed {JITTERED}: replay with --mode {args.mode} --jitter {JITTERED}")
     lag(PORTS["jitter"], PORTS["relay"], jitter)
 try:
-    {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite, "gui": gui_suite}[args.mode]()
+    {"p2p": p2p_suite, "relay": relay_suite, "media": media_suite, "caps": caps_suite, "gui": gui_suite, "upnp": upnp_suite}[args.mode]()
 except Stop as e:
     print(f"  STOP  the rest of this phase depends on: {e}")
 finally:
