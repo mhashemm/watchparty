@@ -1,8 +1,6 @@
 # mpv/CLAUDE.md
 
-The bridge between one mpv process and the party: JSON IPC over a unix socket or a
-Windows named pipe. It turns the player's own pause and seek changes into broadcast
-events, and applies remote ones without bouncing them back. What mpv actually sends,
+The bridge between one mpv process and the party, over JSON IPC. What mpv actually sends,
 and why each flag is pinned, is in **`MPV.md`**: read it before changing anything here.
 
 Security: the wire carries raw mpv JSON, but `apply` must dispatch only the fixed allow-list
@@ -161,9 +159,12 @@ reason: nobody starts the next one until someone resumes.
 - **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
   answers the other, and following both ways would swap them. An answer from anyone whose
   join it didn't hear is the party's, and is followed, lower or not.
-- **Only a matching `playlist-pos` uses up the marker.** mpv's first report of where it
-  started can land after a peer already sent this node elsewhere; used up on that, the real
-  echo goes out as this node moving the party.
+- **`following` queues moves:** the next can overtake mpv's report of the last (`MPV.md`). A
+  report drops entries up to its own; `file-loaded` clears the rest once this node is where it
+  headed, as there-and-back can report nothing. mpv's first report of where it started uses up
+  nothing: it can land after a peer sent this node elsewhere.
+- **Any other report is a key press and clears the queue,** so the party hears every report
+  from there on. Its `From` is where this node was heading, or the tie rule takes it for a crossing.
 - **A switch resets `c.pos` and `seeks` to 0.** The old position would go out with the
   pause, and the new file's `time-pos` 0 would go out as a seek.
 - **`loading` holds a seek until `file-loaded`** (`heldSeek`). Sent right after the
@@ -195,6 +196,5 @@ e2e `[16]`, `[R15c]`.
 
 ## Tests
 
-Tests build a `Client` with `newTestClient` and drive `watch()` through `feed()` or a
-`net.Pipe` with a fake mpv; never a real socket. mpv emits nothing for a no-op set, so
-tests that count events must alternate values.
+Never a real socket in a unit test. mpv emits nothing for a no-op set, so tests that count
+events must alternate values.

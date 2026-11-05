@@ -2,8 +2,7 @@
 
 The part of mpv this project uses, plus what mpv actually does on the wire. The
 upstream manual is <https://mpv.io/manual/master/> (sections "JSON IPC",
-"Properties", "List of events"). Read this first, and the manual only for anything
-not covered here.
+"Properties", "List of events"). Read this first.
 
 **Where this comes from.** The manual and real mpv 0.37.0 (the dev machine's) driven
 over the socket on 2026-10-30, `--vo=null --ao=null --pause`, a 24fps H.264 file with a
@@ -171,6 +170,8 @@ Every event goes through `handleEvent`; anything but `property-change` is
 - A switch sends a data-less `time-pos`, `playlist-pos` (0-based; its place around
   `end-file` varies), `file-loaded`, then `time-pos` 0. It always beat `file-loaded`.
 - **`pause` carries over**, so a playing node starts the next file playing. No `seek` is sent.
+- **Two sets in a row:** the reply beats the report, so the second can go first. Within about 5ms
+  mpv may report only the last (0→1→0: `0` or nothing), from 10ms both. It always loads a file.
 - A seek past the end while paused stops on the last frame. Resuming there moves on at
   once. After the last file: `end-file` `eof`, then exit 0.
 

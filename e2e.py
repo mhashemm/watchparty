@@ -1791,8 +1791,9 @@ def media_suite():
     for n in ("nodeEnd1", "nodeEnd2"):
         resolve(n)
     must("the join is over", quiet(("nodeEnd1", "nodeEnd2")))
-    setp("nodeEnd1", "time-pos", get("nodeEnd1", "duration") - 3)
-    until(lambda: near(get("nodeEnd2", "time-pos"), get("nodeEnd1", "time-pos"), 0.1))
+    target = get("nodeEnd1", "duration") - 3
+    setp("nodeEnd1", "time-pos", target)
+    must("the seek reached the other", until(lambda: near(get("nodeEnd2", "time-pos"), target, 0.1)), log("nodeEnd1")[-300:])
     setp("nodeEnd1", "pause", False)
     must("they play", until(lambda: get("nodeEnd2", "pause") is False))
     ipc(nodes["nodeEnd1"]["sock"], "quit")

@@ -33,6 +33,7 @@ type simNode struct {
 	entry   int
 	notices []string
 	seeks   []string
+	moves   []int
 }
 
 type sim struct {
@@ -88,6 +89,8 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 
 // model answers requests the way mpv does (MPV.md): a no-op set says nothing, and a seek
 // reports later, ahead of a pause sent right behind it but after the reply to that pause.
+// A set of playlist-pos replies first and reports later, so the next set can overtake the
+// report, and two close together can report only the last (MPV.md).
 func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
@@ -108,7 +111,7 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 			n.seek(pos)
 		case name == setProperty && req.Command[1] == playlistPos:
 			i, _ := strconv.Atoi(fmt.Sprint(req.Command[2]))
-			n.move(i)
+			n.request(i)
 		}
 		n.mu.Unlock()
 		select {
@@ -156,6 +159,35 @@ func (n *simNode) landSeekLocked() {
 	n.emit(`{"event":"playback-restart"}` + "\n")
 }
 
+// request is a set or a key press: mpv takes them in the order they came.
+func (n *simNode) request(i int) {
+	if len(n.moves) > 0 || i != n.entry {
+		n.moves = append(n.moves, i)
+	}
+}
+
+func (n *simNode) landMove() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	i := n.moves[0]
+	n.moves = n.moves[1:]
+	n.move(i)
+}
+
+// foldMoves is mpv handling them too close together to report any but the last. Back
+// where it started, it reports nothing at all and still loads the file.
+func (n *simNode) foldMoves() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	i := n.moves[len(n.moves)-1]
+	n.moves = nil
+	if i == n.entry {
+		n.emit(`{"event":"file-loaded"}` + "\n")
+		return
+	}
+	n.move(i)
+}
+
 func (n *simNode) move(i int) {
 	if i == n.entry {
 		return
@@ -194,6 +226,12 @@ func (s *sim) run() {
 			from.mu.Lock()
 			if len(from.seeks) > 0 {
 				next = append(next, from.landSeek)
+			}
+			if len(from.moves) > 0 {
+				next = append(next, from.landMove)
+			}
+			if len(from.moves) > 1 {
+				next = append(next, from.foldMoves)
 			}
 			from.mu.Unlock()
 		}
@@ -320,7 +358,7 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 			return func() {
 				n.mu.Lock()
 				defer n.mu.Unlock()
-				n.move(i)
+				n.request(i)
 			}
 		}
 		s.script = []func(){hand(a, 0), hand(b, 2)}
@@ -330,6 +368,40 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 			t.Errorf("seed %d: on entries %d and %d", seed, a.entry, b.entry)
 		}
 	})
+}
+
+func TestQuickMovesEndOnOneEntryAndLeaveNoMarker(t *testing.T) {
+	for _, moves := range [][]int{{1, 2}, {1, 0}, {1, 2, 0}} {
+		t.Run(fmt.Sprint(moves), func(t *testing.T) {
+			forSeeds(t, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, simEntries, "a", "b")
+				a, b := s.nodes[0], s.nodes[1]
+				for _, i := range moves {
+					s.script = append(s.script, func() {
+						a.mu.Lock()
+						defer a.mu.Unlock()
+						a.request(i)
+					})
+				}
+				s.run()
+				want := moves[len(moves)-1]
+				if a.entry != want || b.entry != want {
+					t.Errorf("seed %d: on entries %d and %d, want %d", seed, a.entry, b.entry, want)
+				}
+				// a marker left behind would swallow this as an echo, and nobody would follow
+				to := (want + 1) % simEntries
+				s.script = []func(){func() {
+					b.mu.Lock()
+					defer b.mu.Unlock()
+					b.request(to)
+				}}
+				s.run()
+				if a.entry != to {
+					t.Errorf("seed %d: a stayed on %d when b moved to %d", seed, a.entry, to)
+				}
+			})
+		})
+	}
 }
 
 func TestSeekAndResumeAtOnceDoesNotPauseAnyone(t *testing.T) {
