@@ -166,6 +166,7 @@ type Client struct {
 	entries    int
 	current    int
 	movedFrom  int
+	following  []string
 	joinedWith []string
 	loading    bool
 	heldSeek   string
@@ -187,8 +188,21 @@ func (c *Client) isEcho(event Event) bool {
 		}
 		return false
 	}
+	if event.Name == playlistPos {
+		i := slices.Index(c.following, event.Data)
+		if i < 0 {
+			// someone pressed a key before our set reached mpv, so the party must hear
+			// every report from here to where it ends up. mpv's first report isn't that.
+			if c.seen[playlistPos] {
+				c.following = nil
+			}
+			return false
+		}
+		c.following = c.following[i+1:]
+		return true
+	}
 	applied, ok := c.applied[event.Name]
-	if !ok || (event.Name == playlistPos && applied != event.Data) {
+	if !ok {
 		return false
 	}
 	delete(c.applied, event.Name)
@@ -211,6 +225,9 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 
 	case fileLoaded:
 		c.loading = false
+		if c.heading() == c.current {
+			c.following = nil
+		}
 		if held := c.heldSeek; held != "" {
 			c.heldSeek = ""
 			go func() {
@@ -226,7 +243,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			return nil, errDoNotSend
 		}
 		var extra [][]byte
-		changed, previous := false, c.current
+		changed, previous := false, c.heading()
 		switch event.Name {
 		case timePos:
 			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
@@ -326,8 +343,8 @@ func (c *Client) tagged(b []byte) []byte {
 
 // heading is the entry this node is on, or on its way to.
 func (c *Client) heading() int {
-	if target, ok := c.applied[playlistPos]; ok {
-		if i, err := strconv.Atoi(target); err == nil {
+	if n := len(c.following); n > 0 {
+		if i, err := strconv.Atoi(c.following[n-1]); err == nil {
 			return i
 		}
 	}
@@ -570,12 +587,12 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	if i == c.current {
+	if i == c.heading() {
 		c.mu.Unlock()
 		return nil
 	}
 	c.loading = true
-	c.applied[playlistPos] = event.Data
+	c.following = append(c.following, event.Data)
 	c.movedFrom = heading
 	if event.From != nil {
 		c.movedFrom = *event.From
@@ -585,7 +602,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	if err != nil {
 		c.mu.Lock()
 		c.loading = false
-		delete(c.applied, playlistPos)
+		if n := slices.Index(c.following, event.Data); n >= 0 {
+			c.following = slices.Delete(c.following, n, n+1)
+		}
 		c.mu.Unlock()
 		return err
 	}
