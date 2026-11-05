@@ -74,7 +74,7 @@ def find_page(line):
 class Page(CDP):
     """The GUI's page, driven the way a person would, plus the few hooks a suite needs."""
 
-    def ready(self, timeout, downloads=None):
+    def ready(self, timeout, downloads=None, jitter=None):
         self.call("Browser.grantPermissions", permissions=["clipboardReadWrite", "clipboardSanitizedWrite"])
         if downloads:
             self.call("Browser.setDownloadBehavior", behavior="allow", downloadPath=downloads)
@@ -91,6 +91,12 @@ class Page(CDP):
         hooked = self.js("window.confirm('?') === true && window.asked === '?' && typeof api === 'function' && typeof run === 'number' && typeof from === 'number'")
         if not hooked:
             raise RuntimeError("the page no longer has the globals e2e hooks into (loadState, api, run, from, confirm)")
+        if jitter:
+            # hold each /state and /log answer, so they land in a different order from one seed to the next
+            seed, worst = jitter
+            self.js(f"{{ let s = {seed}; const real = fetch; window.fetch = async (path, o) => {{ const r = await real(path, o); "
+                    f"if (/^.(state|log)/.test(path)) {{ s = Math.imul(s, 1664525) + 1013904223 >>> 0; "
+                    f"await new Promise(done => setTimeout(done, s / 2 ** 32 * {worst * 1000})) }} return r }} }}")
 
     def status(self):
         return self.js('$("status").textContent')
