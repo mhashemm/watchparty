@@ -18,7 +18,7 @@ rule or contract that spans packages.
 ```sh
 make -j                                    # cli, gui and relay for this machine, into .bin/
 make -j gui linux                          # components × OSes: any of cli gui relay, linux darwin windows
-make -j test                               # unit tests (-race) and e2e.py together, ~45s
+make -j test                               # unit tests (-race) and e2e.py together, ~60s
 go test -race -count=30 -cpu=1,4,16 ./...  # stress a changed test before trusting it
 go mod tidy                                # run it yourself; CI only does go mod download
 make e2e E2E="--mode gui"                  # e2e.py in docker; python e2e_windows.py on Windows

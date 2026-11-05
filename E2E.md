@@ -6,10 +6,10 @@ and Chrome or Chromium on PATH and a `-local`-reachable interface.
 
 ## Phases
 
-The four phases run at once as four copies of the script, on `--port-base` + 0, 20,
-40 and 60, which works because relay-mode nodes open no ports. The slowest phase sets the
-total, so a new slow case goes in whichever phase is shortest. `caps` is the longest
-today: `[R20]` waits out the real 30s ping and 10s pong timeout.
+The six phases run at once as copies of the script, `--port-base` + 20 apart, which works
+because relay-mode nodes open no ports. The slowest phase sets the total, so a new slow case
+goes in whichever phase is shortest. `caps` can't go below about 45s: `[R20]` waits out the
+real 30s ping and 10s pong timeout.
 
 - **`p2p`** nodes run with `-evictAfter 1ms` so strike cases don't wait; `[13b]` runs
   one on the 5-minute default.
@@ -62,7 +62,7 @@ injected delay before fixing it. No retries in CI, and raising a ceiling is not 
 and `/log` answers, for a random time. CI runs it on every PR with a new seed. A seed fixes
 the delays, not the run: threads still race, so a failure may not repeat on replay.
 It can't reorder what stays in order on one connection or happens inside one process, so
-those orders need a Go test (`mpv/party_test.go`). It covers `relay` and `gui`; `p2p` peers dial each other directly.
+those orders need a Go test (`mpv/party_test.go`). It covers `relay`, `media` and `gui`; `p2p` peers dial each other directly.
 A case that can't work under it says why and is left out by name; none needs to today.
 
 ## Windows (`e2e_windows.py`)
@@ -90,7 +90,7 @@ natively (the runner is thrown away). Facts it rests on:
     fails too. Loosening the container for it would trade its isolation for the browser's.
   - `./e2e.py` on the host still works, isolated only by each GUI's environment, with
     its run folder left in `/tmp`.
-- **One `gui` container at a time on a machine:** they share docker's bridge, so a node's SSDP
+- **One `upnp` container at a time on a machine:** they share docker's bridge, so a node's SSDP
   search finds another's fake router and [G34] fails. Other phases can run side by side.
 - `--audio` uses a real, muted audio output. It needs a sound server, so CI doesn't
   run it.
