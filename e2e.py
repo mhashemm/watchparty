@@ -269,6 +269,10 @@ def played(n):
     return [json.loads(l[20:].removeprefix("now playing: ")) for l in log(n).splitlines() if l[20:].startswith("now playing: ")]
 
 
+def played_back(n):
+    return any(l[20:] == "playback started" for l in log(n).splitlines())
+
+
 def osd(n):
     """The OSD notices this node actually displayed."""
     out = []
@@ -1694,9 +1698,11 @@ def media_suite():
     ok("and says who", until(lambda: f"video 2 of 3, by {host}" in osd(guest)), str(osd(guest)[-3:]))
     time.sleep(QUIET)
     ok("nobody bounced back", on("video3.mkv", "a2.mkv")(), str([get(n, "filename") for n in (host, guest)]))
+    ok("nothing has played yet, so no node says it did", not played_back(host) and not played_back(guest))
 
     setp(host, "pause", False)
     must("they play", until(lambda: get(guest, "pause") is False))
+    ok("both say playback started", until(lambda: played_back(host) and played_back(guest)))
     ipc(nodes[host]["sock"], "playlist-next")
     ok("moving while playing moves the other", until(on("video10.mkv", "a10.mkv")), get(guest, "filename"))
     ok("and stops everyone", until(stopped), str([get(n, "pause") for n in (host, guest)]))
@@ -1721,6 +1727,7 @@ def media_suite():
     ok("a joiner comes to the party's entry", until(lambda: get(late, "filename") == "video10.mkv"), get(late, "filename"))
     ok("and its position", until(lambda: near(get(late, "time-pos"), 5, 0.15)), get(late, "time-pos"))
     ok("and nobody else moved", on("video10.mkv", "a10.mkv")() and together(), str([get(n, "time-pos") for n in (host, guest)]))
+    ok("a joiner that only came to the party's place hasn't played anything", not played_back(late))
 
     short = f"{RUN}/short"
     shutil.copytree(folder, short)
@@ -2171,23 +2178,31 @@ def gui_suite():
     groups = lambda: nodes[G]["page"].feed_groups()
     def showing(*names):
         return lambda: [g[0] for g in groups()] == list(names) and [g[1] for g in groups()] == [True] + [False] * (len(names) - 1)
+    videos = lambda: state(G)["history"][-1].get("videos", [])
     ok("the feed opens on that file", until(showing("e2.mkv")), str(groups()))
+    ok("history lists nothing until it plays", videos() == [], str(videos()))
+    def play(count):
+        setp(G, "pause", False)
+        return until(lambda: len(videos()) == count)
+    must("it plays and is listed", play(1))
     ipc(nodes[G]["sock"], "playlist-next")
     ok("the next file gets its own group, and only it is open", until(showing("e3.mkv", "e2.mkv")), str(groups()))
+    ok("moving there stops the party", until(lambda: get(G, "pause") is True))
+    ok("the first has finished, and the next isn't listed while it sits paused", until(lambda: "ended" in videos()[0]) and len(videos()) == 1, str(videos()))
+    must("the next plays and is listed", play(2))
     ipc(nodes[G]["sock"], "playlist-prev")
     ok("going back reopens that file's group", until(showing("e2.mkv", "e3.mkv")), str(groups()))
-    until(lambda: len(state(G)["history"][-1].get("videos", [])) == 3)
-    videos = state(G)["history"][-1].get("videos", [])
-    ok("history has every file played", [v["name"] for v in videos] == ["e2.mkv", "e3.mkv", "e2.mkv"], str(videos))
-    ok("each finished when the next started", all(a["ended"] == b["started"] for a, b in zip(videos, videos[1:])), str(videos))
-    ok("the playing one hasn't finished", "ended" not in videos[-1], str(videos))
+    until(lambda: get(G, "pause") is True)
+    must("the first plays again and is listed again", play(3))
+    ok("history has every file played", [v["name"] for v in videos()] == ["e2.mkv", "e3.mkv", "e2.mkv"], str(videos()))
+    ok("the earlier ones have finished", all("ended" in v for v in videos()[:-1]), str(videos()))
+    ok("the playing one hasn't", "ended" not in videos()[-1], str(videos()))
     end(G)
-    videos = state(G)["history"][-1]["videos"]
-    ok("ending the party finishes it", videos[-1].get("ended") == state(G)["history"][-1]["ended"], str(videos))
+    ok("ending the party finishes it", videos()[-1].get("ended") == state(G)["history"][-1]["ended"], str(videos()))
     tab(G, "history")
     until(lambda: js(G, '$("history-list").querySelector(".videos") !== null'))
     shown = js(G, '$("history-list").firstElementChild.textContent')
-    ok("the History page shows each file and its times", "3 videos" in shown and "e3.mkv" in shown and " to " in shown, shown)
+    ok("the History page counts files, not plays, and shows each with its times", "2 videos" in shown and "e3.mkv" in shown and " to " in shown, shown)
     tab(G, "party")
     line = lambda m: f"2026/11/05 18:00:00 {m}"
     js(G, f'handle({json.dumps(line("do: sent request: " + json.dumps({"command": ["show-text", "video 1 of 3, by Sam", 5000]}, separators=(",", ":"))))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
@@ -2232,6 +2247,7 @@ def gui_suite():
     must(f"{G} is in", joined(G), status(G))
     ok(f"{G} goes to {H}'s entry", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
     end(G)
+    ok(f"{G} never played the file it opened on, so history doesn't list it", not state(G)["history"][-1].get("videos"), str(state(G)["history"][-1]))
     js(G, '$("playlist").checked = false')
     fill(G, file=f"{folder}/e2.mkv")
     go(G)

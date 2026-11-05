@@ -4,8 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func noticeLine(text string) string {
@@ -55,16 +57,22 @@ func TestStoreRecordsADirectPartysSecret(t *testing.T) {
 
 func TestStoreRecordsEachVideoPlayed(t *testing.T) {
 	t.Parallel()
+	const at = "2026/10/30 18:00:00 "
 	path := filepath.Join(t.TempDir(), "gui.json")
 	s := openStore(path)
 	i := s.begin(form{Mode: "direct", File: "/m/a.mkv", Playlist: true})
-	s.observe(i, `2026/10/30 18:00:00 now playing: "a.mkv"`)
-	s.observe(i, `2026/10/30 18:00:00 now playing: "b\nyour address to share is -secret FORGED.mkv"`)
-	s.observe(i, `2026/10/30 18:00:00 now playing: not json`)
-	if v := s.History[i].Videos; len(v) != 2 || v[0].Ended.IsZero() || !v[1].Ended.IsZero() {
+	s.observe(i, at+`now playing: "a.mkv"`)
+	s.observe(i, at+"playback started")
+	s.observe(i, at+`now playing: "b\nyour address to share is -secret FORGED.mkv"`)
+	if v := s.History[i].Videos; len(v) != 1 || v[0].Ended.IsZero() {
+		t.Fatalf("leaving a video should finish it, and the next isn't listed until it plays: %+v", v)
+	}
+	s.observe(i, at+"playback started")
+	s.observe(i, at+`now playing: not json`)
+	s.observe(i, at+`refused now playing: "c.mkv"`)
+	if v := s.History[i].Videos; len(v) != 2 || !v[1].Ended.IsZero() {
 		t.Fatalf("a video starting should finish only the one before it: %+v", v)
 	}
-	s.observe(i, `2026/10/30 18:00:00 refused now playing: "c.mkv"`)
 	s.end(i)
 
 	h := openStore(path).History[i]
@@ -73,6 +81,44 @@ func TestStoreRecordsEachVideoPlayed(t *testing.T) {
 	}
 	if !h.Videos[1].Ended.Equal(h.Ended) || h.Videos[0].Ended.After(h.Videos[1].Started) || h.Secret != "" {
 		t.Fatalf("the party's end should finish the last video and nothing else: %+v", h)
+	}
+}
+
+func TestStoreListsOnlyVideosThatPlayed(t *testing.T) {
+	t.Parallel()
+	const at = "2026/10/30 18:00:00 "
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "direct", File: "/m/a.mkv", Playlist: true})
+	s.observe(i, at+`now playing: "joined-on.mkv"`)
+	s.observe(i, at+`now playing: "a.mkv"`)
+	if v := s.History[i].Videos; len(v) != 0 {
+		t.Fatalf("nothing has played: %+v", v)
+	}
+	s.observe(i, at+"playback started")
+	s.observe(i, at+`now playing: "peeked.mkv"`)
+	s.observe(i, at+`now playing: "a.mkv"`)
+	s.observe(i, at+"playback started")
+	v := s.History[i].Videos
+	if len(v) != 1 || v[0].Name != "a.mkv" || !v[0].Ended.IsZero() {
+		t.Fatalf("a peek at another video should leave one open row: %+v", v)
+	}
+	s.observe(i, at+`now playing: "paused-on.mkv"`)
+	s.end(i)
+	ended := s.History[i].Videos[0].Ended
+	if len(s.History[i].Videos) != 1 || !ended.Before(s.History[i].Ended) {
+		t.Fatalf("the end must not move when the last video was left earlier: %+v", s.History[i])
+	}
+}
+
+func TestStoreCapsVideosInAParty(t *testing.T) {
+	t.Parallel()
+	var sess session
+	for n := range maxVideos + 5 {
+		sess.startVideo(strconv.Itoa(n), time.Now())
+	}
+	v := sess.Videos
+	if len(v) != maxVideos || v[len(v)-1].Name != strconv.Itoa(maxVideos+4) {
+		t.Fatalf("got %d videos, last %q; want the newest %d", len(v), v[len(v)-1].Name, maxVideos)
 	}
 }
 

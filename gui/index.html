@@ -825,7 +825,8 @@ function renderHistory() {
     const li = document.createElement("li");
     const title = document.createElement("b");
     const videos = p.videos || [];
-    title.textContent = videos.length > 1 ? `${videos.length} videos` : fileName(p.file);
+    const files = new Set(videos.map(v => v.name)).size;
+    title.textContent = files > 1 ? `${files} videos` : files ? videos[0].name : fileName(p.file);
     title.title = p.file;
     const meta = document.createElement("span");
     meta.className = "meta";

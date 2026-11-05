@@ -63,7 +63,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party/ws.go | `rejected by relay`, plus `not the same file` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `entry`>` | GUI feed (your own pause/resume), e2e |
-  | mpv | `now playing: <file name as JSON>` | GUI feed, `gui/store.go`, e2e |
+  | mpv | `now playing: <file name as JSON>`, `playback started` | GUI feed, `gui/store.go`, e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both

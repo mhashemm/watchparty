@@ -120,6 +120,25 @@ func TestARequestOnAClosedSocketIsErrClosed(t *testing.T) {
 	}
 }
 
+func TestPlaybackStartsOnlyWhenTimeMovesWhilePlaying(t *testing.T) {
+	t.Parallel()
+	outgoing := make(chan []byte, 16)
+	c := newTestClient(outgoing, nil)
+	c.paused = true
+	feed(t, c, outgoing, propertyChangeLine(filename, "a.mkv", 0)+propertyChangeLine(timePos, "0.000000", 0)+propertyChangeLine(timePos, "5.000000", 0))
+	if c.started {
+		t.Fatal("a seek while paused counted as playing")
+	}
+	feed(t, c, outgoing, propertyChangeLine(pause, "yes", 0)+propertyChangeLine(pause, "no", 0)+propertyChangeLine(timePos, "5.100000", 0))
+	if !c.started {
+		t.Fatal("time moving while playing didn't count")
+	}
+	feed(t, c, outgoing, propertyChangeLine(filename, "b.mkv", 0)+propertyChangeLine(timePos, "0.000000", 0))
+	if c.started {
+		t.Fatal("the next file counted before its time moved")
+	}
+}
+
 func TestFileNameIsNeverBroadcast(t *testing.T) {
 	t.Parallel()
 	outgoing := make(chan []byte, 4)
