@@ -43,6 +43,11 @@ func pickFile() (string, error) {
 if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`)
 }
 
+func pickMpv() (string, error) {
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickOwner+`$d = New-Object System.Windows.Forms.OpenFileDialog
+if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`)
+}
+
 func pickFolder() (string, error) {
 	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickOwner+`$d = New-Object System.Windows.Forms.FolderBrowserDialog
 if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }`)

@@ -1,6 +1,7 @@
 // Command fakeportal answers FileChooser.OpenFile on a private bus for e2e.py: it picks
-// os.Args[1], or its folder when asked for one. It refuses a filter that isn't the
-// portal's a(sa(us)), and a folder request with a filter or a directory option that isn't a bool.
+// os.Args[1], its folder when asked for one, or os.Args[1] + ".unfiltered" when asked with no
+// filter, so a page can tell which it got. It refuses a filter that isn't the portal's
+// a(sa(us)), and a folder request with a filter or a directory option that isn't a bool.
 package main
 
 import (
@@ -33,6 +34,8 @@ func (c chooser) OpenFile(sender dbus.Sender, parent, title string, options map[
 			return "", dbus.MakeFailedError(fmt.Errorf("a filter on a folder request"))
 		}
 		picked = filepath.Dir(c.file)
+	} else if _, ok := options["filters"]; !ok {
+		picked = c.file + ".unfiltered"
 	} else {
 		err := dbus.Store([]any{options["filters"].Value()}, &filters)
 		if err != nil || len(filters) == 0 || len(filters[0].Rules) == 0 {

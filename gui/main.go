@@ -124,6 +124,7 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 		w.Write(g.page)
 	})
 	g.mux.HandleFunc("POST /pick", pick(pickFile))
+	g.mux.HandleFunc("POST /pick-mpv", pick(pickMpv))
 	g.mux.HandleFunc("POST /pick-folder", pick(pickFolder))
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)

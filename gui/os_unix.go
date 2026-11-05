@@ -161,6 +161,13 @@ func pickFile() (string, error) {
 	return portalPick("Pick a video", map[string]dbus.Variant{"filters": dbus.MakeVariant([]portalFilter{videoFilter()})})
 }
 
+func pickMpv() (string, error) {
+	if runtime.GOOS == "darwin" {
+		return dialog("osascript", "-e", "POSIX path of (choose file)")
+	}
+	return portalPick("Pick mpv", map[string]dbus.Variant{})
+}
+
 func pickFolder() (string, error) {
 	if runtime.GOOS == "darwin" {
 		return dialog("osascript", "-e", "POSIX path of (choose folder)")
