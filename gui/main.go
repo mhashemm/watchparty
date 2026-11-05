@@ -347,6 +347,7 @@ func openWindow(url string) (<-chan struct{}, *os.Process) {
 			continue
 		}
 		cmd := exec.Command(b.cmd[0], append(b.cmd[1:], browserArgs(b.name, url, profile)...)...)
+		cmd.Env = append(os.Environ(), "GOOGLE_API_KEY=no", "GOOGLE_DEFAULT_CLIENT_ID=no", "GOOGLE_DEFAULT_CLIENT_SECRET=no")
 		if cmd.Start() != nil {
 			os.RemoveAll(profile)
 			continue
