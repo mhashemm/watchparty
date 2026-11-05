@@ -948,7 +948,7 @@ func TestFollowingAnEntryStopsFirstAndStaysQuiet(t *testing.T) {
 	t.Parallel()
 	c, send, outgoing, requests := playlistClient(t)
 
-	go c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"2"}`))
+	go c.apply(peer("a", move(0, 2)))
 	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property playlist-pos 2", "show-text video 3 of 3, by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
@@ -967,7 +967,7 @@ func TestFollowingAnEntryStopsFirstAndStaysQuiet(t *testing.T) {
 func TestEntryAlreadyHeadedThereIsNotRepeated(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
-	c.paused, c.current = true, 1
+	c.paused, c.current, c.joining = true, 1, true
 
 	go func() {
 		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
@@ -991,7 +991,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 	c.paused = true
 
 	go func() {
-		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+		c.apply(peer("a", move(0, 1)))
 		c.apply(peer("a", `{"event":"property-change","name":"time-pos","data":"40.000000"}`))
 	}()
 	for _, want := range []string{"set_property playlist-pos 1", "show-text video 2 of 3, by a 5000", "show-text synced by a 5000"} {
@@ -1039,6 +1039,44 @@ func TestJoinAnswerNamesTheEntryFirst(t *testing.T) {
 	}
 	if e := nextEvent(t, outgoing); e.Name != startPos || e.Data != "33.000000" {
 		t.Fatalf("broadcast %+v, want the position", e)
+	}
+}
+
+// Everyone hears the answer to a joiner, and it can arrive after someone has moved on.
+// Only the joiner may act on it: followed by the rest, an answer sent just before two
+// people crossed sends each to the other's entry, and they stay apart.
+func TestAnswerToAJoinerMovesOnlyTheJoiner(t *testing.T) {
+	t.Parallel()
+	answer := `{"event":"property-change","name":"playlist-pos","data":"2"}`
+	mark := `{"name":"show-text","data":"mark"}`
+
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.current = true, 1
+	go func() {
+		c.apply(peer("a", answer))
+		c.apply(peer("a", mark))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("a member followed it: %q", got)
+	}
+
+	c, send, outgoing, requests := playlistClient(t)
+	c.paused, c.current, c.joining = true, 1, true
+	send(propertyChangeLine(playlistPos, "0", 0))
+	next(t, outgoing)
+	go func() {
+		c.apply(peer("a", answer))
+		c.apply(peer("a", mark))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("a joiner who has moved by hand followed it: %q", got)
+	}
+
+	c, _, _, requests = playlistClient(t)
+	c.paused, c.current, c.joining = true, 1, true
+	go c.apply(peer("a", answer))
+	if got := next(t, requests); got != "set_property playlist-pos 2" {
+		t.Fatalf("a joiner sent %q, want to follow it", got)
 	}
 }
 
@@ -1108,7 +1146,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 	c.paused = true
 
 	go func() {
-		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+		c.apply(peer("a", move(0, 1)))
 		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
 		c.apply(peer("a", tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`)))
 	}()
@@ -1265,7 +1303,7 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 	c.paused = true
 	delete(c.seen, playlistPos)
 
-	go c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
+	go c.apply(peer("a", move(0, 1)))
 	if got := next(t, requests); got != "set_property playlist-pos 1" {
 		t.Fatalf("sent %q", got)
 	}

@@ -150,6 +150,9 @@ reason: nobody starts the next one until someone resumes.
 - **`followEntry` pauses first**, so the file opens stopped, and marks `applied`, so
   mpv's report isn't sent back. It skips one it is on or already headed to: every member
   answers a joiner, and two nodes often reach the end together.
+- **Only a node still `joining` follows an answer to a joiner** (a `playlist-pos` with no
+  `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
+  before two people crossed would otherwise send each to the other's entry, for good.
 - **Only a matching `playlist-pos` uses up the marker.** mpv's first report of where it
   started can land after a peer already sent this node elsewhere; used up on that, the real
   echo goes out as this node moving the party.

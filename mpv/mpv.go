@@ -291,7 +291,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if !c.paused {
 				c.pauseParty("video changed")
 			}
-			c.movedFrom = previous
+			c.movedFrom, c.joining = previous, false
 			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
 			return [][]byte{b}, errDoNotSend
 		default:
@@ -548,8 +548,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
+	notForUs := event.From == nil && !c.joining
 	c.mu.Unlock()
-	if i == heading || lost {
+	if i == heading || lost || notForUs {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
