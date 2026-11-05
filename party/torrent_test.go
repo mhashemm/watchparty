@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,9 @@ func TestSeveralVideosPlayInOrder(t *testing.T) {
 	want := []string{"/e1.mkv", "/e2.mkv", "/e10.mkv"}
 	if len(stream.urls) != len(want) {
 		t.Fatalf("plays %q", stream.urls)
+	}
+	if !slices.Equal(stream.names, []string{"e1.mkv", "e2.mkv", "e10.mkv"}) {
+		t.Fatalf("names = %q", stream.names)
 	}
 	for i, w := range want {
 		if !strings.HasSuffix(stream.urls[i], w) {
@@ -320,6 +324,9 @@ func TestTheDefaultCacheFolderIsTheSystems(t *testing.T) {
 	}
 	if got, err := torrentCache(""); err != nil || got != filepath.Join(system, "watchparty") {
 		t.Fatalf("got %q %v", got, err)
+	}
+	if got, err := DefaultCacheDir(); err != nil || got != filepath.Join(system, "watchparty") {
+		t.Fatalf("what the Settings page shows: got %q %v", got, err)
 	}
 }
 

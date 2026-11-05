@@ -29,18 +29,28 @@ func openURL(url string) *exec.Cmd {
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 }
 
-const pickScript = `[Console]::OutputEncoding = [Text.Encoding]::UTF8
+const pickOwner = `[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = 'None'; Opacity = 0; StartPosition = 'CenterScreen'; Width = 1; Height = 1}
 $owner.Show()
 $owner.Activate()
 $owner.TopMost = $false
-$d = New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos|PATTERNS'}
-if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`
+`
 
 func pickFile() (string, error) {
 	patterns := "*" + strings.Join(pickExts, ";*")
-	return dialog("powershell", "-NoProfile", "-STA", "-Command", strings.Replace(pickScript, "PATTERNS", patterns, 1))
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickOwner+`$d = New-Object System.Windows.Forms.OpenFileDialog -Property @{Filter = 'Videos|`+patterns+`'}
+if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`)
+}
+
+func pickMpv() (string, error) {
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickOwner+`$d = New-Object System.Windows.Forms.OpenFileDialog
+if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`)
+}
+
+func pickFolder() (string, error) {
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickOwner+`$d = New-Object System.Windows.Forms.FolderBrowserDialog
+if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }`)
 }
 
 func hide(cmd *exec.Cmd) {

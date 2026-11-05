@@ -54,7 +54,7 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   with user-supplied flags:** `r.Host` must equal the exact `ip:port` (DNS rebinding),
   and every path except `GET /` needs `X-Token`, the `rand.Text()` token templated into
   the page as `{{TOKEN}}` and compared in constant time (CSRF).
-- Routes: `GET /`, `POST /pick`, `/start` (400 bad form, 409 party running), `/stop`,
+- Routes: `GET /`, `POST /pick`, `/pick-mpv`, `/pick-folder`, `/start` (400 bad form, 409 party running), `/stop`,
   `GET /log?from=N&run=R`, `GET /state`, `POST /settings`, `/history/clear`, `GET`/`POST
   /update`, `POST /restart`.
 - **`form.config()`** trims every field; an empty port is `party.DefaultPort`. It
@@ -74,17 +74,19 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 
 ## Saved settings and history (`store.go`)
 
-- **One file, `os.UserConfigDir()/watchparty/gui.json`**, written atomically, 0600 in a
-  0700 directory: it holds room secrets and the create key. `save()` needs `store.mu`;
-  lock order is always `g.mu` → `store.mu`.
+- **Two files in `os.UserConfigDir()/watchparty/`,** `gui.json` and `history.json`, written
+  atomically, 0600 in a 0700 directory: they hold the create key and room secrets. Saving needs
+  `store.mu`; lock order is always `g.mu` → `store.mu`.
+- **Versions before `history.json` kept the history in `gui.json`.** `openStore` moves it, writing
+  the new file first, so stopping in between loses nothing; `history.json` wins if both exist.
 - **Not `localStorage`:** the random port makes the page a new origin every launch.
   Nothing is kept in browser storage; the page loads everything from `GET /state`.
 - **Settings:** name, and `local`/`port` from the last Wi-Fi party, are remembered
   automatically. The Settings page's fields are saved by its button. The first relay
   used becomes the default if none is set.
 - **History**, up to 100 parties. `begin` records the form on `/start`, `end` stamps
-  the end. `observe` fills in the *real* room and secret from the invite line, and
-  people from the join notices.
+  the end. `observe` fills in the *real* room and secret from the invite line, people
+  from the join notices, and one entry per file switched to, opened and left, from `now playing:`.
 
 ## Self-update (`update.go`)
 
@@ -116,14 +118,16 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 ## OS helpers (`os_unix.go`, `os_windows.go`)
 
-- **Pickers show only videos** and `.torrent`, by extension from `pickExts`, built on
+- **The video picker shows only videos** and `.torrent`, by extension from `pickExts`, built on
   `party.VideoExts` (Go's sniffer misses `.mov` and `.ts`), which also decides what a
-  playlist holds. Add an extension when a real video doesn't show up.
+  playlist holds. Add an extension when a real video doesn't show up. mpv's picker has no
+  filter: mpv has no extension on Linux, and a video filter hides it.
 - **Linux: only the XDG desktop portal** (`portalPick`), never a specific program;
   hard-coded zenity/kdialog broke on desktops without them. Subscribe to `Response` on
   the predicted request path *before* calling `FileChooser.OpenFile`. The filter type
   is `a(sa(us))`, and a wrong type refuses the whole call
-  (`TestVideoFilterIsWhatThePortalExpects`). Any portal error asks the user to type the
+  (`TestVideoFilterIsWhatThePortalExpects`). A folder is `OpenFile` with `directory`
+  (portal version 3 and up) and no filter. Any portal error asks the user to type the
   path. Check a desktop with `busctl --user introspect org.freedesktop.portal.Desktop
   /org/freedesktop/portal/desktop org.freedesktop.portal.FileChooser` (`.OpenFile
   ssa{sv}`).

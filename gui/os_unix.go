@@ -158,7 +158,21 @@ func pickFile() (string, error) {
 		}
 		return dialog("osascript", "-e", "POSIX path of (choose file of type {"+types+"})")
 	}
-	return portalPick()
+	return portalPick("Pick a video", map[string]dbus.Variant{"filters": dbus.MakeVariant([]portalFilter{videoFilter()})})
+}
+
+func pickMpv() (string, error) {
+	if runtime.GOOS == "darwin" {
+		return dialog("osascript", "-e", "POSIX path of (choose file)")
+	}
+	return portalPick("Pick mpv", map[string]dbus.Variant{})
+}
+
+func pickFolder() (string, error) {
+	if runtime.GOOS == "darwin" {
+		return dialog("osascript", "-e", "POSIX path of (choose folder)")
+	}
+	return portalPick("Pick a folder", map[string]dbus.Variant{"directory": dbus.MakeVariant(true)})
 }
 
 type portalRule struct {
@@ -179,7 +193,7 @@ func videoFilter() portalFilter {
 	return f
 }
 
-func portalPick() (string, error) {
+func portalPick(title string, options map[string]dbus.Variant) (string, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return "", err
@@ -196,11 +210,9 @@ func portalPick() (string, error) {
 	signals := make(chan *dbus.Signal, 1)
 	conn.Signal(signals)
 
+	options["handle_token"] = dbus.MakeVariant(token)
 	err = conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop").
-		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", "Pick a video", map[string]dbus.Variant{
-			"handle_token": dbus.MakeVariant(token),
-			"filters":      dbus.MakeVariant([]portalFilter{videoFilter()}),
-		}).Err
+		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", title, options).Err
 	if err != nil {
 		return "", err
 	}

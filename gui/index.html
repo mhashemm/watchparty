@@ -261,10 +261,13 @@ details[open] summary { margin-bottom: 14px; }
 .tabs button[aria-current="page"] { border-color: var(--moss); background: #eef3df; color: var(--forest); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--berry); margin-left: 6px; vertical-align: 2px; }
 #history-list { list-style: none; padding: 0; margin: 0 0 18px; }
-#history-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+#history-list > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 #history-list b { word-break: break-word; }
 #history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
 #history-list .again { grid-column: 2; grid-row: 1 / span 2; }
+.videos { grid-column: 1 / -1; list-style: none; margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: .9rem; }
+.videos li { padding: 4px 0; display: flex; flex-direction: column; word-break: break-word; }
+.videos .when { color: var(--ink-soft); font-size: .875rem; }
 .about { margin-top: 26px; border-top: 2px dashed var(--line); padding-top: 18px; }
 .about p { margin: 0 0 10px; }
 .about code { font-size: .85rem; word-break: break-all; color: var(--soil); }
@@ -296,11 +299,18 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .status.bad { color: var(--berry); }
 .share { background: #f3eedf; border: 2px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 18px; }
 .share code { display: block; font: .9rem/1.4 ui-monospace, Consolas, monospace; word-break: break-all; margin: 6px 0 10px; color: var(--soil); }
-#feed { list-style: none; padding: 0; margin: 0 0 18px; }
+#feed { margin: 0 0 18px; }
+#feed details { border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 0 0 8px; }
+#feed details[open] { background: #eef3df; border-color: var(--moss); }
+#feed details[open] summary { margin-bottom: 6px; color: var(--forest); }
+#feed summary { word-break: break-word; }
+#feed ul { list-style: none; padding: 0; margin: 0; }
+#feed ul:empty::before { content: "Nothing yet."; color: var(--ink-soft); }
+#feed li:last-child { border-bottom: 0; }
 #feed li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
 #feed time { color: var(--ink-soft); font-size: .875rem; min-width: 3.2em; padding-top: 1px; }
-#feed .empty { color: var(--ink-soft); }
-#feed li:not(.empty)::before { content: ""; flex: none; width: 16px; height: 16px; margin-top: 3px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M12 18h8l1 11h-10z' fill='%23f1ead6' stroke='%236e4b30' stroke-width='1.5'/%3E%3Cpath d='M3 18C5 5 27 5 29 18z' fill='%23a8642a' stroke='%234a3220' stroke-width='1.5'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23f6efdc'/%3E%3Ccircle cx='19' cy='9.5' r='1.6' fill='%23f6efdc'/%3E%3C/svg%3E") center / contain no-repeat; }
+#feed .empty { color: var(--ink-soft); margin: 0; }
+#feed li::before { content: ""; flex: none; width: 16px; height: 16px; margin-top: 3px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M12 18h8l1 11h-10z' fill='%23f1ead6' stroke='%236e4b30' stroke-width='1.5'/%3E%3Cpath d='M3 18C5 5 27 5 29 18z' fill='%23a8642a' stroke='%234a3220' stroke-width='1.5'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23f6efdc'/%3E%3Ccircle cx='19' cy='9.5' r='1.6' fill='%23f6efdc'/%3E%3C/svg%3E") center / contain no-repeat; }
 #chart pre {
   background: #22301f;
   color: #d5e2b8;
@@ -521,7 +531,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <button type="button" id="copy">Copy invite</button>
       </div>
       <h2>Party feed</h2>
-      <ul id="feed"><li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li></ul>
+      <div id="feed"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>
       <details id="chart">
         <summary>Patient chart</summary>
         <pre id="log"></pre>
@@ -616,10 +626,10 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <p class="hint">Filled in for you on the Party page.</p>
         </div>
         <div class="field">
-          <label for="mpv">mpv program</label>
+          <label for="mpv">mpv path</label>
           <div class="row">
-            <input type="text" id="mpv" placeholder="Found automatically">
-            <button type="button" data-pick="mpv">Browse</button>
+            <input type="text" id="mpv">
+            <button type="button" data-pick="mpv" data-route="/pick-mpv">Browse</button>
           </div>
         </div>
         <div class="field">
@@ -632,12 +642,16 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
             <input type="password" id="createKey" placeholder="Only if the relay asks">
           </div>
           <div class="field">
-            <label for="cacheDir">Cache folder</label>
-            <input type="text" id="cacheDir" placeholder="Where torrents download. Your system's cache if empty">
-          </div>
-          <div class="field">
             <label for="pport">Public port</label>
             <input type="text" id="pport" inputmode="numeric" placeholder="6969">
+          </div>
+          <div class="field wide">
+            <label for="cacheDir">Cache folder</label>
+            <div class="row">
+              <input type="text" id="cacheDir">
+              <button type="button" data-pick="cacheDir" data-route="/pick-folder">Browse</button>
+            </div>
+            <p class="hint">Where torrents download.</p>
           </div>
         </div>
         <button type="submit">Save settings</button>
@@ -764,6 +778,8 @@ async function loadState() {
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) $(k).value = s[k] || "";
+  $("mpv").placeholder = saved.defaultMpv;
+  $("cacheDir").placeholder = saved.defaultCacheDir;
   $("set-relay").value = s.relay || "";
   $("store-path").textContent = saved.path;
   renderHistory();
@@ -783,6 +799,31 @@ const fileName = path => /^magnet:/i.test(path || "")
   ? new URLSearchParams(path.split("?")[1]).get("dn") || "Magnet link"
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
+const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
+function videoList(videos, title) {
+  const ul = document.createElement("ul");
+  ul.className = "videos";
+  ul.append(...videos.map(v => {
+    const li = document.createElement("li");
+    if (v.name !== title) {
+      const name = document.createElement("span");
+      name.textContent = v.name;
+      li.append(name);
+    }
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = v.ended ? `${clock(v.started)} to ${clock(v.ended)}` : `started ${clock(v.started)}`;
+    li.append(when);
+    return li;
+  }));
+  return ul;
+}
+function partyTitle(p, files) {
+  if (files === 0) return fileName(p.file);
+  if (files === 1) return p.videos[0].name;
+  const place = /^magnet:|\.torrent$/i.test(p.file) ? fileName(p.file) : p.file.split(/[\\/]/).at(-2);
+  return place ? `${place} (${files} videos)` : `${files} videos`;
+}
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
   $("history-empty").hidden = parties.length > 0;
@@ -790,7 +831,8 @@ function renderHistory() {
   $("history-list").replaceChildren(...parties.map(p => {
     const li = document.createElement("li");
     const title = document.createElement("b");
-    title.textContent = fileName(p.file);
+    const videos = p.videos || [];
+    title.textContent = partyTitle(p, new Set(videos.map(v => v.name)).size);
     title.title = p.file;
     const meta = document.createElement("span");
     meta.className = "meta";
@@ -804,6 +846,7 @@ function renderHistory() {
     again.disabled = running;
     again.addEventListener("click", () => watchAgain(p));
     li.append(title, meta, again);
+    if (videos.length) li.append(videoList(videos, title.textContent));
     return li;
   }));
 }
@@ -876,7 +919,7 @@ document.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click"
   const target = $(b.dataset.pick);
   b.disabled = true;
   try {
-    const res = await api("/pick", {});
+    const res = await api(b.dataset.route || "/pick", {});
     const path = (await res.text()).trim();
     if (!res.ok) throw new Error(path);
     if (path) target.value = path;
@@ -915,20 +958,49 @@ let run = 0, from = 0, state = {};
 function reset() {
   state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false, finding: false, leftPause: false };
   $("log").textContent = "";
-  $("feed").innerHTML = '<li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li>';
+  $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
 }
 reset();
 
-function addFeed(text) {
+function feedGroup(name) {
   const feed = $("feed");
   feed.querySelector(".empty")?.remove();
+  let group = [...feed.children].find(g => g.dataset.name === name);
+  if (!group) {
+    group = document.createElement("details");
+    group.dataset.name = name;
+    const summary = document.createElement("summary");
+    summary.textContent = name;
+    group.append(summary, document.createElement("ul"));
+  }
+  for (const g of feed.children) g.open = false;
+  group.open = true;
+  feed.prepend(group);
+  return group;
+}
+
+function nowPlaying(name, at) {
+  const previous = $("feed").querySelector("details");
+  const group = feedGroup(name);
+  if (previous === group || !previous) return;
+  const moving = [];
+  for (const li of previous.querySelectorAll("li")) {
+    if (at - li.dataset.at > 1000 || !/^from .+, by |: video changed$|^synced by /s.test(li.lastChild.textContent)) break;
+    moving.push(li);
+  }
+  if (moving.some(li => !li.lastChild.textContent.startsWith("synced by "))) group.lastChild.prepend(...moving);
+}
+
+function addFeed(text, at) {
+  const list = ($("feed").querySelector("details") || feedGroup(fileName($("file").value))).lastChild;
   const li = document.createElement("li");
   const time = document.createElement("time");
-  time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  time.textContent = clock(at);
+  li.dataset.at = +at;
   li.append(time, text);
-  feed.prepend(li);
-  while (feed.children.length > 20) feed.lastChild.remove();
+  list.prepend(li);
+  while (list.children.length > 20) list.lastChild.remove();
 }
 
 function handle(line) {
@@ -936,7 +1008,8 @@ function handle(line) {
   log.textContent += line + "\n";
   if (log.textContent.length > 200000) log.textContent = log.textContent.slice(-150000);
 
-  const msg = line.slice(20);
+  const [y, mo, d, h, mi, s] = line.slice(0, 19).split(/[/ :]/).map(Number);
+  const msg = line.slice(20), at = new Date(y, mo - 1, d, h, mi, s);
   let m;
   if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
@@ -953,16 +1026,19 @@ function handle(line) {
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try {
       const text = JSON.parse(m[1]).command[1];
-      addFeed(text);
+      addFeed(text, at);
       if (/^paused for .*: left$/.test(text)) state.leftPause = true;
     } catch {}
+  }
+  if ((m = msg.match(/^now playing: (".*")$/))) {
+    try { nowPlaying(JSON.parse(m[1]), at); } catch {}
   }
   if ((m = msg.match(/^Watch: broadcasted event: (\{.*\})$/))) {
     try {
       const e = JSON.parse(m[1]);
       if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
-      else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");
-      if (e.name === "pause-reason") [...$("feed").children].find(li => li.lastChild.textContent === "paused by you")?.remove();
+      else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you", at);
+      if (e.name === "pause-reason") [...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
   }
 }

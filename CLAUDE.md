@@ -25,8 +25,7 @@ make e2e E2E="--mode gui"                  # e2e.py in docker; python e2e_window
 CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -room r -secret s [-createKey k]
 ```
 
-CI: `pr.yml` builds every OS, runs `make -j test`, and Windows unit + `e2e_windows.py`;
-a tag runs `publisher.yml` (11 files).
+CI: `pr.yml` builds every OS, runs `make -j test`, and Windows unit + `e2e_windows.py`; a tag runs `publisher.yml` (11 files).
 
 ## Architecture
 
@@ -62,8 +61,9 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party | `file fingerprint: <hex>` | e2e |
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file` or `-createKey` | GUI diagnosis |
-  | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed, `gui/store.go`, e2e `osd()` |
+  | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `entry`>` | GUI feed (your own pause/resume), e2e |
+  | mpv | `now playing: <file name as JSON>` | GUI feed, `gui/store.go`, e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both

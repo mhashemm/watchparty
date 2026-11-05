@@ -56,7 +56,7 @@ func (f form) config() (party.Config, error) {
 	cfg := party.Config{
 		File:     strings.TrimSpace(f.File),
 		Hostname: strings.TrimSpace(f.Hostname),
-		Mpv:      cmp.Or(strings.TrimSpace(f.Mpv), sibling("mpv"+exeSuffix), "mpv"),
+		Mpv:      cmp.Or(strings.TrimSpace(f.Mpv), defaultMpv()),
 		MpvFlags: f.MpvFlags,
 	}
 	var err error
@@ -123,7 +123,9 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(g.page)
 	})
-	g.mux.HandleFunc("POST /pick", g.pick)
+	g.mux.HandleFunc("POST /pick", pick(pickFile))
+	g.mux.HandleFunc("POST /pick-mpv", pick(pickMpv))
+	g.mux.HandleFunc("POST /pick-folder", pick(pickFolder))
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
 	g.mux.HandleFunc("GET /log", g.log)
@@ -144,13 +146,15 @@ func (g *gui) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mux.ServeHTTP(w, r)
 }
 
-func (g *gui) pick(w http.ResponseWriter, r *http.Request) {
-	path, err := pickFile()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+func pick(picker func() (string, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path, err := picker()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, path)
 	}
-	io.WriteString(w, path)
 }
 
 func (g *gui) start(w http.ResponseWriter, r *http.Request) {
@@ -204,13 +208,17 @@ func (g *gui) Write(p []byte) (int, error) {
 }
 
 func (g *gui) state(w http.ResponseWriter, r *http.Request) {
+	mpv := defaultMpv()
+	cache, _ := party.DefaultCacheDir()
 	g.store.mu.Lock()
 	b, err := json.Marshal(struct {
-		Settings settings  `json:"settings"`
-		History  []session `json:"history"`
-		Path     string    `json:"path"`
-		Version  string    `json:"version"`
-	}{g.store.Settings, g.store.History, g.store.path, version})
+		Settings        settings  `json:"settings"`
+		History         []session `json:"history"`
+		Path            string    `json:"path"`
+		Version         string    `json:"version"`
+		DefaultMpv      string    `json:"defaultMpv"`
+		DefaultCacheDir string    `json:"defaultCacheDir"`
+	}{g.store.Settings, g.store.History, filepath.Dir(g.store.path), version, mpv, cache})
 	g.store.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -233,7 +241,7 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
 	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
 	s.CacheDir = strings.TrimSpace(in.CacheDir)
-	err = g.store.save()
+	err = g.store.saveSettings()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -245,7 +253,7 @@ func (g *gui) clearHistory(w http.ResponseWriter, r *http.Request) {
 	g.store.mu.Lock()
 	defer g.store.mu.Unlock()
 	g.store.History, g.session = nil, -1
-	err := g.store.save()
+	err := g.store.saveHistory()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -288,6 +296,17 @@ func (g *gui) idle() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.cancel == nil && time.Since(g.lastPoll) > g.idleAfter
+}
+
+func defaultMpv() string {
+	if path := sibling("mpv" + exeSuffix); path != "" {
+		return path
+	}
+	path, err := exec.LookPath("mpv")
+	if err != nil {
+		return "mpv"
+	}
+	return path
 }
 
 func sibling(name string) string {

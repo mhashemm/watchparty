@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const maxHistory = 100
+const (
+	maxHistory = 100
+	maxVideos  = 200
+)
 
 type settings struct {
 	Hostname  string `json:"hostname"`
@@ -36,10 +39,32 @@ type session struct {
 	Addrs    string    `json:"addrs,omitempty"`
 	Invite   string    `json:"invite,omitempty"`
 	People   []string  `json:"people"`
+	Videos   []played  `json:"videos,omitempty"`
+}
+
+type played struct {
+	Name    string    `json:"name"`
+	Started time.Time `json:"started"`
+	Ended   time.Time `json:"ended,omitzero"`
+}
+
+func (sess *session) openVideo(name string, at time.Time) {
+	sess.finishVideo(at)
+	sess.Videos = append(sess.Videos, played{Name: name, Started: at})
+	if over := len(sess.Videos) - maxVideos; over > 0 {
+		sess.Videos = slices.Delete(sess.Videos, 0, over)
+	}
+}
+
+func (sess *session) finishVideo(at time.Time) {
+	if n := len(sess.Videos); n > 0 {
+		sess.Videos[n-1].Ended = at
+	}
 }
 
 type store struct {
-	path string
+	path        string
+	historyPath string
 
 	mu       sync.Mutex
 	Settings settings  `json:"settings"`
@@ -55,24 +80,62 @@ func storePath() string {
 }
 
 func openStore(path string) *store {
-	s := &store{path: path, Settings: settings{Local: true}}
+	s := &store{path: path, historyPath: filepath.Join(filepath.Dir(path), "history.json"), Settings: settings{Local: true}}
 	b, err := os.ReadFile(path)
 	if err == nil {
 		json.Unmarshal(b, s)
 	}
+	inSettings := len(s.History) > 0
+	b, err = os.ReadFile(s.historyPath)
+	if err == nil {
+		var history []session
+		if json.Unmarshal(b, &history) == nil {
+			s.History = mergeHistory(history, s.History)
+		}
+	}
+	s.trimHistory()
+	if inSettings && s.saveHistory() == nil {
+		s.saveSettings()
+	}
 	return s
 }
 
-func (s *store) save() error {
-	b, err := json.MarshalIndent(s, "", "  ")
+func mergeHistory(history, others []session) []session {
+	for _, o := range others {
+		if !slices.ContainsFunc(history, func(h session) bool { return h.Started.Equal(o.Started) && h.File == o.File }) {
+			history = append(history, o)
+		}
+	}
+	slices.SortStableFunc(history, func(a, b session) int { return a.Started.Compare(b.Started) })
+	return history
+}
+
+func (s *store) trimHistory() {
+	if over := len(s.History) - maxHistory; over > 0 {
+		s.History = slices.Delete(s.History, 0, over)
+	}
+}
+
+func (s *store) saveSettings() error {
+	return writeJSON(s.path, struct {
+		Settings settings `json:"settings"`
+	}{s.Settings})
+}
+
+func (s *store) saveHistory() error {
+	return writeJSON(s.historyPath, s.History)
+}
+
+func writeJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	err = os.MkdirAll(filepath.Dir(s.path), 0o700)
+	err = os.MkdirAll(filepath.Dir(path), 0o700)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".gui-*.json")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*.json")
 	if err != nil {
 		return err
 	}
@@ -84,7 +147,7 @@ func (s *store) save() error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), s.path)
+	return os.Rename(tmp.Name(), path)
 }
 
 func (s *store) begin(f form) int {
@@ -107,10 +170,9 @@ func (s *store) begin(f form) int {
 		sess.Addrs = strings.TrimSpace(f.Addrs)
 	}
 	s.History = append(s.History, sess)
-	if over := len(s.History) - maxHistory; over > 0 {
-		s.History = slices.Delete(s.History, 0, over)
-	}
-	s.save()
+	s.trimHistory()
+	s.saveSettings()
+	s.saveHistory()
 	return len(s.History) - 1
 }
 
@@ -131,6 +193,14 @@ func (s *store) observe(i int, line string) {
 		})
 		return
 	}
+	if after, ok := strings.CutPrefix(message(line), "now playing: "); ok {
+		var name string
+		if json.Unmarshal([]byte(after), &name) != nil {
+			return
+		}
+		s.update(i, func(sess *session) { sess.openVideo(name, time.Now()) })
+		return
+	}
 	if text, ok := notice(line); ok {
 		if name, ok := strings.CutSuffix(text, " has joined"); ok {
 			person = name
@@ -149,7 +219,10 @@ func (s *store) observe(i int, line string) {
 }
 
 func (s *store) end(i int) {
-	s.update(i, func(sess *session) { sess.Ended = time.Now() })
+	s.update(i, func(sess *session) {
+		sess.Ended = time.Now()
+		sess.finishVideo(sess.Ended)
+	})
 }
 
 func (s *store) update(i int, f func(*session)) {
@@ -159,7 +232,7 @@ func (s *store) update(i int, f func(*session)) {
 		return
 	}
 	f(&s.History[i])
-	s.save()
+	s.saveHistory()
 }
 
 func message(line string) string {

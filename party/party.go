@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -75,6 +76,7 @@ func Run(parent context.Context, cfg Config) error {
 	var start int
 	var playlist bool
 	var file string
+	var names []string
 	if isTorrent(target) {
 		cache, err := torrentCache(strings.TrimSpace(cfg.CacheDir))
 		if err != nil {
@@ -88,7 +90,7 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		files, playlist, file = stream.urls, len(stream.urls) > 1, stream.id
+		files, names, playlist, file = stream.urls, stream.names, len(stream.urls) > 1, stream.id
 		cfg.Playlist = false
 	} else {
 		var err error
@@ -97,6 +99,9 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		cfg.Playlist = playlist
+		for _, f := range files {
+			names = append(names, filepath.Base(f))
+		}
 	}
 	log.Printf("file fingerprint: %s\n", file)
 	if cfg.Secret == "" {
@@ -140,10 +145,10 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
-	entries := 0
 	if playlist {
-		entries = len(files)
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
+	} else {
+		names = nil
 	}
 	args = append(args, files...)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
@@ -180,7 +185,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, entries)
+	}, conn, outgoing, incoming, names)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():

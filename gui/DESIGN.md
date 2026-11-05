@@ -78,8 +78,8 @@ that.
   and mirrored in the URL hash (`#history`, `#settings`):
   - **Party**: Vitals and the form
   - **History**: recent parties, newest first, each with **Watch again**
-  - **Settings**: the defaults, then **About** (version, Update button, saved-file
-    path). A red dot on the tab means an update is available.
+  - **Settings**: the defaults, then **About** (version, Update button, saved-files
+    folder). A red dot on the tab means an update is available.
 - **The `?`** in the card's corner opens the help over the page, on every view and during
   a party. One topic per section, named for what it is, never for one kind of video.
 - **Vitals** is hidden until the first `/start`. While a party runs the form fieldset

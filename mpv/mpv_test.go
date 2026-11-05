@@ -107,6 +107,39 @@ func TestWatchDoesNotAliasScannerBuffer(t *testing.T) {
 	}
 }
 
+// watch closes the socket when mpv hangs up, so the next request can fail on the write
+// before anyone has seen conn.closed. party.Run needs ErrClosed to read mpv's exit status.
+func TestARequestOnAClosedSocketIsErrClosed(t *testing.T) {
+	t.Parallel()
+	nc, peer := net.Pipe()
+	defer peer.Close()
+	nc.Close()
+	conn := &connection{conn: nc, pending: map[int64]chan Response{}, closed: make(chan struct{})}
+	if err := conn.do("observe_property_string", 1, pause); !errors.Is(err, ErrClosed) {
+		t.Fatalf("got %v, want ErrClosed", err)
+	}
+}
+
+// Someone can add to the playlist from inside mpv, so the entry it reports may be one we never named.
+func TestAnEntryWeDidNotNameDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(make(chan []byte, 1), nil)
+	c.names = []string{"e1"}
+	if got := c.entryName(5); got != "another video" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestFileNameIsNeverBroadcast(t *testing.T) {
+	t.Parallel()
+	outgoing := make(chan []byte, 4)
+	c := newTestClient(outgoing, nil)
+	got := feed(t, c, outgoing, propertyChangeLine(filename, "a.mkv", 0)+propertyChangeLine(filename, "b.mkv", 1))
+	if len(got) != 0 {
+		t.Fatalf("a file name went over the wire: %+v", got)
+	}
+}
+
 // mpv fires one property-change per observed property the moment it is
 // registered. A fresh node is paused, so an unswallowed initial time-pos would be
 // broadcast as time-pos=0 and rewind the whole party.
@@ -328,7 +361,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), 0)
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil)
 		close(loaded)
 	}()
 	select {
@@ -357,7 +390,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 		start := time.Now()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), 0)
+		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil)
 		if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 		}
@@ -397,7 +430,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 	incoming := make(chan IncomingMessage)
 	loaded := make(chan error, 1)
 	go func() {
-		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, 0)
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil)
 		loaded <- err
 	}()
 	send := func(name, data string) {
@@ -988,7 +1021,7 @@ func TestPausedAtFollowsOnlyWhoPausedUs(t *testing.T) {
 func playlistClient(t *testing.T) (*Client, func(string), chan []byte, chan string) {
 	t.Helper()
 	c, send, outgoing, requests := liveClient(t)
-	c.entries = 3
+	c.names = []string{"e1", "e2", "e3"}
 	c.seen[playlistPos] = true
 	c.movedFrom = -1
 	return c, send, outgoing, requests
@@ -1084,7 +1117,7 @@ func TestFollowingAnEntryStopsFirstAndStaysQuiet(t *testing.T) {
 	c, send, outgoing, requests := playlistClient(t)
 
 	go c.apply(peer("a", move(0, 2)))
-	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property playlist-pos 2", "show-text video 3 of 3, by a 5000"} {
+	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property playlist-pos 2", "show-text from e1 to e3, by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
@@ -1111,7 +1144,7 @@ func TestEntryAlreadyHeadedThereIsNotRepeated(t *testing.T) {
 		c.apply(peer("b", `{"event":"property-change","name":"playlist-pos","data":"3"}`))
 		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
 	}()
-	for _, want := range []string{"set_property playlist-pos 2", "show-text video 3 of 3, by a 5000", "show-text mark 5000"} {
+	for _, want := range []string{"set_property playlist-pos 2", "show-text from e2 to e3, by a 5000", "show-text mark 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
@@ -1129,7 +1162,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 		c.apply(peer("a", move(0, 1)))
 		c.apply(peer("a", `{"event":"property-change","name":"time-pos","data":"40.000000"}`))
 	}()
-	for _, want := range []string{"set_property playlist-pos 1", "show-text video 2 of 3, by a 5000", "show-text synced by a 5000"} {
+	for _, want := range []string{"set_property playlist-pos 1", "show-text from e1 to e2, by a 5000", "show-text synced by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
@@ -1285,7 +1318,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
 		c.apply(peer("a", tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`)))
 	}()
-	for _, want := range []string{"set_property playlist-pos 1", "show-text video 2 of 3, by a 5000", "show-text synced by a 5000"} {
+	for _, want := range []string{"set_property playlist-pos 1", "show-text from e1 to e2, by a 5000", "show-text synced by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
@@ -1371,7 +1404,7 @@ func TestATieIsSeenFromAnyEntry(t *testing.T) {
 		c.apply(peer("b", move(1, 1)))
 		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
 	}()
-	for _, want := range []string{"set_property playlist-pos 2", "show-text video 3 of 3, by a 5000", "show-text mark 5000"} {
+	for _, want := range []string{"set_property playlist-pos 2", "show-text from e1 to e3, by a 5000", "show-text mark 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
@@ -1401,7 +1434,7 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
 	c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
 	c.conn.conn = ours
-	c.entries, c.movedFrom = 3, -1
+	c.names, c.movedFrom = []string{"e1", "e2", "e3"}, -1
 	c.current = 1
 	c.seen[pause], c.seen[timePos], c.seen[playlistPos] = true, true, true
 	sent := make(chan string, 16)

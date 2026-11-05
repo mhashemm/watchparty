@@ -41,6 +41,7 @@ func torrentConfig() *torrent.ClientConfig {
 
 type torrentStream struct {
 	urls  []string
+	names []string
 	files []*torrent.File
 	id    string
 	close func()
@@ -70,14 +71,22 @@ func removeDownload(dir string) {
 	}
 }
 
-// torrentCache is where downloads go: a folder the user chose, or their system's cache.
+// DefaultCacheDir is where downloads go unless the user chose a folder.
+func DefaultCacheDir() (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cache, "watchparty"), nil
+}
+
 func torrentCache(chosen string) (string, error) {
 	if chosen == "" {
-		cache, err := os.UserCacheDir()
+		var err error
+		chosen, err = DefaultCacheDir()
 		if err != nil {
 			return "", err
 		}
-		chosen = filepath.Join(cache, "watchparty")
 	}
 	return chosen, os.MkdirAll(chosen, 0o700)
 }
@@ -130,11 +139,12 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 	}
 	token := rand.Text()
 	routes := map[string]*torrent.File{}
-	urls := make([]string, len(files))
+	urls, names := make([]string, len(files)), make([]string, len(files))
 	identity := sha256.New()
 	io.WriteString(identity, t.InfoHash().HexString())
 	for i, f := range files {
 		name := path.Base(f.DisplayPath())
+		names[i] = name
 		routes["/"+token+"/"+strconv.Itoa(i)+"/"+name] = f
 		urls[i] = "http://" + listener.Addr().String() + "/" + token + "/" + strconv.Itoa(i) + "/" + url.PathEscape(name)
 		io.WriteString(identity, "/"+f.Path())
@@ -156,5 +166,5 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 	go server.Serve(listener)
 	closers = append(closers, func() { server.Close() })
 
-	return &torrentStream{urls, files, hex.EncodeToString(identity.Sum(nil)), closeAll}, nil
+	return &torrentStream{urls, names, files, hex.EncodeToString(identity.Sum(nil)), closeAll}, nil
 }

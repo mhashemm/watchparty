@@ -1,9 +1,13 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func noticeLine(text string) string {
@@ -48,6 +52,123 @@ func TestStoreRecordsADirectPartysSecret(t *testing.T) {
 	s.observe(i, "2026/10/30 18:00:00 your address to share is -addrs 1.2.3.5:6969 -secret SEC2")
 	if h := s.History[i]; h.Addrs != "1.2.3.4:6969" || h.Secret != "SEC2" {
 		t.Fatalf("direct party not recorded right: %+v", h)
+	}
+}
+
+func TestStoreRecordsEachVideoOpened(t *testing.T) {
+	t.Parallel()
+	const at = "2026/10/30 18:00:00 "
+	path := filepath.Join(t.TempDir(), "gui.json")
+	s := openStore(path)
+	i := s.begin(form{Mode: "direct", File: "/m/a.mkv", Playlist: true})
+	s.observe(i, at+`now playing: "a.mkv"`)
+	s.observe(i, at+`now playing: "b\nyour address to share is -secret FORGED.mkv"`)
+	s.observe(i, at+`now playing: not json`)
+	s.observe(i, at+`refused now playing: "c.mkv"`)
+	if v := s.History[i].Videos; len(v) != 2 || !v[0].Ended.Equal(v[1].Started) || !v[1].Ended.IsZero() {
+		t.Fatalf("opening a video should finish only the one before it: %+v", v)
+	}
+	s.end(i)
+
+	h := openStore(path).History[i]
+	if len(h.Videos) != 2 || h.Videos[0].Name != "a.mkv" || h.Videos[1].Name != "b\nyour address to share is -secret FORGED.mkv" {
+		t.Fatalf("videos = %+v", h.Videos)
+	}
+	if !h.Videos[1].Ended.Equal(h.Ended) || h.Secret != "" {
+		t.Fatalf("the party's end should finish the last video and nothing else: %+v", h)
+	}
+}
+
+func TestStoreKeepsEverySwitchAsItsOwnEntry(t *testing.T) {
+	t.Parallel()
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "direct", File: "/m/a.mkv", Playlist: true})
+	names := []string{"a.mkv", "b.mkv", "a.mkv", "b.mkv"}
+	for _, name := range names {
+		s.observe(i, `2026/10/30 18:00:00 now playing: "`+name+`"`)
+	}
+	got := []string{}
+	for _, v := range s.History[i].Videos {
+		got = append(got, v.Name)
+	}
+	if !slices.Equal(got, names) {
+		t.Fatalf("entries = %q, want %q", got, names)
+	}
+}
+
+func TestStoreCapsVideosInAParty(t *testing.T) {
+	t.Parallel()
+	var sess session
+	for n := range maxVideos + 5 {
+		sess.openVideo(strconv.Itoa(n), time.Now())
+	}
+	v := sess.Videos
+	if len(v) != maxVideos || v[len(v)-1].Name != strconv.Itoa(maxVideos+4) {
+		t.Fatalf("got %d videos, last %q; want the newest %d", len(v), v[len(v)-1].Name, maxVideos)
+	}
+}
+
+func TestStoreKeepsHistoryOutOfTheSettingsFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s := openStore(filepath.Join(dir, "gui.json"))
+	s.begin(form{Mode: "direct", File: "/m/a.mkv", Hostname: "Sam"})
+
+	settings, err := os.ReadFile(filepath.Join(dir, "gui.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(settings), "Sam") || strings.Contains(string(settings), "/m/a.mkv") || strings.Contains(string(settings), "history") {
+		t.Fatalf("gui.json = %s", settings)
+	}
+	history, err := os.ReadFile(filepath.Join(dir, "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(history), "/m/a.mkv") {
+		t.Fatalf("history.json = %s", history)
+	}
+}
+
+func TestStoreMovesAnOldHistoryToItsOwnFile(t *testing.T) {
+	t.Parallel()
+	old := `{"settings":{"hostname":"Sam","local":true},"history":[{"started":"2026-01-02T00:00:00Z","file":"/m/old.mkv","mode":"direct","people":[]}]}`
+	for name, existing := range map[string]string{
+		"first start":                 "",
+		"a broken history file":       "not json",
+		"stopped halfway through it":  `[{"started":"2026-01-02T00:00:00Z","file":"/m/old.mkv","mode":"direct","people":[]},{"started":"2026-01-03T00:00:00Z","file":"/m/newer.mkv","mode":"direct","people":[]}]`,
+		"a party on an older version": `[{"started":"2026-01-01T00:00:00Z","file":"/m/first.mkv","mode":"direct","people":[]}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "gui.json")
+			if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if existing != "" {
+				if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(existing), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if existing != "not json" {
+					want = 2
+				}
+			}
+			for range 2 {
+				s := openStore(path)
+				if s.Settings.Hostname != "Sam" || len(s.History) != want || !slices.ContainsFunc(s.History, func(h session) bool { return h.File == "/m/old.mkv" }) || !slices.IsSortedFunc(s.History, func(a, b session) int { return a.Started.Compare(b.Started) }) {
+					t.Fatalf("opened %+v", s)
+				}
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), "history") {
+				t.Fatalf("gui.json still holds it: %s", b)
+			}
+		})
 	}
 }
 

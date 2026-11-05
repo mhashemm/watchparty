@@ -264,6 +264,11 @@ def log(n):
     return open(nodes[n]["log"]).read()
 
 
+def played(n):
+    """The file names this node's mpv reported, oldest first."""
+    return [json.loads(l[20:].removeprefix("now playing: ")) for l in log(n).splitlines() if l[20:].startswith("now playing: ")]
+
+
 def osd(n):
     """The OSD notices this node actually displayed."""
     out = []
@@ -1642,6 +1647,7 @@ def media_suite():
     resolve("packB")
     ipc(nodes["packA"]["sock"], "playlist-next")
     ok("next moves both", until(lambda: get("packA", "filename") == "e2.mkv" and get("packB", "filename") == "e2.mkv", 30), get("packB", "filename"))
+    ok("and says from which to which, by name", until(lambda: "from e1.mkv to e2.mkv, by packA" in osd("packB")), str(osd("packB")[-3:]))
     for n in ("packA", "packB"):
         stop(n)
 
@@ -1655,6 +1661,7 @@ def media_suite():
     ok("it opens", until(lambda: booted(n), 60), log(n)[-300:])
     resolve(n)
     ok("mpv can read it", get(n, "duration") is not None, get(n, "duration"))
+    ok("its name is logged whole", played(n) == [os.path.basename(odd)], str(played(n)))
     ok("no line was forged", not any(l[20:].startswith("your address") and "FORGED" in l for l in log(n).splitlines()),
        [l for l in log(n).splitlines() if "FORGED" in l][:2])
     stop(n)
@@ -1685,7 +1692,7 @@ def media_suite():
 
     ipc(nodes[host]["sock"], "playlist-next")
     ok("moving while paused moves the other", until(on("video3.mkv", "a2.mkv")), get(guest, "filename"))
-    ok("and says who", until(lambda: f"video 2 of 3, by {host}" in osd(guest)), str(osd(guest)[-3:]))
+    ok("and says who", until(lambda: f"from a1.mkv to a2.mkv, by {host}" in osd(guest)), str(osd(guest)[-3:]))
     time.sleep(QUIET)
     ok("nobody bounced back", on("video3.mkv", "a2.mkv")(), str([get(n, "filename") for n in (host, guest)]))
 
@@ -1696,6 +1703,7 @@ def media_suite():
     ok("and stops everyone", until(stopped), str([get(n, "pause") for n in (host, guest)]))
     ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
     ok("the other is told why", until(lambda: f"paused for {host}: video changed" in osd(guest)), str(osd(guest)[-3:]))
+    ok("each logs its own names, in order", played(host) == ["video2.mkv", "video3.mkv", "video10.mkv"] and played(guest) == ["a1.mkv", "a2.mkv", "a10.mkv"], str([played(host), played(guest)]))
 
     ipc(nodes[host]["sock"], "playlist-prev")
     must("back on the middle one", until(on("video3.mkv", "a2.mkv")))
@@ -1971,8 +1979,11 @@ def gui_suite():
     ok("the settings reached the store", (s["relay"], s["createKey"], s["mpvFlags"]) == (RELAY_URL, KEY, MPVFLAGS), str(s))
     ok("the party's relay was filled in", js(H, '$("relay").value') == RELAY_URL)
     store = js(H, '$("store-path").textContent')
-    ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty/gui.json", store)
-    ok("the store is 0600 in a 0700 folder", (os.stat(store).st_mode & 0o777, os.stat(os.path.dirname(store)).st_mode & 0o777) == (0o600, 0o700))
+    ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty", store)
+    ok("the settings are 0600 in a 0700 folder", (os.stat(f"{store}/gui.json").st_mode & 0o777, os.stat(store).st_mode & 0o777) == (0o600, 0o700))
+
+    ok("the mpv path shows the one it will use", js(H, '$("mpv").placeholder') == f"{nodes[H]['home']}/bin/mpv" and js(H, 'document.querySelector("label[for=mpv]").textContent') == "mpv path", js(H, '$("mpv").placeholder'))
+    ok("the cache folder shows the one it will use", js(H, '$("cacheDir").placeholder') == f"{nodes[H]['home']}/.cache/watchparty", js(H, '$("cacheDir").placeholder'))
 
     print("\n[G3b] the ? button opens the help, one topic at a time")
     ok("it starts closed", js(H, '$("tip").hidden'))
@@ -1996,6 +2007,12 @@ def gui_suite():
     print("\n[G4] Browse uses the desktop portal, and says so when there is none")
     click(H, "[data-pick=file]")
     ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
+    click(H, "[data-pick=cacheDir]")
+    ok(f"{H} picked a folder through it too", until(lambda: js(H, '$("cacheDir").value') == os.path.dirname(MEDIA)), js(H, '$("cacheDir").value'))
+    js(H, '$("cacheDir").value = ""')
+    click(H, "[data-pick=mpv]")
+    ok(f"{H} can pick mpv, which no video filter would show", until(lambda: js(H, '$("mpv").value') == MEDIA + ".unfiltered"), js(H, '$("mpv").value'))
+    js(H, '$("mpv").value = ""')
     click(G, "[data-pick=file]")
     until(lambda: js(G, '!$("error").hidden'))
     ok(f"{G}, with no portal, is told to type the path", js(G, '$("error").textContent').startswith("No file picker found"), js(G, '$("error").textContent'))
@@ -2083,6 +2100,8 @@ def gui_suite():
     last = state(H)["history"][-1]
     ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
     ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
+    ok("the history and its secret are 0600 in their own file", os.stat(f"{store}/history.json").st_mode & 0o777 == 0o600 and secret in open(f"{store}/history.json").read())
+    ok("the settings file has no party in it", secret not in open(f"{store}/gui.json").read() and "history" not in open(f"{store}/gui.json").read())
 
     print(f"\n[G15] {G} ends the party from the page, which pauses {H}")
     setp(H, "pause", False)
@@ -2150,7 +2169,42 @@ def gui_suite():
     ok("it opens the picked file", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
     ok("with its neighbours", get(G, "playlist-count") == 3, get(G, "playlist-count"))
     ok("history remembers it", state(G)["history"][-1].get("playlist") is True, str(state(G)["history"][-1]))
+    groups = lambda: nodes[G]["page"].feed_groups()
+    def showing(*names):
+        return lambda: [g[0] for g in groups()] == list(names) and [g[1] for g in groups()] == [True] + [False] * (len(names) - 1)
+    videos = lambda: state(G)["history"][-1].get("videos", [])
+    ok("the feed opens on that file", until(showing("e2.mkv")), str(groups()))
+    ok("history has it from when it opened", [v["name"] for v in videos()] == ["e2.mkv"], str(videos()))
+    ipc(nodes[G]["sock"], "playlist-next")
+    ok("the next file gets its own group, and only it is open", until(showing("e3.mkv", "e2.mkv")), str(groups()))
+    ipc(nodes[G]["sock"], "playlist-prev")
+    ok("going back reopens that file's group", until(showing("e2.mkv", "e3.mkv")), str(groups()))
+    ok("every switch is its own entry", until(lambda: [v["name"] for v in videos()] == ["e2.mkv", "e3.mkv", "e2.mkv"]), str(videos()))
+    ok("each was left when the next opened", all(a.get("ended") == b["started"] for a, b in zip(videos(), videos()[1:])), str(videos()))
+    ok("the open one hasn't been left", "ended" not in videos()[-1], str(videos()))
     end(G)
+    ok("ending the party finishes it", videos()[-1].get("ended") == state(G)["history"][-1]["ended"], str(videos()))
+    tab(G, "history")
+    until(lambda: js(G, '$("history-list").querySelector(".videos") !== null'))
+    shown = js(G, '$("history-list").firstElementChild.textContent')
+    ok("the History page names the folder, counts files rather than plays, and shows each with its times", "guifolder (2 videos)" in shown and "e3.mkv" in shown and " to " in shown, shown)
+    title = lambda file: js(G, f'partyTitle({{file: {json.dumps(file)}}}, 2)')
+    ok("a torrent has no folder of its own, so it's named for itself", (title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent")) == ("The.Pack (2 videos)", "pack.torrent (2 videos)"), str((title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent"))))
+    ok("a Windows path works, and a path with no folder just counts", (title("C:\\v\\trip\\a.mkv"), title("a.mkv")) == ("trip (2 videos)", "2 videos"), str((title("C:\\v\\trip\\a.mkv"), title("a.mkv"))))
+    tab(G, "party")
+    line = lambda m, at="18:00:00": f"2026/11/05 {at} {m}"
+    notice = lambda text, at="18:00:00": line("do: sent request: " + json.dumps({"command": ["show-text", text, 5000]}, separators=(",", ":")), at)
+    js(G, f'handle({json.dumps(notice("paused by Sam"))}); handle({json.dumps(notice("from e2\nsecond line.mkv to e1.mkv, by Sam"))}); handle({json.dumps(notice("synced by Sam"))}); handle({json.dumps(notice("paused for Sam: video changed"))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
+    ok("a move's notices land with the file it moved to, in order, whichever came first", groups()[0][0] == "e1.mkv" and groups()[0][2] == ["paused for Sam: video changed", "synced by Sam", "from e2\nsecond line.mkv to e1.mkv, by Sam"], str(groups()))
+    ok("and the rest stays behind", "paused by Sam" in groups()[1][2], str(groups()))
+    js(G, f'handle({json.dumps(line("now playing: " + json.dumps("e3.mkv"), "18:00:10"))})')
+    ok("a later move leaves the notices of the one before", groups()[1][0] == "e1.mkv" and len(groups()[1][2]) == 3, str(groups()))
+    js(G, f'handle({json.dumps(notice("synced by Noor", "18:00:20"))}); handle({json.dumps(line("now playing: " + json.dumps("e2.mkv"), "18:00:20"))})')
+    ok("a seek on its own stays with the file it was on", groups()[1][0] == "e3.mkv" and "synced by Noor" in groups()[1][2], str(groups()))
+    row = '[...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent == "synced by Noor")'
+    got = js(G, f'[+{row}.dataset.at, {row}.querySelector("time").textContent]')
+    want = js(G, '[+new Date(2026, 10, 5, 18, 0, 20), clock(new Date(2026, 10, 5, 18, 0, 20))]')
+    ok("a row's moment and time are the log line's own", got == want, str((got, want)))
     js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")
@@ -2190,7 +2244,14 @@ def gui_suite():
     start(G, file=f"{folder}/e1.mkv")
     must(f"{G} is in", joined(G), status(G))
     ok(f"{G} goes to {H}'s entry", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+    setp(H, "pause", False)
+    must("they play", until(lambda: get(G, "pause") is False))
+    ipc(nodes[H]["sock"], "playlist-next")
+    top = lambda n: (nodes[n]["page"].feed_groups() or [[None, None, []]])[0]
+    ok(f"{G}'s real notices about the move are with the file it moved to", until(lambda: top(G)[0] == "e3.mkv" and {f"from e2.mkv to e3.mkv, by {H}", f"paused for {H}: video changed"} <= set(top(G)[2])), str(nodes[G]["page"].feed_groups()))
+    ok(f"so are {H}'s", until(lambda: top(H)[0] == "e3.mkv" and "paused for everyone: video changed" in top(H)[2]), str(nodes[H]["page"].feed_groups()))
     end(G)
+    ok(f"{G}'s history has every file it was on", [v["name"] for v in state(G)["history"][-1].get("videos", [])] == ["e1.mkv", "e2.mkv", "e3.mkv"], str(state(G)["history"][-1]))
     js(G, '$("playlist").checked = false')
     fill(G, file=f"{folder}/e2.mkv")
     go(G)
@@ -2297,6 +2358,19 @@ def gui_suite():
     js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
     ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
     stop(G2)
+
+    print("\n[G27b] a history saved by an older version moves to its own file, and is kept")
+    folder = f"{nodes[G]['home']}/config/watchparty"
+    os.remove(f"{folder}/history.json")
+    saved = json.load(open(f"{folder}/gui.json"))
+    saved["history"] = [{"started": "2026-01-02T03:04:05Z", "ended": "2026-01-02T04:04:05Z", "file": "/m/from-before.mkv", "mode": "direct", "people": ["Sam"]}]
+    json.dump(saved, open(f"{folder}/gui.json", "w"))
+    G3 = launch_gui(G, tag="guiGuest3", portal=False)
+    tab(G3, "history")
+    ok("the page shows it", until(lambda: "from-before.mkv" in js(G3, '$("history-list").textContent')))
+    ok("it moved", "from-before.mkv" in open(f"{folder}/history.json").read() and "history" not in open(f"{folder}/gui.json").read())
+    ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
+    stop(G3)
 
     print("\n[G28] self-update: offered, refused on a bad digest, installed on a good one")
     rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
