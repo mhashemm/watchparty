@@ -1008,7 +1008,8 @@ function handle(line) {
   log.textContent += line + "\n";
   if (log.textContent.length > 200000) log.textContent = log.textContent.slice(-150000);
 
-  const msg = line.slice(20), at = new Date(line.slice(0, 19));
+  const [y, mo, d, h, mi, s] = line.slice(0, 19).split(/[/ :]/).map(Number);
+  const msg = line.slice(20), at = new Date(y, mo - 1, d, h, mi, s);
   let m;
   if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
