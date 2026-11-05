@@ -232,7 +232,8 @@ def listening(port):
 
 
 def near(v, x, tol=1.5):
-    return v is not None and abs(v - x) < tol
+    """Either can be None: mpv has no position while it switches files."""
+    return v is not None and x is not None and abs(v - x) < tol
 
 
 def booted(n):
@@ -1421,8 +1422,7 @@ def relay_suite():
     launch("nodeLagC", room="lagroom", media=url)
     must("a third joins", until(lambda: booted("nodeLagC"), BOOT))
     resolve("nodeLagC")
-    apart = lambda: max(abs(get(n, "time-pos") - get("nodeLagA", "time-pos")) for n in lagged + ("nodeLagC",))
-    ok("a join stops everyone in the same place, however far each is", until(lambda: all(get(n, "pause") is True for n in lagged + ("nodeLagC",)) and apart() < 0.15, 5), f"{apart():.3f}s apart")
+    ok("a join stops everyone in the same place, however far each is", until(lambda: all(get(n, "pause") is True and near(get(n, "time-pos"), get("nodeLagA", "time-pos"), 0.15) for n in lagged + ("nodeLagC",)), 5), str([get(n, "time-pos") for n in lagged + ("nodeLagC",)]))
     Quiet.delay = 0
     for n in lagged + ("nodeLagC",):
         stop(n)
@@ -1522,10 +1522,10 @@ def relay_suite():
     ok("mpv reads it from loopback", str(get("torA", "path")).startswith("http://127.0.0.1:"), get("torA", "path"))
     must("the join is over", quiet(("torA", "torB")))
     setp("torA", "time-pos", 80)
-    ok("a seek reaches the other", until(lambda: abs(get("torB", "time-pos") - 80) < 0.15), get("torB", "time-pos"))
+    ok("a seek reaches the other", until(lambda: near(get("torB", "time-pos"), 80, 0.15)), get("torB", "time-pos"))
     ok("and lands on a part nobody had yet", until(lambda: get("torB", "seeking") is False and get("torA", "seeking") is False, 30))
     setp("torA", "pause", False)
-    ok("it plays", until(lambda: get("torB", "pause") is False and get("torB", "time-pos") > 80.5, 30), get("torB", "time-pos"))
+    ok("it plays", until(lambda: get("torB", "pause") is False and (get("torB", "time-pos") or 0) > 80.5, 30), get("torB", "time-pos"))
     setp("torB", "pause", True)
     ok("and pauses", until(lambda: get("torA", "pause") is True))
     _, diff = variants()
@@ -1590,10 +1590,10 @@ def relay_suite():
     def stopped():
         return all(get(n, "pause") is True for n in (host, guest))
     def together():
-        return abs(get(host, "time-pos") - get(guest, "time-pos")) < 0.15
+        return near(get(host, "time-pos"), get(guest, "time-pos"), 0.15)
     def seek(pos):
         setp(host, "time-pos", pos)
-        return until(lambda: abs(get(guest, "time-pos") - pos) < 0.15 and abs(get(host, "time-pos") - pos) < 0.15)
+        return until(lambda: near(get(guest, "time-pos"), pos, 0.15) and near(get(host, "time-pos"), pos, 0.15))
     launch(host, room="playlistroom", media=f"{folder}/video2.mkv", playlist=True)
     must(f"{host} is up", until(lambda: booted(host) and connected(host), BOOT))
     resolve(host)
@@ -1622,7 +1622,7 @@ def relay_suite():
     must("near its end", seek(get(host, "duration") - 1))
     setp(host, "pause", False)
     ok("reaching the end moves everyone on", until(on("video10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
-    ok("and stops them at the start", until(lambda: stopped() and get(host, "time-pos") < 2 and get(guest, "time-pos") < 2),
+    ok("and stops them at the start", until(lambda: stopped() and near(get(host, "time-pos"), 0, 2) and near(get(guest, "time-pos"), 0, 2)),
        str([(get(n, "pause"), get(n, "time-pos")) for n in (host, guest)]))
     ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
 
@@ -1632,7 +1632,7 @@ def relay_suite():
     must(f"{late} is up", until(lambda: booted(late), BOOT))
     resolve(late)
     ok("a joiner comes to the party's entry", until(lambda: get(late, "filename") == "video10.mkv"), get(late, "filename"))
-    ok("and its position", until(lambda: abs(get(late, "time-pos") - 5) < 0.15), get(late, "time-pos"))
+    ok("and its position", until(lambda: near(get(late, "time-pos"), 5, 0.15)), get(late, "time-pos"))
     ok("and nobody else moved", on("video10.mkv", "a10.mkv")() and together(), str([get(n, "time-pos") for n in (host, guest)]))
 
     short = f"{RUN}/short"
@@ -1712,7 +1712,7 @@ def relay_suite():
         resolve(n)
     must("the join is over", quiet(("nodeEnd1", "nodeEnd2")))
     setp("nodeEnd1", "time-pos", get("nodeEnd1", "duration") - 3)
-    until(lambda: abs(get("nodeEnd2", "time-pos") - get("nodeEnd1", "time-pos")) < 0.1)
+    until(lambda: near(get("nodeEnd2", "time-pos"), get("nodeEnd1", "time-pos"), 0.1))
     setp("nodeEnd1", "pause", False)
     must("they play", until(lambda: get("nodeEnd2", "pause") is False))
     ipc(nodes["nodeEnd1"]["sock"], "quit")
