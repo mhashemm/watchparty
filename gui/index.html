@@ -981,7 +981,7 @@ function nowPlaying(name, at) {
   if (previous === group || !previous) return;
   const moving = [];
   for (const li of previous.querySelectorAll("li")) {
-    if (at - li.dataset.at > 1000 || !/^video \d+ of \d+, by |: video changed$|^synced by /.test(li.lastChild.textContent)) break;
+    if (at - li.dataset.at > 1000 || !/^from .+, by |: video changed$|^synced by /s.test(li.lastChild.textContent)) break;
     moving.push(li);
   }
   if (moving.some(li => !li.lastChild.textContent.startsWith("synced by "))) group.lastChild.prepend(...moving);

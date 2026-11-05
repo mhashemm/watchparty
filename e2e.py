@@ -1647,6 +1647,7 @@ def media_suite():
     resolve("packB")
     ipc(nodes["packA"]["sock"], "playlist-next")
     ok("next moves both", until(lambda: get("packA", "filename") == "e2.mkv" and get("packB", "filename") == "e2.mkv", 30), get("packB", "filename"))
+    ok("and says from which to which, by name", until(lambda: "from e1.mkv to e2.mkv, by packA" in osd("packB")), str(osd("packB")[-3:]))
     for n in ("packA", "packB"):
         stop(n)
 
@@ -1691,7 +1692,7 @@ def media_suite():
 
     ipc(nodes[host]["sock"], "playlist-next")
     ok("moving while paused moves the other", until(on("video3.mkv", "a2.mkv")), get(guest, "filename"))
-    ok("and says who", until(lambda: f"video 2 of 3, by {host}" in osd(guest)), str(osd(guest)[-3:]))
+    ok("and says who", until(lambda: f"from a1.mkv to a2.mkv, by {host}" in osd(guest)), str(osd(guest)[-3:]))
     time.sleep(QUIET)
     ok("nobody bounced back", on("video3.mkv", "a2.mkv")(), str([get(n, "filename") for n in (host, guest)]))
 
@@ -2190,8 +2191,8 @@ def gui_suite():
     tab(G, "party")
     line = lambda m, at="18:00:00": f"2026/11/05 {at} {m}"
     notice = lambda text, at="18:00:00": line("do: sent request: " + json.dumps({"command": ["show-text", text, 5000]}, separators=(",", ":")), at)
-    js(G, f'handle({json.dumps(notice("paused by Sam"))}); handle({json.dumps(notice("video 1 of 3, by Sam"))}); handle({json.dumps(notice("synced by Sam"))}); handle({json.dumps(notice("paused for Sam: video changed"))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
-    ok("a move's notices land with the file it moved to, in order, whichever came first", groups()[0][0] == "e1.mkv" and groups()[0][2] == ["paused for Sam: video changed", "synced by Sam", "video 1 of 3, by Sam"], str(groups()))
+    js(G, f'handle({json.dumps(notice("paused by Sam"))}); handle({json.dumps(notice("from e2\nsecond line.mkv to e1.mkv, by Sam"))}); handle({json.dumps(notice("synced by Sam"))}); handle({json.dumps(notice("paused for Sam: video changed"))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
+    ok("a move's notices land with the file it moved to, in order, whichever came first", groups()[0][0] == "e1.mkv" and groups()[0][2] == ["paused for Sam: video changed", "synced by Sam", "from e2\nsecond line.mkv to e1.mkv, by Sam"], str(groups()))
     ok("and the rest stays behind", "paused by Sam" in groups()[1][2], str(groups()))
     js(G, f'handle({json.dumps(line("now playing: " + json.dumps("e3.mkv"), "18:00:10"))})')
     ok("a later move leaves the notices of the one before", groups()[1][0] == "e1.mkv" and len(groups()[1][2]) == 3, str(groups()))
@@ -2240,7 +2241,7 @@ def gui_suite():
     must("they play", until(lambda: get(G, "pause") is False))
     ipc(nodes[H]["sock"], "playlist-next")
     top = lambda n: (nodes[n]["page"].feed_groups() or [[None, None, []]])[0]
-    ok(f"{G}'s real notices about the move are with the file it moved to", until(lambda: top(G)[0] == "e3.mkv" and {f"video 3 of 3, by {H}", f"paused for {H}: video changed"} <= set(top(G)[2])), str(nodes[G]["page"].feed_groups()))
+    ok(f"{G}'s real notices about the move are with the file it moved to", until(lambda: top(G)[0] == "e3.mkv" and {f"from e2.mkv to e3.mkv, by {H}", f"paused for {H}: video changed"} <= set(top(G)[2])), str(nodes[G]["page"].feed_groups()))
     ok(f"so are {H}'s", until(lambda: top(H)[0] == "e3.mkv" and "paused for everyone: video changed" in top(H)[2]), str(nodes[H]["page"].feed_groups()))
     end(G)
     ok(f"{G}'s history has every file it was on", [v["name"] for v in state(G)["history"][-1].get("videos", [])] == ["e1.mkv", "e2.mkv", "e3.mkv"], str(state(G)["history"][-1]))

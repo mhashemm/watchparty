@@ -55,7 +55,7 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 		ours, theirs := net.Pipe()
 		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true}
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
-		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.entries, n.c.movedFrom = ctx, ours, true, entries, -1
+		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names, n.c.movedFrom = ctx, ours, true, slices.Repeat([]string{"e"}, entries), -1
 		n.c.seen[pause], n.c.seen[timePos], n.c.seen[playlistPos] = true, true, true
 		t.Cleanup(func() { ours.Close(); theirs.Close(); close(n.c.conn.closed) })
 		go n.model(ctx, theirs)

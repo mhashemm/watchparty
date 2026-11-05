@@ -164,7 +164,7 @@ type Client struct {
 	reason     string
 	joining    bool
 	pausedBy   string
-	entries    int
+	names      []string
 	current    int
 	movedFrom  int
 	following  []string
@@ -336,7 +336,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 // tagged says which entry a message belongs to, so a peer that has moved on can drop
 // it. Only this node knows, at the moment it sends.
 func (c *Client) tagged(b []byte) []byte {
-	if c.entries == 0 {
+	if len(c.names) == 0 {
 		return b
 	}
 	c.mu.Lock()
@@ -526,7 +526,7 @@ func (c *Client) welcome(hostname string) error {
 		c.settling = true
 	}
 	var entry []byte
-	if c.entries > 0 {
+	if len(c.names) > 0 {
 		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
 	}
 	c.mu.Unlock()
@@ -575,7 +575,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	if err != nil {
 		return err
 	}
-	if i < 0 || i >= c.entries {
+	if i < 0 || i >= len(c.names) {
 		return errors.New("no such entry")
 	}
 	c.mu.Lock()
@@ -595,6 +595,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		c.mu.Unlock()
 		return nil
 	}
+	from := c.entryName(c.heading())
 	c.loading = true
 	c.following = append(c.following, event.Data)
 	c.movedFrom = heading
@@ -612,7 +613,14 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		c.mu.Unlock()
 		return err
 	}
-	return c.showText(fmt.Sprintf("video %d of %d, by %s", i+1, c.entries, hostname))
+	return c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
+}
+
+func (c *Client) entryName(i int) string {
+	if i < 0 || i >= len(c.names) {
+		return "another video"
+	}
+	return c.names[i]
 }
 
 func (c *Client) arrive(event Event, hostname string) error {
@@ -760,7 +768,7 @@ func (c *Client) showText(text string) error {
 }
 
 // New wires up one mpv. entries is the length of its playlist, and 0 for a single file.
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, entries int) (*Client, error) {
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -775,7 +783,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		paused:    true,
 		applied:   map[string]string{},
 		seen:      map[string]bool{},
-		entries:   entries,
+		names:     names,
 		movedFrom: -1,
 	}
 
@@ -795,7 +803,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 	}()
 
 	events := []string{filename, pause, timePos, pausedForCache, duration}
-	if entries > 0 {
+	if len(names) > 0 {
 		events = append(events, playlistPos)
 	}
 	for i, event := range events {
