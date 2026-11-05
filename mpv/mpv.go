@@ -145,28 +145,29 @@ type Response struct {
 }
 
 type Client struct {
-	ctx       context.Context
-	ready     chan struct{}
-	outgoing  chan<- []byte
-	conn      *connection
-	mu        sync.Mutex
-	paused    bool
-	applied   map[string]string
-	seeks     []float64
-	seen      map[string]bool
-	pos       float64
-	duration  float64
-	seeking   bool
-	stalled   bool
-	reason    string
-	joining   bool
-	pausedBy  string
-	entries   int
-	current   int
-	movedFrom int
-	loading   bool
-	heldSeek  string
-	settling  bool
+	ctx        context.Context
+	ready      chan struct{}
+	outgoing   chan<- []byte
+	conn       *connection
+	mu         sync.Mutex
+	paused     bool
+	applied    map[string]string
+	seeks      []float64
+	seen       map[string]bool
+	pos        float64
+	duration   float64
+	seeking    bool
+	stalled    bool
+	reason     string
+	joining    bool
+	pausedBy   string
+	entries    int
+	current    int
+	movedFrom  int
+	joinedWith []string
+	loading    bool
+	heldSeek   string
+	settling   bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -492,7 +493,9 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
-	if !joining {
+	if joining {
+		c.joinedWith = append(c.joinedWith, hostname)
+	} else {
 		c.settling = true
 	}
 	var entry []byte
@@ -551,7 +554,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	notForUs := event.From == nil && !c.joining
+	notForUs := event.From == nil && (!c.joining || slices.Contains(c.joinedWith, hostname) && i < heading)
 	c.mu.Unlock()
 	if i == heading || lost || notForUs {
 		return nil

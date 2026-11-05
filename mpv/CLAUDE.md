@@ -154,6 +154,9 @@ reason: nobody starts the next one until someone resumes.
 - **Only a node still `joining` follows an answer to a joiner** (a `playlist-pos` with no
   `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
   before two people crossed would otherwise send each to the other's entry, for good.
+- **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
+  answers the other, and following both ways would swap them. An answer from anyone whose
+  join it didn't hear is the party's, and is followed, lower or not.
 - **Only a matching `playlist-pos` uses up the marker.** mpv's first report of where it
   started can land after a peer already sent this node elsewhere; used up on that, the real
   echo goes out as this node moving the party.

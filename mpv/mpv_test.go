@@ -821,6 +821,47 @@ func TestPausesForAJoinSettleOnTheEarliest(t *testing.T) {
 	}
 }
 
+// Two people start at once on different entries, and each hears the other's join. Each
+// answering and each following would swap them, for good, so the higher one wins, as it
+// does for two moves. Hearing no join from whoever answers means a party to go to.
+func TestTwoJoinersSettleOnTheHigherEntry(t *testing.T) {
+	t.Parallel()
+	answer := func(i int) string {
+		return fmt.Sprintf(`{"event":"property-change","name":"playlist-pos","data":"%d"}`, i)
+	}
+	mark := `{"name":"show-text","data":"mark"}`
+
+	c, _, outgoing, requests := playlistClient(t)
+	c.paused, c.joining, c.current = true, true, 2
+	go func() {
+		c.apply(peer("a", `{"name":"joined"}`))
+		c.apply(peer("a", answer(0)))
+		c.apply(peer("a", mark))
+	}()
+	nextEvent(t, outgoing)
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("the higher one sent %q, want to stay", got)
+	}
+
+	c, _, outgoing, requests = playlistClient(t)
+	c.paused, c.joining, c.current = true, true, 0
+	go func() {
+		c.apply(peer("a", `{"name":"joined"}`))
+		c.apply(peer("a", answer(2)))
+	}()
+	nextEvent(t, outgoing)
+	if got := next(t, requests); got != "set_property playlist-pos 2" {
+		t.Fatalf("the lower one sent %q, want to follow", got)
+	}
+
+	c, _, _, requests = playlistClient(t)
+	c.paused, c.joining, c.current = true, true, 2
+	go c.apply(peer("a", answer(0)))
+	if got := next(t, requests); got != "set_property playlist-pos 0" {
+		t.Fatalf("sent %q, want to follow a party whose join it never heard", got)
+	}
+}
+
 // The earliest member's paused-at can beat the first answer, while the joiner isn't
 // stopped yet, and its own answer then comes second, before the first seek has reported.
 func TestAJoinerFollowsAnEarlierAnswer(t *testing.T) {

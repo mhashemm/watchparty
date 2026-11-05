@@ -1670,6 +1670,21 @@ def relay_suite():
     for n in ("epD", "epE"):
         stop(n)
 
+    print("\n[R15f2] two people starting at once on different entries end up together, on the higher entry")
+    slow = lag(0, PORTS["relay"], 0.5)
+    via = f"ws://127.0.0.1:{slow.getsockname()[1]}"
+    launch("epH", room="startingtogether", media=f"{folder}/video2.mkv", relay=via, playlist=True)
+    launch("epI", room="startingtogether", media=f"{folder}/video10.mkv", relay=via, playlist=True)
+    must("both are in", until(lambda: all(booted(n) and connected(n) for n in ("epH", "epI")), BOOT))
+    for n in ("epH", "epI"):
+        resolve(n)
+    ok("they settle on the higher one", until(lambda: get("epH", "filename") == get("epI", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epH", "epI")]))
+    time.sleep(2)
+    ok("and stay there", get("epH", "filename") == get("epI", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epH", "epI")]))
+    for n in ("epH", "epI"):
+        stop(n)
+    slow.close()
+
     print("\n[R15g] two people moving at once end up together, on the higher entry")
     slow = lag(PORTS["upnpNode"], PORTS["relay"], 0.5)
     via = f"ws://127.0.0.1:{PORTS['upnpNode']}"
