@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -774,7 +775,7 @@ func TestOnlyALeaveNoticePauses(t *testing.T) {
 func TestPausesForALeaveSettleOnTheEarliest(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := liveClient(t)
-	c.paused, c.leaving, c.pos = true, true, 40
+	c.paused, c.settling, c.pos = true, true, 40
 
 	go func() {
 		c.apply(peer("a", `{"event":"property-change","name":"paused-at","data":"41.000000"}`))
@@ -786,6 +787,67 @@ func TestPausesForALeaveSettleOnTheEarliest(t *testing.T) {
 }
 
 // Without a leave, a pause that isn't ours to follow stays ignored, earlier or not.
+// Every member stops for a joiner the moment it hears, so they stop a little apart, and
+// the joiner stops wherever the first answer said. All of them settle on the earliest.
+func TestPausesForAJoinSettleOnTheEarliest(t *testing.T) {
+	t.Parallel()
+	earlier := `{"name":"paused-at","data":"39.000000"}`
+
+	c, _, outgoing, requests := liveClient(t)
+	c.paused, c.pos = true, 40
+	go func() {
+		c.apply(peer("j", `{"name":"joined"}`))
+		c.apply(peer("a", earlier))
+	}()
+	next(t, requests)
+	nextEvent(t, outgoing)
+	if got := next(t, requests); got != "set_property time-pos 39.000000" {
+		t.Fatalf("a member sent %q, want to follow the earlier stop", got)
+	}
+
+	c, send, _, requests := liveClient(t)
+	c.paused, c.joining = true, true
+	go c.apply(peer("a", `{"name":"start-pos","data":"40.000000"}`))
+	for next(t, requests) != "set_property time-pos 40.000000" {
+	}
+	next(t, requests)
+	send(propertyChangeLine(timePos, "40.000000", 0))
+	for !func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.pos == 40 }() {
+		time.Sleep(time.Millisecond)
+	}
+	go c.apply(peer("b", earlier))
+	if got := next(t, requests); got != "set_property time-pos 39.000000" {
+		t.Fatalf("a joiner sent %q, want to follow the earlier stop", got)
+	}
+}
+
+// The earliest member's paused-at can beat the first answer, while the joiner isn't
+// stopped yet, and its own answer then comes second, before the first seek has reported.
+func TestAJoinerFollowsAnEarlierAnswer(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.joining = true, true
+	go func() {
+		c.apply(peer("a", `{"name":"start-pos","data":"40.000000"}`))
+		c.apply(peer("b", `{"name":"start-pos","data":"39.000000"}`))
+		c.apply(peer("c", `{"name":"start-pos","data":"40.000000"}`))
+		c.apply(peer("c", `{"name":"show-text","data":"mark"}`))
+	}()
+	var seeks []string
+	for {
+		got := next(t, requests)
+		if got == "show-text mark 5000" {
+			break
+		}
+		if strings.HasPrefix(got, "set_property time-pos") {
+			seeks = append(seeks, got)
+		}
+	}
+	if want := []string{"set_property time-pos 40.000000", "set_property time-pos 39.000000"}; !slices.Equal(seeks, want) {
+		t.Fatalf("sent %q, want %q", seeks, want)
+	}
+}
+
 func TestEarlierStopIsIgnoredWithoutALeave(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := liveClient(t)

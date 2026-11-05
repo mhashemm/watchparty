@@ -114,7 +114,8 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
    member's pause often arrives first), and broadcasts `start-pos` = `c.pos`. A member
    still `joining` doesn't answer: its position isn't the party's.
 3. The joiner takes the **first** `start-pos` only: applies a pause as from that peer
-   (it can beat the pauses), then the seek, unless already within 0.1s.
+   (it can beat the pauses), then the seek, unless already within 0.1s. Members stop a moment
+   apart, so everyone then settles on the earliest stop (`settling`, below).
 4. Any resume or seek clears `joining`, so the room's first node stops being a joiner.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
@@ -126,7 +127,7 @@ relay loses, pauses the party. Reading the text means an already deployed relay 
 P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's next send.
 
 - Each node pauses itself and it goes out as its own pause, so a node whose notice was
-  lost still stops. Nodes stop a moment apart, so until the next resume `leaving` makes
+  lost still stops. Nodes stop a moment apart, so until the next resume `settling` makes
   `align` follow any earlier `paused-at`: they settle on the earliest stop.
 - **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
   and a pause would hold everyone else just short of it. So `duration` is observed.

@@ -1415,8 +1415,16 @@ def relay_suite():
     ipc(nodes["nodeLagB"]["sock"], "seek", 15, "relative")
     until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 5)
     ok("a seek while playing on the far node also stops both together", gap() < 0.05, f"{gap():.3f}s apart")
+    must("the seek is over", quiet(lagged))
+    setp("nodeLagA", "pause", False)
+    must("they play again", until(lambda: all(get(n, "pause") is False for n in lagged)))
+    launch("nodeLagC", room="lagroom", media=url)
+    must("a third joins", until(lambda: booted("nodeLagC"), BOOT))
+    resolve("nodeLagC")
+    apart = lambda: max(abs(get(n, "time-pos") - get("nodeLagA", "time-pos")) for n in lagged + ("nodeLagC",))
+    ok("a join stops everyone in the same place, however far each is", until(lambda: all(get(n, "pause") is True for n in lagged + ("nodeLagC",)) and apart() < 0.15, 5), f"{apart():.3f}s apart")
     Quiet.delay = 0
-    for n in lagged:
+    for n in lagged + ("nodeLagC",):
         stop(n)
     for p in proxies:
         p.close()

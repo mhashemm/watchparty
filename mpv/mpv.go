@@ -166,7 +166,7 @@ type Client struct {
 	movedFrom int
 	loading   bool
 	heldSeek  string
-	leaving   bool
+	settling  bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -262,7 +262,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking, c.joining, c.leaving = false, false, false
+				c.seeking, c.joining, c.settling = false, false, false
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
@@ -492,6 +492,9 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
+	if !joining {
+		c.settling = true
+	}
 	var entry []byte
 	if c.entries > 0 {
 		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
@@ -526,7 +529,7 @@ func (c *Client) welcome(hostname string) error {
 
 func (c *Client) left(hostname string) error {
 	c.mu.Lock()
-	c.leaving = true
+	c.settling = true
 	playing := !c.paused
 	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
 	c.mu.Unlock()
@@ -588,9 +591,13 @@ func (c *Client) arrive(event Event, hostname string) error {
 	c.mu.Lock()
 	joining := c.joining
 	c.joining = false
+	c.settling = c.settling || joining
 	there := c.at(pos)
 	c.mu.Unlock()
-	if !joining || there {
+	if !joining {
+		return c.align(event, hostname)
+	}
+	if there {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -637,7 +644,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining, c.leaving = false, false
+		c.joining, c.settling = false, false
 	}
 	c.mu.Unlock()
 
@@ -692,7 +699,11 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.leaving && pos < c.pos)
+	stopped := c.pos
+	if n := len(c.seeks); n > 0 {
+		stopped = c.seeks[n-1]
+	}
+	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.settling && pos < stopped)
 	c.mu.Unlock()
 	if !follow {
 		return nil
