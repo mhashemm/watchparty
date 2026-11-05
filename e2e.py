@@ -1861,8 +1861,8 @@ def caps_suite():
                   {"create-key": "k", "room-secret": "s", "Connection": "Upgrade", "Upgrade": "websocket",
                    "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="})
     ok("the key holder gets in", code == 101, f"HTTP {code}")
-    until(lambda: "joined inj" in relay_log())
-    ok("both requests were logged", "FORGED1: bad create key" in relay_log() and "FORGED2 from" in relay_log(), relay_log())
+    until(lambda: "msg=joined" in relay_log() and "room=injFORGED2" in relay_log())
+    ok("both requests were logged", "room=injFORGED1 " in relay_log() and "hostname=evilFORGED3 " in relay_log(), relay_log())
     ok("and nothing they sent starts a line", not [l for l in relay_log().splitlines() if l.startswith("FORGED")], relay_log())
     for t in ("k1", "k2", "k3"):
         stop(t)

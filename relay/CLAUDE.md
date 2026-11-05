@@ -116,6 +116,12 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
 - On SIGINT/SIGTERM, `Shutdown` gets 5s. Hijacked websockets end because `BaseContext`
   is the signal context. No TLS: put a TLS proxy in front and set `TRUST_PROXY=true`.
 
+## Logs
+
+- `log/slog` text on stderr: `msg=` is `listening`, `refused` (with `status`, `reason`),
+  `joined`, `left`, `replaced by its reconnect`; `members=0` on a `left` means the room closed.
+  e2e reads them in `[R19b]`.
+
 ## Docker and compose
 
 - Build from the repo root: the relay needs `go.mod` and `mpv/`. `COPY . .` makes
