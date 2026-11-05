@@ -55,10 +55,9 @@ unit:
 
 # in e2e.Dockerfile's container as this user, so no case can reach this machine's desktop,
 # bus or display. The last run's logs land in .e2e/<phase>. E2E="--mode gui" passes flags.
-# It compiles into this machine's Go caches, which setup-go restores in CI, which also
-# builds the image itself with a layer cache and sets E2E_PREBUILT=1.
+# It compiles into this machine's Go caches, which setup-go restores in CI.
 e2e:
-	$(if $(E2E_PREBUILT),,docker build -q -t watchparty-e2e --build-arg UID="$$(id -u)" --build-arg GID="$$(id -g)" - < e2e.Dockerfile > /dev/null)
+	docker build -q -t watchparty-e2e --build-arg UID="$$(id -u)" --build-arg GID="$$(id -g)" - < e2e.Dockerfile > /dev/null
 	rm -rf .e2e && mkdir .e2e
 	docker run --rm --init --shm-size=1g -v "$(CURDIR)":/src:ro -w /src \
 		-v "$(CURDIR)/.e2e":"$(CURDIR)/.e2e" -e E2E_LOGS="$(CURDIR)/.e2e" \
