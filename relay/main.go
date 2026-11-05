@@ -9,6 +9,7 @@ import (
 	"log"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -315,11 +316,13 @@ func refuse(res http.ResponseWriter, l *slog.Logger, code int, reason string) {
 }
 
 func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
+	// random, not a counter: the same id must not mean two connections across a restart
+	id := strconv.FormatUint(rand.Uint64(), 36)
 	// reserve first: a flood would otherwise all pass a Load() check before any of
 	// them incremented
 	if r.conns.Add(1) > r.maxConns {
 		r.conns.Add(-1)
-		refuse(res, slog.With("ip", r.ip(req)), http.StatusServiceUnavailable, "too many connections")
+		refuse(res, slog.With("conn", id, "ip", r.ip(req)), http.StatusServiceUnavailable, "too many connections")
 		return
 	}
 	defer r.conns.Add(-1)
@@ -327,7 +330,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	name := req.URL.Query().Get("room")
 	hostname := clean(req.URL.Query().Get("hostname"))
 	ip := r.ip(req)
-	l := slog.With("ip", ip, "room", clean(name), "hostname", hostname)
+	l := slog.With("conn", id, "ip", ip, "room", clean(name), "hostname", hostname)
 	if name == "" || hostname == "" {
 		refuse(res, l, http.StatusBadRequest, "room and hostname are required")
 		return
@@ -371,7 +374,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 			msg = "left"
 		}
 		members, rooms := r.counts(name)
-		l.Info(msg, "after", time.Since(start).Round(time.Second), "frames", frames, "reason", readErr, "members", members, "rooms", rooms)
+		l.Info(msg, "seconds", int(time.Since(start).Seconds()), "frames", frames, "reason", readErr, "members", members, "rooms", rooms)
 	}()
 
 	go r.write(c, m)
@@ -408,7 +411,7 @@ func main() {
 	defer cancel()
 
 	// also routes the log package, so net/http's own errors land here too
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	addr := env("ADDR", ":8080", str)
 	r := &relay{

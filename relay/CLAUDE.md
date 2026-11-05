@@ -118,9 +118,12 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
 
 ## Logs
 
-- `log/slog` text on stderr: `msg=` is `listening`, `refused` (with `status`, `reason`),
-  `joined`, `left`, `replaced by its reconnect`; `members=0` on a `left` means the room closed.
+- `log/slog` JSON on stderr: `msg` is `listening`, `refused` (with `status`, `reason`),
+  `joined`, `left`, `replaced by its reconnect`; `members: 0` on a `left` means the room closed.
   e2e reads them in `[R19b]`.
+- **`conn` links one request's lines**, refusals too: `jq 'select(.conn=="…")'`. It is never
+  sent to the client. Log a duration as a number: `JSONHandler` writes a `time.Duration` in
+  nanoseconds.
 - **Compose caps the files (`json-file`, 5 × 50MB).** Outsiders can make lines, so Docker's
   uncapped default is a disk-exhaustion attack. A bare `docker run` has no cap; pass
   `--log-opt`.

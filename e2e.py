@@ -474,6 +474,21 @@ def relay_log():
     return open(f"{RUN}/relay.log").read()
 
 
+def relay_events():
+    """One dict per finished line; a line that isn't JSON comes back as {"unparsed": line}."""
+    events = []
+    for line in relay_log().rpartition("\n")[0].split("\n"):
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            events.append({"unparsed": line})
+    return events
+
+
+def relay_event(msg, room):
+    return next((e for e in relay_events() if e.get("msg") == msg and e.get("room") == room), None)
+
+
 def resolve(name):
     n = nodes[name]
     n["sock"] = child_mpv_socket(n["proc"].pid)
@@ -1861,9 +1876,13 @@ def caps_suite():
                   {"create-key": "k", "room-secret": "s", "Connection": "Upgrade", "Upgrade": "websocket",
                    "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="})
     ok("the key holder gets in", code == 101, f"HTTP {code}")
-    until(lambda: "msg=joined" in relay_log() and "room=injFORGED2" in relay_log())
-    ok("both requests were logged", "room=injFORGED1 " in relay_log() and "hostname=evilFORGED3 " in relay_log(), relay_log())
-    ok("and nothing they sent starts a line", not [l for l in relay_log().splitlines() if l.startswith("FORGED")], relay_log())
+    until(lambda: relay_event("left", "injFORGED2"))
+    refused, joined, left = relay_event("refused", "injFORGED1"), relay_event("joined", "injFORGED2"), relay_event("left", "injFORGED2")
+    ok("both requests were logged", refused and joined and left and joined["hostname"] == "evilFORGED3", relay_log())
+    ok("and every line is JSON, so nothing they sent starts one", not [e for e in relay_events() if "unparsed" in e], relay_log())
+    ok("a connection's lines share one id", joined and left and joined["conn"] and joined["conn"] == left["conn"], relay_log())
+    ok("another connection has another id", refused and joined and refused["conn"] != joined["conn"], relay_log())
+    ok("how long it stayed is a number of seconds", left and type(left["seconds"]) is int, relay_log())
     for t in ("k1", "k2", "k3"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
