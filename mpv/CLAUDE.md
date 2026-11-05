@@ -178,7 +178,7 @@ reason: nobody starts the next one until someone resumes.
   move is followed, lower or not, so someone who missed one catches up on the next.
 - Accepted: a seek reaching someone just before the move it depends on is lost. A node
   that really is on another entry stays paused until the next move, since its resumes
-  and everyone else's are dropped.
+  and everyone else's are dropped. A seek right after a move can lose to a stop on its way.
 
 e2e `[16]`, `[R15c]`.
 
