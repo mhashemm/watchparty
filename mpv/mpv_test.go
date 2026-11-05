@@ -518,6 +518,35 @@ func TestSeekWhilePlayingPausesTheParty(t *testing.T) {
 	}
 }
 
+// Someone seeks and resumes at once, and both reach this node together. mpv reports the
+// seek after the resume, which must not look like someone seeking while playing.
+func TestPeerSeekReportedAfterAResumeIsNotASeek(t *testing.T) {
+	t.Parallel()
+	c, send, _, requests := liveClient(t)
+	c.paused = true
+	send(propertyChangeLine(pause, "yes", 0))
+	go c.apply(peer("a", `{"event":"property-change","name":"time-pos","data":"40.000000"}`))
+	if got := next(t, requests); got != "set_property time-pos 40.000000" {
+		t.Fatalf("sent %q, want the seek", got)
+	}
+	next(t, requests)
+	send(propertyChangeLine(pause, "no", 0))
+	send(`{"event":"seek"}` + "\n")
+	send(propertyChangeLine(timePos, "40.000000", 0))
+	send(`{"event":"playback-restart"}` + "\n")
+	send(propertyChangeLine(timePos, "40.041000", 0))
+	send(`{"event":"seek"}` + "\n")
+	send(propertyChangeLine(timePos, "50.000000", 0))
+	if got := next(t, requests); got != "set_property pause true" {
+		t.Fatalf("sent %q, want a real seek to pause", got)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pos != 50 {
+		t.Fatalf("paused at %v, want only the seek to 50 to pause", c.pos)
+	}
+}
+
 // Playback moves time-pos on every frame, and none of it may go out or pause anyone.
 func TestPlaybackIsNotASeek(t *testing.T) {
 	t.Parallel()

@@ -18,20 +18,21 @@ import (
 )
 
 const (
-	pause          = "pause"
-	timePos        = "time-pos"
-	pausedForCache = "paused-for-cache"
-	playlistPos    = "playlist-pos"
-	fileLoaded     = "file-loaded"
-	duration       = "duration"
-	propertyChange = "property-change"
-	seek           = "seek"
-	setProperty    = "set_property"
-	showText       = "show-text"
-	pauseReason    = "pause-reason"
-	joined         = "joined"
-	startPos       = "start-pos"
-	pausedAt       = "paused-at"
+	pause           = "pause"
+	timePos         = "time-pos"
+	pausedForCache  = "paused-for-cache"
+	playlistPos     = "playlist-pos"
+	fileLoaded      = "file-loaded"
+	duration        = "duration"
+	propertyChange  = "property-change"
+	seek            = "seek"
+	playbackRestart = "playback-restart"
+	setProperty     = "set_property"
+	showText        = "show-text"
+	pauseReason     = "pause-reason"
+	joined          = "joined"
+	startPos        = "start-pos"
+	pausedAt        = "paused-at"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
@@ -157,6 +158,7 @@ type Client struct {
 	pos        float64
 	duration   float64
 	seeking    bool
+	peerSeek   bool
 	stalled    bool
 	reason     string
 	joining    bool
@@ -198,9 +200,13 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 	defer c.mu.Unlock()
 	switch event.EventType {
 	case seek:
-		if !c.paused {
+		if !c.paused && !c.peerSeek {
 			c.seeking = true
 		}
+		return nil, errDoNotSend
+
+	case playbackRestart:
+		c.peerSeek = false
 		return nil, errDoNotSend
 
 	case fileLoaded:
@@ -692,8 +698,15 @@ func (c *Client) seekTo(data string) error {
 		c.mu.Unlock()
 		return nil
 	}
+	c.peerSeek = true
 	c.mu.Unlock()
-	return c.conn.do(setProperty, timePos, data)
+	err = c.conn.do(setProperty, timePos, data)
+	if err != nil {
+		c.mu.Lock()
+		c.peerSeek = false
+		c.mu.Unlock()
+	}
+	return err
 }
 
 func (c *Client) align(event Event, hostname string) error {
