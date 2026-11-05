@@ -105,7 +105,7 @@ func (c *connection) do(args ...any) error {
 	defer c.done(req.RequestId)
 	_, err = c.conn.Write(append(body, '\n'))
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrClosed, err)
 	}
 	log.Printf("do: sent request: %s\n", body)
 

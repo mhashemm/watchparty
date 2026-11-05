@@ -107,6 +107,19 @@ func TestWatchDoesNotAliasScannerBuffer(t *testing.T) {
 	}
 }
 
+// watch closes the socket when mpv hangs up, so the next request can fail on the write
+// before anyone has seen conn.closed. party.Run needs ErrClosed to read mpv's exit status.
+func TestARequestOnAClosedSocketIsErrClosed(t *testing.T) {
+	t.Parallel()
+	nc, peer := net.Pipe()
+	defer peer.Close()
+	nc.Close()
+	conn := &connection{conn: nc, pending: map[int64]chan Response{}, closed: make(chan struct{})}
+	if err := conn.do("observe_property_string", 1, pause); !errors.Is(err, ErrClosed) {
+		t.Fatalf("got %v, want ErrClosed", err)
+	}
+}
+
 func TestFileNameIsNeverBroadcast(t *testing.T) {
 	t.Parallel()
 	outgoing := make(chan []byte, 4)
