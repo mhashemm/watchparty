@@ -264,6 +264,11 @@ def log(n):
     return open(nodes[n]["log"]).read()
 
 
+def played(n):
+    """The file names this node's mpv reported, oldest first."""
+    return [json.loads(l[20:].removeprefix("now playing: ")) for l in log(n).splitlines() if l[20:].startswith("now playing: ")]
+
+
 def osd(n):
     """The OSD notices this node actually displayed."""
     out = []
@@ -1655,6 +1660,7 @@ def media_suite():
     ok("it opens", until(lambda: booted(n), 60), log(n)[-300:])
     resolve(n)
     ok("mpv can read it", get(n, "duration") is not None, get(n, "duration"))
+    ok("its name is logged whole", played(n) == [os.path.basename(odd)], str(played(n)))
     ok("no line was forged", not any(l[20:].startswith("your address") and "FORGED" in l for l in log(n).splitlines()),
        [l for l in log(n).splitlines() if "FORGED" in l][:2])
     stop(n)
@@ -1696,6 +1702,7 @@ def media_suite():
     ok("and stops everyone", until(stopped), str([get(n, "pause") for n in (host, guest)]))
     ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
     ok("the other is told why", until(lambda: f"paused for {host}: video changed" in osd(guest)), str(osd(guest)[-3:]))
+    ok("each logs its own names, in order", played(host) == ["video2.mkv", "video3.mkv", "video10.mkv"] and played(guest) == ["a1.mkv", "a2.mkv", "a10.mkv"], str([played(host), played(guest)]))
 
     ipc(nodes[host]["sock"], "playlist-prev")
     must("back on the middle one", until(on("video3.mkv", "a2.mkv")))
@@ -2150,7 +2157,30 @@ def gui_suite():
     ok("it opens the picked file", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
     ok("with its neighbours", get(G, "playlist-count") == 3, get(G, "playlist-count"))
     ok("history remembers it", state(G)["history"][-1].get("playlist") is True, str(state(G)["history"][-1]))
+    groups = lambda: nodes[G]["page"].feed_groups()
+    def showing(*names):
+        return lambda: [g[0] for g in groups()] == list(names) and [g[1] for g in groups()] == [True] + [False] * (len(names) - 1)
+    ok("the feed opens on that file", until(showing("e2.mkv")), str(groups()))
+    ipc(nodes[G]["sock"], "playlist-next")
+    ok("the next file gets its own group, and only it is open", until(showing("e3.mkv", "e2.mkv")), str(groups()))
+    ipc(nodes[G]["sock"], "playlist-prev")
+    ok("going back reopens that file's group", until(showing("e2.mkv", "e3.mkv")), str(groups()))
+    until(lambda: len(state(G)["history"][-1].get("videos", [])) == 3)
+    videos = state(G)["history"][-1].get("videos", [])
+    ok("history has every file played", [v["name"] for v in videos] == ["e2.mkv", "e3.mkv", "e2.mkv"], str(videos))
+    ok("each finished when the next started", all(a["ended"] == b["started"] for a, b in zip(videos, videos[1:])), str(videos))
+    ok("the playing one hasn't finished", "ended" not in videos[-1], str(videos))
     end(G)
+    videos = state(G)["history"][-1]["videos"]
+    ok("ending the party finishes it", videos[-1].get("ended") == state(G)["history"][-1]["ended"], str(videos))
+    tab(G, "history")
+    until(lambda: js(G, '$("history-list").querySelector(".videos") !== null'))
+    shown = js(G, '$("history-list").firstElementChild.textContent')
+    ok("the History page shows each file and its times", "3 videos" in shown and "e3.mkv" in shown and " to " in shown, shown)
+    tab(G, "party")
+    line = lambda m: f"2026/11/05 18:00:00 {m}"
+    js(G, f'handle({json.dumps(line("do: sent request: " + json.dumps({"command": ["show-text", "video 1 of 3, by Sam", 5000]}, separators=(",", ":"))))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
+    ok("a move's notice lands with the file it moved to, whichever came first", groups()[0][0] == "e1.mkv" and groups()[0][2] == ["video 1 of 3, by Sam"], str(groups()))
     js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")

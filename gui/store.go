@@ -36,6 +36,19 @@ type session struct {
 	Addrs    string    `json:"addrs,omitempty"`
 	Invite   string    `json:"invite,omitempty"`
 	People   []string  `json:"people"`
+	Videos   []played  `json:"videos,omitempty"`
+}
+
+type played struct {
+	Name    string    `json:"name"`
+	Started time.Time `json:"started"`
+	Ended   time.Time `json:"ended,omitzero"`
+}
+
+func (sess *session) finishVideo(at time.Time) {
+	if n := len(sess.Videos); n > 0 {
+		sess.Videos[n-1].Ended = at
+	}
 }
 
 type store struct {
@@ -131,6 +144,18 @@ func (s *store) observe(i int, line string) {
 		})
 		return
 	}
+	if after, ok := strings.CutPrefix(message(line), "now playing: "); ok {
+		var name string
+		if json.Unmarshal([]byte(after), &name) != nil {
+			return
+		}
+		s.update(i, func(sess *session) {
+			now := time.Now()
+			sess.finishVideo(now)
+			sess.Videos = append(sess.Videos, played{Name: name, Started: now})
+		})
+		return
+	}
 	if text, ok := notice(line); ok {
 		if name, ok := strings.CutSuffix(text, " has joined"); ok {
 			person = name
@@ -149,7 +174,10 @@ func (s *store) observe(i int, line string) {
 }
 
 func (s *store) end(i int) {
-	s.update(i, func(sess *session) { sess.Ended = time.Now() })
+	s.update(i, func(sess *session) {
+		sess.Ended = time.Now()
+		sess.finishVideo(sess.Ended)
+	})
 }
 
 func (s *store) update(i int, f func(*session)) {

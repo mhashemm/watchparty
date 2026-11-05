@@ -103,7 +103,11 @@ class Page(CDP):
 
     def feed(self):
         """The party feed, newest first."""
-        return self.js('[...$("feed").children].filter(li => !li.classList.contains("empty")).map(li => li.lastChild.textContent)')
+        return self.js('[...$("feed").querySelectorAll("li")].map(li => li.lastChild.textContent)')
+
+    def feed_groups(self):
+        """The feed's videos, latest first: [name, open, its entries]."""
+        return self.js('[...$("feed").children].filter(g => g.dataset.name).map(g => [g.dataset.name, g.open, [...g.querySelectorAll("li")].map(li => li.lastChild.textContent)])')
 
     def click(self, selector):
         self.js(f"document.querySelector({json.dumps(selector)}).click()")

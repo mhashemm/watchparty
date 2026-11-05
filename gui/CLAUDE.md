@@ -83,8 +83,8 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   automatically. The Settings page's fields are saved by its button. The first relay
   used becomes the default if none is set.
 - **History**, up to 100 parties. `begin` records the form on `/start`, `end` stamps
-  the end. `observe` fills in the *real* room and secret from the invite line, and
-  people from the join notices.
+  the end. `observe` fills in the *real* room and secret from the invite line, people
+  from the join notices, and each video's start and finish from `now playing:`.
 
 ## Self-update (`update.go`)
 

@@ -22,6 +22,7 @@ const (
 	timePos         = "time-pos"
 	pausedForCache  = "paused-for-cache"
 	playlistPos     = "playlist-pos"
+	filename        = "filename"
 	fileLoaded      = "file-loaded"
 	duration        = "duration"
 	propertyChange  = "property-change"
@@ -257,6 +258,9 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if event.paused() {
 				extra = c.pauseExtras()
 			}
+		case filename:
+			name, _ := json.Marshal(event.Data)
+			log.Printf("now playing: %s\n", name)
 		case playlistPos:
 			if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
 				c.current, c.pos, c.seeking = n, 0, false
@@ -790,7 +794,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		}
 	}()
 
-	events := []string{pause, timePos, pausedForCache, duration}
+	events := []string{filename, pause, timePos, pausedForCache, duration}
 	if entries > 0 {
 		events = append(events, playlistPos)
 	}

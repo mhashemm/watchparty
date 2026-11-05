@@ -261,10 +261,13 @@ details[open] summary { margin-bottom: 14px; }
 .tabs button[aria-current="page"] { border-color: var(--moss); background: #eef3df; color: var(--forest); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--berry); margin-left: 6px; vertical-align: 2px; }
 #history-list { list-style: none; padding: 0; margin: 0 0 18px; }
-#history-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+#history-list > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 #history-list b { word-break: break-word; }
 #history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
 #history-list .again { grid-column: 2; grid-row: 1 / span 2; }
+.videos { grid-column: 1 / -1; list-style: none; margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: .9rem; }
+.videos li { padding: 4px 0; display: flex; flex-direction: column; word-break: break-word; }
+.videos .when { color: var(--ink-soft); font-size: .875rem; }
 .about { margin-top: 26px; border-top: 2px dashed var(--line); padding-top: 18px; }
 .about p { margin: 0 0 10px; }
 .about code { font-size: .85rem; word-break: break-all; color: var(--soil); }
@@ -296,11 +299,17 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .status.bad { color: var(--berry); }
 .share { background: #f3eedf; border: 2px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 18px; }
 .share code { display: block; font: .9rem/1.4 ui-monospace, Consolas, monospace; word-break: break-all; margin: 6px 0 10px; color: var(--soil); }
-#feed { list-style: none; padding: 0; margin: 0 0 18px; }
+#feed { margin: 0 0 18px; }
+#feed details { border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 0 0 8px; }
+#feed details[open] { background: #eef3df; border-color: var(--moss); }
+#feed details[open] summary { margin-bottom: 6px; color: var(--forest); }
+#feed summary { word-break: break-word; }
+#feed ul { list-style: none; padding: 0; margin: 0; }
+#feed li:last-child { border-bottom: 0; }
 #feed li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
 #feed time { color: var(--ink-soft); font-size: .875rem; min-width: 3.2em; padding-top: 1px; }
-#feed .empty { color: var(--ink-soft); }
-#feed li:not(.empty)::before { content: ""; flex: none; width: 16px; height: 16px; margin-top: 3px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M12 18h8l1 11h-10z' fill='%23f1ead6' stroke='%236e4b30' stroke-width='1.5'/%3E%3Cpath d='M3 18C5 5 27 5 29 18z' fill='%23a8642a' stroke='%234a3220' stroke-width='1.5'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23f6efdc'/%3E%3Ccircle cx='19' cy='9.5' r='1.6' fill='%23f6efdc'/%3E%3C/svg%3E") center / contain no-repeat; }
+#feed .empty { color: var(--ink-soft); margin: 0; }
+#feed li::before { content: ""; flex: none; width: 16px; height: 16px; margin-top: 3px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M12 18h8l1 11h-10z' fill='%23f1ead6' stroke='%236e4b30' stroke-width='1.5'/%3E%3Cpath d='M3 18C5 5 27 5 29 18z' fill='%23a8642a' stroke='%234a3220' stroke-width='1.5'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23f6efdc'/%3E%3Ccircle cx='19' cy='9.5' r='1.6' fill='%23f6efdc'/%3E%3C/svg%3E") center / contain no-repeat; }
 #chart pre {
   background: #22301f;
   color: #d5e2b8;
@@ -521,7 +530,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <button type="button" id="copy">Copy invite</button>
       </div>
       <h2>Party feed</h2>
-      <ul id="feed"><li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li></ul>
+      <div id="feed"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>
       <details id="chart">
         <summary>Patient chart</summary>
         <pre id="log"></pre>
@@ -783,6 +792,25 @@ const fileName = path => /^magnet:/i.test(path || "")
   ? new URLSearchParams(path.split("?")[1]).get("dn") || "Magnet link"
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
+function videoList(videos, title) {
+  const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
+  const ul = document.createElement("ul");
+  ul.className = "videos";
+  ul.append(...videos.map(v => {
+    const li = document.createElement("li");
+    if (v.name !== title) {
+      const name = document.createElement("span");
+      name.textContent = v.name;
+      li.append(name);
+    }
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = v.ended ? `${clock(v.started)} to ${clock(v.ended)}` : `started ${clock(v.started)}`;
+    li.append(when);
+    return li;
+  }));
+  return ul;
+}
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
   $("history-empty").hidden = parties.length > 0;
@@ -790,7 +818,8 @@ function renderHistory() {
   $("history-list").replaceChildren(...parties.map(p => {
     const li = document.createElement("li");
     const title = document.createElement("b");
-    title.textContent = fileName(p.file);
+    const videos = p.videos || [];
+    title.textContent = videos.length > 1 ? `${videos.length} videos` : fileName(p.file);
     title.title = p.file;
     const meta = document.createElement("span");
     meta.className = "meta";
@@ -804,6 +833,7 @@ function renderHistory() {
     again.disabled = running;
     again.addEventListener("click", () => watchAgain(p));
     li.append(title, meta, again);
+    if (videos.length) li.append(videoList(videos, title.textContent));
     return li;
   }));
 }
@@ -915,20 +945,43 @@ let run = 0, from = 0, state = {};
 function reset() {
   state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false, finding: false, leftPause: false };
   $("log").textContent = "";
-  $("feed").innerHTML = '<li class="empty">Nothing yet. Joins, pauses and seeks show up here.</li>';
+  $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
 }
 reset();
 
-function addFeed(text) {
+function feedGroup(name) {
   const feed = $("feed");
   feed.querySelector(".empty")?.remove();
+  let group = [...feed.children].find(g => g.dataset.name === name);
+  if (!group) {
+    group = document.createElement("details");
+    group.dataset.name = name;
+    const summary = document.createElement("summary");
+    summary.textContent = name;
+    group.append(summary, document.createElement("ul"));
+  }
+  for (const g of feed.children) g.open = false;
+  group.open = true;
+  feed.prepend(group);
+  return group;
+}
+
+function nowPlaying(name) {
+  const previous = $("feed").querySelector("details");
+  const group = feedGroup(name);
+  const last = previous?.querySelector("li");
+  if (previous !== group && /^video \d+ of \d+, by |: video changed$/.test(last?.lastChild.textContent)) group.lastChild.prepend(last);
+}
+
+function addFeed(text) {
+  const list = ($("feed").querySelector("details") || feedGroup(fileName($("file").value))).lastChild;
   const li = document.createElement("li");
   const time = document.createElement("time");
   time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   li.append(time, text);
-  feed.prepend(li);
-  while (feed.children.length > 20) feed.lastChild.remove();
+  list.prepend(li);
+  while (list.children.length > 20) list.lastChild.remove();
 }
 
 function handle(line) {
@@ -957,12 +1010,15 @@ function handle(line) {
       if (/^paused for .*: left$/.test(text)) state.leftPause = true;
     } catch {}
   }
+  if ((m = msg.match(/^now playing: (".*")$/))) {
+    try { nowPlaying(JSON.parse(m[1])); } catch {}
+  }
   if ((m = msg.match(/^Watch: broadcasted event: (\{.*\})$/))) {
     try {
       const e = JSON.parse(m[1]);
       if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
       else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you");
-      if (e.name === "pause-reason") [...$("feed").children].find(li => li.lastChild.textContent === "paused by you")?.remove();
+      if (e.name === "pause-reason") [...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
   }
 }

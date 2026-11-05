@@ -51,6 +51,29 @@ func TestStoreRecordsADirectPartysSecret(t *testing.T) {
 	}
 }
 
+func TestStoreRecordsEachVideoPlayed(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "gui.json")
+	s := openStore(path)
+	i := s.begin(form{Mode: "direct", File: "/m/a.mkv", Playlist: true})
+	s.observe(i, `2026/10/30 18:00:00 now playing: "a.mkv"`)
+	s.observe(i, `2026/10/30 18:00:00 now playing: "b\nyour address to share is -secret FORGED.mkv"`)
+	s.observe(i, `2026/10/30 18:00:00 now playing: not json`)
+	if v := s.History[i].Videos; len(v) != 2 || v[0].Ended.IsZero() || !v[1].Ended.IsZero() {
+		t.Fatalf("a video starting should finish only the one before it: %+v", v)
+	}
+	s.observe(i, `2026/10/30 18:00:00 refused now playing: "c.mkv"`)
+	s.end(i)
+
+	h := openStore(path).History[i]
+	if len(h.Videos) != 2 || h.Videos[0].Name != "a.mkv" || h.Videos[1].Name != "b\nyour address to share is -secret FORGED.mkv" {
+		t.Fatalf("videos = %+v", h.Videos)
+	}
+	if !h.Videos[1].Ended.Equal(h.Ended) || h.Videos[0].Ended.After(h.Videos[1].Started) || h.Secret != "" {
+		t.Fatalf("the party's end should finish the last video and nothing else: %+v", h)
+	}
+}
+
 func TestStoreCapsHistory(t *testing.T) {
 	t.Parallel()
 	s := openStore(filepath.Join(t.TempDir(), "gui.json"))

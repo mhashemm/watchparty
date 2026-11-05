@@ -107,6 +107,16 @@ func TestWatchDoesNotAliasScannerBuffer(t *testing.T) {
 	}
 }
 
+func TestFileNameIsNeverBroadcast(t *testing.T) {
+	t.Parallel()
+	outgoing := make(chan []byte, 4)
+	c := newTestClient(outgoing, nil)
+	got := feed(t, c, outgoing, propertyChangeLine(filename, "a.mkv", 0)+propertyChangeLine(filename, "b.mkv", 1))
+	if len(got) != 0 {
+		t.Fatalf("a file name went over the wire: %+v", got)
+	}
+}
+
 // mpv fires one property-change per observed property the moment it is
 // registered. A fresh node is paused, so an unswallowed initial time-pos would be
 // broadcast as time-pos=0 and rewind the whole party.

@@ -65,10 +65,10 @@ config still applies, for example `keep-open` (see "Ending").
 
 | Command | Sent by | Notes |
 |---|---|---|
-| `["observe_property_string", id, name]` | `New`, ids 1 = `pause`, 2 = `time-pos`, 3 = `paused-for-cache`, 4 = `duration` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
+| `["observe_property_string", id, name]` | `New`, ids 1 = `filename`, 2 = `pause`, 3 = `time-pos`, 4 = `paused-for-cache`, 5 = `duration` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
 | `["set_property", "pause", bool]` | `pause()` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. |
 | `["set_property", "time-pos", "<string>"]` | `sync()` | A string is accepted, so the received event's `data` is forwarded as is. This is an **absolute seek**. |
-| `["set_property", "playlist-pos", n]` | `followEntry()` | Observed with id 5, playlists only. A no-op set emits nothing. |
+| `["set_property", "playlist-pos", n]` | `followEntry()` | Observed with id 6, playlists only. A no-op set emits nothing. |
 | `["show-text", text, ms]` | `showText()` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Its log line is how e2e and the GUI read notices. |
 
 By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absolute"]`.
@@ -80,9 +80,10 @@ By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absol
   `pause` still `"no"`. At load it comes first with no data, then `"no"`. Under
   `--cache-pause-wait` (default 1s) it clears once that much is cached again, and mpv
   then resumes by itself unless `pause` is set, which is why the node pauses itself.
-- **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet,
-  or quitting) **the `property-change` event has no `data` field at all**, which
-  unmarshals to `Data == ""`.
+- **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet, or quitting)
+  **the `property-change` event has no `data` field at all**, which unmarshals to `Data == ""`.
+- **`filename`** (RO): percent-decoded for a URL, and it fires only when the name changes, so a
+  replay says nothing. It can hold a newline, so it is logged as JSON. Probed on 0.37.0.
 
 ## Events
 
@@ -95,7 +96,6 @@ Every event goes through `handleEvent`; anything but `property-change` is
 | `start-file`, `file-loaded` | The file is opening, then loaded. |
 | `seek` | A seek started. Arrives **before** the matching `time-pos` change. |
 | `playback-restart` | Playback (or the paused frame) is ready after a seek or a load. Rapid seeks give one `seek` and one of these (probed on 0.40.0). |
-| `audio-reconfig`, `video-reconfig` | Output reinitialised. Noise for us. |
 | `end-file` (`reason`) | `"quit"` for a quit, `"eof"` for the end of the file. |
 
 ## Observed behaviour, and what our code relies on
