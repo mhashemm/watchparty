@@ -172,7 +172,6 @@ type Client struct {
 	loading    bool
 	heldSeek   string
 	settling   bool
-	started    bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -250,10 +249,6 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		case timePos:
 			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
 				c.pos = pos
-				if pos > 0 && !c.paused && !c.started {
-					c.started = true
-					log.Println("playback started")
-				}
 			}
 		case duration:
 			if d, err := strconv.ParseFloat(event.Data, 64); err == nil {
@@ -264,7 +259,6 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 				extra = c.pauseExtras()
 			}
 		case filename:
-			c.started = false
 			name, _ := json.Marshal(event.Data)
 			log.Printf("now playing: %s\n", name)
 		case playlistPos:

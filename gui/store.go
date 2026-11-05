@@ -48,11 +48,8 @@ type played struct {
 	Ended   time.Time `json:"ended,omitzero"`
 }
 
-func (sess *session) startVideo(name string, at time.Time) {
-	if n := len(sess.Videos); n > 0 && sess.Videos[n-1].Name == name {
-		sess.Videos[n-1].Ended = time.Time{}
-		return
-	}
+func (sess *session) openVideo(name string, at time.Time) {
+	sess.finishVideo(at)
 	sess.Videos = append(sess.Videos, played{Name: name, Started: at})
 	if over := len(sess.Videos) - maxVideos; over > 0 {
 		sess.Videos = slices.Delete(sess.Videos, 0, over)
@@ -60,7 +57,7 @@ func (sess *session) startVideo(name string, at time.Time) {
 }
 
 func (sess *session) finishVideo(at time.Time) {
-	if n := len(sess.Videos); n > 0 && sess.Videos[n-1].Ended.IsZero() {
+	if n := len(sess.Videos); n > 0 {
 		sess.Videos[n-1].Ended = at
 	}
 }
@@ -68,7 +65,6 @@ func (sess *session) finishVideo(at time.Time) {
 type store struct {
 	path        string
 	historyPath string
-	onFile      string
 
 	mu       sync.Mutex
 	Settings settings  `json:"settings"`
@@ -167,7 +163,6 @@ func (s *store) begin(f form) int {
 			s.Settings.Port = p
 		}
 	}
-	s.onFile = ""
 	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Playlist: f.Playlist, Mode: f.Mode, Secret: strings.TrimSpace(f.Secret), People: []string{}}
 	if f.Mode == "relay" {
 		sess.Relay, sess.Room = strings.TrimSpace(f.Relay), strings.TrimSpace(f.Room)
@@ -203,18 +198,7 @@ func (s *store) observe(i int, line string) {
 		if json.Unmarshal([]byte(after), &name) != nil {
 			return
 		}
-		s.update(i, func(sess *session) {
-			s.onFile = name
-			sess.finishVideo(time.Now())
-		})
-		return
-	}
-	if message(line) == "playback started" {
-		s.update(i, func(sess *session) {
-			if s.onFile != "" {
-				sess.startVideo(s.onFile, time.Now())
-			}
-		})
+		s.update(i, func(sess *session) { sess.openVideo(name, time.Now()) })
 		return
 	}
 	if text, ok := notice(line); ok {
