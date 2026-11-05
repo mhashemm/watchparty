@@ -46,12 +46,19 @@ type relayConn struct {
 	file      string
 	incoming  chan<- mpv.IncomingMessage
 	retry     time.Duration
+	up        chan struct{}
 }
 
 func (r *relayConn) set(conn *websocket.Conn) {
 	r.mu.Lock()
 	r.conn = conn
 	r.mu.Unlock()
+	if conn != nil {
+		select {
+		case r.up <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // errRejected means the relay will never accept these credentials, so retrying
@@ -137,7 +144,15 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 // Broadcast is the single writer for the whole process. It must not be restarted
 // per connection: two of these ranging over outgoing would steal frames from each
 // other during a redial.
+//
+// It starts once the first dial has succeeded. mpv can finish loading before that, and
+// its "joined" going nowhere would leave the joiner at 0 with the party playing on.
 func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
+	select {
+	case <-r.up:
+	case <-c.Done():
+		return
+	}
 	for {
 		var event []byte
 		select {

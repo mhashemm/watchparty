@@ -1198,6 +1198,18 @@ def relay_suite():
        f"time-pos={get('mid', 'time-pos')}")
     stop("mid")
 
+    print("\n[R10c] a joiner whose relay connects only after mpv has loaded still pauses the party, and starts where it stopped")
+    setp(A, "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
+    far = lag(0, PORTS["relay"], 1)
+    launch("nodeFar", room=ROOM, tag="far", relay=f"ws://127.0.0.1:{far.getsockname()[1]}")
+    must("mpv loaded before the relay answered", until(lambda: booted("far") and connected("far"), BOOT) and log("far").index("init done") < log("far").index("relay: connected"), log("far"))
+    resolve("far")
+    ok("the party paused for it", until(lambda: all(get(n, "pause") is True for n in NODES + ["far"]) and all("paused for nodeFar: joining" in osd(n) for n in NODES)), str([get(n, "pause") for n in NODES]))
+    ok("it starts where the party stopped", until(lambda: near(get("far", "time-pos"), get(A, "time-pos"), 0.3)), f"{get('far', 'time-pos')} and {get(A, 'time-pos')}")
+    stop("far")
+    far.close()
+
     print("\n[R11] a wrong secret is refused and the node gives up instead of retrying")
     launch("nodeBad", room=ROOM, secret="wrongsecret", tag="bad")
     nodes["bad"]["proc"].wait(timeout=30)

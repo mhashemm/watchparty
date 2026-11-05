@@ -122,6 +122,7 @@ func Run(parent context.Context, cfg Config) error {
 			file:      file,
 			incoming:  incoming,
 			retry:     minBackoff,
+			up:        make(chan struct{}, 1),
 		}
 		defer conn.Close()
 		go conn.Connect(c, cancel)
