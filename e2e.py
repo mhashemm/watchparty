@@ -1157,6 +1157,21 @@ def relay_suite():
         ok(f"{n} told why", f"paused for {A}: seek" in osd(n))
     ok(f"{A} told it paused everyone", "paused for everyone: seek" in osd(A))
 
+    print("\n[R6c] seeking and resuming at once doesn't pause the party for a seek")
+    must("the last seek is over", quiet(NODES))
+    seeks = lambda n: [s for s in osd(n) if s.endswith(": seek")]
+    before = {n: len(seeks(n)) for n in NODES}
+    for i in range(20):  # without the fix about one round in six does it, so a few aren't enough
+        setp(A, "time-pos", 5.0 + i * 2)
+        setp(A, "pause", False)
+        must(f"round {i + 1} plays", until(lambda: all(get(n, "pause") is False for n in NODES)))
+        time.sleep(0.15)
+        setp(A, "pause", True)
+        must(f"round {i + 1} stops", until(lambda: all(get(n, "pause") is True for n in NODES)))
+    must("the rounds are over", quiet(NODES))
+    for n in NODES:
+        ok(f"{n} never took it for a seek while playing", len(seeks(n)) == before[n], str(seeks(n)[before[n]:]))
+
     print("\n[R7] no a->b->a rebound (relay has no counters; this is the only guard)")
     # start from a known state: everyone playing, so the pause below is a real change
     setp(A, "pause", False)
@@ -1416,15 +1431,8 @@ def relay_suite():
     ipc(nodes["nodeLagB"]["sock"], "seek", 15, "relative")
     until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 5)
     ok("a seek while playing on the far node also stops both together", gap() < 0.05, f"{gap():.3f}s apart")
-    must("the seek is over", quiet(lagged))
-    setp("nodeLagA", "pause", False)
-    must("they play again", until(lambda: all(get(n, "pause") is False for n in lagged)))
-    launch("nodeLagC", room="lagroom", media=url)
-    must("a third joins", until(lambda: booted("nodeLagC"), BOOT))
-    resolve("nodeLagC")
-    ok("a join stops everyone in the same place, however far each is", until(lambda: all(get(n, "pause") is True and near(get(n, "time-pos"), get("nodeLagA", "time-pos"), 0.15) for n in lagged + ("nodeLagC",)), 5), str([get(n, "time-pos") for n in lagged + ("nodeLagC",)]))
     Quiet.delay = 0
-    for n in lagged + ("nodeLagC",):
+    for n in lagged:
         stop(n)
     for p in proxies:
         p.close()

@@ -86,8 +86,8 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	return s
 }
 
-// model answers requests the way MPV.md says mpv does: a no-op set says nothing, and a
-// seek reports later, which can be after a pause sent behind it.
+// model answers requests the way mpv does (MPV.md): a no-op set says nothing, and a seek
+// reports later, ahead of a pause sent right behind it but after the reply to that pause.
 func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
@@ -99,6 +99,9 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 		case name == showText:
 			n.notices = append(n.notices, fmt.Sprint(req.Command[1]))
 		case name == setProperty && req.Command[1] == pause:
+			if len(n.seeks) > 0 {
+				n.emit(fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId))
+			}
 			n.setPause(req.Command[2] == true)
 		case name == setProperty && req.Command[1] == timePos:
 			pos, _ := strconv.ParseFloat(fmt.Sprint(req.Command[2]), 64)
@@ -123,6 +126,7 @@ func (n *simNode) setPause(paused bool) {
 		return
 	}
 	n.paused = paused
+	n.landSeekLocked()
 	data := "no"
 	if paused {
 		data = "yes"
@@ -137,6 +141,13 @@ func (n *simNode) seek(pos float64) {
 func (n *simNode) landSeek() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.landSeekLocked()
+}
+
+func (n *simNode) landSeekLocked() {
+	if len(n.seeks) == 0 {
+		return
+	}
 	last := n.seeks[len(n.seeks)-1]
 	n.seeks = nil
 	n.pos, _ = strconv.ParseFloat(last, 64)

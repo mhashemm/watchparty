@@ -75,8 +75,8 @@ A seek while playing, or a node waiting on its cache, would leave the others out
 step, so that node pauses everyone with a reason:
 
 - **`seek`**: a `seek` event while playing sets `seeking`; the next `time-pos` is where
-  it landed. A peer's seek applied just before its resume can report after the resume, so
-  until `playback-restart` (`peerSeek`) a `seek` isn't ours. Not a count: mpv folds seeks.
+  it landed. A peer's seek right before its resume reports after mpv replies to the resume, when
+  `c.paused` is false, so until `playback-restart` (`peerSeek`) a `seek` isn't ours. mpv folds seeks.
 - **`buffering`**: `paused-for-cache` turns `yes` while playing.
 - **`still buffering`**: a local resume while `stalled` is caught and not broadcast.
   A **peer's** resume while `stalled` never reaches mpv: `pause()` refuses it and sends
