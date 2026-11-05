@@ -90,6 +90,8 @@ natively (the runner is thrown away). Facts it rests on:
     fails too. Loosening the container for it would trade its isolation for the browser's.
   - `./e2e.py` on the host still works, isolated only by each GUI's environment, with
     its run folder left in `/tmp`.
+- **One `gui` container at a time on a machine:** they share docker's bridge, so a node's SSDP
+  search finds another's fake router and [G34] fails. Other phases can run side by side.
 - `--audio` uses a real, muted audio output. It needs a sound server, so CI doesn't
   run it.
 - The script points its stdin at `/dev/null` so no mpv puts the terminal in raw mode.
