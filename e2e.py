@@ -1978,8 +1978,8 @@ def gui_suite():
     ok("the settings reached the store", (s["relay"], s["createKey"], s["mpvFlags"]) == (RELAY_URL, KEY, MPVFLAGS), str(s))
     ok("the party's relay was filled in", js(H, '$("relay").value') == RELAY_URL)
     store = js(H, '$("store-path").textContent')
-    ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty/gui.json", store)
-    ok("the store is 0600 in a 0700 folder", (os.stat(store).st_mode & 0o777, os.stat(os.path.dirname(store)).st_mode & 0o777) == (0o600, 0o700))
+    ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty", store)
+    ok("the settings are 0600 in a 0700 folder", (os.stat(f"{store}/gui.json").st_mode & 0o777, os.stat(store).st_mode & 0o777) == (0o600, 0o700))
 
     print("\n[G3b] the ? button opens the help, one topic at a time")
     ok("it starts closed", js(H, '$("tip").hidden'))
@@ -2090,6 +2090,8 @@ def gui_suite():
     last = state(H)["history"][-1]
     ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
     ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
+    ok("the history and its secret are 0600 in their own file", os.stat(f"{store}/history.json").st_mode & 0o777 == 0o600 and secret in open(f"{store}/history.json").read())
+    ok("the settings file has no party in it", secret not in open(f"{store}/gui.json").read() and "history" not in open(f"{store}/gui.json").read())
 
     print(f"\n[G15] {G} ends the party from the page, which pauses {H}")
     setp(H, "pause", False)
@@ -2327,6 +2329,19 @@ def gui_suite():
     js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
     ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
     stop(G2)
+
+    print("\n[G27b] a history saved by an older version moves to its own file, and is kept")
+    folder = f"{nodes[G]['home']}/config/watchparty"
+    os.remove(f"{folder}/history.json")
+    saved = json.load(open(f"{folder}/gui.json"))
+    saved["history"] = [{"started": "2026-01-02T03:04:05Z", "ended": "2026-01-02T04:04:05Z", "file": "/m/from-before.mkv", "mode": "direct", "people": ["Sam"]}]
+    json.dump(saved, open(f"{folder}/gui.json", "w"))
+    G3 = launch_gui(G, tag="guiGuest3", portal=False)
+    tab(G3, "history")
+    ok("the page shows it", until(lambda: "from-before.mkv" in js(G3, '$("history-list").textContent')))
+    ok("it moved", "from-before.mkv" in open(f"{folder}/history.json").read() and "history" not in open(f"{folder}/gui.json").read())
+    ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
+    stop(G3)
 
     print("\n[G28] self-update: offered, refused on a bad digest, installed on a good one")
     rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())

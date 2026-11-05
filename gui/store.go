@@ -52,7 +52,8 @@ func (sess *session) finishVideo(at time.Time) {
 }
 
 type store struct {
-	path string
+	path        string
+	historyPath string
 
 	mu       sync.Mutex
 	Settings settings  `json:"settings"`
@@ -68,24 +69,45 @@ func storePath() string {
 }
 
 func openStore(path string) *store {
-	s := &store{path: path, Settings: settings{Local: true}}
+	s := &store{path: path, historyPath: filepath.Join(filepath.Dir(path), "history.json"), Settings: settings{Local: true}}
 	b, err := os.ReadFile(path)
 	if err == nil {
 		json.Unmarshal(b, s)
 	}
+	inSettings := len(s.History) > 0
+	b, err = os.ReadFile(s.historyPath)
+	if err == nil {
+		var history []session
+		if json.Unmarshal(b, &history) == nil {
+			s.History = history
+		}
+	}
+	if inSettings && s.saveHistory() == nil {
+		s.saveSettings()
+	}
 	return s
 }
 
-func (s *store) save() error {
-	b, err := json.MarshalIndent(s, "", "  ")
+func (s *store) saveSettings() error {
+	return writeJSON(s.path, struct {
+		Settings settings `json:"settings"`
+	}{s.Settings})
+}
+
+func (s *store) saveHistory() error {
+	return writeJSON(s.historyPath, s.History)
+}
+
+func writeJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	err = os.MkdirAll(filepath.Dir(s.path), 0o700)
+	err = os.MkdirAll(filepath.Dir(path), 0o700)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".gui-*.json")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*.json")
 	if err != nil {
 		return err
 	}
@@ -97,7 +119,7 @@ func (s *store) save() error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), s.path)
+	return os.Rename(tmp.Name(), path)
 }
 
 func (s *store) begin(f form) int {
@@ -123,7 +145,8 @@ func (s *store) begin(f form) int {
 	if over := len(s.History) - maxHistory; over > 0 {
 		s.History = slices.Delete(s.History, 0, over)
 	}
-	s.save()
+	s.saveSettings()
+	s.saveHistory()
 	return len(s.History) - 1
 }
 
@@ -187,7 +210,7 @@ func (s *store) update(i int, f func(*session)) {
 		return
 	}
 	f(&s.History[i])
-	s.save()
+	s.saveHistory()
 }
 
 func message(line string) string {

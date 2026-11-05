@@ -210,7 +210,7 @@ func (g *gui) state(w http.ResponseWriter, r *http.Request) {
 		History  []session `json:"history"`
 		Path     string    `json:"path"`
 		Version  string    `json:"version"`
-	}{g.store.Settings, g.store.History, g.store.path, version})
+	}{g.store.Settings, g.store.History, filepath.Dir(g.store.path), version})
 	g.store.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -233,7 +233,7 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
 	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
 	s.CacheDir = strings.TrimSpace(in.CacheDir)
-	err = g.store.save()
+	err = g.store.saveSettings()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -245,7 +245,7 @@ func (g *gui) clearHistory(w http.ResponseWriter, r *http.Request) {
 	g.store.mu.Lock()
 	defer g.store.mu.Unlock()
 	g.store.History, g.session = nil, -1
-	err := g.store.save()
+	err := g.store.saveHistory()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

@@ -74,9 +74,11 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 
 ## Saved settings and history (`store.go`)
 
-- **One file, `os.UserConfigDir()/watchparty/gui.json`**, written atomically, 0600 in a
-  0700 directory: it holds room secrets and the create key. `save()` needs `store.mu`;
-  lock order is always `g.mu` → `store.mu`.
+- **Two files in `os.UserConfigDir()/watchparty/`,** `gui.json` and `history.json`, written
+  atomically, 0600 in a 0700 directory: they hold the create key and room secrets. Saving needs
+  `store.mu`; lock order is always `g.mu` → `store.mu`.
+- **Versions before `history.json` kept the history in `gui.json`.** `openStore` moves it, writing
+  the new file first, so stopping in between loses nothing; `history.json` wins if both exist.
 - **Not `localStorage`:** the random port makes the page a new origin every launch.
   Nothing is kept in browser storage; the page loads everything from `GET /state`.
 - **Settings:** name, and `local`/`port` from the last Wi-Fi party, are remembered

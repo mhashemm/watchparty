@@ -1,8 +1,10 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +73,69 @@ func TestStoreRecordsEachVideoPlayed(t *testing.T) {
 	}
 	if !h.Videos[1].Ended.Equal(h.Ended) || h.Videos[0].Ended.After(h.Videos[1].Started) || h.Secret != "" {
 		t.Fatalf("the party's end should finish the last video and nothing else: %+v", h)
+	}
+}
+
+func TestStoreKeepsHistoryOutOfTheSettingsFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s := openStore(filepath.Join(dir, "gui.json"))
+	s.begin(form{Mode: "direct", File: "/m/a.mkv", Hostname: "Sam"})
+
+	settings, err := os.ReadFile(filepath.Join(dir, "gui.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(settings), "Sam") || strings.Contains(string(settings), "/m/a.mkv") || strings.Contains(string(settings), "history") {
+		t.Fatalf("gui.json = %s", settings)
+	}
+	history, err := os.ReadFile(filepath.Join(dir, "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(history), "/m/a.mkv") {
+		t.Fatalf("history.json = %s", history)
+	}
+}
+
+func TestStoreMovesAnOldHistoryToItsOwnFile(t *testing.T) {
+	t.Parallel()
+	old := `{"settings":{"hostname":"Sam","local":true},"history":[{"file":"/m/old.mkv","mode":"direct","people":[]}]}`
+	for name, existing := range map[string]string{
+		"first start":                "",
+		"a broken history file":      "not json",
+		"stopped halfway through it": `[{"file":"/m/old.mkv","mode":"direct","people":[]},{"file":"/m/newer.mkv","mode":"direct","people":[]}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "gui.json")
+			if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if existing != "" {
+				if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(existing), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if existing != "not json" {
+					want = 2
+				}
+			}
+			for range 2 {
+				s := openStore(path)
+				if s.Settings.Hostname != "Sam" || len(s.History) != want || s.History[0].File != "/m/old.mkv" {
+					t.Fatalf("opened %+v", s)
+				}
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), "history") {
+				t.Fatalf("gui.json still holds it: %s", b)
+			}
+		})
 	}
 }
 
