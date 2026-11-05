@@ -767,7 +767,7 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-// New wires up one mpv. entries is the length of its playlist, and 0 for a single file.
+// New wires up one mpv. names are its playlist entries in order, and nil for a single file.
 func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
