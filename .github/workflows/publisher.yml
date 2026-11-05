@@ -27,6 +27,8 @@ jobs:
       actions: read
     runs-on: ubuntu-latest
     strategy:
+      # one failed upload must not cancel the others mid-upload
+      fail-fast: false
       matrix:
         include:
           - { goos: linux, goarch: amd64, out: watchparty_amd64, gui: watchparty-gui_amd64 }
@@ -68,6 +70,13 @@ jobs:
           makensis -V2 -DEXE=$PWD/${{ matrix.gui }} -DOUT=$PWD/watchparty-gui-setup.exe gui/setup.nsi
 
       - name: Publish
-        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} ${{ matrix.goos == 'windows' && 'watchparty-gui-setup.exe' || '' }} --clobber
+        # GitHub's upload API has answered 404, 500 and 502 for minutes at a time. --clobber
+        # makes a retry safe, including after a partial upload.
+        run: |
+          for delay in 30 60 90 120 0; do
+            gh release upload "$GITHUB_REF_NAME" ${{ matrix.out }} ${{ matrix.gui }} ${{ matrix.goos == 'windows' && 'watchparty-gui-setup.exe' || '' }} --clobber && exit 0
+            sleep "$delay"
+          done
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
