@@ -126,8 +126,12 @@ if args.mode == "all":
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
              for i, m in enumerate(PHASES) if not args.jitter or m in JITTER_PHASES]
+    took = []
     for m, p in procs:
-        print(f"\n######## {m} ########\n" + p.communicate()[0], end="")
+        out = p.communicate()[0]
+        print(f"\n######## {m} ########\n" + out, end="")
+        took += [f"{m:6} {line}" for line in out.splitlines() if line.startswith("took:")]
+    print("\n" + "\n".join(took))
     bad = [m for m, p in procs if p.returncode]
     print("\n" + ("ALL PASS" if not bad else "FAILED: " + ", ".join(bad)))
     sys.exit(1 if bad else 0)
@@ -694,6 +698,13 @@ def private_bus():
     return f"unix:path={path}"
 
 
+marks = [("", time.time())]
+
+
+def mark(name):
+    marks.append((name, time.time()))
+
+
 need("go")
 need("mpv")
 print(f"run directory: {RUN}")
@@ -701,6 +712,7 @@ print("building watchparty and relay")
 subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=True)
 subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
 subprocess.run(["go", "build", "-o", RUN + "/fakeseed", "./party/fakeseed"], cwd=REPO, check=True)
+mark("build")
 BIN = RUN + "/watchparty"
 RELAY_BIN = RUN + "/relay"
 GUI_BIN = RUN + "/watchparty-gui"
@@ -719,6 +731,7 @@ if args.mode in ("gui", "upnp"):
     for v in ("v0.0.1", "v0.0.2"):
         subprocess.run(["go", "build", "-ldflags", f"-X main.version={v} {release}", "-o", f"{RUN}/cli-{v}", "."], cwd=REPO, check=True)
     subprocess.run(["go", "build", "-o", PORTAL_BIN, "./gui/fakeportal"], cwd=REPO, check=True)
+    mark("gui build")
 
 if args.file:
     MEDIA = os.path.abspath(args.file)
@@ -729,6 +742,7 @@ else:
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10",
                     "-f", "lavfi", "-i", "sine=frequency=440", "-t", "120", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", MEDIA], check=True)
+    mark("video")
 
 def seeder(path):
     """Seeds path until the phase ends, and returns its magnet link."""
@@ -805,6 +819,7 @@ def p2p_suite():
         ok(f"{n} waits for its cache", get(n, "cache-pause") is True)
 
     print(f"\n[3] resume on {A} propagates to all {len(NODES) - 1} others")
+    must("the joins are over", quiet(NODES))
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES)
           and all(f"resumed by {A}" in osd(n) for n in others(A)))
@@ -1443,6 +1458,7 @@ def relay_suite():
     resolve("nodeLagB")
     lagged = ("nodeLagA", "nodeLagB")
     gap = lambda: abs((get("nodeLagA", "time-pos") or 0) - (get("nodeLagB", "time-pos") or 0))
+    must("the join is over", quiet(lagged))
     for i, (resumer, pauser) in enumerate([("nodeLagA", "nodeLagB"), ("nodeLagB", "nodeLagA")] * 2):
         setp(resumer, "pause", False)
         until(lambda: all(get(n, "pause") is False for n in lagged))
@@ -2007,6 +2023,7 @@ def gui_suite():
     ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
 
     print(f"\n[G10] a resume in {G}'s mpv: the feeds say who did it")
+    must("the join is over", quiet((H, G)))
     setp(G, "pause", False)
     until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
     ok(f"{H}'s mpv resumed", get(H, "pause") is False)
@@ -2532,6 +2549,8 @@ finally:
         if p.poll() is None:
             p.kill()
             p.wait(timeout=5)
+    mark("cases")
+    print("took: " + ", ".join(f"{n} {t - marks[i][1]:.0f}s" for i, (n, t) in enumerate(marks[1:])) + f", total {time.time() - marks[0][1]:.0f}s")
     # here, so a crash or an early exit still leaves its logs
     print(f"\nlogs: {keep_logs()}")
 
