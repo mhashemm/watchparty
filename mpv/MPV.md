@@ -82,8 +82,8 @@ By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absol
   then resumes by itself unless `pause` is set, which is why the node pauses itself.
 - **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet, or quitting)
   **the `property-change` event has no `data` field at all**, which unmarshals to `Data == ""`.
-- **`filename`** (RO): percent-decoded for a URL, and it fires only when the name changes, so a
-  replay says nothing. It can hold a newline, so it is logged as JSON. Probed on 0.37.0.
+- **`filename`** (RO): percent-decoded for a URL; it can hold a newline, so it is logged as JSON. Probed on 0.37.0. It fires only when the
+  name changes: a replay, or a switch between same-named files (a torrent's folders), makes no history entry. Accepted until it's a real problem.
 
 ## Events
 
