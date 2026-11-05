@@ -9,6 +9,9 @@ Security: the wire carries raw mpv JSON, but `apply` must dispatch only the fixe
 below, never write a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why
 that line is load-bearing and holds the cross-cutting mindset and trust model.
 
+**`party_test.go` runs whole parties in a `synctest` bubble,** through every order a seed picks.
+A new message or rule that nodes must agree on gets a check there.
+
 ## The connection
 
 - **`watch()` is the only reader of the socket**, and `do()` waits for a reply only
@@ -72,7 +75,8 @@ A seek while playing, or a node waiting on its cache, would leave the others out
 step, so that node pauses everyone with a reason:
 
 - **`seek`**: a `seek` event while playing sets `seeking`; the next `time-pos` is where
-  it landed. `sync()` only seeks while paused, so a seek while playing is always ours.
+  it landed. A peer's seek right before its resume reports after mpv replies to the resume, when
+  `c.paused` is false, so until `playback-restart` (`peerSeek`) a `seek` isn't ours. mpv folds seeks.
 - **`buffering`**: `paused-for-cache` turns `yes` while playing.
 - **`still buffering`**: a local resume while `stalled` is caught and not broadcast.
   A **peer's** resume while `stalled` never reaches mpv: `pause()` refuses it and sends
@@ -114,7 +118,8 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
    member's pause often arrives first), and broadcasts `start-pos` = `c.pos`. A member
    still `joining` doesn't answer: its position isn't the party's.
 3. The joiner takes the **first** `start-pos` only: applies a pause as from that peer
-   (it can beat the pauses), then the seek, unless already within 0.1s.
+   (it can beat the pauses), then the seek, unless already within 0.1s. Members stop a moment
+   apart, so everyone then settles on the earliest stop (`settling`, below).
 4. Any resume or seek clears `joining`, so the room's first node stops being a joiner.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
@@ -126,7 +131,7 @@ relay loses, pauses the party. Reading the text means an already deployed relay 
 P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's next send.
 
 - Each node pauses itself and it goes out as its own pause, so a node whose notice was
-  lost still stops. Nodes stop a moment apart, so until the next resume `leaving` makes
+  lost still stops. Nodes stop a moment apart, so until the next resume `settling` makes
   `align` follow any earlier `paused-at`: they settle on the earliest stop.
 - **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
   and a pause would hold everyone else just short of it. So `duration` is observed.
@@ -150,6 +155,12 @@ reason: nobody starts the next one until someone resumes.
 - **`followEntry` pauses first**, so the file opens stopped, and marks `applied`, so
   mpv's report isn't sent back. It skips one it is on or already headed to: every member
   answers a joiner, and two nodes often reach the end together.
+- **Only a node still `joining` follows an answer to a joiner** (a `playlist-pos` with no
+  `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
+  before two people crossed would otherwise send each to the other's entry, for good.
+- **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
+  answers the other, and following both ways would swap them. An answer from anyone whose
+  join it didn't hear is the party's, and is followed, lower or not.
 - **Only a matching `playlist-pos` uses up the marker.** mpv's first report of where it
   started can land after a peer already sent this node elsewhere; used up on that, the real
   echo goes out as this node moving the party.
@@ -167,7 +178,7 @@ reason: nobody starts the next one until someone resumes.
   move is followed, lower or not, so someone who missed one catches up on the next.
 - Accepted: a seek reaching someone just before the move it depends on is lost. A node
   that really is on another entry stays paused until the next move, since its resumes
-  and everyone else's are dropped.
+  and everyone else's are dropped. A seek right after a move can lose to a stop on its way.
 
 e2e `[16]`, `[R15c]`.
 

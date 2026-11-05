@@ -18,20 +18,21 @@ import (
 )
 
 const (
-	pause          = "pause"
-	timePos        = "time-pos"
-	pausedForCache = "paused-for-cache"
-	playlistPos    = "playlist-pos"
-	fileLoaded     = "file-loaded"
-	duration       = "duration"
-	propertyChange = "property-change"
-	seek           = "seek"
-	setProperty    = "set_property"
-	showText       = "show-text"
-	pauseReason    = "pause-reason"
-	joined         = "joined"
-	startPos       = "start-pos"
-	pausedAt       = "paused-at"
+	pause           = "pause"
+	timePos         = "time-pos"
+	pausedForCache  = "paused-for-cache"
+	playlistPos     = "playlist-pos"
+	fileLoaded      = "file-loaded"
+	duration        = "duration"
+	propertyChange  = "property-change"
+	seek            = "seek"
+	playbackRestart = "playback-restart"
+	setProperty     = "set_property"
+	showText        = "show-text"
+	pauseReason     = "pause-reason"
+	joined          = "joined"
+	startPos        = "start-pos"
+	pausedAt        = "paused-at"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
@@ -145,28 +146,30 @@ type Response struct {
 }
 
 type Client struct {
-	ctx       context.Context
-	ready     chan struct{}
-	outgoing  chan<- []byte
-	conn      *connection
-	mu        sync.Mutex
-	paused    bool
-	applied   map[string]string
-	seeks     []float64
-	seen      map[string]bool
-	pos       float64
-	duration  float64
-	seeking   bool
-	stalled   bool
-	reason    string
-	joining   bool
-	pausedBy  string
-	entries   int
-	current   int
-	movedFrom int
-	loading   bool
-	heldSeek  string
-	leaving   bool
+	ctx        context.Context
+	ready      chan struct{}
+	outgoing   chan<- []byte
+	conn       *connection
+	mu         sync.Mutex
+	paused     bool
+	applied    map[string]string
+	seeks      []float64
+	seen       map[string]bool
+	pos        float64
+	duration   float64
+	seeking    bool
+	peerSeek   bool
+	stalled    bool
+	reason     string
+	joining    bool
+	pausedBy   string
+	entries    int
+	current    int
+	movedFrom  int
+	joinedWith []string
+	loading    bool
+	heldSeek   string
+	settling   bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -197,9 +200,13 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 	defer c.mu.Unlock()
 	switch event.EventType {
 	case seek:
-		if !c.paused {
+		if !c.paused && !c.peerSeek {
 			c.seeking = true
 		}
+		return nil, errDoNotSend
+
+	case playbackRestart:
+		c.peerSeek = false
 		return nil, errDoNotSend
 
 	case fileLoaded:
@@ -262,7 +269,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking, c.joining, c.leaving = false, false, false
+				c.seeking, c.joining, c.settling = false, false, false
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
@@ -291,7 +298,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			if !c.paused {
 				c.pauseParty("video changed")
 			}
-			c.movedFrom = previous
+			c.movedFrom, c.joining = previous, false
 			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
 			return [][]byte{b}, errDoNotSend
 		default:
@@ -492,6 +499,11 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
+	if joining {
+		c.joinedWith = append(c.joinedWith, hostname)
+	} else {
+		c.settling = true
+	}
 	var entry []byte
 	if c.entries > 0 {
 		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
@@ -526,7 +538,7 @@ func (c *Client) welcome(hostname string) error {
 
 func (c *Client) left(hostname string) error {
 	c.mu.Lock()
-	c.leaving = true
+	c.settling = true
 	playing := !c.paused
 	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
 	c.mu.Unlock()
@@ -548,8 +560,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
+	notForUs := event.From == nil && (!c.joining || slices.Contains(c.joinedWith, hostname) && i < heading)
 	c.mu.Unlock()
-	if i == heading || lost {
+	if i == heading || lost || notForUs {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -587,9 +600,13 @@ func (c *Client) arrive(event Event, hostname string) error {
 	c.mu.Lock()
 	joining := c.joining
 	c.joining = false
+	c.settling = c.settling || joining
 	there := c.at(pos)
 	c.mu.Unlock()
-	if !joining || there {
+	if !joining {
+		return c.align(event, hostname)
+	}
+	if there {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -636,7 +653,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining, c.leaving = false, false
+		c.joining, c.settling = false, false
 	}
 	c.mu.Unlock()
 
@@ -681,8 +698,15 @@ func (c *Client) seekTo(data string) error {
 		c.mu.Unlock()
 		return nil
 	}
+	c.peerSeek = true
 	c.mu.Unlock()
-	return c.conn.do(setProperty, timePos, data)
+	err = c.conn.do(setProperty, timePos, data)
+	if err != nil {
+		c.mu.Lock()
+		c.peerSeek = false
+		c.mu.Unlock()
+	}
+	return err
 }
 
 func (c *Client) align(event Event, hostname string) error {
@@ -691,7 +715,11 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.leaving && pos < c.pos)
+	stopped := c.pos
+	if n := len(c.seeks); n > 0 {
+		stopped = c.seeks[n-1]
+	}
+	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.settling && pos < stopped)
 	c.mu.Unlock()
 	if !follow {
 		return nil

@@ -95,7 +95,7 @@ Every event goes through `handleEvent`; anything but `property-change` is
 | `property-change` (`id`, `name`, `data`) | An observed property changed, or right after `observe_*`. `id` is the observe id. |
 | `start-file`, `file-loaded` | The file is opening, then loaded. |
 | `seek` | A seek started. Arrives **before** the matching `time-pos` change. |
-| `playback-restart` | Playback (or the paused frame) is ready after a seek or a load. |
+| `playback-restart` | Playback (or the paused frame) is ready after a seek or a load. Rapid seeks give one `seek` and one of these (probed on 0.40.0). |
 | `audio-reconfig`, `video-reconfig` | Output reinitialised. Noise for us. |
 | `end-file` (`reason`) | `"quit"` for a quit, `"eof"` for the end of the file. |
 

@@ -44,6 +44,26 @@ today: `[R20]` waits out the real 30s ping and 10s pong timeout.
   the full string (`f"paused by {A}"`) or `pauses()`.
 - The suite reads nodes through their log lines (root `CLAUDE.md` has the table).
 - mpv emits no `property-change` for a no-op set, so counted events must alternate.
+- **Wait on the node you act on or read from**, never on another node's view of it. A
+  relay announces a join before the joiner has read its handshake.
+- **The `until` covers everything the next `ok` reads.** Prefer `ok(name, until(cond))`.
+- **`booted` doesn't mean connected**, and neither means the node's `joined` has landed.
+  Before a step that a message on its way would undo, wait for `quiet(names)`.
+- **Assert what the protocol guarantees.** Before checking an order or "every node", ask
+  whether another result is allowed. Nodes hear things in different orders.
+- **Slow only the client under test**, never a shared server.
+
+## Flakes
+
+A flake is a bug until shown otherwise; several were real ones. Reproduce it with an
+injected delay before fixing it. No retries in CI, and raising a ceiling is not a fix.
+
+`--jitter SEED` holds each direction of each relay connection, and each page's `/state`
+and `/log` answers, for a random time. CI runs it on every PR with a new seed. A seed fixes
+the delays, not the run: threads still race, so a failure may not repeat on replay.
+It can't reorder what stays in order on one connection or happens inside one process, so
+those orders need a Go test (`mpv/party_test.go`). It covers `relay` and `gui`; `p2p` peers dial each other directly.
+A case that can't work under it says why and is left out by name; none needs to today.
 
 ## Windows (`e2e_windows.py`)
 
@@ -70,6 +90,8 @@ natively (the runner is thrown away). Facts it rests on:
     fails too. Loosening the container for it would trade its isolation for the browser's.
   - `./e2e.py` on the host still works, isolated only by each GUI's environment, with
     its run folder left in `/tmp`.
+- **One `gui` container at a time on a machine:** they share docker's bridge, so a node's SSDP
+  search finds another's fake router and [G34] fails. Other phases can run side by side.
 - `--audio` uses a real, muted audio output. It needs a sound server, so CI doesn't
   run it.
 - The script points its stdin at `/dev/null` so no mpv puts the terminal in raw mode.

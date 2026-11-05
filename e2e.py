@@ -30,14 +30,15 @@ each on its own ports and in its own run directory:
     ./e2e.py --mode relay       # one phase
     ./e2e.py --file video.mkv   # use a real file instead of a generated one
     ./e2e.py --nodes 3          # fewer nodes, faster
+    ./e2e.py --jitter 7         # the relay and each page answer late, by seed 7's random delays
 
 Needs go, mpv, Chrome or Chromium, dbus-daemon and (unless --file is given) ffmpeg.
 All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, functools, glob, http.client, http.server, json, os, re, shutil, signal, socket, subprocess
-import plistlib, queue, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import argparse, functools, glob, http.client, http.server, itertools, json, os, re, shutil, signal, socket, subprocess
+import plistlib, queue, random, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
 from e2e_lib import Gateway, Page, Release, find_page, sha
@@ -49,6 +50,7 @@ MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --c
 BOOT = 20            # mpv loading the file, plus the handshake
 SETTLE = 10          # an event reaching every node
 QUIET = 1.0
+JITTER = 0.4         # a message crosses the proxy twice, node to relay to node: this stays under QUIET
 STUB_HOST = "slowpeer"
 
 
@@ -105,6 +107,7 @@ ap.add_argument("--port-base", type=int, default=6969)
 ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
 ap.add_argument("--mode", choices=("p2p", "relay", "caps", "gui", "all"), default="all")
 ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
+ap.add_argument("--jitter", metavar="SEED", help="random delays on the relay and gui phases' connections, replayable by seed")
 args = ap.parse_args()
 if args.audio:
     MPVFLAGS = MPVFLAGS.replace("--ao=null", "--mute=yes")
@@ -114,7 +117,7 @@ os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
-    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else [])
+    flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else []) + (["--jitter", args.jitter] if args.jitter else [])
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
              for i, m in enumerate(("p2p", "relay", "caps", "gui"))]
@@ -143,7 +146,9 @@ PORTS["wifiGuest"] = args.port_base + len(NODES) + 10
 PORTS["cliRelease"] = args.port_base + len(NODES) + 11
 PORTS["gateway"] = args.port_base + len(NODES) + 12
 PORTS["upnpNode"] = args.port_base + len(NODES) + 13
-RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
+PORTS["jitter"] = args.port_base + len(NODES) + 14
+JITTERED = args.jitter if args.mode in ("relay", "gui") else None
+RELAY_URL = f"ws://127.0.0.1:{PORTS['jitter' if JITTERED else 'relay']}"
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
 
@@ -227,7 +232,8 @@ def listening(port):
 
 
 def near(v, x, tol=1.5):
-    return v is not None and abs(v - x) < tol
+    """Either can be None: mpv has no position while it switches files."""
+    return v is not None and x is not None and abs(v - x) < tol
 
 
 def booted(n):
@@ -262,6 +268,20 @@ def pauses(n):
     """How many 'paused by X' notices this node displayed. osd() returns a list, so
     count() is an exact match, never a substring search."""
     return sum(1 for s in osd(n) if s.startswith("paused by "))
+
+
+def quiet(names, timeout=SETTLE):
+    """Wait until these nodes' logs have stopped growing for QUIET, longer than anything
+    can take to arrive. For a step that a message still on its way would undo."""
+    last, since = None, time.time()
+
+    def still():
+        nonlocal last, since
+        now = [os.path.getsize(nodes[n]["log"]) for n in names]
+        if now != last:
+            last, since = now, time.time()
+        return time.time() - since >= QUIET
+    return until(still, timeout)
 
 
 def known(n):
@@ -342,13 +362,15 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
 
 def lag(port, target, delay):
     """A TCP proxy on port that delivers every chunk to target delay seconds late, in
-    order, both ways: a network with that much one-way latency."""
+    order, both ways: a network with that much one-way latency. delay can instead be a
+    function from a direction's name to a function giving each chunk's delay."""
+    delays = delay if callable(delay) else lambda _: lambda: delay
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", port))
     srv.listen()
 
-    def pipe(src, dst):
+    def pipe(src, dst, wait):
         q = queue.Queue()
 
         def read():
@@ -357,7 +379,7 @@ def lag(port, target, delay):
                     b = src.recv(65536)
                 except OSError:
                     b = b""
-                q.put((time.time() + delay, b))
+                q.put((time.time() + wait(), b))
                 if not b:
                     return
         threading.Thread(target=read, daemon=True).start()
@@ -373,16 +395,28 @@ def lag(port, target, delay):
                 return
 
     def accept():
-        while True:
+        for n in itertools.count():
             try:
                 c, _ = srv.accept()
-                u = socket.create_connection(("127.0.0.1", target))
             except OSError:
                 return
-            threading.Thread(target=pipe, args=(c, u), daemon=True).start()
-            threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+            try:
+                u = socket.create_connection(("127.0.0.1", target))
+            except OSError:  # the target is down for now, as in [R13]
+                c.close()
+                continue
+            threading.Thread(target=pipe, args=(c, u, delays(f"{n} up")), daemon=True).start()
+            threading.Thread(target=pipe, args=(u, c, delays(f"{n} down")), daemon=True).start()
     threading.Thread(target=accept, daemon=True).start()
     return srv
+
+
+def jitter(name):
+    """One direction of one connection: some are slower than others, so messages between
+    nodes arrive in a different order from one seed to the next."""
+    rng = random.Random(f"{JITTERED}/{name}")
+    worst = rng.uniform(0, JITTER)
+    return lambda: rng.uniform(0, worst)
 
 
 def launch_relay(extra=None):
@@ -581,7 +615,7 @@ def attach(n, count):
     if not url:
         sys.exit(f"{n} never opened its page; see {nodes[n]['log']}")
     nodes[n]["page"] = Page(url)
-    nodes[n]["page"].ready(BOOT, downloads=f"{nodes[n]['home']}/downloads")
+    nodes[n]["page"].ready(BOOT, downloads=f"{nodes[n]['home']}/downloads", jitter=(random.Random(f"{JITTERED}/{n}/{count}").getrandbits(32), JITTER) if JITTERED else None)
 
 
 def js(n, expr):
@@ -1076,6 +1110,7 @@ def relay_suite():
         ok(f"{n} paused", get(n, "pause") is True)
 
     print(f"\n[R3] resume on {A} fans out to everyone")
+    must("the joins are over", quiet(NODES))  # a "joined" still on its way would pause the party
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES)
           and all(f"resumed by {A}" in osd(n) for n in others(A)))
@@ -1121,6 +1156,21 @@ def relay_suite():
         ok(f"{n} at {A}'s {at:.2f}s", near(v, at, 0.15), f"time-pos={v}")
         ok(f"{n} told why", f"paused for {A}: seek" in osd(n))
     ok(f"{A} told it paused everyone", "paused for everyone: seek" in osd(A))
+
+    print("\n[R6c] seeking and resuming at once doesn't pause the party for a seek")
+    must("the last seek is over", quiet(NODES))
+    seeks = lambda n: [s for s in osd(n) if s.endswith(": seek")]
+    before = {n: len(seeks(n)) for n in NODES}
+    for i in range(20):  # without the fix about one round in six does it, so a few aren't enough
+        setp(A, "time-pos", 5.0 + i * 2)
+        setp(A, "pause", False)
+        must(f"round {i + 1} plays", until(lambda: all(get(n, "pause") is False for n in NODES)))
+        time.sleep(0.15)
+        setp(A, "pause", True)
+        must(f"round {i + 1} stops", until(lambda: all(get(n, "pause") is True for n in NODES)))
+    must("the rounds are over", quiet(NODES))
+    for n in NODES:
+        ok(f"{n} never took it for a seek while playing", len(seeks(n)) == before[n], str(seeks(n)[before[n]:]))
 
     print("\n[R7] no a->b->a rebound (relay has no counters; this is the only guard)")
     # start from a known state: everyone playing, so the pause below is a real change
@@ -1197,6 +1247,19 @@ def relay_suite():
     ok(f"the joiner starts at {at:.2f}s, not 0", near(get("mid", "time-pos"), at, 0.3) and at > 1,
        f"time-pos={get('mid', 'time-pos')}")
     stop("mid")
+
+    print("\n[R10c] a joiner whose relay connects only after mpv has loaded still pauses the party, and starts where it stopped")
+    must("the last joiner's leave is over", quiet(NODES))
+    setp(A, "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
+    far = lag(0, PORTS["relay"], 1)
+    launch("nodeFar", room=ROOM, tag="far", relay=f"ws://127.0.0.1:{far.getsockname()[1]}")
+    must("mpv loaded before the relay answered", until(lambda: booted("far") and connected("far"), BOOT) and log("far").index("init done") < log("far").index("relay: connected"), log("far"))
+    resolve("far")
+    ok("the party paused for it", until(lambda: all(get(n, "pause") is True for n in NODES + ["far"]) and all("paused for nodeFar: joining" in osd(n) for n in NODES)), str([get(n, "pause") for n in NODES]))
+    ok("it starts where the party stopped", until(lambda: near(get("far", "time-pos"), get(A, "time-pos"), 0.3)), f"{get('far', 'time-pos')} and {get(A, 'time-pos')}")
+    stop("far")
+    far.close()
 
     print("\n[R11] a wrong secret is refused and the node gives up instead of retrying")
     launch("nodeBad", room=ROOM, secret="wrongsecret", tag="bad")
@@ -1298,6 +1361,7 @@ def relay_suite():
        f"{osd('nodeUrl4').count('synced by nodeUrl1')} syncs")
 
     print("\n[R11d2] a joiner slow to load while the party plays pauses it once loaded, not before")
+    must("the last case is over", quiet(("nodeUrl1", "nodeUrl2", "nodeUrl4")))
     setp("nodeUrl1", "pause", False)
     until(lambda: all(get(n, "pause") is False for n in ("nodeUrl1", "nodeUrl2", "nodeUrl4")))
     Quiet.late = 3
@@ -1325,6 +1389,7 @@ def relay_suite():
     resolve("nodeSlow")
     reasons = lambda: [s for s in osd("nodeFast") if s.startswith("paused for nodeSlow: ")]
     both_paused = lambda: all(get(n, "pause") is True for n in ("nodeFast", "nodeSlow"))
+    must("the join is over", quiet(("nodeFast", "nodeSlow")))
     setp("nodeFast", "pause", False)
     until(lambda: reasons() and both_paused(), 30)
     ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
@@ -1383,7 +1448,7 @@ def relay_suite():
     ok("mpv's own reason is in its log", "mpv: Failed to recognize file format." in log("nodeNotVideo"))
 
     print("\n[R12] a node that reconnects while the relay still holds its dead conn")
-    proxy = Proxy(PORTS["relay"])
+    proxy = Proxy(PORTS["jitter" if JITTERED else "relay"])
     launch("nodeFlaky", room=ROOM, tag="flaky", relay=proxy.url)
     # the relay announces a join before the node has read the handshake's reply, so a cut
     # that only waited for the announcement can land mid-handshake: a failed dial, not a drop
@@ -1455,7 +1520,7 @@ def relay_suite():
     magnet = seeder(MEDIA)
     must("the seeder printed a magnet link", magnet.startswith("magnet:?"), magnet)
     launch("torA", room="torroom", media=magnet)
-    must("the first node opens it", until(lambda: booted("torA"), 60), log("torA")[-300:])
+    must("the first node opens it", until(lambda: booted("torA") and connected("torA"), 60), log("torA")[-300:])
     resolve("torA")
     ok("it says what it found", f"torrent: found {os.path.basename(MEDIA)}, 1 to play" in log("torA"))
     launch("torB", room="torroom", media=magnet)
@@ -1463,11 +1528,12 @@ def relay_suite():
     resolve("torB")
     ok("both have one identity, whatever the local port", fingerprint("torA") == fingerprint("torB"))
     ok("mpv reads it from loopback", str(get("torA", "path")).startswith("http://127.0.0.1:"), get("torA", "path"))
+    must("the join is over", quiet(("torA", "torB")))
     setp("torA", "time-pos", 80)
-    ok("a seek reaches the other", until(lambda: abs(get("torB", "time-pos") - 80) < 0.15), get("torB", "time-pos"))
+    ok("a seek reaches the other", until(lambda: near(get("torB", "time-pos"), 80, 0.15)), get("torB", "time-pos"))
     ok("and lands on a part nobody had yet", until(lambda: get("torB", "seeking") is False and get("torA", "seeking") is False, 30))
     setp("torA", "pause", False)
-    ok("it plays", until(lambda: get("torB", "pause") is False and get("torB", "time-pos") > 80.5, 30), get("torB", "time-pos"))
+    ok("it plays", until(lambda: get("torB", "pause") is False and (get("torB", "time-pos") or 0) > 80.5, 30), get("torB", "time-pos"))
     setp("torB", "pause", True)
     ok("and pauses", until(lambda: get("torA", "pause") is True))
     _, diff = variants()
@@ -1494,7 +1560,7 @@ def relay_suite():
         shutil.copy(MEDIA, f"{pack}/{name}")
     magnet = seeder(pack)
     launch("packA", room="packroom", media=magnet)
-    must("it opens", until(lambda: booted("packA"), 60), log("packA")[-300:])
+    must("it opens", until(lambda: booted("packA") and connected("packA"), 60), log("packA")[-300:])
     resolve("packA")
     ok("with every video", get("packA", "playlist-count") == 3, get("packA", "playlist-count"))
     ok("on the first", get("packA", "filename") == "e1.mkv", get("packA", "filename"))
@@ -1532,12 +1598,12 @@ def relay_suite():
     def stopped():
         return all(get(n, "pause") is True for n in (host, guest))
     def together():
-        return abs(get(host, "time-pos") - get(guest, "time-pos")) < 0.15
+        return near(get(host, "time-pos"), get(guest, "time-pos"), 0.15)
     def seek(pos):
         setp(host, "time-pos", pos)
-        return until(lambda: abs(get(guest, "time-pos") - pos) < 0.15 and abs(get(host, "time-pos") - pos) < 0.15)
+        return until(lambda: near(get(guest, "time-pos"), pos, 0.15) and near(get(host, "time-pos"), pos, 0.15))
     launch(host, room="playlistroom", media=f"{folder}/video2.mkv", playlist=True)
-    must(f"{host} is up", until(lambda: booted(host), BOOT))
+    must(f"{host} is up", until(lambda: booted(host) and connected(host), BOOT))
     resolve(host)
     launch(guest, room="playlistroom", media=f"{copy}/a1.mkv", playlist=True)
     must(f"{guest} is up", until(lambda: booted(guest) and f"{guest} has joined" in osd(host), BOOT))
@@ -1564,16 +1630,17 @@ def relay_suite():
     must("near its end", seek(get(host, "duration") - 1))
     setp(host, "pause", False)
     ok("reaching the end moves everyone on", until(on("video10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
-    ok("and stops them at the start", until(lambda: stopped() and get(host, "time-pos") < 2 and get(guest, "time-pos") < 2),
+    ok("and stops them at the start", until(lambda: stopped() and near(get(host, "time-pos"), 0, 2) and near(get(guest, "time-pos"), 0, 2)),
        str([(get(n, "pause"), get(n, "time-pos")) for n in (host, guest)]))
     ok("in the same place", until(together), str([get(n, "time-pos") for n in (host, guest)]))
 
+    must("the move is over", quiet((host, guest)))
     must("a few seconds in", seek(5))
     launch(late, room="playlistroom", media=f"{folder}/video2.mkv", playlist=True)
     must(f"{late} is up", until(lambda: booted(late), BOOT))
     resolve(late)
     ok("a joiner comes to the party's entry", until(lambda: get(late, "filename") == "video10.mkv"), get(late, "filename"))
-    ok("and its position", until(lambda: abs(get(late, "time-pos") - 5) < 0.15), get(late, "time-pos"))
+    ok("and its position", until(lambda: near(get(late, "time-pos"), 5, 0.15)), get(late, "time-pos"))
     ok("and nobody else moved", on("video10.mkv", "a10.mkv")() and together(), str([get(n, "time-pos") for n in (host, guest)]))
 
     short = f"{RUN}/short"
@@ -1595,7 +1662,7 @@ def relay_suite():
 
     print("\n[R15d] it starts on the file you opened, and the neighbours are either side of it")
     launch("epD", room="midplaylist", media=f"{folder}/video3.mkv", playlist=True)
-    must("it is up", until(lambda: booted("epD"), BOOT))
+    must("it is up", until(lambda: booted("epD") and connected("epD"), BOOT))
     resolve("epD")
     ok("it opens that file", get("epD", "filename") == "video3.mkv", get("epD", "filename"))
     launch("epE", room="midplaylist", media=f"{folder}/video2.mkv", playlist=True)
@@ -1610,6 +1677,21 @@ def relay_suite():
     ok("next is the file after", until(lambda: get("epD", "filename") == "video10.mkv" and get("epE", "filename") == "video10.mkv"), get("epE", "filename"))
     for n in ("epD", "epE"):
         stop(n)
+
+    print("\n[R15f2] two people starting at once on different entries end up together, on the higher entry")
+    slow = lag(0, PORTS["relay"], 0.5)
+    via = f"ws://127.0.0.1:{slow.getsockname()[1]}"
+    launch("epH", room="startingtogether", media=f"{folder}/video2.mkv", relay=via, playlist=True)
+    launch("epI", room="startingtogether", media=f"{folder}/video10.mkv", relay=via, playlist=True)
+    must("both are in", until(lambda: all(booted(n) and connected(n) for n in ("epH", "epI")), BOOT))
+    for n in ("epH", "epI"):
+        resolve(n)
+    ok("they settle on the higher one", until(lambda: get("epH", "filename") == get("epI", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epH", "epI")]))
+    time.sleep(2)
+    ok("and stay there", get("epH", "filename") == get("epI", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epH", "epI")]))
+    for n in ("epH", "epI"):
+        stop(n)
+    slow.close()
 
     print("\n[R15g] two people moving at once end up together, on the higher entry")
     slow = lag(PORTS["upnpNode"], PORTS["relay"], 0.5)
@@ -1636,8 +1718,9 @@ def relay_suite():
     must("both are in", until(lambda: booted("nodeEnd1") and booted("nodeEnd2") and "nodeEnd2 has joined" in osd("nodeEnd1"), BOOT))
     for n in ("nodeEnd1", "nodeEnd2"):
         resolve(n)
+    must("the join is over", quiet(("nodeEnd1", "nodeEnd2")))
     setp("nodeEnd1", "time-pos", get("nodeEnd1", "duration") - 3)
-    until(lambda: abs(get("nodeEnd2", "time-pos") - get("nodeEnd1", "time-pos")) < 0.1)
+    until(lambda: near(get("nodeEnd2", "time-pos"), get("nodeEnd1", "time-pos"), 0.1))
     setp("nodeEnd1", "pause", False)
     must("they play", until(lambda: get("nodeEnd2", "pause") is False))
     ipc(nodes["nodeEnd1"]["sock"], "quit")
@@ -2391,6 +2474,9 @@ def keep_logs():
     return dest
 
 
+if JITTERED:
+    print(f"jitter seed {JITTERED}: replay with --mode {args.mode} --jitter {JITTERED}")
+    lag(PORTS["jitter"], PORTS["relay"], jitter)
 try:
     {"p2p": p2p_suite, "relay": relay_suite, "caps": caps_suite, "gui": gui_suite}[args.mode]()
 except Stop as e:

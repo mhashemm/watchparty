@@ -37,7 +37,7 @@ func accept(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Con
 }
 
 func newRelayConn(addr string, incoming chan mpv.IncomingMessage) *relayConn {
-	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond}
+	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, up: make(chan struct{}, 1)}
 }
 
 func waitDone(t *testing.T, done <-chan struct{}, what string) {
@@ -215,6 +215,39 @@ func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
 
 	cancel()
 	waitDone(t, returned, "Broadcast outlived the party")
+}
+
+// mpv can load before the first dial returns, and what it says then must not be lost:
+// a dropped "joined" leaves the joiner at 0 with the party playing on. The dial is held
+// long enough for a Broadcast that doesn't wait to have taken the event and dropped it.
+func TestEventsBeforeTheFirstConnectionAreHeld(t *testing.T) {
+	t.Parallel()
+	got := make(chan []byte, 1)
+	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		conn := accept(t, w, r)
+		_, b, err := conn.Read(r.Context())
+		if err == nil {
+			got <- b
+		}
+		conn.Read(r.Context())
+	})
+	r := newRelayConn(addr, nil)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	outgoing := make(chan []byte, 1)
+	outgoing <- []byte(`{"name":"joined"}`)
+	go r.Broadcast(c, outgoing)
+	go r.Connect(c, cancel)
+
+	select {
+	case b := <-got:
+		if want := `{"hostname":"me","event":{"name":"joined"}}`; string(b) != want {
+			t.Fatalf("sent %s, want %s", b, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the event sent before the connection was lost")
+	}
 }
 
 // An invite pasted as wss://host/ must not dial //ws, which the relay's mux
