@@ -799,8 +799,9 @@ func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-// New wires up one mpv. names are its playlist entries in order, and nil for a single file.
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string) (*Client, error) {
+// New wires up one mpv. names are its playlist entries in order, and nil for a single file;
+// start is the entry it opens on, which a peer's answer can arrive before mpv reports.
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -816,6 +817,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		applied:   map[string]string{},
 		seen:      map[string]bool{},
 		names:     names,
+		current:   start,
 		movedFrom: -1,
 	}
 

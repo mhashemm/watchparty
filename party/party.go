@@ -186,7 +186,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names)
+	}, conn, outgoing, incoming, names, start)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():

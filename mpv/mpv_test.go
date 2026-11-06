@@ -361,7 +361,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil)
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0)
 		close(loaded)
 	}()
 	select {
@@ -390,7 +390,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 		start := time.Now()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil)
+		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0)
 		if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 		}
@@ -430,7 +430,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 	incoming := make(chan IncomingMessage)
 	loaded := make(chan error, 1)
 	go func() {
-		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil)
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil, 0)
 		loaded <- err
 	}()
 	send := func(name, data string) {
@@ -1482,5 +1482,39 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 	send(propertyChangeLine(pause, "no", 0))
 	if e := nextEvent(t, outgoing); e.Name != pause {
 		t.Fatalf("broadcast %+v, want nothing before the resume", e)
+	}
+}
+
+// A node that opens on a later entry can hear the party name that entry before mpv has
+// reported where it is. Taking itself for entry 0, it set the entry it was already on,
+// which mpv answers with nothing, and waited for that load forever.
+func TestJoinerKnowsItsStartingEntryBeforeMpvSaysSo(t *testing.T) {
+	t.Parallel()
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	sent := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			if req.Command[0] != "observe_property_string" {
+				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+			} else if req.Command[2] == timePos {
+				fmt.Fprint(theirs, `{"event":"property-change","id":3,"name":"time-pos","data":"0.000000"}`+"\n")
+			}
+		}
+	}()
+	incoming := make(chan IncomingMessage, 2)
+	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"event":"property-change","name":"playlist-pos","data":"1"}`)}
+	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"name":"show-text","data":"mark"}`)}
+	if _, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, []string{"e1", "e2", "e3"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, sent); got != "show-text mark 5000" {
+		t.Fatalf("sent %q before the mark, want nothing: it is already on that entry", got)
 	}
 }
