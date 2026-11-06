@@ -264,8 +264,8 @@ details[open] summary { margin-bottom: 14px; }
 #history-list > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 #history-list b { word-break: break-word; }
 #history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
-#history-list .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: 6px; }
-#history-list .actions button { margin-left: 0; }
+#history-list .continue { grid-column: 2; grid-row: 1 / span 2; background: var(--moss); border-color: var(--moss-deep); color: #fff; }
+#history-list .continue:hover:not(:disabled) { background: var(--moss-deep); }
 .videos { grid-column: 1 / -1; list-style: none; margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: .9rem; }
 .videos li { padding: 4px 0; display: flex; flex-direction: column; word-break: break-word; }
 .videos .when { color: var(--ink-soft); font-size: .875rem; }
@@ -842,41 +842,28 @@ function renderHistory() {
     const when = new Date(p.started).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     const who = p.people && p.people.length ? `with ${names(p.people)}` : "just you";
     meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "on Wi-Fi" : "over the internet"}`;
-    const button = (className, text, action) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "small " + className;
-      b.textContent = text;
-      b.disabled = running;
-      b.addEventListener("click", action);
-      return b;
-    };
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    if (p.mode !== "direct" && p.room && p.secret) actions.append(button("continue", "Continue", () => continueParty(p)));
-    actions.append(button("again", "Watch again", () => watchAgain(p)));
-    li.append(title, meta, actions);
+    li.append(title, meta);
+    if (p.mode !== "direct" && p.room && p.secret) {
+      const resume = document.createElement("button");
+      resume.type = "button";
+      resume.className = "small continue";
+      resume.textContent = "Continue";
+      resume.disabled = running;
+      resume.addEventListener("click", () => continueParty(p));
+      li.append(resume);
+    }
     if (videos.length) li.append(videoList(videos, p.playlist ? null : fileName(p.file)));
     return li;
   }));
 }
-function watchAgain(p) {
+async function continueParty(p) {
   $("file").value = p.file;
   $("playlist").checked = !!p.playlist;
-  if (p.mode === "direct") {
-    setMode("direct");
-    $("addrs").value = p.addrs || "";
-    $("psecret").value = p.secret || "";
-  } else {
-    setMode("relay");
-    $("relay").value = p.relay || $("relay").value;
-    $("room").value = p.room || "";
-    $("secret").value = p.secret || "";
-  }
+  setMode("relay");
+  $("relay").value = p.relay || $("relay").value;
+  $("room").value = p.room;
+  $("secret").value = p.secret;
   show("party");
-}
-async function continueParty(p) {
-  watchAgain(p);
   await startParty({ continue: p.started });
 }
 $("clear-history").addEventListener("click", async () => {
@@ -1108,7 +1095,7 @@ function render(exitErr) {
   $("update").disabled = running;
   $("restart").disabled = running;
   $("restart-now").disabled = running;
-  document.querySelectorAll(".again").forEach(b => b.disabled = running);
+  document.querySelectorAll("#history-list .continue").forEach(b => b.disabled = running);
 }
 
 async function poll() {
