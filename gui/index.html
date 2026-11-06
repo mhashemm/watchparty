@@ -801,12 +801,12 @@ const fileName = path => /^magnet:/i.test(path || "")
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
 const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
-function videoList(videos, title) {
+function videoList(videos, hide) {
   const ul = document.createElement("ul");
   ul.className = "videos";
   ul.append(...videos.map(v => {
     const li = document.createElement("li");
-    if (v.name !== title) {
+    if (v.name !== hide) {
       const name = document.createElement("span");
       name.textContent = v.name;
       li.append(name);
@@ -819,11 +819,13 @@ function videoList(videos, title) {
   }));
   return ul;
 }
+// the full path of the file, or of its folder for a playlist; a magnet link has no path
 function partyTitle(p, files) {
-  if (files === 0) return fileName(p.file);
-  if (files === 1) return p.videos[0].name;
-  const place = /^magnet:|\.torrent$/i.test(p.file) ? fileName(p.file) : p.file.split(/[\\/]/).at(-2);
-  return place ? `${place} (${files} videos)` : `${files} videos`;
+  const place = /^magnet:/i.test(p.file) ? fileName(p.file)
+    : p.playlist && !/\.torrent$/i.test(p.file) ? p.file.replace(/[\\/][^\\/]*$/, "").replace(/^[^\\/]*$/, "")
+    : p.file;
+  const count = files > 1 ? `${files} videos` : "";
+  return place && count ? `${place} (${count})` : place || count;
 }
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
@@ -854,7 +856,7 @@ function renderHistory() {
     if (p.mode !== "direct" && p.room && p.secret) actions.append(button("continue", "Continue", () => continueParty(p)));
     actions.append(button("again", "Watch again", () => watchAgain(p)));
     li.append(title, meta, actions);
-    if (videos.length) li.append(videoList(videos, title.textContent));
+    if (videos.length) li.append(videoList(videos, p.playlist ? null : fileName(p.file)));
     return li;
   }));
 }

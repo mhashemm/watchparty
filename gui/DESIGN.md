@@ -77,8 +77,9 @@ that.
 - One centred card, `min(520px, 100% - 32px)`, with three views switched by pill tabs
   and mirrored in the URL hash (`#history`, `#settings`):
   - **Party**: Vitals and the form
-  - **History**: recent parties, newest first, each with **Watch again**, and **Continue**
-    above it for a party over the internet
+  - **History**: recent parties, newest first, each titled by its file's full path (a
+    playlist by its folder's), with **Watch again**, and **Continue** above it for a party
+    over the internet
   - **Settings**: the defaults, then **About** (version, Update button, saved-files
     folder). A red dot on the tab means an update is available.
 - **The `?`** in the card's corner opens the help over the page, on every view and during
