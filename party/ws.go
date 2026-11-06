@@ -20,6 +20,7 @@ import (
 const (
 	secretHeaderKey = "room-secret"
 	createHeaderKey = "create-key"
+	openedHeaderKey = "room-opened"
 
 	minBackoff = 1 * time.Second
 	maxBackoff = 30 * time.Second
@@ -92,6 +93,13 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 				return nil, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
 			}
 			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
+		}
+	}
+	// ahead of the first frame, so mpv knows it opened the room before anyone joins
+	if err == nil && res.Header.Get(openedHeaderKey) == "yes" {
+		select {
+		case r.incoming <- mpv.IncomingMessage{Opened: true}:
+		case <-c.Done():
 		}
 	}
 	return conn, err

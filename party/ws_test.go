@@ -307,3 +307,43 @@ func TestTrailingSlashOnRelayAddress(t *testing.T) {
 	}
 	conn.CloseNow()
 }
+
+// The relay tells the node that opened the room, and mpv hears it before any frame from
+// that connection, so it answers whoever joins with its position.
+func TestOpenedReachesMpvFirst(t *testing.T) {
+	t.Parallel()
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			w.Header().Set(openedHeaderKey, "yes")
+		}
+		conn := accept(t, w, r)
+		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"a","event":{"name":"joined"}}`))
+		if n == 1 {
+			conn.Close(websocket.StatusGoingAway, "relay restarting")
+			return
+		}
+		conn.Read(r.Context())
+	})
+	incoming := make(chan mpv.IncomingMessage, 8)
+	r := newRelayConn(addr, incoming)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Connect(c, cancel)
+
+	var got []string
+	for len(got) < 3 {
+		select {
+		case m := <-incoming:
+			if m.Opened {
+				got = append(got, "opened")
+			} else {
+				got = append(got, m.HostName)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("got only %v", got)
+		}
+	}
+	if want := []string{"opened", "a", "a"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v, want %v: opened first, and only for the connection that opened the room", got, want)
+	}
+}

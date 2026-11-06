@@ -377,9 +377,9 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 			l.Error("remembering a room failed", "err", err)
 		}
 	}
-	// a room brought back without the key has no host yet: a node told it opened the
-	// room answers joiners with its position, and only a key holder's is the party's
-	if created && (r.createKey == nil || len(key) > 0) {
+	// a node told it opened the room answers joiners with its position, and only a key
+	// holder's is the party's: not a keyless reopen, and nobody's on a keyless relay
+	if created && r.createKey != nil && len(key) > 0 {
 		res.Header().Set(openedHeaderKey, "yes")
 	}
 

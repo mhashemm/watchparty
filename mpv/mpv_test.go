@@ -1167,6 +1167,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"property-change","name":"playlist-pos","data":"1"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
 		t.Fatalf("sent %q, want the held seek", got)
@@ -1323,6 +1324,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"property-change","name":"playlist-pos","data":"1"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 41.000000" {
 		t.Fatalf("sent %q, want the seek on the new entry", got)

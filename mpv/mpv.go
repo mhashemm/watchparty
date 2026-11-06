@@ -53,6 +53,9 @@ var (
 type IncomingMessage struct {
 	HostName string
 	Event    []byte
+	// Opened is set only by this node's relay client, never from the wire: this node
+	// opened the room with the key, so its position is the party's.
+	Opened bool
 }
 
 type connection struct {
@@ -169,6 +172,7 @@ type Client struct {
 	movedFrom  int
 	following  []string
 	joinedWith []string
+	heardParty bool
 	loading    bool
 	heldSeek   string
 	settling   bool
@@ -225,12 +229,15 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		return nil, errDoNotSend
 
 	case fileLoaded:
-		c.loading = false
-		if c.heading() == c.current {
-			c.following = nil
+		// a file on the way to where this node is headed: a seek let go here lands on it
+		if c.heading() != c.current {
+			return nil, errDoNotSend
 		}
+		c.loading, c.following = false, nil
 		if held := c.heldSeek; held != "" {
-			c.heldSeek = ""
+			// still on its way until seekTo has marked the seek, or target sees neither
+			pos, _ := strconv.ParseFloat(held, 64)
+			c.heldSeek, c.peerSeek, c.seeks = "", true, append(c.seeks, pos)
 			go func() {
 				if err := c.seekTo(held); err != nil {
 					log.Println("seek after loading:", err)
@@ -483,6 +490,12 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 }
 
 func (c *Client) apply(e IncomingMessage) {
+	if e.Opened {
+		c.mu.Lock()
+		c.joining = false
+		c.mu.Unlock()
+		return
+	}
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
 	if err == nil && c.fromAnotherEntry(event) {
@@ -527,7 +540,7 @@ func (c *Client) welcome(hostname string) error {
 	}
 	var entry []byte
 	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
 	}
 	c.mu.Unlock()
 	if entry != nil {
@@ -548,7 +561,7 @@ func (c *Client) welcome(hostname string) error {
 	}
 	c.showText(fmt.Sprintf("paused for %s: joining", hostname))
 	c.mu.Lock()
-	b := position(startPos, c.pos)
+	b := position(startPos, c.target())
 	c.mu.Unlock()
 	select {
 	case c.outgoing <- c.tagged(b):
@@ -581,7 +594,12 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	notForUs := event.From == nil && (!c.joining || slices.Contains(c.joinedWith, hostname) && i < heading)
+	joiner := slices.Contains(c.joinedWith, hostname)
+	// once the party has answered, a fellow joiner's entry is only where it was
+	notForUs := event.From == nil && (!c.joining || joiner && (i < heading || c.heardParty))
+	if event.From == nil && c.joining && !joiner {
+		c.heardParty = true
+	}
 	c.mu.Unlock()
 	if i == heading || lost || notForUs {
 		return nil
@@ -756,6 +774,20 @@ func (c *Client) align(event Event, hostname string) error {
 		return nil
 	}
 	return c.seekTo(event.Data)
+}
+
+// target is where this node is, or where a seek it applied will land: a member that
+// just arrived is still on its way, and answering another joiner with the old spot
+// would drag the party back to it.
+func (c *Client) target() float64 {
+	held := c.heldSeek
+	if held == "" && c.peerSeek && len(c.seeks) > 0 {
+		return c.seeks[len(c.seeks)-1]
+	}
+	if pos, err := strconv.ParseFloat(held, 64); err == nil {
+		return pos
+	}
+	return c.pos
 }
 
 func (c *Client) at(pos float64) bool {

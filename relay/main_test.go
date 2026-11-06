@@ -636,16 +636,12 @@ func TestKeyHolderReplacesARememberedRoom(t *testing.T) {
 	}
 }
 
-// Without a create key anyone opens any room, and the opener is told so.
-func TestOpenerWithoutCreateKey(t *testing.T) {
+// Without a create key nobody holds one, so nobody's position is the party's: who
+// arrives first is chance, and two joiners settle on the higher entry as before.
+func TestNobodyOpensARoomWithoutCreateKey(t *testing.T) {
 	t.Parallel()
 	url := serve(t, newRelay(100, 100, 100))
-	join(t, url, "room", "s", "a")
-	if first, _ := opened(t, url, "room", "s", "b"); first {
-		t.Fatal("a joiner of an open room was told it opened it")
-	}
-	url2 := serve(t, newRelay(100, 100, 100))
-	if first, _ := opened(t, url2, "room", "s", "a"); !first {
-		t.Fatal("the first in a room wasn't told it opened it")
+	if first, _ := opened(t, url, "room", "s", "a", "k"); first {
+		t.Fatal("the first in a room on a keyless relay was told it opened it")
 	}
 }

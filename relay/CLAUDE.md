@@ -48,8 +48,8 @@ goes there too. Not in the release; deployed by hand or as the image.
   **`room-secret`** header, never the query (proxies log it); the optional create key
   in **`create-key`**. `file` isn't secret.
 - The 101 carries **`room-opened: yes`** for the node whose request created the room
-  with the key (or on a keyless relay), not for a keyless reopen: that node's position is
-  the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
+  with the key, not for a keyless reopen nor on a relay without `CREATE_KEY`: that node's
+  position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
 - Notices: "X has joined" and "X has left" to the room, and "connected to Y" to the
   joiner once per member already there, so the last joiner learns who is in the room.
 
