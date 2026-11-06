@@ -176,6 +176,8 @@ type Client struct {
 	loading    bool
 	heldSeek   string
 	settling   bool
+	earliest   float64
+	heard      bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -270,7 +272,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			log.Printf("now playing: %s\n", name)
 		case playlistPos:
 			if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-				c.current, c.pos, c.seeking = n, 0, false
+				c.current, c.pos, c.seeking, c.heard = n, 0, false, false
 				changed = c.seen[timePos]
 				if changed {
 					c.seeks = []float64{0}
@@ -297,11 +299,18 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			c.paused = event.paused()
 			if !c.paused {
 				c.seeks = nil
-				c.seeking, c.joining, c.settling = false, false, false
+				c.seeking, c.joining, c.settling, c.heard = false, false, false, false
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
 					extra = [][]byte{position(pausedAt, c.pos)}
+				}
+				if at, ok := c.earlierStop(); ok {
+					go func() {
+						if err := c.seekTo(at); err != nil {
+							log.Println("settling:", err)
+						}
+					}()
 				}
 			}
 		case timePos:
@@ -538,6 +547,7 @@ func (c *Client) welcome(hostname string) error {
 	} else {
 		c.settling = true
 	}
+	at, earlier := c.earlierStop()
 	var entry []byte
 	if len(c.names) > 0 {
 		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
@@ -552,6 +562,11 @@ func (c *Client) welcome(hostname string) error {
 	}
 	if joining {
 		return nil
+	}
+	if earlier {
+		if err := c.seekTo(at); err != nil {
+			return err
+		}
 	}
 	if playing {
 		err := c.pauseReq(true)
@@ -575,7 +590,11 @@ func (c *Client) left(hostname string) error {
 	c.settling = true
 	playing := !c.paused
 	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
+	at, earlier := c.earlierStop()
 	c.mu.Unlock()
+	if earlier {
+		return c.seekTo(at)
+	}
 	if !playing || ending {
 		return nil
 	}
@@ -702,7 +721,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining, c.settling = false, false
+		c.joining, c.settling, c.heard = false, false, false
 	}
 	c.mu.Unlock()
 
@@ -764,11 +783,13 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	stopped := c.pos
-	if n := len(c.seeks); n > 0 {
-		stopped = c.seeks[n-1]
+	if !c.heard || pos < c.earliest {
+		c.earliest, c.heard = pos, true
 	}
-	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.settling && pos < stopped)
+	stopped := c.stopped()
+	// while settling only an earlier stop counts, even from the peer whose pause we applied:
+	// its paused-at can land after another member's earlier one
+	follow := c.paused && !c.at(pos) && (c.settling && pos < stopped || !c.settling && c.pausedBy == hostname)
 	c.mu.Unlock()
 	if !follow {
 		return nil
@@ -788,6 +809,24 @@ func (c *Client) target() float64 {
 		return pos
 	}
 	return c.pos
+}
+
+func (c *Client) stopped() float64 {
+	if n := len(c.seeks); n > 0 {
+		return c.seeks[n-1]
+	}
+	return c.pos
+}
+
+// earlierStop is the earliest stop a peer sent since the last resume, if this node is
+// settling and stopped later. It can have arrived before this node knew to settle: a
+// member that applied someone's pause ignores everyone else's position until a leave or
+// a join makes it settle.
+func (c *Client) earlierStop() (string, bool) {
+	if !c.paused || !c.settling || !c.heard || c.earliest >= c.stopped() || c.at(c.earliest) {
+		return "", false
+	}
+	return strconv.FormatFloat(c.earliest, 'f', 6, 64), true
 }
 
 func (c *Client) at(pos float64) bool {

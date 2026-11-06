@@ -301,8 +301,10 @@ func forManySeeds(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64))
 	}
 }
 
+// Members stop a moment apart and hear each other in any order; seeds 391 and 474 were
+// the first to strand one 0.2s away, so these run 1000.
 func TestPartySettlesAfterAJoin(t *testing.T) {
-	forSeeds(t, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, 0, "a", "b", "c", "j")
 		a, b, c, j := s.nodes[0], s.nodes[1], s.nodes[2], s.nodes[3]
 		play(30, a, b, c)
@@ -320,7 +322,7 @@ func TestPartySettlesAfterAJoin(t *testing.T) {
 }
 
 func TestPartySettlesAfterALeave(t *testing.T) {
-	forSeeds(t, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, 0, "a", "b", "c")
 		play(30, s.nodes...)
 		s.ticks = 20

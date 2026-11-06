@@ -130,12 +130,12 @@ P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's 
 
 - Each node pauses itself and it goes out as its own pause, so a node whose notice was
   lost still stops. Nodes stop a moment apart, so until the next resume `settling` makes
-  `align` follow any earlier `paused-at`: they settle on the earliest stop.
+  `align` follow only an earlier `paused-at`, even over the pauser's: they settle on the
+  earliest stop. One heard before settling began is kept (`earliest`) and followed then.
 - **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
   and a pause would hold everyone else just short of it. So `duration` is observed.
 - A notice shows first, so the GUI can tell this pause from a person's in its feed.
-
-e2e `[14]`, `[R14]`, `[R15h]`.
+  e2e `[14]`, `[R14]`, `[R15h]`.
 
 ### Playlists (`entries`, `followEntry`)
 
