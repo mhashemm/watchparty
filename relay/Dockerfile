@@ -14,6 +14,8 @@ ENV ADDR=":80" \
     TRUST_PROXY="" \
     ROOMS_PER_HOUR="" \
     MAX_ROOMS="" \
-    MAX_CONNS=""
+    MAX_CONNS="" \
+    DB="/data/relay.db"
+VOLUME /data
 EXPOSE 80
 ENTRYPOINT ["/relay"]

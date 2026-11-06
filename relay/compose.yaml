@@ -7,8 +7,13 @@ services:
     env_file: .env
     ports:
       - "${PORT:-80}:80"
+    volumes:
+      - rooms:/data
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "5"
+
+volumes:
+  rooms:

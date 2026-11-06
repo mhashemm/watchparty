@@ -435,7 +435,7 @@ def jitter(name):
 
 def launch_relay(extra=None):
     path = f"{RUN}/relay.log"
-    env = {**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}", **(extra or {})}
+    env = {**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}", "DB": f"{RUN}/relay.db", **(extra or {})}
     # append: a restart in [R13] must not lose the first run's lines
     p = subprocess.Popen([RELAY_BIN], env=env, stdout=open(path, "ab"), stderr=subprocess.STDOUT)
     relays.append(p)
@@ -1901,6 +1901,18 @@ def caps_suite():
     ok("how long it stayed is a number of seconds", left and type(left["seconds"]) is int, relay_log())
     for t in ("k1", "k2", "k3"):
         stop(t)
+    relay.kill(); relay.wait(timeout=10)
+
+    print("\n[R19c] a room a key holder opened comes back without the key, across a relay restart")
+    relay = launch_relay({"CREATE_KEY": "k"})
+    until(lambda: listening(PORTS["relay"]))
+    launch("nodeC", room="keyroom", secret="wrong", tag="k5")
+    nodes["k5"]["proc"].wait(timeout=30)
+    ok("a keyless node with the wrong secret is refused, not kept waiting", "403" in log("k5") and "not open yet" not in log("k5"), log("k5")[-300:])
+    launch("nodeB", room="keyroom", tag="k4")
+    until(lambda: connected("k4"), BOOT)
+    ok("a keyless member reopened the room", connected("k4") and "not open yet" not in log("k4"), log("k4")[-300:])
+    stop("k4")
     relay.kill(); relay.wait(timeout=10)
 
     print("\n[R20] a member that stops answering pings is dropped and the room hears it left")

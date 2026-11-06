@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 const (
 	secretHeaderKey = "room-secret"
 	createHeaderKey = "create-key"
+	openedHeaderKey = "room-opened"
 
 	sendBuffer    = 64
 	pingInterval  = 30 * time.Second
@@ -103,15 +105,16 @@ type relay struct {
 	mu    sync.Mutex
 	rooms map[string]*room
 
-	limiter   *limiter
-	createKey []byte
-	conns     atomic.Int64
-	perHour   int
-	maxRooms  int
-	maxConns  int64
-	trusted   bool
-	ping      time.Duration
-	timeout   time.Duration
+	limiter    *limiter
+	createKey  []byte
+	remembered *remembered
+	conns      atomic.Int64
+	perHour    int
+	maxRooms   int
+	maxConns   int64
+	trusted    bool
+	ping       time.Duration
+	timeout    time.Duration
 }
 
 func (r *relay) ip(req *http.Request) string {
@@ -172,8 +175,9 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 }
 
 // admit enforces the caps in cost order, creating the room if it is new. It runs
-// before the upgrade so a refused caller never becomes a websocket.
-func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, error) {
+// before the upgrade so a refused caller never becomes a websocket. old is the
+// room as it was remembered, for a keyless caller bringing it back.
+func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known) (bool, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -183,31 +187,40 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, er
 			// a wrong secret is the only lock on the door, so grind attempts cost
 			// quota and eventually stop being answered at all
 			if !r.limiter.allow(ip, r.perHour) {
-				return http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
+				return false, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
 			}
-			return http.StatusForbidden, fmt.Errorf("bad secret")
+			return false, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if rm.file != file {
-			return http.StatusConflict, fmt.Errorf("not the same file")
+			return false, http.StatusConflict, fmt.Errorf("not the same file")
 		}
-		return 0, nil
+		return false, 0, nil
 	}
-	// no key is a member waiting for the host to open the room, not a guess, so
-	// it costs no quota and the node keeps retrying
-	if r.createKey != nil && len(key) == 0 {
-		return http.StatusUnauthorized, fmt.Errorf("room not open yet")
+	keyless := r.createKey != nil && len(key) == 0
+	// no key for a room never opened is a member waiting for the host, not a
+	// guess, so it costs no quota and the node keeps retrying
+	if keyless && old == nil {
+		return false, http.StatusUnauthorized, fmt.Errorf("room not open yet")
 	}
 	if !r.limiter.allow(ip, r.perHour) {
-		return http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
+		return false, http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
 	}
-	if r.createKey != nil && subtle.ConstantTimeCompare(r.createKey, key) != 1 {
-		return http.StatusForbidden, fmt.Errorf("bad create key")
+	if keyless {
+		sum := sha256.Sum256(secret)
+		if subtle.ConstantTimeCompare(old.secret[:], sum[:]) != 1 {
+			return false, http.StatusForbidden, fmt.Errorf("bad secret")
+		}
+		if old.file != file {
+			return false, http.StatusConflict, fmt.Errorf("not the same file")
+		}
+	} else if r.createKey != nil && subtle.ConstantTimeCompare(r.createKey, key) != 1 {
+		return false, http.StatusForbidden, fmt.Errorf("bad create key")
 	}
 	if len(r.rooms) >= r.maxRooms {
-		return http.StatusServiceUnavailable, fmt.Errorf("relay is full")
+		return false, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
 	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}}
-	return 0, nil
+	return true, 0, nil
 }
 
 // add registers the member only once its conn is set, so broadcast can never
@@ -262,10 +275,16 @@ func (r *relay) leave(name string, m *member) bool {
 	}
 	_, present := rm.members[m]
 	delete(rm.members, m)
-	if len(rm.members) == 0 {
+	reaped := len(rm.members) == 0
+	if reaped {
 		delete(r.rooms, name)
 	}
 	r.mu.Unlock()
+	if reaped && r.remembered != nil {
+		if err := r.remembered.touch(name); err != nil {
+			slog.Error("remembering a room failed", "room", clean(name), "err", err)
+		}
+	}
 	if present {
 		r.broadcast(name, m, notice(m.hostname, fmt.Sprintf("%s has left", m.hostname)))
 	}
@@ -337,10 +356,31 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file"), ip)
+	secret, key, file := []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file")
+	var old *known
+	if r.remembered != nil && r.createKey != nil && len(key) == 0 {
+		// read before admit takes r.mu, so a free keyless retry never holds every room up on the disk
+		var err error
+		if old, err = r.remembered.lookup(name); err != nil {
+			l.Error("reading remembered rooms failed", "err", err)
+			refuse(res, l, http.StatusServiceUnavailable, "relay storage failed")
+			return
+		}
+	}
+	created, code, err := r.admit(name, secret, key, file, ip, old)
 	if err != nil {
 		refuse(res, l, code, err.Error())
 		return
+	}
+	if created && r.remembered != nil {
+		if err := r.remembered.remember(name, secret, file); err != nil {
+			l.Error("remembering a room failed", "err", err)
+		}
+	}
+	// a room brought back without the key has no host yet: a node told it opened the
+	// room answers joiners with its position, and only a key holder's is the party's
+	if created && (r.createKey == nil || len(key) > 0) {
+		res.Header().Set(openedHeaderKey, "yes")
 	}
 
 	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer), log: l}
@@ -429,6 +469,13 @@ func main() {
 	}
 	if k := env("CREATE_KEY", "", str); k != "" {
 		r.createKey = []byte(k)
+		// without a key anyone may open any room, so there is nothing to bring back
+		db := env("DB", "relay.db", str)
+		var err error
+		if r.remembered, err = openRemembered(db); err != nil {
+			log.Fatalf("DB=%q: %v", db, err)
+		}
+		defer r.remembered.db.Close()
 	}
 
 	mux := http.NewServeMux()
@@ -450,7 +497,7 @@ func main() {
 		s.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "trust_proxy", r.trusted,
+	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "remembers_rooms", r.remembered != nil, "trust_proxy", r.trusted,
 		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns)
 	slog.Info("stopped", "reason", s.ListenAndServe())
 }

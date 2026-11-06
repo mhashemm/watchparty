@@ -291,7 +291,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(10, 10, 10)
-	if _, err := r.admit("room", []byte("s"), nil, "f", "ip"); err != nil {
+	if _, _, err := r.admit("room", []byte("s"), nil, "f", "ip", nil); err != nil {
 		t.Fatal(err)
 	}
 	r.leave("room", nil)
@@ -520,5 +520,132 @@ func TestHostnameIsSanitizedInNotices(t *testing.T) {
 	}
 	if !slices.Contains(got, "evilFORGED has joined") {
 		t.Fatalf("hostname not sanitized in notice: got %v", got)
+	}
+}
+
+// opened dials like join and reports whether the relay said this node opened the room.
+func opened(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (bool, int) {
+	t.Helper()
+	conn, res, err := websocket.Dial(context.Background(),
+		url+"/ws?room="+roomName+"&hostname="+hostname,
+		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}, createHeaderKey: createKey}})
+	if err != nil {
+		if res != nil {
+			return false, res.StatusCode
+		}
+		t.Fatalf("dial %s: %s", roomName, err)
+	}
+	conn.CloseNow()
+	return res.Header.Get(openedHeaderKey) == "yes", http.StatusSwitchingProtocols
+}
+
+func gone(t *testing.T, r *relay, roomName string) {
+	t.Helper()
+	eventually(t, roomName+" was never reaped", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		_, ok := r.rooms[roomName]
+		return !ok
+	})
+}
+
+// A room a key holder opened can be brought back without the key by anyone with its
+// secret and file, across a relay restart, until it is forgotten. Only a key holder
+// is told it opened the room.
+func TestRememberedRoomReopensWithoutKey(t *testing.T) {
+	t.Parallel()
+	db := t.TempDir() + "/relay.db"
+	keyed := func() (*relay, string) {
+		r := newRelay(100, 100, 100)
+		r.createKey = []byte("k")
+		var err error
+		if r.remembered, err = openRemembered(db); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.remembered.db.Close() })
+		return r, serve(t, r)
+	}
+	r, url := keyed()
+
+	if _, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusUnauthorized {
+		t.Fatalf("keyless before the room was ever opened got %d, want 401", code)
+	}
+	host, _ := join(t, url, "room", "s", "a&file=f", "k")
+	if first, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusSwitchingProtocols || first {
+		t.Fatalf("keyless join of an open room got %d, opened=%v; want an upgrade, not opened", code, first)
+	}
+	// a party that ran for a month is remembered from when it closed, not opened
+	if _, err := r.remembered.db.Exec(`UPDATE rooms SET used = 0`); err != nil {
+		t.Fatal(err)
+	}
+	host.CloseNow()
+	gone(t, r, "room")
+
+	for _, c := range []struct {
+		secret, file string
+		want         int
+	}{{"wrong", "f", http.StatusForbidden}, {"s", "other", http.StatusConflict}} {
+		if _, code := opened(t, url, "room", c.secret, "b&file="+c.file); code != c.want {
+			t.Fatalf("keyless reopen with secret %q file %q got %d, want %d", c.secret, c.file, code, c.want)
+		}
+	}
+	if first, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusSwitchingProtocols || first {
+		t.Fatalf("keyless reopen got %d, opened=%v; want an upgrade, not opened", code, first)
+	}
+	gone(t, r, "room")
+	if first, code := opened(t, url, "room", "s", "a&file=f", "k"); code != http.StatusSwitchingProtocols || !first {
+		t.Fatalf("key holder reopen got %d, opened=%v; want an upgrade and opened", code, first)
+	}
+	gone(t, r, "room")
+
+	r2, url2 := keyed()
+	if _, code := opened(t, url2, "room", "s", "b&file=f"); code != http.StatusSwitchingProtocols {
+		t.Fatalf("keyless reopen after a restart got %d, want an upgrade", code)
+	}
+	gone(t, r2, "room")
+	if _, err := r2.remembered.db.Exec(`UPDATE rooms SET used = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, code := opened(t, url2, "room", "s", "b&file=f"); code != http.StatusUnauthorized {
+		t.Fatalf("keyless reopen of a forgotten room got %d, want 401", code)
+	}
+}
+
+// A key holder starting over in a remembered room's name replaces what was
+// remembered, so Watch again with another video still works.
+func TestKeyHolderReplacesARememberedRoom(t *testing.T) {
+	t.Parallel()
+	r := newRelay(100, 100, 100)
+	r.createKey = []byte("k")
+	var err error
+	if r.remembered, err = openRemembered(":memory:"); err != nil {
+		t.Fatal(err)
+	}
+	url := serve(t, r)
+	opened(t, url, "room", "s", "a&file=f", "k")
+	gone(t, r, "room")
+	if _, code := opened(t, url, "room", "s2", "a&file=g", "k"); code != http.StatusSwitchingProtocols {
+		t.Fatalf("key holder with a new secret and file got %d, want an upgrade", code)
+	}
+	gone(t, r, "room")
+	if _, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusForbidden {
+		t.Fatalf("keyless reopen with the old secret got %d, want 403", code)
+	}
+	if _, code := opened(t, url, "room", "s2", "b&file=g"); code != http.StatusSwitchingProtocols {
+		t.Fatalf("keyless reopen with the new secret got %d, want an upgrade", code)
+	}
+}
+
+// Without a create key anyone opens any room, and the opener is told so.
+func TestOpenerWithoutCreateKey(t *testing.T) {
+	t.Parallel()
+	url := serve(t, newRelay(100, 100, 100))
+	join(t, url, "room", "s", "a")
+	if first, _ := opened(t, url, "room", "s", "b"); first {
+		t.Fatal("a joiner of an open room was told it opened it")
+	}
+	url2 := serve(t, newRelay(100, 100, 100))
+	if first, _ := opened(t, url2, "room", "s", "a"); !first {
+		t.Fatal("the first in a room wasn't told it opened it")
 	}
 }
