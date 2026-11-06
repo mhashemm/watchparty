@@ -264,7 +264,8 @@ details[open] summary { margin-bottom: 14px; }
 #history-list > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 #history-list b { word-break: break-word; }
 #history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
-#history-list .continue { grid-column: 2; grid-row: 1 / span 2; background: var(--moss); border-color: var(--moss-deep); color: #fff; }
+#history-list li > button { grid-column: 2; grid-row: 1 / span 2; }
+#history-list .continue { background: var(--moss); border-color: var(--moss-deep); color: #fff; }
 #history-list .continue:hover:not(:disabled) { background: var(--moss-deep); }
 .videos { grid-column: 1 / -1; list-style: none; margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: .9rem; }
 .videos li { padding: 4px 0; display: flex; flex-direction: column; word-break: break-word; }
@@ -439,7 +440,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <h2>Connecting</h2>
         <ul>
           <li><b>Over the internet</b> goes through a relay, and works from anywhere. A relay can ask for a create key to open a party: add it in Settings.</li>
-          <li><b>Same Wi-Fi</b> connects straight to your friends. Untick the box there to reach them through your router instead.</li>
+          <li><b>Peer-to-Peer</b> connects straight to your friends, with no relay. Untick its Wi-Fi box to reach them through your router instead.</li>
         </ul>
   </section>
   <svg class="cat" viewBox="0 0 200 220" role="img" aria-label="Fosdo2 the cat">
@@ -566,7 +567,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <span class="label" id="mode-label">How are you connecting?</span>
           <div class="seg" role="radiogroup" aria-labelledby="mode-label">
             <label><input type="radio" name="mode" value="relay" checked><span><b>Over the internet</b><small>Through a relay, works from anywhere</small></span></label>
-            <label><input type="radio" name="mode" value="direct"><span><b>Same Wi-Fi</b><small>Or straight to a friend's address</small></span></label>
+            <label><input type="radio" name="mode" value="direct"><span><b>Peer-to-Peer</b><small>Straight to your friends, no relay</small></span></label>
           </div>
         </div>
 
@@ -844,7 +845,7 @@ function renderHistory() {
     meta.className = "meta";
     const when = new Date(p.started).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     const who = p.people && p.people.length ? `with ${names(p.people)}` : "just you";
-    meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "on Wi-Fi" : "over the internet"}`;
+    meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "peer-to-peer" : "over the internet"}`;
     li.append(title, meta);
     if (continuable(p)) {
       const resume = document.createElement("button");
@@ -855,9 +856,26 @@ function renderHistory() {
       resume.addEventListener("click", () => continueParty(p));
       li.append(resume);
     }
+    if (p.mode === "direct") {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "small again";
+      again.textContent = "Watch again";
+      again.disabled = running;
+      again.addEventListener("click", () => watchAgain(p));
+      li.append(again);
+    }
     if (videos.length) li.append(videoList(videos, p.playlist ? null : fileName(p.file)));
     return li;
   }));
+}
+function watchAgain(p) {
+  $("file").value = p.file;
+  $("playlist").checked = !!p.playlist;
+  setMode("direct");
+  $("addrs").value = p.addrs || "";
+  $("psecret").value = p.secret || "";
+  show("party");
 }
 async function continueParty(p) {
   $("file").value = p.file;
@@ -1098,7 +1116,7 @@ function render(exitErr) {
   $("update").disabled = running;
   $("restart").disabled = running;
   $("restart-now").disabled = running;
-  document.querySelectorAll("#history-list .continue").forEach(b => b.disabled = running);
+  document.querySelectorAll("#history-list button").forEach(b => b.disabled = running);
 }
 
 async function poll() {

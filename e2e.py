@@ -2348,7 +2348,7 @@ def gui_suite():
     fill(H, file=MEDIA, room="", secret="")
     fill(G, file=MEDIA, room="", secret="")
 
-    print("\n[G20] a Wi-Fi party: the invite switches the guest to Same Wi-Fi")
+    print("\n[G20] a peer-to-peer party: the invite switches the guest to Peer-to-Peer")
     js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
     start(H, port=str(PORTS["wifiHost"]))
     must(f"{H} is in", joined(H), status(H))
@@ -2368,7 +2368,7 @@ def gui_suite():
     ok("the saved session is unchanged", state(H)["history"][-1] == before[1], str(state(H)["history"][-1]))
 
     js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
-    ok(f"{G} switched to Same Wi-Fi and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
+    ok(f"{G} switched to Peer-to-Peer and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
     _, diff = variants()
     start(G, file=diff, port=str(PORTS["wifiGuest"]))
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
@@ -2393,15 +2393,17 @@ def gui_suite():
     ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
     ok(f"{H}'s mpv closed", not listening_unix(sock))
 
-    print(f"\n[G23] {G}'s history: every party, and Continue only over the internet")
+    print(f"\n[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
     tab(G, "history")
     until(lambda: js(G, '$("history-list").children.length') == len(state(G)["history"]))
     items = js(G, '[...$("history-list").children].map(li => li.textContent)')
-    ok("newest first, a Wi-Fi party with the host", "on Wi-Fi" in items[0] and f"with {H}" in items[0], items[0])
+    ok("newest first, a peer-to-peer party with the host", "peer-to-peer" in items[0] and f"with {H}" in items[0], items[0])
     ok("the first is over the internet with the host", "over the internet" in items[-1] and f"with {H}" in items[-1], items[-1])
     buttons = lambda li: js(G, f'[...$("history-list").{li}.querySelectorAll("button")].map(b => b.textContent)')
-    ok("a Wi-Fi party has nothing to press", buttons("firstElementChild") == [], str(buttons("firstElementChild")))
+    ok("a peer-to-peer party has Watch again alone", buttons("firstElementChild") == ["Watch again"], str(buttons("firstElementChild")))
     ok("a party over the internet has Continue alone", buttons("lastElementChild") == ["Continue"], str(buttons("lastElementChild")))
+    click(G, "#history-list li .again")
+    ok("Watch again fills Peer-to-Peer and shows the form", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)} && !$("view-party").hidden'))
 
     print(f"\n[G24] closing {G}'s window ends its GUI")
     browser = next(c for c in children(nodes[G]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
