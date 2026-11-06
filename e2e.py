@@ -2348,6 +2348,24 @@ def gui_suite():
     fill(H, file=MEDIA, room="", secret="")
     fill(G, file=MEDIA, room="", secret="")
 
+    print("\n[G19d] Continue a torrent: the same file of it, by the name mpv reported, at the same second")
+    pack = f"{RUN}/guipack"
+    os.makedirs(pack)
+    for name in ("e1.mkv", "Part 2 #b.mkv"):
+        shutil.copy(MEDIA, f"{pack}/{name}")
+    start(H, file=seeder(pack), room="e2etorrent", secret="e2etorrentsecret")
+    must(f"{H} is in", until(lambda: status(H).startswith("You're in"), 60) and joined(H), status(H))
+    setp(H, "playlist-pos", 1)
+    must("it moved to the second file", until(lambda: get(H, "filename") == "Part 2 #b.mkv"), get(H, "filename"))
+    setp(H, "time-pos", 50)
+    until(lambda: near(get(H, "time-pos"), 50, 0.2))
+    end(H)
+    press_continue(H)
+    must(f"{H} is back in", until(lambda: status(H).startswith("You're in"), 60) and joined(H), status(H))
+    ok("it opens that file at 50s", until(lambda: get(H, "filename") == "Part 2 #b.mkv" and near(get(H, "time-pos"), 50, 0.2)), f'{get(H, "filename")} {get(H, "time-pos")}')
+    end(H)
+    fill(H, file=MEDIA, room="", secret="")
+
     print("\n[G20] a peer-to-peer party: the invite switches the guest to Peer-to-Peer")
     js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
     start(H, port=str(PORTS["wifiHost"]))
