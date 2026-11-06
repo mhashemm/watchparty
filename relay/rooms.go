@@ -24,15 +24,14 @@ type known struct {
 }
 
 func openRemembered(path string) (*remembered, error) {
-	db, err := sql.Open("sqlite", path)
+	// pragmas in the DSN apply to every connection the pool opens
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=temp_store(MEMORY)")
 	if err != nil {
 		return nil, err
 	}
 	// one connection: sqlite has one writer, and ":memory:" is per connection
 	db.SetMaxOpenConns(1)
 	for _, q := range []string{
-		`PRAGMA journal_mode=WAL`,
-		`PRAGMA temp_store=MEMORY`,
 		`CREATE TABLE IF NOT EXISTS rooms (name TEXT PRIMARY KEY, secret BLOB NOT NULL, file TEXT NOT NULL, used INTEGER NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS rooms_used ON rooms (used)`,
 	} {

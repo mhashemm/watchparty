@@ -23,8 +23,10 @@ func newRelay(perHour, maxRooms int, maxConns int64) *relay {
 		perHour:  perHour,
 		maxRooms: maxRooms,
 		maxConns: maxConns,
+		opening:  map[string]*opening{},
 		ping:     pingInterval,
 		timeout:  writeTimeout,
+		waitFor:  waitForKeyHolder,
 	}
 }
 
@@ -291,7 +293,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(10, 10, 10)
-	if _, _, err := r.admit("room", []byte("s"), nil, "f", "ip", nil); err != nil {
+	if _, _, _, err := r.admit("room", []byte("s"), nil, "f", "ip", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	r.leave("room", nil)
@@ -523,20 +525,49 @@ func TestHostnameIsSanitizedInNotices(t *testing.T) {
 	}
 }
 
-// opened dials like join and reports whether the relay said this node opened the room.
-func opened(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (bool, int) {
+// dial connects like a node: wait=1, and the relay's answer. A held member's conn is
+// returned open; anyone else's is closed.
+func dial(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, *http.Response, int) {
 	t.Helper()
 	conn, res, err := websocket.Dial(context.Background(),
-		url+"/ws?room="+roomName+"&hostname="+hostname,
+		url+"/ws?wait=1&room="+roomName+"&hostname="+hostname,
 		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}, createHeaderKey: createKey}})
 	if err != nil {
 		if res != nil {
-			return false, res.StatusCode
+			return nil, res, res.StatusCode
 		}
 		t.Fatalf("dial %s: %s", roomName, err)
 	}
-	conn.CloseNow()
-	return res.Header.Get(openedHeaderKey) == "yes", http.StatusSwitchingProtocols
+	t.Cleanup(func() { conn.CloseNow() })
+	if res.Header.Get(waitingHeaderKey) != "yes" {
+		conn.CloseNow()
+	}
+	return conn, res, http.StatusSwitchingProtocols
+}
+
+func opened(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (bool, int) {
+	t.Helper()
+	_, res, code := dial(t, url, roomName, secret, hostname, createKey...)
+	return res != nil && res.Header.Get(openedHeaderKey) == "yes", code
+}
+
+// held dials as a keyless member and fails unless the relay holds it.
+func held(t *testing.T, url, roomName, secret, hostname string) *websocket.Conn {
+	t.Helper()
+	conn, res, code := dial(t, url, roomName, secret, hostname)
+	if code != http.StatusSwitchingProtocols || res.Header.Get(waitingHeaderKey) != "yes" {
+		t.Fatalf("%s got %d, want to be held until the room opens", hostname, code)
+	}
+	return conn
+}
+
+// closedWith is the close code the relay ends a held member with.
+func closedWith(t *testing.T, conn *websocket.Conn) websocket.StatusCode {
+	t.Helper()
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err := conn.Read(c)
+	return websocket.CloseStatus(err)
 }
 
 func gone(t *testing.T, r *relay, roomName string) {
@@ -549,25 +580,28 @@ func gone(t *testing.T, r *relay, roomName string) {
 	})
 }
 
-// A room a key holder opened can be brought back without the key by anyone with its
-// secret and file, across a relay restart, until it is forgotten. Only a key holder
-// is told it opened the room.
-func TestRememberedRoomReopensWithoutKey(t *testing.T) {
+func keyed(t *testing.T, db string) (*relay, string) {
+	t.Helper()
+	r := newRelay(100, 100, 100)
+	r.createKey = []byte("k")
+	var err error
+	if r.remembered, err = openRemembered(db); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.remembered.db.Close() })
+	return r, serve(t, r)
+}
+
+// Only a key holder creates a room. A keyless member of a room a key holder opened
+// before, with its secret and file, is held instead of refused, without the room
+// existing, and sent to join the moment a key holder opens it. That holds across a
+// relay restart, until the room is forgotten.
+func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 	t.Parallel()
 	db := t.TempDir() + "/relay.db"
-	keyed := func() (*relay, string) {
-		r := newRelay(100, 100, 100)
-		r.createKey = []byte("k")
-		var err error
-		if r.remembered, err = openRemembered(db); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { r.remembered.db.Close() })
-		return r, serve(t, r)
-	}
-	r, url := keyed()
+	r, url := keyed(t, db)
 
-	if _, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusUnauthorized {
+	if _, _, code := dial(t, url, "room", "s", "b&file=f"); code != http.StatusUnauthorized {
 		t.Fatalf("keyless before the room was ever opened got %d, want 401", code)
 	}
 	host, _ := join(t, url, "room", "s", "a&file=f", "k")
@@ -585,55 +619,74 @@ func TestRememberedRoomReopensWithoutKey(t *testing.T) {
 		secret, file string
 		want         int
 	}{{"wrong", "f", http.StatusForbidden}, {"s", "other", http.StatusConflict}} {
-		if _, code := opened(t, url, "room", c.secret, "b&file="+c.file); code != c.want {
-			t.Fatalf("keyless reopen with secret %q file %q got %d, want %d", c.secret, c.file, code, c.want)
+		if _, _, code := dial(t, url, "room", c.secret, "b&file="+c.file); code != c.want {
+			t.Fatalf("keyless with secret %q file %q got %d, want %d", c.secret, c.file, code, c.want)
 		}
 	}
-	if first, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusSwitchingProtocols || first {
-		t.Fatalf("keyless reopen got %d, opened=%v; want an upgrade, not opened", code, first)
+	if _, code := join(t, url, "room", "s", "old&file=f"); code != http.StatusUnauthorized {
+		t.Fatalf("a node that can't wait got %d, want 401 as before", code)
 	}
-	gone(t, r, "room")
+	b, c := held(t, url, "room", "s", "b&file=f"), held(t, url, "room", "s", "c&file=f")
+	r.mu.Lock()
+	_, exists := r.rooms["room"]
+	r.mu.Unlock()
+	if exists {
+		t.Fatal("holding keyless members created the room")
+	}
 	if first, code := opened(t, url, "room", "s", "a&file=f", "k"); code != http.StatusSwitchingProtocols || !first {
-		t.Fatalf("key holder reopen got %d, opened=%v; want an upgrade and opened", code, first)
+		t.Fatalf("key holder got %d, opened=%v; want an upgrade and opened", code, first)
+	}
+	for _, conn := range []*websocket.Conn{b, c} {
+		if got := closedWith(t, conn); got != statusRoomOpen {
+			t.Fatalf("a held member was closed with %d, want %d", got, statusRoomOpen)
+		}
 	}
 	gone(t, r, "room")
 
-	r2, url2 := keyed()
-	if _, code := opened(t, url2, "room", "s", "b&file=f"); code != http.StatusSwitchingProtocols {
-		t.Fatalf("keyless reopen after a restart got %d, want an upgrade", code)
+	r2, url2 := keyed(t, db)
+	held(t, url2, "room", "s", "b&file=f")
+	r3 := newRelay(100, 100, 100)
+	r3.createKey, r3.remembered, r3.waitFor = r2.createKey, r2.remembered, 0
+	if got := closedWith(t, held(t, serve(t, r3), "room", "s", "c&file=f")); got != statusNotOpened {
+		t.Fatalf("a member held past waitFor was closed with %d, want %d", got, statusNotOpened)
 	}
-	gone(t, r2, "room")
 	if _, err := r2.remembered.db.Exec(`UPDATE rooms SET used = 0`); err != nil {
 		t.Fatal(err)
 	}
-	if _, code := opened(t, url2, "room", "s", "b&file=f"); code != http.StatusUnauthorized {
-		t.Fatalf("keyless reopen of a forgotten room got %d, want 401", code)
+	if _, _, code := dial(t, url2, "room", "s", "b&file=f"); code != http.StatusUnauthorized {
+		t.Fatalf("keyless for a forgotten room got %d, want 401", code)
 	}
 }
 
+// Held members leave nothing behind, so a room name can't pile up waiters' state.
+func TestHeldMembersLeaveNothingBehind(t *testing.T) {
+	t.Parallel()
+	r, url := keyed(t, ":memory:")
+	opened(t, url, "room", "s", "a", "k")
+	gone(t, r, "room")
+	held(t, url, "room", "s", "b").CloseNow()
+	eventually(t, "a member that stopped waiting is still counted", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.opening) == 0
+	})
+}
+
 // A key holder starting over in a remembered room's name replaces what was
-// remembered, so Watch again with another video still works.
+// remembered, so a room name can be reused for another video.
 func TestKeyHolderReplacesARememberedRoom(t *testing.T) {
 	t.Parallel()
-	r := newRelay(100, 100, 100)
-	r.createKey = []byte("k")
-	var err error
-	if r.remembered, err = openRemembered(":memory:"); err != nil {
-		t.Fatal(err)
-	}
-	url := serve(t, r)
+	r, url := keyed(t, ":memory:")
 	opened(t, url, "room", "s", "a&file=f", "k")
 	gone(t, r, "room")
 	if _, code := opened(t, url, "room", "s2", "a&file=g", "k"); code != http.StatusSwitchingProtocols {
 		t.Fatalf("key holder with a new secret and file got %d, want an upgrade", code)
 	}
 	gone(t, r, "room")
-	if _, code := opened(t, url, "room", "s", "b&file=f"); code != http.StatusForbidden {
-		t.Fatalf("keyless reopen with the old secret got %d, want 403", code)
+	if _, _, code := dial(t, url, "room", "s", "b&file=f"); code != http.StatusForbidden {
+		t.Fatalf("keyless with the old secret got %d, want 403", code)
 	}
-	if _, code := opened(t, url, "room", "s2", "b&file=g"); code != http.StatusSwitchingProtocols {
-		t.Fatalf("keyless reopen with the new secret got %d, want an upgrade", code)
-	}
+	held(t, url, "room", "s2", "b&file=g")
 }
 
 // Without a create key nobody holds one, so nobody's position is the party's: who

@@ -146,6 +146,7 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   | Status | Relay meaning | Node |
   |---|---|---|
   | 400 | missing room or hostname | gives up (`errRejected`) |
+  | 101 + `room-waiting` | held: remembered room, no key | logs the "not open yet" line, reads until the close: 4001 dials again at once, 4002 gives up ("did not open") |
   | 401 | room not open or remembered, no create key sent | retries: "room X is not open yet, waiting for someone with -createKey". Gives up (`errRejected`) if `Run` generated the room, since no host is coming, and after 30 minutes of 401s since the last connection (`r.wait`, "did not open within"), since a fake invite would wait forever |
   | 403 | wrong secret or create key | gives up, logs `rejected by relay`. A wrong secret never becomes right, and retrying burns the relay's rate limit |
   | 409 | not the room creator's file | gives up, `errRejected` wrapping `server.ErrDifferentFile` |

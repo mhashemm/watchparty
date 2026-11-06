@@ -18,9 +18,14 @@ import (
 )
 
 const (
-	secretHeaderKey = "room-secret"
-	createHeaderKey = "create-key"
-	openedHeaderKey = "room-opened"
+	secretHeaderKey  = "room-secret"
+	createHeaderKey  = "create-key"
+	openedHeaderKey  = "room-opened"
+	waitingHeaderKey = "room-waiting"
+
+	// how the relay ends a member it held until the room opened, declared again in relay/main.go
+	statusRoomOpen  websocket.StatusCode = 4001
+	statusNotOpened websocket.StatusCode = 4002
 
 	minBackoff = 1 * time.Second
 	maxBackoff = 30 * time.Second
@@ -69,20 +74,41 @@ func (r *relayConn) set(conn *websocket.Conn) {
 // only burns its rate limiter.
 var errRejected = errors.New("rejected by relay")
 
+// dial returns a connection in the room. A keyless member of a room the relay remembers
+// is held until a key holder opens it, then dials again at once and joins.
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
-	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}, "file": {r.file}}
+	for {
+		conn, held, err := r.dialOnce(c)
+		if !held {
+			return conn, err
+		}
+		log.Printf("relay: dial: room %s is not open yet, waiting for someone with -createKey\n", r.room)
+		_, _, err = conn.Read(c)
+		conn.CloseNow()
+		switch websocket.CloseStatus(err) {
+		case statusRoomOpen:
+			continue
+		case statusNotOpened:
+			return nil, fmt.Errorf("%w: room %s did not open while the relay held this node", errRejected, r.room)
+		}
+		return nil, fmt.Errorf("waiting for room %s: %w", r.room, err)
+	}
+}
+
+func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
+	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}, "file": {r.file}, "wait": {"1"}}
 	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+"/ws?"+q.Encode(), &websocket.DialOptions{
 		HTTPHeader: http.Header{secretHeaderKey: {r.secret}, createHeaderKey: {r.createKey}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
 		case http.StatusForbidden, http.StatusBadRequest:
-			return nil, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
+			return nil, false, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
 		case http.StatusConflict:
-			return nil, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
+			return nil, false, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
 		case http.StatusUnauthorized:
 			if r.creating {
-				return nil, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
+				return nil, false, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
 			}
 			// a room nobody opens (a fake invite, a host who never comes) must not
 			// keep a node waiting forever
@@ -90,10 +116,13 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 				r.waiting = time.Now()
 			}
 			if time.Since(r.waiting) >= r.wait {
-				return nil, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
+				return nil, false, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
 			}
-			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
+			return nil, false, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
+	}
+	if err == nil && res.Header.Get(waitingHeaderKey) == "yes" {
+		return conn, true, nil
 	}
 	// ahead of the first frame, so mpv knows it opened the room before anyone joins
 	if err == nil && res.Header.Get(openedHeaderKey) == "yes" {
@@ -102,7 +131,7 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 		case <-c.Done():
 		}
 	}
-	return conn, err
+	return conn, false, err
 }
 
 func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {

@@ -347,3 +347,39 @@ func TestOpenedReachesMpvFirst(t *testing.T) {
 		t.Fatalf("got %v, want %v: opened first, and only for the connection that opened the room", got, want)
 	}
 }
+
+// A keyless member of a room the relay remembers is held, not refused: it asks to be
+// (wait=1), joins as soon as the relay says a key holder opened the room, and gives up
+// when the relay says the room didn't open.
+func TestHeldUntilTheRoomOpens(t *testing.T) {
+	t.Parallel()
+	joined := make(chan struct{})
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("wait") != "1" {
+			t.Error("the node didn't ask to be held")
+		}
+		if n == 1 {
+			w.Header().Set(waitingHeaderKey, "yes")
+			accept(t, w, r).Close(statusRoomOpen, "room open")
+			return
+		}
+		conn := accept(t, w, r)
+		close(joined)
+		conn.Read(r.Context())
+	})
+	r := newRelayConn(addr, nil)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Connect(c, cancel)
+	waitDone(t, joined, "never joined once the room opened")
+
+	addr = stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(waitingHeaderKey, "yes")
+		accept(t, w, r).Close(statusNotOpened, "room did not open")
+	})
+	r = newRelayConn(addr, nil)
+	_, err := r.dial(context.Background())
+	if !errors.Is(err, errRejected) || !strings.Contains(err.Error(), "did not open") {
+		t.Fatalf("got %v, want errRejected saying the room did not open", err)
+	}
+}

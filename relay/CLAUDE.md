@@ -31,9 +31,9 @@ goes there too. Not in the release; deployed by hand or as the image.
 - **Open rooms are memory only.** The first joiner's secret and file define the room; it is
   deleted when its last member leaves. No accounts, no playback state.
 - **With `CREATE_KEY`, closed rooms are remembered** (`rooms.go`, SQLite at `DB`): name,
-  SHA-256 of the secret, file, last used (opened or closed), forgotten after 30 days. So a
-  party continued later can be reopened by any member, key or not. Without `CREATE_KEY`
-  anyone opens any room, so nothing is kept. Pure-Go `modernc.org/sqlite`: releases and
+  SHA-256 of the secret, file, last used (opened or closed), forgotten after 30 days. Only a
+  key holder creates a room; a keyless member of a remembered one is **held** until a key
+  holder does. Without `CREATE_KEY` anyone opens any room, so nothing is kept. Pure-Go `modernc.org/sqlite`: releases and
   the `scratch` image are `CGO_ENABLED=0`.
 - **`room` and `hostname` arrive URL-decoded**, so a newline is one `%0a` away. `hostname`
   is cleaned once at ingress, since notices echo it. `room` is the routing key, so it stays
@@ -44,12 +44,17 @@ goes there too. Not in the release; deployed by hand or as the image.
 
 ## Protocol
 
-- `GET /ws?room=&hostname=&session=&file=` upgrades. The secret is in the
+- `GET /ws?room=&hostname=&session=&file=&wait=1` upgrades. The secret is in the
   **`room-secret`** header, never the query (proxies log it); the optional create key
   in **`create-key`**. `file` isn't secret.
-- The 101 carries **`room-opened: yes`** for the node whose request created the room
-  with the key, not for a keyless reopen nor on a relay without `CREATE_KEY`: that node's
-  position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
+- The 101 carries **`room-opened: yes`** for the node that created the room with the key
+  (never on a relay without `CREATE_KEY`): its position is the party's, and a joiner jumps
+  to it (`mpv/CLAUDE.md`, joining).
+- **Held** (`hold`): a 101 with **`room-waiting: yes`**, only for a node that sent `wait=1`
+  (older ones get 401 and retry, as before). Nothing is relayed and no room exists. It is
+  pinged like a member, and closed with **4001** when a key holder creates the room (the
+  node dials again at once and joins) or **4002** after `waitFor`, 30 minutes (it gives up).
+  `opening` counts who waits per room and goes when the last stops.
 - Notices: "X has joined" and "X has left" to the room, and "connected to Y" to the
   joiner once per member already there, so the last joiner learns who is in the room.
 
@@ -66,10 +71,11 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
      the secret, so outsiders can't probe what a room plays.
    - New room with `CREATE_KEY` set, no key sent and not remembered → 401, free: a guest
      who arrived before the host, and the node keeps retrying.
-   - New room: rate limit (429) → create-key compare, or for a keyless remembered room
-     the secret hash then file (403, 409, after the quota is spent, so guessing costs)
-     → `MAX_ROOMS` (503) → create. A key holder overwrites what was remembered, so a
-     room name can be reused for another video.
+   - New remembered room, no key: secret hash (403, costing quota like any wrong secret),
+     then file (409), then held, free.
+   - New room: rate limit (429) → create-key compare (403, after the quota is spent, so
+     guessing costs) → `MAX_ROOMS` (503) → create, releasing anyone held for it. A key
+     holder overwrites what was remembered, so a room name can be reused for another video.
    - The remembered row is read **before** `r.mu`, since keyless retries are free and
      shouldn't hold every room up on the disk; written after `admit` and on reaping.
 4. `websocket.Accept`. On failure, `leave(name, nil)` reaps a room `admit` just made,
@@ -114,8 +120,8 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
   Seeds are per process, so collisions can't be targeted. Counters saturate.
 - Counted against `ROOMS_PER_HOUR`: room creations, failed secrets, any create that
   sends a key. Free: joining an existing room (or a party of eight would use up one
-  person's quota) and a keyless create of a room never opened while `CREATE_KEY` is set.
-  A keyless reopen of a remembered room costs like any creation.
+  person's quota), a keyless create of a room never opened while `CREATE_KEY` is set, and
+  being held.
 
 ## Client IP and HTTP server
 

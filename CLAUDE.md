@@ -68,7 +68,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
   `server/` and `relay/`, parsed by `mpv` (a leave pauses), `gui/store.go` and e2e's `known()`. Change all or none.
-- **The relay envelope** `{"hostname", "event": <raw mpv JSON>}` is declared in both
+- **The relay envelope** `{"hostname", "event": <raw mpv JSON>}`, and the held member's close codes 4001/4002, are declared in both
   `relay/main.go` and `party/ws.go`: importing `party` would pull upnp and server into
   the relay image. Keep them in sync by hand.
 - **`party.Run` runs many times in one GUI process:** no globals, no leftover goroutines.
