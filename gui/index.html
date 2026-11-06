@@ -1019,7 +1019,7 @@ function handle(line) {
     state.reconnecting = true;
     state.waiting = /is not open yet/.test(msg);
   }
-  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /-createKey/.test(msg) ? "key" : "secret";
+  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
   if (/^torrent: /.test(msg)) state.finding = /^torrent: finding/.test(msg);
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
@@ -1051,6 +1051,8 @@ function render(exitErr) {
   let text, bad = false, mood = "awake", walking = false;
   if (state.rejected === "file") {
     text = notSameFile(); bad = true;
+  } else if (state.rejected === "unopened") {
+    text = "Diagnosis: nobody opened this room for 30 minutes. Start again once someone with the create key is in."; bad = true;
   } else if (state.rejected === "key") {
     text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
   } else if (state.rejected) {

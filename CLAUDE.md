@@ -60,7 +60,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party | `init done`, `unreachable address: …`, `torrent: finding peers`, `torrent: found …` | GUI status, e2e |
   | party | `file fingerprint: <hex>` | e2e |
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
-  | party/ws.go | `rejected by relay`, plus `not the same file` or `-createKey` | GUI diagnosis |
+  | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `entry`>` | GUI feed (your own pause/resume), e2e |
   | mpv | `now playing: <file name as JSON>` | GUI feed, `gui/store.go`, e2e |

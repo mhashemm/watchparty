@@ -37,7 +37,7 @@ func accept(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Con
 }
 
 func newRelayConn(addr string, incoming chan mpv.IncomingMessage) *relayConn {
-	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, up: make(chan struct{}, 1)}
+	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, wait: time.Hour, up: make(chan struct{}, 1)}
 }
 
 func waitDone(t *testing.T, done <-chan struct{}, what string) {
@@ -98,6 +98,45 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 	waitDone(t, joined, "never redialled after 401")
 	if c.Err() != nil {
 		t.Fatal("401 ended the party")
+	}
+}
+
+// Nobody opening the room (a fake invite, a host who never comes) must not keep the
+// node waiting forever. The wait counts from the first 401, and a connection resets it.
+func TestNotOpenGivesUpAfterAWhile(t *testing.T) {
+	t.Parallel()
+	const wait = 50 * time.Millisecond
+	var connected atomic.Int64
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n != 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// outlast the wait the first 401 started, so only a reset keeps the node going
+		time.Sleep(2 * wait)
+		conn := accept(t, w, r)
+		connected.Store(time.Now().UnixNano())
+		conn.Close(websocket.StatusGoingAway, "relay restarting")
+	})
+	r := newRelayConn(addr, nil)
+	r.wait = wait
+
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan struct{})
+	go func() {
+		r.Connect(c, cancel)
+		close(returned)
+	}()
+	waitDone(t, returned, "Connect kept waiting for a room that never opened")
+	if c.Err() == nil {
+		t.Fatal("Connect gave up without ending the party")
+	}
+	if connected.Load() == 0 {
+		t.Fatal("gave up before the room ever opened")
+	}
+	if waited := time.Since(time.Unix(0, connected.Load())); waited < wait {
+		t.Fatalf("gave up %s after the connection, before its own %s of 401s", waited, wait)
 	}
 }
 

@@ -23,6 +23,7 @@ const (
 
 	minBackoff = 1 * time.Second
 	maxBackoff = 30 * time.Second
+	notOpenFor = 30 * time.Minute
 )
 
 // declared again in relay/main.go, which is package main and cannot be imported; four
@@ -46,6 +47,8 @@ type relayConn struct {
 	file      string
 	incoming  chan<- mpv.IncomingMessage
 	retry     time.Duration
+	wait      time.Duration
+	waiting   time.Time
 	up        chan struct{}
 }
 
@@ -79,6 +82,14 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 		case http.StatusUnauthorized:
 			if r.creating {
 				return nil, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
+			}
+			// a room nobody opens (a fake invite, a host who never comes) must not
+			// keep a node waiting forever
+			if r.waiting.IsZero() {
+				r.waiting = time.Now()
+			}
+			if time.Since(r.waiting) >= r.wait {
+				return nil, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
 			}
 			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
@@ -127,7 +138,7 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
-		backoff = r.retry
+		backoff, r.waiting = r.retry, time.Time{}
 		r.set(conn)
 		log.Printf("relay: connected to %s room %s\n", r.addr, r.room)
 

@@ -127,6 +127,7 @@ func Run(parent context.Context, cfg Config) error {
 			file:      file,
 			incoming:  incoming,
 			retry:     minBackoff,
+			wait:      notOpenFor,
 			up:        make(chan struct{}, 1),
 		}
 		defer conn.Close()
