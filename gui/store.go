@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,7 @@ type played struct {
 	Name    string    `json:"name"`
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended,omitzero"`
+	At      float64   `json:"at,omitempty"`
 }
 
 func (sess *session) openVideo(name string, at time.Time) {
@@ -101,6 +103,10 @@ func openStore(path string) *store {
 }
 
 func mergeHistory(history, others []session) []session {
+	if len(others) == 0 {
+		// a continued party moved to the end; sorting by start would bury it again
+		return history
+	}
 	for _, o := range others {
 		if !slices.ContainsFunc(history, func(h session) bool { return h.Started.Equal(o.Started) && h.File == o.File }) {
 			history = append(history, o)
@@ -163,6 +169,15 @@ func (s *store) begin(f form) int {
 			s.Settings.Port = p
 		}
 	}
+	if i := s.find(f.Continue); i >= 0 {
+		// the same room and secret, so the same party: it moves to the top, open again
+		sess := s.History[i]
+		sess.Ended = time.Time{}
+		s.History = append(slices.Delete(s.History, i, i+1), sess)
+		s.saveSettings()
+		s.saveHistory()
+		return len(s.History) - 1
+	}
 	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Playlist: f.Playlist, Mode: f.Mode, Secret: strings.TrimSpace(f.Secret), People: []string{}}
 	if f.Mode == "relay" {
 		sess.Relay, sess.Room = strings.TrimSpace(f.Relay), strings.TrimSpace(f.Room)
@@ -174,6 +189,25 @@ func (s *store) begin(f form) int {
 	s.saveSettings()
 	s.saveHistory()
 	return len(s.History) - 1
+}
+
+func (s *store) find(started string) int {
+	t, err := time.Parse(time.RFC3339Nano, started)
+	if err != nil {
+		return -1
+	}
+	return slices.IndexFunc(s.History, func(h session) bool { return h.Started.Equal(t) })
+}
+
+// stoppedAt is the entry and the second the party at i was left on.
+func (s *store) stoppedAt(i int) (string, float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i < 0 || i >= len(s.History) || len(s.History[i].Videos) == 0 {
+		return "", 0
+	}
+	v := s.History[i].Videos[len(s.History[i].Videos)-1]
+	return v.Name, v.At
 }
 
 func (s *store) observe(i int, line string) {
@@ -189,6 +223,18 @@ func (s *store) observe(i int, line string) {
 				case "-secret":
 					sess.Secret = fields[j+1]
 				}
+			}
+		})
+		return
+	}
+	if after, ok := strings.CutPrefix(message(line), "stopped at: "); ok {
+		at, err := strconv.ParseFloat(strings.TrimSpace(after), 64)
+		if err != nil {
+			return
+		}
+		s.update(i, func(sess *session) {
+			if n := len(sess.Videos); n > 0 {
+				sess.Videos[n-1].At = at
 			}
 		})
 		return

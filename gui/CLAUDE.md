@@ -86,7 +86,12 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   used becomes the default if none is set.
 - **History**, up to 100 parties. `begin` records the form on `/start`, `end` stamps
   the end. `observe` fills in the *real* room and secret from the invite line, people
-  from the join notices, and one entry per file switched to, opened and left, from `now playing:`.
+  from the join notices, one entry per file switched to, opened and left, from `now playing:`,
+  and the last one's `at` from `stopped at:`.
+- **Continue** (relay parties only: a Wi-Fi guest's saved address can change) posts the form
+  plus `continue`, the party's `started`. Same room and secret, so the same party: `begin`
+  moves its entry to the end, open again, and `Run` starts on its last file at `at`. So the
+  slice order is the truth, and `mergeHistory` sorts by `started` only when it merges.
 
 ## Self-update (`update.go`)
 

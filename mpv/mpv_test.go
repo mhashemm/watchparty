@@ -1485,6 +1485,17 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 	}
 }
 
+// Where a node stopped is where a continued party starts, except right at the end,
+// where starting would only end the file again.
+func TestPositionToContinueFrom(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ pos, duration, want float64 }{{50, 100, 50}, {97, 100, 0}, {12, 0, 12}} {
+		if got := (&Client{pos: c.pos, duration: c.duration}).Position(); got != c.want {
+			t.Errorf("at %v of %v: %v, want %v", c.pos, c.duration, got, c.want)
+		}
+	}
+}
+
 // A node that opens on a later entry can hear the party name that entry before mpv has
 // reported where it is. Taking itself for entry 0, it set the entry it was already on,
 // which mpv answers with nothing, and waited for that load forever.

@@ -264,7 +264,8 @@ details[open] summary { margin-bottom: 14px; }
 #history-list > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 #history-list b { word-break: break-word; }
 #history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
-#history-list .again { grid-column: 2; grid-row: 1 / span 2; }
+#history-list .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: 6px; }
+#history-list .actions button { margin-left: 0; }
 .videos { grid-column: 1 / -1; list-style: none; margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: .9rem; }
 .videos li { padding: 4px 0; display: flex; flex-direction: column; word-break: break-word; }
 .videos .when { color: var(--ink-soft); font-size: .875rem; }
@@ -839,13 +840,20 @@ function renderHistory() {
     const when = new Date(p.started).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     const who = p.people && p.people.length ? `with ${names(p.people)}` : "just you";
     meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "on Wi-Fi" : "over the internet"}`;
-    const again = document.createElement("button");
-    again.type = "button";
-    again.className = "small again";
-    again.textContent = "Watch again";
-    again.disabled = running;
-    again.addEventListener("click", () => watchAgain(p));
-    li.append(title, meta, again);
+    const button = (className, text, action) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "small " + className;
+      b.textContent = text;
+      b.disabled = running;
+      b.addEventListener("click", action);
+      return b;
+    };
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    if (p.mode !== "direct" && p.room && p.secret) actions.append(button("continue", "Continue", () => continueParty(p)));
+    actions.append(button("again", "Watch again", () => watchAgain(p)));
+    li.append(title, meta, actions);
     if (videos.length) li.append(videoList(videos, title.textContent));
     return li;
   }));
@@ -864,6 +872,10 @@ function watchAgain(p) {
     $("secret").value = p.secret || "";
   }
   show("party");
+}
+async function continueParty(p) {
+  watchAgain(p);
+  await startParty({ continue: p.started });
 }
 $("clear-history").addEventListener("click", async () => {
   if (!confirm("Clear the whole party history?")) return;
@@ -944,15 +956,18 @@ $("form").addEventListener("submit", async e => {
     }
     return;
   }
+  await startParty({});
+});
+async function startParty(extra) {
   showError("");
   if (!$("file").value.trim()) { showError("Pick a video first."); $("file").focus(); return; }
-  const res = await api("/start", collect());
+  const res = await api("/start", { ...collect(), ...extra });
   if (!res.ok) {
     const text = (await res.text()).trim();
     showError("Diagnosis: " + text + ".");
   }
   if (res.ok) loadState();
-});
+}
 
 let run = 0, from = 0, state = {};
 function reset() {

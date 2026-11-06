@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -52,6 +53,10 @@ type Config struct {
 	PublicPort int
 	Addrs      string
 	EvictAfter time.Duration
+	// Entry and Start continue a party where this node stopped: the playlist entry by
+	// name, and seconds into it. An entry no longer in the playlist starts as usual.
+	Entry string
+	Start float64
 }
 
 var (
@@ -104,6 +109,14 @@ func Run(parent context.Context, cfg Config) error {
 		}
 	}
 	log.Printf("file fingerprint: %s\n", file)
+	startAt := cfg.Start
+	if playlist && cfg.Entry != "" {
+		if i := slices.Index(names, cfg.Entry); i >= 0 {
+			start = i
+		} else {
+			startAt = 0
+		}
+	}
 	if cfg.Secret == "" {
 		cfg.Secret = rand.Text()
 	}
@@ -146,6 +159,10 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	if startAt > 0 {
+		// cleared once the file is open, or every entry would start there
+		args = append(args, "--start="+strconv.FormatFloat(startAt, 'f', 3, 64))
+	}
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {
@@ -181,7 +198,7 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	mpvQuit := atomic.Bool{}
-	_, err = mpv.New(c, func() {
+	client, err := mpv.New(c, func() {
 		if c.Err() == nil {
 			mpvQuit.Store(true)
 		}
@@ -203,9 +220,15 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 
+	if startAt > 0 {
+		if err := client.ClearStart(); err != nil {
+			log.Println("clearing start:", err)
+		}
+	}
 	log.Println("init done. now you can start watching")
 
 	err = <-exited
+	log.Printf("stopped at: %s\n", strconv.FormatFloat(client.Position(), 'f', 3, 64))
 	if err != nil {
 		log.Println(err)
 	}

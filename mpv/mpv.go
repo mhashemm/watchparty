@@ -795,6 +795,23 @@ func (c *Client) at(pos float64) bool {
 	return near(c.pos) || slices.ContainsFunc(c.seeks, near)
 }
 
+// ClearStart undoes --start once the first file is open: mpv would start every later
+// entry, and every return to this one, there too.
+func (c *Client) ClearStart() error {
+	return c.conn.do(setProperty, "start", "none")
+}
+
+// Position is where this node is in its entry, for continuing the party later. Within
+// endGraceSeconds of the end it is 0: continuing there would only end the file again.
+func (c *Client) Position() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.duration > 0 && c.duration-c.pos <= endGraceSeconds {
+		return 0
+	}
+	return c.pos
+}
+
 func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
