@@ -249,3 +249,18 @@ func TestStoreContinuesAParty(t *testing.T) {
 		t.Fatalf("an unknown party to continue made entry %d, want a new one", j)
 	}
 }
+
+// A party played to the end of its last file has nothing left to continue.
+func TestStoreRecordsAFinishedParty(t *testing.T) {
+	t.Parallel()
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "relay", File: "/m/a.mkv"})
+	s.observe(i, "2026/10/30 18:00:00 stopped at: 12.000")
+	if s.History[i].Finished {
+		t.Fatal("a party stopped midway counts as finished")
+	}
+	s.observe(i, "2026/10/30 18:00:00 finished: played to the end")
+	if !s.History[i].Finished {
+		t.Fatal("a party played to the end isn't finished")
+	}
+}

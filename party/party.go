@@ -228,7 +228,11 @@ func Run(parent context.Context, cfg Config) error {
 	log.Println("init done. now you can start watching")
 
 	err = <-exited
-	log.Printf("stopped at: %s\n", strconv.FormatFloat(client.Position(), 'f', 3, 64))
+	if client.Finished() {
+		log.Println("finished: played to the end")
+	} else {
+		log.Printf("stopped at: %s\n", strconv.FormatFloat(client.Position(), 'f', 3, 64))
+	}
 	if err != nil {
 		log.Println(err)
 	}

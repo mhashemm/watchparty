@@ -806,10 +806,22 @@ func (c *Client) ClearStart() error {
 func (c *Client) Position() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.duration > 0 && c.duration-c.pos <= endGraceSeconds {
+	if c.ending() {
 		return 0
 	}
 	return c.pos
+}
+
+// Finished is the last entry, or the only file, played to its end: nothing is left to
+// continue.
+func (c *Client) Finished() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ending() && c.current >= len(c.names)-1
+}
+
+func (c *Client) ending() bool {
+	return c.duration > 0 && c.duration-c.pos <= endGraceSeconds
 }
 
 func (c *Client) showText(text string) error {

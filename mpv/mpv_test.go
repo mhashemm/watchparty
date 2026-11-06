@@ -1496,6 +1496,23 @@ func TestPositionToContinueFrom(t *testing.T) {
 	}
 }
 
+// Only the end of the last entry, or of the only file, finishes the party: at the end
+// of any other entry mpv moves on to the next.
+func TestFinishedOnlyAtTheEndOfTheLastEntry(t *testing.T) {
+	t.Parallel()
+	three := []string{"e1", "e2", "e3"}
+	for _, c := range []struct {
+		names    []string
+		current  int
+		pos      float64
+		finished bool
+	}{{nil, 0, 97, true}, {nil, 0, 50, false}, {three, 2, 97, true}, {three, 1, 97, false}, {three, 2, 50, false}} {
+		if got := (&Client{names: c.names, current: c.current, pos: c.pos, duration: 100}).Finished(); got != c.finished {
+			t.Errorf("%d entries, on %d at %v: %v, want %v", len(c.names), c.current, c.pos, got, c.finished)
+		}
+	}
+}
+
 // A node that opens on a later entry can hear the party name that entry before mpv has
 // reported where it is. Taking itself for entry 0, it set the entry it was already on,
 // which mpv answers with nothing, and waited for that load forever.

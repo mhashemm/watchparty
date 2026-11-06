@@ -39,6 +39,7 @@ type session struct {
 	Secret   string    `json:"secret,omitempty"`
 	Addrs    string    `json:"addrs,omitempty"`
 	Invite   string    `json:"invite,omitempty"`
+	Finished bool      `json:"finished,omitempty"`
 	People   []string  `json:"people"`
 	Videos   []played  `json:"videos,omitempty"`
 }
@@ -225,6 +226,10 @@ func (s *store) observe(i int, line string) {
 				}
 			}
 		})
+		return
+	}
+	if strings.HasPrefix(message(line), "finished: ") {
+		s.update(i, func(sess *session) { sess.Finished = true })
 		return
 	}
 	if after, ok := strings.CutPrefix(message(line), "stopped at: "); ok {

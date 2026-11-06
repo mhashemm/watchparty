@@ -827,6 +827,9 @@ function partyTitle(p, files) {
   const count = files > 1 ? `${files} videos` : "";
   return place && count ? `${place} (${count})` : place || count;
 }
+// the relay forgets a closed room 30 days after its last use (forgetAfter in relay/rooms.go)
+const continuable = p => p.mode !== "direct" && !!p.room && !!p.secret && !p.finished
+  && Date.now() - new Date(p.ended || p.started) < 30 * 864e5;
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
   $("history-empty").hidden = parties.length > 0;
@@ -843,7 +846,7 @@ function renderHistory() {
     const who = p.people && p.people.length ? `with ${names(p.people)}` : "just you";
     meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "on Wi-Fi" : "over the internet"}`;
     li.append(title, meta);
-    if (p.mode !== "direct" && p.room && p.secret) {
+    if (continuable(p)) {
       const resume = document.createElement("button");
       resume.type = "button";
       resume.className = "small continue";
