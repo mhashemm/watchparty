@@ -157,14 +157,13 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
   **`.dockerignore` load-bearing** (`.bin` is most of the context).
 - `scratch` with a static `CGO_ENABLED=0` binary: no shell, libc or CA bundle, since the
   relay never dials out.
-- It listens on **:80** as root. Docker 20.10+ allows unprivileged ports below 1024 in
-  containers, so `USER 65534:65534` would also bind :80 (verified). Under podman or a
-  hardened host, use `ADDR=:8080` and `-p 80:8080`.
+- **Compose runs it as `UID:GID` from `relay/.env`**, the owner of `relay/data`, since a
+  file belongs to the process that makes it, not its folder; the image alone runs as root.
+  It still listens on **:80**: Docker 20.10+ allows unprivileged ports below 1024 in
+  containers. Under podman or a hardened host, use `ADDR=:8080` and `-p 80:8080`.
 - **`DB` is `/data/relay.db` on a `VOLUME`.** Compose binds **`relay/data`** there, never a
   Docker volume, so nothing lands outside the repo; the folder is in git (`.gitkeep`) and
-  `create_host_path: false` stops compose making it as root. Compose runs the relay as
-  `UID:GID` from `relay/.env`, the folder's owner, so the database is that user's. The
-  image itself still runs as root for a bare `docker run`. `.dockerignore` keeps the data
+  `create_host_path: false` stops compose making it as root. `.dockerignore` keeps the data
   out of the build. SQLite's temp store is memory: `scratch` has no `/tmp`.
 - Compose: `printf 'CREATE_KEY=%s\nUID=%s\nGID=%s\n' "$(openssl rand -hex 16)" "$(id -u)" "$(id -g)"
   > relay/.env` (also `PORT`, `TRUST_PROXY`), then `docker compose -f relay/compose.yaml up -d --build`.

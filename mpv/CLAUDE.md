@@ -16,10 +16,6 @@ A new message or rule that nodes must agree on gets a check there.
   `watch()` delivers. So `watch` starts before `New`'s observe calls, and
   **`c.mu` is never held across `do()`**: `watch` needs `c.mu` for `handleEvent`, so
   every call would become a 5s timeout. Lock, mutate, unlock, then IPC.
-- Only a line with `request_id > 0` and an `error` is a reply; mpv answers a request
-  without an id with 0. An id nobody waits for anymore logs `Watch: dropped response`.
-- `do()` logs `do: sent request: <json>`. Every on-screen notice is recovered from that
-  line (contract table in the root `CLAUDE.md`).
 - **`New` waits for `ready`**, the first `time-pos` with data, i.e. the first file is loaded.
   - Before `ready`, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run`
     reads mpv's real exit status. Cancelling would kill the exiting mpv and turn
@@ -46,7 +42,6 @@ go out. The non-obvious rules:
 - **A pause goes out with its position:** `paused-at` = `c.pos`, or, if `pauseParty` set
   a reason, a `time-pos` plus `pause-reason` (`pauseExtras`). Those extras go out even
   when the pause itself was an echo, so a seek that raced a peer's pause isn't lost.
-- `errNoChange` for a pause equal to the current state; a resume clears `seeks`, `seeking`, `joining`.
 
 ### Echo suppression (`applied`, `seeks`)
 
@@ -95,8 +90,7 @@ continued party stopped (`resumeAt`, marked like a peer's seek, so not broadcast
 position (mpv starts `--pause`d, so it lands before any resume), pause, announces `joined`,
 then the notices. e2e `[R11d]`.
 
-- `pause` shows "paused by X"/"resumed by X" and records `pausedBy`; our own pause clears
-  it. `time-pos` is applied only while paused.
+- `time-pos` is applied only while paused.
 - **`paused-at` is followed only from the peer whose pause we applied** (`pausedBy`), so
   two nodes pausing at once don't swap positions, and only if not already within 0.1s
   (`at`). e2e `[R11g]`.
@@ -189,10 +183,9 @@ reason: nobody starts the next one until someone resumes.
 - `Init` gives mpv `CREATE_NEW_CONSOLE` (hidden) and its own process group, so a
   node's Ctrl-Break never reaches it. Works under the `-H=windowsgui` GUI parent
   (`e2e_windows.py` `[W10]`, `--vo=null` only).
-- **`Init` runs the `mpv.exe` next to an `mpv.com`.** A bare `mpv` resolves to the
-  `.com` console wrapper (`.COM` precedes `.EXE` in `PATHEXT`); `cmd.Cancel` killed only
-  the wrapper, `mpv.exe` kept the pipe open and `Run` never returned. CI's `windows` job
-  runs its test, and `e2e_windows.py` `[W8]` runs a party through `mpv.com`.
+- **`Init` runs the `mpv.exe` next to an `mpv.com`.** A bare `mpv` resolves to the `.com`
+  console wrapper (`.COM` precedes `.EXE` in `PATHEXT`), and killing the wrapper leaves
+  `mpv.exe` holding the pipe. `e2e_windows.py` `[W8]` runs a party through `mpv.com`.
 
 ## Tests
 
