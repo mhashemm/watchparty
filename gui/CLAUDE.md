@@ -110,6 +110,12 @@ The download, SHA-256 check and binary swap live in the `update` package
   exits, `main` logs `gui: window closed` and cancels everything.
 - **Hand-off guard:** a browser that exits within `handoffWindow` (5s) is assumed to
   have passed the page to a running instance (Edge's startup boost), not closed.
+- **The page holds `GET /alive` open,** an event stream read with `fetch` so it carries
+  `X-Token`, with a heartbeat every 15s. If the GUI opened its own window and no page is
+  connected `closeGrace` (3s) after the last one left, the window is closed; this is what
+  works when the browser outlives its window (macOS) or hands it off (Edge). A reload
+  reconnects within that. The page reconnects as soon as its stream is cut, never on a
+  timer (hidden windows' timers run once a minute), and stops when the request itself fails.
 - **Idle exit**, when the window can't be watched: no party and no `/log` poll for 2
   minutes. Don't shorten it: Chrome throttles hidden windows' timers to about one per
   minute. The first poll gets a minute's grace.

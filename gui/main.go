@@ -102,23 +102,27 @@ type gui struct {
 	ctx         context.Context
 	quit        func()
 	closeWindow func()
+	ownWindow   bool
 	exe         string
 	wg          sync.WaitGroup
 
-	mu        sync.Mutex
-	cancel    context.CancelFunc
-	store     *store
-	session   int
-	installed string
-	run       int
-	lines     []string
-	exitErr   string
-	lastPoll  time.Time
-	idleAfter time.Duration
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	store      *store
+	session    int
+	installed  string
+	run        int
+	lines      []string
+	exitErr    string
+	lastPoll   time.Time
+	idleAfter  time.Duration
+	pages      int
+	closeGrace time.Duration
+	heartbeat  time.Duration
 }
 
 func newGUI(ctx context.Context, host string, st *store) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, closeGrace: 3 * time.Second, heartbeat: 15 * time.Second, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -130,6 +134,7 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
 	g.mux.HandleFunc("GET /log", g.log)
+	g.mux.HandleFunc("GET /alive", g.alive)
 	g.mux.HandleFunc("GET /update", g.checkUpdate)
 	g.mux.HandleFunc("POST /update", g.update)
 	g.mux.HandleFunc("POST /restart", g.restart)
@@ -296,6 +301,51 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
+func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	rc := http.NewResponseController(w)
+	g.mu.Lock()
+	g.pages++
+	g.mu.Unlock()
+	defer g.pageGone()
+	tick := time.NewTicker(g.heartbeat)
+	defer tick.Stop()
+	for {
+		_, err := io.WriteString(w, ":\n\n")
+		if err == nil {
+			err = rc.Flush()
+		}
+		if err != nil {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-g.ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+func (g *gui) pageGone() {
+	g.mu.Lock()
+	g.pages--
+	g.mu.Unlock()
+	time.AfterFunc(g.closeGrace, g.checkPages)
+}
+
+func (g *gui) checkPages() {
+	g.mu.Lock()
+	none := g.pages == 0
+	g.mu.Unlock()
+	if g.ownWindow && none && g.ctx.Err() == nil {
+		log.Println("gui: window closed")
+		g.quit()
+	}
+}
+
 func (g *gui) idle() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -421,6 +471,7 @@ func main() {
 	closed, browser := openWindow(url)
 	if browser != nil {
 		g.closeWindow = func() { browser.Kill() }
+		g.ownWindow = true
 	}
 	if closed != nil {
 		go func() {

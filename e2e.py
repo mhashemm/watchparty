@@ -2512,7 +2512,17 @@ def gui_suite():
     print("\n[G27] the cat")
     js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
     ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
-    stop(G2)
+
+    print(f"\n[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
+    nodes[G2]["page"].call("Page.reload")
+    time.sleep(3 + QUIET)  # the GUI's closeGrace
+    ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
+    try:
+        nodes[G2]["page"].call("Page.close")
+    except (OSError, RuntimeError, ValueError):
+        pass  # the page can go before it answers
+    ok(f"{G2} exited", until(lambda: nodes[G2]["proc"].poll() is not None, 10))
+    ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
 
     print("\n[G27b] a history saved by an older version moves to its own file, and is kept")
     folder = f"{nodes[G]['home']}/config/watchparty"
