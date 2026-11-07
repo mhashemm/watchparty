@@ -642,6 +642,11 @@ def script(path, body):
     os.chmod(path, 0o755)
 
 
+def profile(n):
+    """The temporary browser profile of the last window this GUI's folder opened."""
+    return next(a.split("=", 1)[1] for a in launches(n)[-1].split() if a.startswith("--user-data-dir="))
+
+
 def launches(n):
     try:
         return open(f"{nodes[n]['home']}/browser.args").read().splitlines()
@@ -2472,6 +2477,7 @@ def gui_suite():
     ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
     ok(f"{H}'s mpv closed", not listening_unix(sock))
     ok(f"{H}'s window closed", until(lambda: gone(window)))
+    ok("and its browser profile is deleted", not os.path.exists(profile(H)), profile(H))
 
     print(f"\n[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
     tab(G, "history")
@@ -2523,6 +2529,7 @@ def gui_suite():
         pass  # the page can go before it answers
     ok(f"{G2} exited", until(lambda: nodes[G2]["proc"].poll() is not None, 10))
     ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
+    ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
 
     print("\n[G27b] a history saved by an older version moves to its own file, and is kept")
     folder = f"{nodes[G]['home']}/config/watchparty"

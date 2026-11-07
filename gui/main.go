@@ -413,7 +413,7 @@ func newProfile(root string) (string, error) {
 	return profile, nil
 }
 
-func openWindow(url string) (<-chan struct{}, *os.Process) {
+func openWindow(url string) (<-chan struct{}, func()) {
 	for _, b := range browsers() {
 		profile, err := newProfile(b.root)
 		if err != nil {
@@ -425,16 +425,20 @@ func openWindow(url string) (<-chan struct{}, *os.Process) {
 			os.RemoveAll(profile)
 			continue
 		}
-		closed := make(chan struct{})
+		closed, gone := make(chan struct{}), make(chan struct{})
 		started := time.Now()
 		go func() {
 			cmd.Wait()
-			os.RemoveAll(profile)
+			removeProfile(profile)
+			close(gone)
 			if time.Since(started) > handoffWindow {
 				close(closed)
 			}
 		}()
-		return closed, cmd.Process
+		return closed, func() {
+			cmd.Process.Kill()
+			<-gone
+		}
 	}
 	cmd := openURL(url)
 	go func() {
@@ -447,6 +451,16 @@ func openWindow(url string) (<-chan struct{}, *os.Process) {
 		}
 	}()
 	return nil, nil
+}
+
+func removeProfile(dir string) {
+	for range 20 {
+		os.RemoveAll(dir)
+		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 const handoffWindow = 5 * time.Second
@@ -468,9 +482,9 @@ func main() {
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
-	closed, browser := openWindow(url)
-	if browser != nil {
-		g.closeWindow = func() { browser.Kill() }
+	closed, closeWindow := openWindow(url)
+	if closeWindow != nil {
+		g.closeWindow = closeWindow
 		g.ownWindow = true
 	}
 	if closed != nil {
