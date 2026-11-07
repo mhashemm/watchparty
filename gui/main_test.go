@@ -154,6 +154,7 @@ func TestTheLastPageGoingEndsTheGUI(t *testing.T) {
 	g := newGUI(t.Context(), ln.Addr().String(), openStore(t.TempDir()+"/gui.json"))
 	quit := make(chan struct{})
 	g.quit = func() { close(quit) }
+	g.closeGrace = 0
 	srv := &http.Server{Handler: g}
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
@@ -185,12 +186,19 @@ func TestTheGUIStaysWhileAPageIsConnected(t *testing.T) {
 	g.quit = func() { quits++ }
 	g.pages = 2
 	g.pageGone()
+	g.checkPages()
 	if quits != 0 {
 		t.Fatal("quit with a page still connected")
 	}
-	g.pageGone()
+	g.pages = 1
+	g.checkPages()
+	if quits != 0 {
+		t.Fatal("quit although the page reconnected within the grace")
+	}
+	g.pages = 0
+	g.checkPages()
 	if quits != 1 {
-		t.Fatal("didn't quit when the last page went")
+		t.Fatal("didn't quit with no page back after the grace")
 	}
 }
 
@@ -199,7 +207,6 @@ func TestShuttingDownIsNotAClosedWindow(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	g := newGUI(ctx, "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
 	g.quit = func() { t.Fatal("quit") }
-	g.pages = 1
 	cancel()
-	g.pageGone()
+	g.checkPages()
 }

@@ -106,10 +106,12 @@ The download, SHA-256 check and binary swap live in the `update` package
   SIGINT/SIGTERM `main` cancels the party and waits for `Run`, so no UPNP mapping leaks.
 - **Closing the window shuts everything down,** the fallback tab too. The page holds
   `GET /alive` open, an event stream read with `fetch` so it carries `X-Token`, with a
-  heartbeat every 15s; when the last one drops, `main` logs `gui: window closed` and
-  cancels everything. The browser's process can't say: macOS keeps it running without
-  windows, and Edge's startup boost hands the window to another process. A reload drops
-  it too, which is why the page blocks F5 and Ctrl/Cmd+R.
+  heartbeat every 15s. When none is connected `closeGrace` (3s) after the last one
+  dropped, `main` logs `gui: window closed` and cancels everything. The browser's process
+  can't say: macOS keeps it running without windows, and Edge's startup boost hands the
+  window to another process. The page reconnects the moment its stream is cut, never on a
+  timer (a hidden window's run once a minute), so a browser cutting a long request costs
+  nothing; it stops when the request itself fails, the GUI being gone.
 - **The browser runs as its own instance** with a fresh temporary profile per launch; a
   shared profile would hand a second GUI's window to the first. On exit the GUI kills it
   and deletes the profile until it stays deleted: Chrome's network service still writes

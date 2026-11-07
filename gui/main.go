@@ -105,22 +105,23 @@ type gui struct {
 	exe         string
 	wg          sync.WaitGroup
 
-	mu        sync.Mutex
-	cancel    context.CancelFunc
-	store     *store
-	session   int
-	installed string
-	run       int
-	lines     []string
-	exitErr   string
-	lastPoll  time.Time
-	idleAfter time.Duration
-	pages     int
-	heartbeat time.Duration
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	store      *store
+	session    int
+	installed  string
+	run        int
+	lines      []string
+	exitErr    string
+	lastPoll   time.Time
+	idleAfter  time.Duration
+	pages      int
+	heartbeat  time.Duration
+	closeGrace time.Duration
 }
 
 func newGUI(ctx context.Context, host string, st *store) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, heartbeat: 15 * time.Second, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, heartbeat: 15 * time.Second, closeGrace: 3 * time.Second, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -330,6 +331,15 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 func (g *gui) pageGone() {
 	g.mu.Lock()
 	g.pages--
+	none := g.pages == 0
+	g.mu.Unlock()
+	if none {
+		time.AfterFunc(g.closeGrace, g.checkPages)
+	}
+}
+
+func (g *gui) checkPages() {
+	g.mu.Lock()
 	none := g.pages == 0
 	g.mu.Unlock()
 	if none && g.ctx.Err() == nil {
