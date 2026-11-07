@@ -298,8 +298,8 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			}
 			c.paused = event.paused()
 			if !c.paused {
-				c.seeks = nil
-				c.seeking, c.joining, c.settling, c.heard = false, false, false, false
+				c.seeks, c.seeking = nil, false
+				c.resumed()
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
@@ -542,12 +542,13 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
+	var at string
+	var earlier bool
 	if joining {
 		c.joinedWith = append(c.joinedWith, hostname)
 	} else {
-		c.settling = true
+		at, earlier = c.settle()
 	}
-	at, earlier := c.earlierStop()
 	var entry []byte
 	if len(c.names) > 0 {
 		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
@@ -587,10 +588,8 @@ func (c *Client) welcome(hostname string) error {
 
 func (c *Client) left(hostname string) error {
 	c.mu.Lock()
-	c.settling = true
-	playing := !c.paused
-	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
-	at, earlier := c.earlierStop()
+	playing, ending := !c.paused, c.ending()
+	at, earlier := c.settle()
 	c.mu.Unlock()
 	if earlier {
 		return c.seekTo(at)
@@ -613,14 +612,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	joiner := slices.Contains(c.joinedWith, hostname)
-	// once the party has answered, a fellow joiner's entry is only where it was
-	notForUs := event.From == nil && (!c.joining || joiner && (i < heading || c.heardParty))
-	if event.From == nil && c.joining && !joiner {
-		c.heardParty = true
-	}
+	takes := event.From != nil || c.takesAnswer(i, heading, hostname)
 	c.mu.Unlock()
-	if i == heading || lost || notForUs {
+	if i == heading || lost || !takes {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -651,6 +645,22 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return err
 	}
 	return c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
+}
+
+// takesAnswer is whether this node follows the entry someone answered a joiner with.
+// Only a node still joining does. The party's answer, from anyone whose join it didn't
+// hear, always; a fellow joiner's only if higher (each answers the other, and following
+// both ways would swap them), and not once the party has answered, since it only says
+// where that joiner was.
+func (c *Client) takesAnswer(i, heading int, hostname string) bool {
+	if !c.joining {
+		return false
+	}
+	if !slices.Contains(c.joinedWith, hostname) {
+		c.heardParty = true
+		return true
+	}
+	return i > heading && !c.heardParty
 }
 
 func (c *Client) entryName(i int) string {
@@ -721,7 +731,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining, c.settling, c.heard = false, false, false
+		c.resumed()
 	}
 	c.mu.Unlock()
 
@@ -786,10 +796,9 @@ func (c *Client) align(event Event, hostname string) error {
 	if !c.heard || pos < c.earliest {
 		c.earliest, c.heard = pos, true
 	}
-	stopped := c.stopped()
 	// while settling only an earlier stop counts, even from the peer whose pause we applied:
 	// its paused-at can land after another member's earlier one
-	follow := c.paused && !c.at(pos) && (c.settling && pos < stopped || !c.settling && c.pausedBy == hostname)
+	follow := c.paused && !c.at(pos) && (c.settling && pos < c.target() || !c.settling && c.pausedBy == hostname)
 	c.mu.Unlock()
 	if !follow {
 		return nil
@@ -811,11 +820,16 @@ func (c *Client) target() float64 {
 	return c.pos
 }
 
-func (c *Client) stopped() float64 {
-	if n := len(c.seeks); n > 0 {
-		return c.seeks[n-1]
-	}
-	return c.pos
+// settle starts settling, after a join or a leave: members stop a moment apart, so until
+// the next resume this node follows only an earlier stop. It returns one heard already.
+func (c *Client) settle() (string, bool) {
+	c.settling = true
+	return c.earlierStop()
+}
+
+// resumed ends joining and settling: the party is playing again.
+func (c *Client) resumed() {
+	c.joining, c.settling, c.heard = false, false, false
 }
 
 // earlierStop is the earliest stop a peer sent since the last resume, if this node is
@@ -823,7 +837,7 @@ func (c *Client) stopped() float64 {
 // member that applied someone's pause ignores everyone else's position until a leave or
 // a join makes it settle.
 func (c *Client) earlierStop() (string, bool) {
-	if !c.paused || !c.settling || !c.heard || c.earliest >= c.stopped() || c.at(c.earliest) {
+	if !c.paused || !c.settling || !c.heard || c.earliest >= c.target() || c.at(c.earliest) {
 		return "", false
 	}
 	return strconv.FormatFloat(c.earliest, 'f', 6, 64), true

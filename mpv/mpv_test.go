@@ -1561,3 +1561,20 @@ func TestJoinerKnowsItsStartingEntryBeforeMpvSaysSo(t *testing.T) {
 		t.Fatalf("sent %q before the mark, want nothing: it is already on that entry", got)
 	}
 }
+
+// Settling compares a peer's stop with where this node really is. Its own seek after a
+// peer's had landed isn't in seeks, so the peer's older seek is not where it stopped.
+func TestSettlingComparesWithItsOwnLastSeek(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.seeks, c.pos = true, []float64{40}, 60
+	go func() {
+		c.apply(peer("x", `{"name":"show-text","data":"x has left"}`))
+		c.apply(peer("a", `{"event":"property-change","name":"paused-at","data":"50.000000"}`))
+	}()
+	for _, want := range []string{"show-text x has left 5000", "set_property time-pos 50.000000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q: 50 is earlier than its 60", got, want)
+		}
+	}
+}
