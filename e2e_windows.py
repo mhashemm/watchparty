@@ -476,7 +476,9 @@ def gui_suite():
     def setup(version):
         out = os.path.join(RUN, f"watchparty-gui-setup-{version}.exe")
         subprocess.run([MAKENSIS, "/V2", f"/DEXE={GUI_BIN}", f"/DOUT={out}", f"/DVERSION={version}", os.path.join(REPO, "gui", "setup.nsi")], cwd=REPO, check=True)
-        subprocess.run([out, "/S", f"/D={target}"], check=True, timeout=BOOT)
+        code = subprocess.run([out, "/S", f"/D={target}"], timeout=BOOT).returncode
+        crash = "(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000} -MaxEvents 1).Message"
+        must(f"the {version} installer exits 0", code == 0, "" if code == 0 else f"{code:#x} " + subprocess.run(["powershell", "-NoProfile", "-Command", crash], capture_output=True, text=True, timeout=BOOT).stdout)
 
     def installed(name):
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
