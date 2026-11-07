@@ -158,7 +158,10 @@ PORTS["upnpNode"] = args.port_base + len(NODES) + 13
 PORTS["jitter"] = args.port_base + len(NODES) + 14
 JITTERED = args.jitter if args.mode in JITTER_PHASES else None
 RELAY_URL = f"ws://127.0.0.1:{PORTS['jitter' if JITTERED else 'relay']}"
-CREATE_KEY = "k"  # every relay needs one; a node passes create_key="" to go without
+CREATE_KEY = "k"
+# the first node launched into a room is its host and has the key, as someone who starts a
+# party and shares the invite; the rest join without it. create_key overrides either way.
+hosted = set()
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
 
@@ -353,7 +356,7 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=CREATE_KEY, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False, cache=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False, cache=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
@@ -361,6 +364,9 @@ def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, creat
     cmd = [BIN, "-file", media or MEDIA, "-hostname", name, "-mpvFlags", f"{MPVFLAGS} {mpvflags}"] + (["-mpv", mpv] if mpv else []) + (["-playlist"] if playlist else []) + (["-cacheDir", cache] if cache else [])
     if room is not None:
         cmd += ["-relay", relay or RELAY_URL, "-room", room, "-secret", secret or SECRET]
+        if create_key is None:
+            create_key = "" if room in hosted else CREATE_KEY
+        hosted.add(room)
         if create_key:
             cmd += ["-createKey", create_key]
     else:
@@ -1764,7 +1770,7 @@ def media_suite():
     slow = lag(0, PORTS["relay"], 0.5)
     via = f"ws://127.0.0.1:{slow.getsockname()[1]}"
     launch("epH", room="startingtogether", media=f"{folder}/video2.mkv", relay=via, playlist=True)
-    launch("epI", room="startingtogether", media=f"{folder}/video10.mkv", relay=via, playlist=True)
+    launch("epI", room="startingtogether", media=f"{folder}/video10.mkv", relay=via, playlist=True, create_key=CREATE_KEY)  # two key holders continuing at once
     must("both are in", until(lambda: all(booted(n) and connected(n) for n in ("epH", "epI")), BOOT))
     for n in ("epH", "epI"):
         resolve(n)

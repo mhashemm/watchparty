@@ -295,7 +295,7 @@ def cli_suite():
                              stdout=open(os.path.join(RUN, "relay.log"), "wb"), stderr=subprocess.STDOUT)
     others_procs.append(relay)
     for n in (A, B, C):
-        launch(n, "-relay", RELAY_URL, "-room", "winroom", "-secret", "winsecret", "-createKey", "k")
+        launch(n, "-relay", RELAY_URL, "-room", "winroom", "-secret", "winsecret", *(["-createKey", "k"] if n == A else []))
     until(lambda: all(booted(n) for n in (A, B, C)), BOOT)
     for n in (A, B, C):
         resolve(n)

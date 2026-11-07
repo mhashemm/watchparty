@@ -549,7 +549,6 @@ func main() {
 		timeout:    writeTimeout,
 		waitFor:    waitForKeyHolder,
 	}
-	// without it, anyone who finds the relay gets a free anonymous fan-out for any bytes
 	if r.createKey = []byte(env("CREATE_KEY", "", str)); len(r.createKey) == 0 {
 		log.Fatal("CREATE_KEY is required: only someone with it can open a room")
 	}
