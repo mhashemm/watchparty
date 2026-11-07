@@ -13,6 +13,8 @@ Page instfiles
 
 !include LogicLib.nsh
 !include WordFunc.nsh
+!include Win\COM.nsh
+!include Win\Propkey.nsh
 !ifndef VERSION
 	!define VERSION dev
 !endif
@@ -46,30 +48,33 @@ Function SetAppID
 	Push $5
 	Push $6
 	Push $7
-	System::Call 'ole32::CoInitialize(p 0)'
-	System::Call 'ole32::CoCreateInstance(g "{00021401-0000-0000-C000-000000000046}", p 0, i 1, g "{000214F9-0000-0000-C000-000000000046}", *p .r2) i .r0'
-	${If} $0 = 0
-		System::Call '$2->0(g "{0000010b-0000-0000-C000-000000000046}", *p .r3) i .r0'
-		${If} $0 = 0
-			System::Call '$3->5(w r1, i 2) i .r0'
-			System::Call '$2->0(g "{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}", *p .r4) i .r0'
-			${If} $0 = 0
-				System::Call '*(&g16 "{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", i 5) p .r5'
-				System::Call '*(&w64 "${APPID}") p .r7'
-				System::Call '*(&i2 31, &i2 0, &i2 0, &i2 0, p r7, p 0) p .r6'
-				System::Call '$4->6(p r5, p r6) i .r0'
-				System::Call '$4->7() i .r0'
-				System::Call '$4->2()'
-				System::Free $5
-				System::Free $6
-				System::Free $7
-				System::Call '$3->6(p 0, i 1) i .r0'
+	System::Call 'OLE32::CoInitialize(p 0)'
+	!insertmacro ComHlpr_CreateInProcInstance ${CLSID_ShellLink} ${IID_IShellLink} r0 ""
+	${If} $0 P<> 0
+		${IUnknown::QueryInterface} $0 '("${IID_IPersistFile}",.r2)'
+		${If} $2 P<> 0
+			${IPersistFile::Load} $2 '("$1",${STGM_READWRITE}).r3'
+			${If} $3 = 0
+				${IUnknown::QueryInterface} $0 '("${IID_IPropertyStore}",.r4)'
+				${If} $4 P<> 0
+					System::Call '*${SYSSTRUCT_PROPERTYKEY}(${PKEY_AppUserModel_ID})p.r6'
+					System::Call '*(&w64 "${APPID}")p.r5'
+					System::Call '*${SYSSTRUCT_PROPVARIANT}(${VT_LPWSTR})p.r7'
+					System::Call '*$7(&i8,p r5)'
+					${IPropertyStore::SetValue} $4 '($6,$7)'
+					${IPropertyStore::Commit} $4 ""
+					${IUnknown::Release} $4 ""
+					System::Free $5
+					System::Free $6
+					System::Free $7
+					${IPersistFile::Save} $2 '("$1",1)'
+				${EndIf}
 			${EndIf}
-			System::Call '$3->2()'
+			${IUnknown::Release} $2 ""
 		${EndIf}
-		System::Call '$2->2()'
+		${IUnknown::Release} $0 ""
 	${EndIf}
-	System::Call 'ole32::CoUninitialize()'
+	System::Call 'OLE32::CoUninitialize()'
 	Pop $7
 	Pop $6
 	Pop $5
