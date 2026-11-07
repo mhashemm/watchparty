@@ -133,6 +133,7 @@ type Event struct {
 	Data      string `json:"data"`
 	Entry     *int   `json:"entry,omitempty"`
 	From      *int   `json:"from,omitempty"`
+	Party     bool   `json:"party,omitempty"`
 	Response
 }
 
@@ -560,13 +561,10 @@ func (c *Client) welcome(hostname string) error {
 	}
 	var entry []byte
 	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading()), Party: !joining})
 	}
 	c.mu.Unlock()
 	if entry != nil {
-		if !joining {
-			entry = c.tagged(entry)
-		}
 		select {
 		case c.outgoing <- entry:
 		case <-c.ctx.Done():
@@ -624,7 +622,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Entry != nil)
+	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Party)
 	c.mu.Unlock()
 	if i == heading || lost || !takes {
 		return nil
@@ -660,8 +658,8 @@ func (c *Client) followEntry(event Event, hostname string) error {
 }
 
 // takesAnswer is whether this node follows the entry someone answered a joiner with.
-// Only a node still joining does. The party's answer, tagged with its entry or from
-// anyone whose join it didn't hear, always; a fellow joiner's only if higher (each
+// Only a node still joining does. The party's answer, marked party or from anyone
+// whose join it didn't hear, always; a fellow joiner's only if higher (each
 // answers the other, and following both ways would swap them), and not once the party
 // has answered, since it only says where that joiner was.
 func (c *Client) takesAnswer(i, heading int, hostname string, party bool) bool {
