@@ -156,12 +156,13 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
   **`.dockerignore` load-bearing** (`.bin` is most of the context).
 - `scratch` with a static `CGO_ENABLED=0` binary: no shell, libc or CA bundle, since the
   relay never dials out.
-- It listens on **:80** as root. Docker 20.10+ allows unprivileged ports below 1024 in
-  containers, so `USER 65534:65534` would also bind :80 (verified). Under podman or a
-  hardened host, use `ADDR=:8080` and `-p 80:8080`.
+- It runs as **`65534:65534`** (nobody) and still listens on **:80**: Docker 20.10+ allows
+  unprivileged ports below 1024 in containers. Under podman or a hardened host, use
+  `ADDR=:8080` and `-p 80:8080`.
 - **`DB` is `/data/relay.db` on a `VOLUME`**; compose mounts the named volume `rooms` there,
-  so a rebuilt container keeps its remembered rooms. SQLite's temp store is memory: `scratch`
-  has no `/tmp`.
+  so a rebuilt container keeps its remembered rooms. The image's `/data` is owned by 65534,
+  and a **new** volume copies that; one created by an older root image stays root's and
+  needs `chown -R 65534:65534` once. SQLite's temp store is memory: `scratch` has no `/tmp`.
 - Compose: `printf 'CREATE_KEY=%s\n' "$(openssl rand -hex 16)" > relay/.env` (also
   `PORT`, `TRUST_PROXY`), then `docker compose -f relay/compose.yaml up -d --build`.
   `relay/.env` must exist and is ignored by git and Docker. `PORT` is the host port,
