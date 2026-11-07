@@ -140,7 +140,7 @@ The download, SHA-256 check and binary swap live in the `update` package
   - Its environment sets the `GOOGLE_*` keys to `no`: a build with none (Void's) otherwise
     shows a "keys are missing" bar, and this window uses no Google service. A distro's wrapper
     that exports its own keys overrides them, which is fine.
-  - The page blocks DevTools' shortcuts and the right-click menu, except in a field, where
+  - The page blocks DevTools' shortcuts, F5 and Ctrl/Cmd+R, and the right-click menu, except in a field, where
     right-click paste matters. That is only a deterrent: Chromium has no switch for it, and
     the policy that does it is system-wide.
   - The profile is seeded to turn off the password manager. Edge also gets

@@ -903,7 +903,8 @@ document.addEventListener("contextmenu", e => { if (!e.target.closest("input, te
 document.addEventListener("keydown", e => {
   const devtools = /^[ijc]$/i.test(e.key) && (e.ctrlKey && e.shiftKey || e.metaKey && e.altKey);
   const source = /^u$/i.test(e.key) && (e.ctrlKey || e.metaKey);
-  if (e.key === "F12" || devtools || source) e.preventDefault();
+  const reload = e.key === "F5" || /^r$/i.test(e.key) && (e.ctrlKey || e.metaKey);
+  if (e.key === "F12" || devtools || source || reload) e.preventDefault();
 });
 document.addEventListener("click", e => {
   if (!e.target.closest("#tip, #tip-button")) showTip(false);

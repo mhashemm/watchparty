@@ -2019,6 +2019,12 @@ def gui_suite():
     for name, keys in (("F12", 'key: "F12"'), ("Ctrl+Shift+I", 'key: "I", ctrlKey: true, shiftKey: true'), ("Cmd+Alt+J", 'key: "j", metaKey: true, altKey: true'), ("Ctrl+U", 'key: "u", ctrlKey: true')):
         ok(f"{name} is blocked", prevented("document.body", f'KeyboardEvent("keydown", {{{keys}, bubbles: true, cancelable: true}})'))
     ok("Ctrl+V isn't", not prevented('$("invite")', 'KeyboardEvent("keydown", {key: "v", ctrlKey: true, bubbles: true, cancelable: true})'))
+    js(H, "window.notReloaded = true")
+    for key, code, vk, mods in (("F5", "F5", 116, 0), ("r", "KeyR", 82, 2), ("r", "KeyR", 82, 4), ("R", "KeyR", 82, 10)):
+        for kind in ("rawKeyDown", "keyUp"):
+            nodes[H]["page"].call("Input.dispatchKeyEvent", type=kind, key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk, modifiers=mods)
+    time.sleep(QUIET)
+    ok("F5, Ctrl+R, Cmd+R and Ctrl+Shift+R, pressed for real, don't reload it", js(H, "window.notReloaded") is True)
 
     print("\n[G2] the tabs switch views and the address remembers which")
     for view in ("history", "settings", "party"):
