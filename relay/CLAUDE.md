@@ -77,8 +77,10 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
    - New remembered room, no key: secret hash (403, costing quota like any wrong secret),
      then file (409), then held, free.
    - New room: rate limit (429) → create-key compare (403, after the quota is spent, so
-     guessing costs) → `MAX_ROOMS` (503) → create, releasing anyone held for it. A key
-     holder overwrites what was remembered, so a room name can be reused for another video.
+     guessing costs) → `MAX_ROOMS` (503) → create. A key holder overwrites what was
+     remembered, so a room name can be reused for another video. **Anyone held for the room
+     is released only once the key holder is added** (`opened`): released at create, one
+     could be added first and say `joined` to an empty room, and nobody answered it.
    - The remembered row is read **before** `r.mu`, since keyless retries are free and
      shouldn't hold every room up on the disk; written after `admit` and on reaping.
 4. `websocket.Accept`. On failure, `leave(name, nil)` reaps a room `admit` just made,

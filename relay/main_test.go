@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -313,6 +314,34 @@ func TestAddToAReapedRoomFails(t *testing.T) {
 	}
 	if _, exists := r.rooms["room"]; exists {
 		t.Fatal("add recreated the room behind admit's back")
+	}
+}
+
+// A held member is sent to join only once the key holder is in the room. Sent when the
+// room was created, it could be added first and say joined to an empty room, and the key
+// holder never answered it.
+func TestHeldMembersJoinAfterTheOpener(t *testing.T) {
+	t.Parallel()
+	r := newRelay(t, 100, 100, 100)
+	old := &known{secret: sha256.Sum256([]byte("s")), file: "f"}
+	_, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old, true)
+	if err != nil || open == nil {
+		t.Fatalf("got %v, want to be held", err)
+	}
+	if created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); !created || err != nil {
+		t.Fatalf("the key holder got %v, want the room created", err)
+	}
+	select {
+	case <-open:
+		t.Fatal("the held member was sent to join before the key holder was in the room")
+	default:
+	}
+	r.add("room", &member{hostname: "a", ch: make(chan []byte, sendBuffer)})
+	r.opened("room")
+	select {
+	case <-open:
+	default:
+		t.Fatal("the held member was never sent to join")
 	}
 }
 

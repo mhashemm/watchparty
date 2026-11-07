@@ -238,11 +238,18 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 		return false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
 	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}}
+	return true, nil, 0, nil
+}
+
+// opened sends anyone held for the room to join, once its key holder is in it: sent
+// sooner, one could be added first and say joined to an empty room.
+func (r *relay) opened(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if o, ok := r.opening[name]; ok {
 		close(o.open)
 		delete(r.opening, name)
 	}
-	return true, nil, 0, nil
 }
 
 func (r *relay) stopWaiting(name string, open <-chan struct{}) {
@@ -478,6 +485,9 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		l.Info("room closed before the join landed, sent back to redial")
 		conn.Close(websocket.StatusTryAgainLater, "room closed")
 		return
+	}
+	if created {
+		r.opened(name)
 	}
 	replaces := ""
 	if stale != nil {
