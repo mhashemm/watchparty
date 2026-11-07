@@ -158,6 +158,7 @@ PORTS["upnpNode"] = args.port_base + len(NODES) + 13
 PORTS["jitter"] = args.port_base + len(NODES) + 14
 JITTERED = args.jitter if args.mode in JITTER_PHASES else None
 RELAY_URL = f"ws://127.0.0.1:{PORTS['jitter' if JITTERED else 'relay']}"
+CREATE_KEY = "k"  # every relay needs one; a node passes create_key="" to go without
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
 
@@ -352,7 +353,7 @@ def kill_mpv_for(sock):
             pass
 
 
-def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=None, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False, cache=None):
+def launch(name, addrs=None, room=None, secret=None, tag=None, relay=None, create_key=CREATE_KEY, media=None, evict="1ms", local=True, mpv=None, mpvflags="", port=None, playlist=False, cache=None):
     """Start a node. room!=None selects relay mode; addrs is the p2p bootstrap. evict is
     -evictAfter, short by default so the strike cases need no 5-minute wait."""
     key = tag or name
@@ -435,7 +436,7 @@ def jitter(name):
 
 def launch_relay(extra=None):
     path = f"{RUN}/relay.log"
-    env = {**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}", "DB": f"{RUN}/relay.db", **(extra or {})}
+    env = {**os.environ, "ADDR": f"127.0.0.1:{PORTS['relay']}", "DB": f"{RUN}/relay.db", "CREATE_KEY": CREATE_KEY, **(extra or {})}
     # append: a restart in [R13] must not lose the first run's lines
     p = subprocess.Popen([RELAY_BIN], env=env, stdout=open(path, "ab"), stderr=subprocess.STDOUT)
     relays.append(p)
@@ -1447,7 +1448,8 @@ def relay_suite():
     launch("nodeSlow", room="bufroom", media=url, mpvflags="--user-agent=slow")
     until(lambda: booted("nodeSlow"), BOOT)
     resolve("nodeSlow")
-    reasons = lambda: [s for s in osd("nodeFast") if s.startswith("paused for nodeSlow: ")]
+    # nodeFast opened the room, so it answered nodeSlow's join, and that pause is over
+    reasons = lambda: [s for s in osd("nodeFast") if s.startswith("paused for nodeSlow: ") and s != "paused for nodeSlow: joining"]
     both_paused = lambda: all(get(n, "pause") is True for n in ("nodeFast", "nodeSlow"))
     must("the join is over", quiet(("nodeFast", "nodeSlow")))
     setp("nodeFast", "pause", False)
@@ -1758,7 +1760,7 @@ def media_suite():
     for n in ("epD", "epE"):
         stop(n)
 
-    print("\n[R15f2] two people starting at once on different entries end up together, on the higher entry")
+    print("\n[R15f2] two people starting at once on different entries end up together, on the entry of whoever opened the room")
     slow = lag(0, PORTS["relay"], 0.5)
     via = f"ws://127.0.0.1:{slow.getsockname()[1]}"
     launch("epH", room="startingtogether", media=f"{folder}/video2.mkv", relay=via, playlist=True)
@@ -1766,9 +1768,10 @@ def media_suite():
     must("both are in", until(lambda: all(booted(n) and connected(n) for n in ("epH", "epI")), BOOT))
     for n in ("epH", "epI"):
         resolve(n)
-    ok("they settle on the higher one", until(lambda: get("epH", "filename") == get("epI", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epH", "epI")]))
+    together = lambda: get("epH", "filename") == get("epI", "filename") in ("video2.mkv", "video10.mkv")
+    ok("they settle on one", until(together), str([get(n, "filename") for n in ("epH", "epI")]))
     time.sleep(2)
-    ok("and stay there", get("epH", "filename") == get("epI", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epH", "epI")]))
+    ok("and stay there", together(), str([get(n, "filename") for n in ("epH", "epI")]))
     for n in ("epH", "epI"):
         stop(n)
     slow.close()
@@ -1860,13 +1863,17 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
+    print("\n[R19a] a relay without CREATE_KEY refuses to start")
+    relay = launch_relay({"CREATE_KEY": ""})
+    ok("it exits at once and says why", relay.wait(timeout=10) != 0 and "CREATE_KEY is required" in relay_log(), relay_log()[-300:])
+
     print("\n[R19] -createKey: only the key holder opens a room, the rest just join")
-    relay = launch_relay({"CREATE_KEY": "k"})
+    relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))
-    launch("nodeB", room="", tag="k0")
+    launch("nodeB", room="", tag="k0", create_key="")
     nodes["k0"]["proc"].wait(timeout=30)
     ok("opening a new room without the key is refused, and the node exits", "needs -createKey" in log("k0") and "not open yet" not in log("k0") and nodes["k0"]["proc"].returncode != 0, log("k0")[-300:])
-    launch("nodeB", room="keyroom", tag="k1")
+    launch("nodeB", room="keyroom", tag="k1", create_key="")
     until(lambda: "not open yet" in log("k1"), BOOT)
     ok("a keyless node waits for the room instead of giving up",
        "not open yet" in log("k1") and nodes["k1"]["proc"].poll() is None)
@@ -1904,14 +1911,14 @@ def caps_suite():
     relay.kill(); relay.wait(timeout=10)
 
     print("\n[R19c] a keyless member of a room a key holder opened before is held, across a relay restart, until a key holder opens it")
-    relay = launch_relay({"CREATE_KEY": "k"})
+    relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))
     since = len(relay_events())
     seen = lambda msg: any(e.get("msg") == msg and e.get("room") == "keyroom" for e in relay_events()[since:])
-    launch("nodeC", room="keyroom", secret="wrong", tag="k5")
+    launch("nodeC", room="keyroom", secret="wrong", tag="k5", create_key="")
     nodes["k5"]["proc"].wait(timeout=30)
     ok("with the wrong secret it is refused, not kept waiting", "403" in log("k5") and "not open yet" not in log("k5"), log("k5")[-300:])
-    launch("nodeB", room="keyroom", tag="k4")
+    launch("nodeB", room="keyroom", tag="k4", create_key="")
     until(lambda: seen("waiting for a key holder") and "not open yet" in log("k4"), BOOT)
     ok("with the right one the relay holds it", seen("waiting for a key holder") and "not open yet" in log("k4") and not connected("k4"), log("k4")[-300:])
     ok("and opens no room for it", not seen("joined"), relay_log()[-500:])
@@ -1924,11 +1931,11 @@ def caps_suite():
     relay.kill(); relay.wait(timeout=10)
 
     print("\n[R19d] MAX_WAITING: a room holds only so many keyless members, the rest retry")
-    relay = launch_relay({"CREATE_KEY": "k", "MAX_WAITING": "1"})
+    relay = launch_relay({"MAX_WAITING": "1"})
     until(lambda: listening(PORTS["relay"]))
-    launch("nodeB", room="keyroom", tag="k7")
+    launch("nodeB", room="keyroom", tag="k7", create_key="")
     until(lambda: "not open yet" in log("k7"), BOOT)
-    launch("nodeC", room="keyroom", tag="k8")
+    launch("nodeC", room="keyroom", tag="k8", create_key="")
     until(lambda: "503" in log("k8"), BOOT)
     ok("the second is refused with 503 and keeps trying", "503" in log("k8") and nodes["k8"]["proc"].poll() is None, log("k8")[-300:])
     launch(A, room="keyroom", tag="k9", create_key="k")

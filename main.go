@@ -57,7 +57,7 @@ Torrents
   and you upload to them while you watch.
 
 Relays
-  A relay can ask for a create key to open a party: add -createKey KEY. Joining needs none.
+  Opening a party on a relay needs its create key: add -createKey KEY. Joining needs none.
 
 Flags
 `

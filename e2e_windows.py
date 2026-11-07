@@ -291,11 +291,11 @@ def browser_of(n):
 def cli_suite():
     A, B, C = "winA", "winB", "winC"
     print("\n=== cli: three nodes through one relay, over mpv's named pipes ===")
-    relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}"),
+    relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}", CREATE_KEY="k", DB=os.path.join(RUN, "relay.db")),
                              stdout=open(os.path.join(RUN, "relay.log"), "wb"), stderr=subprocess.STDOUT)
     others_procs.append(relay)
     for n in (A, B, C):
-        launch(n, "-relay", RELAY_URL, "-room", "winroom", "-secret", "winsecret")
+        launch(n, "-relay", RELAY_URL, "-room", "winroom", "-secret", "winsecret", "-createKey", "k")
     until(lambda: all(booted(n) for n in (A, B, C)), BOOT)
     for n in (A, B, C):
         resolve(n)
@@ -362,7 +362,7 @@ def cli_suite():
     if not os.path.exists(com):
         print(f"  SKIP  no mpv.com next to {shutil.which('mpv')}")
     else:
-        M = launch("winCom", "-relay", RELAY_URL, "-room", "comroom", "-secret", "winsecret", mpv=com)
+        M = launch("winCom", "-relay", RELAY_URL, "-room", "comroom", "-secret", "winsecret", "-createKey", "k", mpv=com)
         until(lambda: booted(M), BOOT)
         resolve(M)
         ok("its child is mpv.exe", bool(nodes[M]["pipe"]))
@@ -377,7 +377,7 @@ def cli_suite():
 def gui_suite():
     H, G = "winHost", "winGuest"
     print("\n=== gui: two GUIs built -H=windowsgui, each in headless Chrome ===")
-    relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}"),
+    relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}", CREATE_KEY="k", DB=os.path.join(RUN, "relay-gui.db")),
                              stdout=open(os.path.join(RUN, "relay-gui.log"), "wb"), stderr=subprocess.STDOUT)
     others_procs.append(relay)
     for n in (H, G):
@@ -389,7 +389,7 @@ def gui_suite():
         ok(f"{n} opened {nodes[n]['url']} at 560x940", f"--app={nodes[n]['url']}" in argv and "--window-size=560,940" in argv, argv)
 
     print("\n[W10] a relay party from the page: mpv starts under the windowsgui parent")
-    fill(H, hostname=H, file=MEDIA, relay=RELAY_URL, mpvFlags=MPVFLAGS)
+    fill(H, hostname=H, file=MEDIA, relay=RELAY_URL, createKey="k", mpvFlags=MPVFLAGS)
     go(H)
     must(f"{H} is in", until(lambda: status(H).startswith("You're in"), BOOT), status(H))
     nodes[H]["pipe"] = mpv_pipe(nodes[H]["proc"].pid)

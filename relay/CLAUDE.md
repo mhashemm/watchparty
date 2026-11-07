@@ -13,7 +13,7 @@ assessment is kept private, out of the repo.
 ```sh
 go test -race ./relay
 docker build -f relay/Dockerfile -t watchparty-relay .     # from the REPO ROOT
-[ADDR=:8080] [CREATE_KEY=k] [DB=relay.db] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [MAX_ROOMS=10000] [MAX_CONNS=5000] [MAX_WAITING=20] ./relay
+CREATE_KEY=k [ADDR=:8080] [DB=relay.db] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [MAX_ROOMS=10000] [MAX_CONNS=5000] [MAX_WAITING=20] ./relay
 ```
 
 **Env vars only, no flags.** An empty value means the default; one that doesn't parse
@@ -31,11 +31,12 @@ goes there too. Not in the release; deployed by hand or as the image.
   notices, as `show-text` events (so it imports `mpv`).
 - **Open rooms are memory only.** The first joiner's secret and file define the room; it is
   deleted when its last member leaves. No accounts, no playback state.
-- **With `CREATE_KEY`, closed rooms are remembered** (`rooms.go`, SQLite at `DB`): name,
-  SHA-256 of the secret, file, last used (opened or closed), forgotten after 30 days. Only a
-  key holder creates a room; a keyless member of a remembered one is **held** until a key
-  holder does. Without `CREATE_KEY` anyone opens any room, so nothing is kept. Pure-Go `modernc.org/sqlite`: releases and
-  the `scratch` image are `CGO_ENABLED=0`.
+- **`CREATE_KEY` is required**, or the relay won't start: without it, anyone who finds
+  the relay gets an anonymous fan-out for any bytes. Only a key holder creates a room.
+- **Closed rooms are remembered** (`rooms.go`, SQLite at `DB`): name, SHA-256 of the
+  secret, file, last used (opened or closed), forgotten after 30 days. A keyless member of
+  a remembered one is **held** until a key holder opens it. Pure-Go `modernc.org/sqlite`:
+  releases and the `scratch` image are `CGO_ENABLED=0`.
 - **`room` and `hostname` arrive URL-decoded**, so a newline is one `%0a` away. `hostname`
   is cleaned once at ingress, since notices echo it. `room` is the routing key, so it stays
   raw and every log site cleans it.
@@ -46,11 +47,10 @@ goes there too. Not in the release; deployed by hand or as the image.
 ## Protocol
 
 - `GET /ws?room=&hostname=&session=&file=&wait=1` upgrades. The secret is in the
-  **`room-secret`** header, never the query (proxies log it); the optional create key
-  in **`create-key`**. `file` isn't secret.
-- The 101 carries **`room-opened: yes`** for the node that created the room with the key
-  (never on a relay without `CREATE_KEY`): its position is the party's, and a joiner jumps
-  to it (`mpv/CLAUDE.md`, joining).
+  **`room-secret`** header, never the query (proxies log it); the create key, needed
+  only to open a room, in **`create-key`**. `file` isn't secret.
+- The 101 carries **`room-opened: yes`** for the node that created the room with the key:
+  its position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
 - **Held** (`hold`): a 101 with **`room-waiting: yes`**, only for a node that sent `wait=1`
   (older ones get 401 and retry, as before). Nothing is relayed and no room exists. It is
   pinged like a member, and closed with **4001** when a key holder creates the room (the
@@ -72,8 +72,8 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
    - Existing room: constant-time secret compare. Wrong → 403, and it costs rate-limit
      quota (429 once over). Right secret but another `file` → 409, free, and only after
      the secret, so outsiders can't probe what a room plays.
-   - New room with `CREATE_KEY` set, no key sent and not remembered → 401, free: a guest
-     who arrived before the host, and the node keeps retrying.
+   - New room, no key sent and not remembered → 401, free: a guest who arrived before
+     the host, and the node keeps retrying.
    - New remembered room, no key: secret hash (403, costing quota like any wrong secret),
      then file (409), then held, free.
    - New room: rate limit (429) → create-key compare (403, after the quota is spent, so
@@ -123,8 +123,7 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
   Seeds are per process, so collisions can't be targeted. Counters saturate.
 - Counted against `ROOMS_PER_HOUR`: room creations, failed secrets, any create that
   sends a key. Free: joining an existing room (or a party of eight would use up one
-  person's quota), a keyless create of a room never opened while `CREATE_KEY` is set, and
-  being held.
+  person's quota), a keyless create of a room never opened, and being held.
 
 ## Client IP and HTTP server
 

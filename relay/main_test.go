@@ -17,8 +17,17 @@ import (
 	"github.com/mhashemm/watchparty/relay/wire"
 )
 
-func newRelay(perHour, maxRooms int, maxConns int64) *relay {
+// newRelay is keyed with "k" and remembers rooms in memory, as main requires.
+func newRelay(t *testing.T, perHour, maxRooms int, maxConns int64) *relay {
+	t.Helper()
+	rm, err := openRemembered(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rm.db.Close() })
 	return &relay{
+		createKey:  []byte("k"),
+		remembered: rm,
 		rooms:      map[string]*room{},
 		limiter:    newLimiter(),
 		perHour:    perHour,
@@ -154,8 +163,8 @@ func recvEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration) (wire.
 // event loops forever.
 func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(10, 10, 10))
-	a, _ := join(t, url, "room", "s3cret", "a")
+	url := serve(t, newRelay(t, 10, 10, 10))
+	a, _ := join(t, url, "room", "s3cret", "a", "k")
 	b, _ := join(t, url, "room", "s3cret", "b")
 	c, _ := join(t, url, "room", "s3cret", "c")
 
@@ -184,8 +193,8 @@ func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
 // the second half the last node in would believe it was alone.
 func TestJoinerLearnsWhoIsAlreadyThere(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(10, 10, 10))
-	a, _ := join(t, url, "room", "s", "a")
+	url := serve(t, newRelay(t, 10, 10, 10))
+	a, _ := join(t, url, "room", "s", "a", "k")
 	join(t, url, "room", "s", "b")
 	c, _ := join(t, url, "room", "s", "c")
 
@@ -206,9 +215,9 @@ func TestJoinerLearnsWhoIsAlreadyThere(t *testing.T) {
 // member until the ping reaps it and tell the room it joined twice.
 func TestReconnectReplacesStaleMember(t *testing.T) {
 	t.Parallel()
-	r := newRelay(10, 10, 10)
+	r := newRelay(t, 10, 10, 10)
 	url := serve(t, r)
-	a, _ := join(t, url, "room", "s", "a")
+	a, _ := join(t, url, "room", "s", "a", "k")
 	stale, _ := join(t, url, "room", "s", "b&session=x")
 	fresh, _ := join(t, url, "room", "s", "b&session=x")
 
@@ -257,7 +266,7 @@ func queued(m *member) []string {
 // someone it already found in the room, and a reconnect never hears of itself.
 func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	t.Parallel()
-	r := newRelay(10, 10, 10)
+	r := newRelay(t, 10, 10, 10)
 	r.rooms["room"] = &room{members: map[*member]struct{}{}}
 	mk := func(hostname, session string) *member {
 		return &member{hostname: hostname, session: session, ch: make(chan []byte, sendBuffer)}
@@ -294,8 +303,8 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 // not be left connected to a room that no longer exists.
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
-	r := newRelay(10, 10, 10)
-	if _, _, _, err := r.admit("room", []byte("s"), nil, "f", "ip", nil, false); err != nil {
+	r := newRelay(t, 10, 10, 10)
+	if _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	r.leave("room", nil)
@@ -309,8 +318,8 @@ func TestAddToAReapedRoomFails(t *testing.T) {
 
 func TestWrongSecretIsRejected(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(100, 10, 10))
-	join(t, url, "room", "right", "a")
+	url := serve(t, newRelay(t, 100, 10, 10))
+	join(t, url, "room", "right", "a", "k")
 
 	if _, code := join(t, url, "room", "wrong", "b"); code != http.StatusForbidden {
 		t.Fatalf("wrong secret got %d, want 403", code)
@@ -324,8 +333,8 @@ func TestWrongSecretIsRejected(t *testing.T) {
 // is refused before the upgrade.
 func TestDifferentFileIsRejected(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(100, 10, 10))
-	join(t, url, "room", "s", "a&file=abc")
+	url := serve(t, newRelay(t, 100, 10, 10))
+	join(t, url, "room", "s", "a&file=abc", "k")
 
 	if _, code := join(t, url, "room", "s", "b&file=xyz"); code != http.StatusConflict {
 		t.Fatalf("a different file got %d, want 409", code)
@@ -342,14 +351,14 @@ func TestDifferentFileIsRejected(t *testing.T) {
 // itself out.
 func TestOnlyRoomCreationIsRateLimited(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(2, 100, 100))
+	url := serve(t, newRelay(t, 2, 100, 100))
 
 	for i := range 2 {
-		if _, code := join(t, url, "room"+strconv.Itoa(i), "s", "a"); code != http.StatusSwitchingProtocols {
+		if _, code := join(t, url, "room"+strconv.Itoa(i), "s", "a", "k"); code != http.StatusSwitchingProtocols {
 			t.Fatalf("room %d got %d, want an upgrade", i, code)
 		}
 	}
-	if _, code := join(t, url, "room2", "s", "a"); code != http.StatusTooManyRequests {
+	if _, code := join(t, url, "room2", "s", "a", "k"); code != http.StatusTooManyRequests {
 		t.Fatalf("third new room got %d, want 429", code)
 	}
 	for i := range 2 {
@@ -361,8 +370,8 @@ func TestOnlyRoomCreationIsRateLimited(t *testing.T) {
 
 func TestSecretGrindingIsRateLimited(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(3, 100, 100))
-	join(t, url, "room", "right", "a")
+	url := serve(t, newRelay(t, 3, 100, 100))
+	join(t, url, "room", "right", "a", "k")
 
 	codes := map[int]int{}
 	for range 10 {
@@ -379,8 +388,7 @@ func TestSecretGrindingIsRateLimited(t *testing.T) {
 // must not cost quota, but a wrong key is a guess and must.
 func TestCreateKey(t *testing.T) {
 	t.Parallel()
-	r := newRelay(2, 100, 100)
-	r.createKey = []byte("k")
+	r := newRelay(t, 2, 100, 100)
 	url := serve(t, r)
 
 	for range 5 {
@@ -404,16 +412,16 @@ func TestCreateKey(t *testing.T) {
 
 func TestMaxRoomsAndMaxConns(t *testing.T) {
 	t.Parallel()
-	r := newRelay(100, 1, 100)
+	r := newRelay(t, 100, 1, 100)
 	url := serve(t, r)
-	join(t, url, "first", "s", "a")
-	if _, code := join(t, url, "second", "s", "b"); code != http.StatusServiceUnavailable {
+	join(t, url, "first", "s", "a", "k")
+	if _, code := join(t, url, "second", "s", "b", "k"); code != http.StatusServiceUnavailable {
 		t.Fatalf("second room got %d, want 503", code)
 	}
 
-	r2 := newRelay(100, 100, 2)
+	r2 := newRelay(t, 100, 100, 2)
 	url2 := serve(t, r2)
-	join(t, url2, "room", "s", "a")
+	join(t, url2, "room", "s", "a", "k")
 	join(t, url2, "room", "s", "b")
 	if _, code := join(t, url2, "room", "s", "c"); code != http.StatusServiceUnavailable {
 		t.Fatalf("third conn got %d, want 503", code)
@@ -479,9 +487,9 @@ func TestLimiterResetsOnWindowRollover(t *testing.T) {
 
 func TestMemberThatStopsAnsweringPingsIsRemoved(t *testing.T) {
 	t.Parallel()
-	r := newRelay(10, 10, 10)
+	r := newRelay(t, 10, 10, 10)
 	r.ping, r.timeout = 50*time.Millisecond, 50*time.Millisecond
-	join(t, serve(t, r), "deaf", "s", "a")
+	join(t, serve(t, r), "deaf", "s", "a", "k")
 
 	eventually(t, "a member that never answers a ping still holds its room", func() bool {
 		r.mu.Lock()
@@ -510,8 +518,8 @@ func TestCleanStripsControlChars(t *testing.T) {
 
 func TestHostnameIsSanitizedInNotices(t *testing.T) {
 	t.Parallel()
-	url := serve(t, newRelay(10, 10, 10))
-	a, _ := join(t, url, "room", "s", "a")
+	url := serve(t, newRelay(t, 10, 10, 10))
+	a, _ := join(t, url, "room", "s", "a", "k")
 	// a spoofed hostname with a CRLF: cleaned at ingress, so the notice echoed to
 	// the room (mpv OSD / GUI feed) must not carry the raw control char.
 	evil, _ := join(t, url, "room", "s", "evil%0aFORGED")
@@ -582,10 +590,10 @@ func gone(t *testing.T, r *relay, roomName string) {
 	})
 }
 
+// keyed remembers rooms in db, so a second relay on it is the first one restarted.
 func keyed(t *testing.T, db string) (*relay, string) {
 	t.Helper()
-	r := newRelay(100, 100, 100)
-	r.createKey = []byte("k")
+	r := newRelay(t, 100, 100, 100)
 	var err error
 	if r.remembered, err = openRemembered(db); err != nil {
 		t.Fatal(err)
@@ -647,7 +655,7 @@ func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 
 	r2, url2 := keyed(t, db)
 	held(t, url2, "room", "s", "b&file=f")
-	r3 := newRelay(100, 100, 100)
+	r3 := newRelay(t, 100, 100, 100)
 	r3.createKey, r3.remembered, r3.waitFor = r2.createKey, r2.remembered, 0
 	if got := closedWith(t, held(t, serve(t, r3), "room", "s", "c&file=f")); got != wire.StatusNotOpened {
 		t.Fatalf("a member held past waitFor was closed with %d, want %d", got, wire.StatusNotOpened)
@@ -663,7 +671,8 @@ func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 // Held members leave nothing behind, so a room name can't pile up waiters' state.
 func TestHeldMembersLeaveNothingBehind(t *testing.T) {
 	t.Parallel()
-	r, url := keyed(t, ":memory:")
+	r := newRelay(t, 100, 100, 100)
+	url := serve(t, r)
 	opened(t, url, "room", "s", "a", "k")
 	gone(t, r, "room")
 	held(t, url, "room", "s", "b").CloseNow()
@@ -678,7 +687,8 @@ func TestHeldMembersLeaveNothingBehind(t *testing.T) {
 // remembered, so a room name can be reused for another video.
 func TestKeyHolderReplacesARememberedRoom(t *testing.T) {
 	t.Parallel()
-	r, url := keyed(t, ":memory:")
+	r := newRelay(t, 100, 100, 100)
+	url := serve(t, r)
 	opened(t, url, "room", "s", "a&file=f", "k")
 	gone(t, r, "room")
 	if _, code := opened(t, url, "room", "s2", "a&file=g", "k"); code != http.StatusSwitchingProtocols {
@@ -691,21 +701,12 @@ func TestKeyHolderReplacesARememberedRoom(t *testing.T) {
 	held(t, url, "room", "s2", "b&file=g")
 }
 
-// Without a create key nobody holds one, so nobody's position is the party's: who
-// arrives first is chance, and two joiners settle on the higher entry as before.
-func TestNobodyOpensARoomWithoutCreateKey(t *testing.T) {
-	t.Parallel()
-	url := serve(t, newRelay(100, 100, 100))
-	if first, _ := opened(t, url, "room", "s", "a", "k"); first {
-		t.Fatal("the first in a room on a keyless relay was told it opened it")
-	}
-}
-
 // A room holds at most MAX_WAITING keyless members, so a secret can't pin every
 // connection the relay has; the next one waits its turn through the node's backoff.
 func TestHeldMembersPerRoomAreCapped(t *testing.T) {
 	t.Parallel()
-	r, url := keyed(t, ":memory:")
+	r := newRelay(t, 100, 100, 100)
+	url := serve(t, r)
 	r.mu.Lock()
 	r.maxWaiting = 2
 	r.mu.Unlock()
