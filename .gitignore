@@ -3,3 +3,4 @@
 .env
 .e2e
 relay.db*
+__pycache__/
