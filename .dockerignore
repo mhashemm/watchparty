@@ -10,3 +10,4 @@ CLAUDE.md
 LICENSE
 Dockerfile
 **/.env
+relay/data
