@@ -4,6 +4,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -256,3 +258,7 @@ func fileURIPath(uri string) (string, error) {
 }
 
 func hide(_ *exec.Cmd) {}
+
+func groupWindow(context.Context, string, string, time.Duration) {}
+
+func recordVersion(string, string) {}

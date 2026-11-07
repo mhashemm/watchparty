@@ -473,18 +473,34 @@ def gui_suite():
     ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
 
     print("\n[W16] the installer: per user, silent, and its uninstaller leaves nothing")
-    setup = os.path.join(RUN, "setup.exe")
-    subprocess.run([MAKENSIS, "/V2", f"/DEXE={GUI_BIN}", f"/DOUT={setup}", os.path.join(REPO, "gui", "setup.nsi")], cwd=REPO, check=True)
+    def setup(version):
+        out = os.path.join(RUN, f"watchparty-gui-setup-{version}.exe")
+        subprocess.run([MAKENSIS, "/V2", f"/DEXE={GUI_BIN}", f"/DOUT={out}", f"/DVERSION={version}", os.path.join(REPO, "gui", "setup.nsi")], cwd=REPO, check=True)
+        code = subprocess.run([out, "/S", f"/D={target}"], timeout=BOOT).returncode
+        crash = "(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000} -MaxEvents 1).Message"
+        must(f"the {version} installer exits 0", code == 0, "" if code == 0 else f"{code:#x} " + subprocess.run(["powershell", "-NoProfile", "-Command", crash], capture_output=True, text=True, timeout=BOOT).stdout)
+
+    def installed(name):
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            return winreg.QueryValueEx(k, name)[0]
+
+    def app_id(lnk):
+        ps = f"(New-Object -ComObject Shell.Application).NameSpace('{os.path.dirname(lnk)}').ParseName('{os.path.basename(lnk)}').ExtendedProperty('System.AppUserModel.ID')"
+        return subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=BOOT).stdout.strip()
+
     target = os.path.join(RUN, "installed")
-    subprocess.run([setup, "/S", f"/D={target}"], check=True, timeout=BOOT)
+    key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
+    setup("v0.0.9")
     exe = os.path.join(target, "watchparty-gui.exe")
     ok("the exe is the one it was built from", sha(exe) == sha(GUI_BIN))
     menu = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Watchparty.lnk")
     desktop = os.path.join(os.path.expanduser("~"), "Desktop", "Watchparty.lnk")
     ok("Start menu and desktop shortcuts", os.path.exists(menu) and os.path.exists(desktop))
-    key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
-        ok("Add/Remove Programs points at its uninstaller", os.path.join(target, "uninstall.exe") in winreg.QueryValueEx(k, "UninstallString")[0])
+    ok("both carry the id the GUI gives its window, so a pinned one groups it", app_id(menu) == app_id(desktop) == "mhashemm.watchparty", (app_id(menu), app_id(desktop)))
+    ok("Add/Remove Programs points at its uninstaller", os.path.join(target, "uninstall.exe") in installed("UninstallString"))
+    ok("and knows its version and folder", installed("DisplayVersion") == "v0.0.9" and installed("InstallLocation") == target, (installed("DisplayVersion"), installed("InstallLocation")))
+    setup("v0.0.1")
+    ok("an older installer, silent, answers yes to replacing a newer one", installed("DisplayVersion") == "v0.0.1", installed("DisplayVersion"))
     for left in (exe + ".old", os.path.join(target, ".watchparty-update-1"), os.path.join(target, ".watchparty-gui-update-1")):
         open(left, "w").close()
     subprocess.run([os.path.join(target, "uninstall.exe"), "/S"], check=True, timeout=BOOT)

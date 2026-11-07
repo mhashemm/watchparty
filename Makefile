@@ -46,7 +46,7 @@ all $(COMPONENTS) $(OSES): $(targets)
 setup: $(OUT)/watchparty-gui-setup.exe
 
 $(OUT)/watchparty-gui-setup.exe: $(OUT)/watchparty-gui.exe
-	makensis -V2 -DEXE=$(CURDIR)/$< -DOUT=$(CURDIR)/$@ gui/setup.nsi
+	makensis -V2 -DEXE=$(CURDIR)/$< -DOUT=$(CURDIR)/$@ -DVERSION=$(VERSION) gui/setup.nsi
 
 test: unit e2e
 
