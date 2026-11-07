@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -231,7 +232,14 @@ func Run(parent context.Context, cfg Config) error {
 	if client.Finished() {
 		log.Println("finished: played to the end")
 	} else {
-		log.Printf("stopped at: %s\n", strconv.FormatFloat(client.Position(), 'f', 3, 64))
+		entry, at := client.Position()
+		if entry < len(names) {
+			// the name Config.Entry looks up, from the same list
+			name, _ := json.Marshal(names[entry])
+			log.Printf("stopped at: %s in %s\n", strconv.FormatFloat(at, 'f', 3, 64), name)
+		} else {
+			log.Printf("stopped at: %s\n", strconv.FormatFloat(at, 'f', 3, 64))
+		}
 	}
 	if err != nil {
 		log.Println(err)

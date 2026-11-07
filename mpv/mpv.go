@@ -840,15 +840,16 @@ func (c *Client) ClearStart() error {
 	return c.conn.do(setProperty, "start", "none")
 }
 
-// Position is where this node is in its entry, for continuing the party later. Within
-// endGraceSeconds of the end it is 0: continuing there would only end the file again.
-func (c *Client) Position() float64 {
+// Position is the entry and the second to continue the party from. Within
+// endGraceSeconds of an entry's end that is the next entry's start: with keep-open=always
+// mpv stays on the finished one, and continuing there would only end it again.
+func (c *Client) Position() (int, float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.ending() {
-		return 0
+	if !c.ending() {
+		return c.current, c.pos
 	}
-	return c.pos
+	return min(c.current+1, max(len(c.names)-1, 0)), 0
 }
 
 // Finished is the last entry, or the only file, played to its end: nothing is left to

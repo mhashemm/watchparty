@@ -1485,19 +1485,34 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 	}
 }
 
-// Where a node stopped is where a continued party starts, except right at the end,
-// where starting would only end the file again.
+// Where a node stopped is where a continued party starts, except right at an entry's
+// end (mpv's keep-open=always stays there): then it is the next entry, from its start.
 func TestPositionToContinueFrom(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ pos, duration, want float64 }{{50, 100, 50}, {97, 100, 0}, {12, 0, 12}} {
-		if got := (&Client{pos: c.pos, duration: c.duration}).Position(); got != c.want {
-			t.Errorf("at %v of %v: %v, want %v", c.pos, c.duration, got, c.want)
+	three := []string{"e1", "e2", "e3"}
+	for _, c := range []struct {
+		names    []string
+		current  int
+		pos, dur float64
+		entry    int
+		at       float64
+	}{
+		{nil, 0, 50, 100, 0, 50},
+		{nil, 0, 97, 100, 0, 0},
+		{nil, 0, 12, 0, 0, 12},
+		{three, 1, 50, 100, 1, 50},
+		{three, 1, 97, 100, 2, 0},
+		{three, 2, 97, 100, 2, 0},
+	} {
+		entry, at := (&Client{names: c.names, current: c.current, pos: c.pos, duration: c.dur}).Position()
+		if entry != c.entry || at != c.at {
+			t.Errorf("%d entries, on %d at %v of %v: entry %d at %v, want %d at %v", len(c.names), c.current, c.pos, c.dur, entry, at, c.entry, c.at)
 		}
 	}
 }
 
-// Only the end of the last entry, or of the only file, finishes the party: at the end
-// of any other entry mpv moves on to the next.
+// Only the end of the last entry, or of the only file, finishes the party: any other
+// entry has a next one to continue from.
 func TestFinishedOnlyAtTheEndOfTheLastEntry(t *testing.T) {
 	t.Parallel()
 	three := []string{"e1", "e2", "e3"}

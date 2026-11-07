@@ -79,20 +79,19 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   `store.mu`; lock order is always `g.mu` → `store.mu`.
 - **Versions before `history.json` kept the history in `gui.json`.** `openStore` moves it, writing
   the new file first, so stopping in between loses nothing; `history.json` wins if both exist.
-- **Not `localStorage`:** the random port makes the page a new origin every launch.
-  Nothing is kept in browser storage; the page loads everything from `GET /state`.
+- **Not `localStorage`:** the random port makes the page a new origin every launch; it loads everything from `GET /state`.
 - **Settings:** name, and `local`/`port` from the last peer-to-peer party, are remembered automatically,
   the rest by the Settings page's button. The first relay used becomes the default if none is set.
 - **History**, up to 100 parties. `begin` records the form on `/start`, `end` stamps
   the end. `observe` fills in the *real* room and secret from the invite line, people
-  from the join notices, one entry per file switched to, opened and left, from `now playing:`,
-  the last one's `at` from `stopped at:`, and `finished` from `finished:`.
+  from the join notices, one entry per file switched to, opened and left (`now playing:`),
+  where to continue (`stopped at:`) and `finished` (`finished:`).
 - **Continue** posts the form plus `continue`, the party's `started`. Same room and secret, so
-  the same party: `begin` moves its entry to the end, open again, and `Run` starts on its last
-  file at `at`. So the slice order is the truth; `mergeHistory` sorts only when it merges. Not
-  shown (`continuable`) peer-to-peer (a guest's saved address can change; it gets Watch
-  again, which only fills the form), for a `finished` party, or
-  30 days after it ended, when the relay has forgotten the room (`forgetAfter`).
+  the same party: `begin` moves its entry to the end, open again, and `Run` starts at `stopped`,
+  which the node chose (with keep-open=always, the file after one it finished). So the slice
+  order is the truth; `mergeHistory` sorts only when it merges. Hidden (`continuable`) for
+  peer-to-peer (a guest's saved address can change; Watch again only fills the form), a
+  `finished` party, or 30 days after it ended, when the relay has forgotten the room.
 
 ## Self-update (`update.go`)
 

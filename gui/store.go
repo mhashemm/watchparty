@@ -40,6 +40,7 @@ type session struct {
 	Addrs    string    `json:"addrs,omitempty"`
 	Invite   string    `json:"invite,omitempty"`
 	Finished bool      `json:"finished,omitempty"`
+	Stopped  stop      `json:"stopped,omitzero"`
 	People   []string  `json:"people"`
 	Videos   []played  `json:"videos,omitempty"`
 }
@@ -48,7 +49,12 @@ type played struct {
 	Name    string    `json:"name"`
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended,omitzero"`
-	At      float64   `json:"at,omitempty"`
+}
+
+// stop is where Continue starts: a playlist's entry, by name, and the second into it.
+type stop struct {
+	Entry string  `json:"entry,omitempty"`
+	At    float64 `json:"at,omitempty"`
 }
 
 func (sess *session) openVideo(name string, at time.Time) {
@@ -200,15 +206,14 @@ func (s *store) find(started string) int {
 	return slices.IndexFunc(s.History, func(h session) bool { return h.Started.Equal(t) })
 }
 
-// stoppedAt is the entry and the second the party at i was left on.
+// stoppedAt is where the party at i continues: the entry and the second.
 func (s *store) stoppedAt(i int) (string, float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if i < 0 || i >= len(s.History) || len(s.History[i].Videos) == 0 {
+	if i < 0 || i >= len(s.History) {
 		return "", 0
 	}
-	v := s.History[i].Videos[len(s.History[i].Videos)-1]
-	return v.Name, v.At
+	return s.History[i].Stopped.Entry, s.History[i].Stopped.At
 }
 
 func (s *store) observe(i int, line string) {
@@ -233,15 +238,16 @@ func (s *store) observe(i int, line string) {
 		return
 	}
 	if after, ok := strings.CutPrefix(message(line), "stopped at: "); ok {
-		at, err := strconv.ParseFloat(strings.TrimSpace(after), 64)
-		if err != nil {
+		secs, name, playlist := strings.Cut(after, " in ")
+		var to stop
+		var err error
+		if to.At, err = strconv.ParseFloat(strings.TrimSpace(secs), 64); err != nil {
 			return
 		}
-		s.update(i, func(sess *session) {
-			if n := len(sess.Videos); n > 0 {
-				sess.Videos[n-1].At = at
-			}
-		})
+		if playlist && json.Unmarshal([]byte(name), &to.Entry) != nil {
+			return
+		}
+		s.update(i, func(sess *session) { sess.Stopped = to })
 		return
 	}
 	if after, ok := strings.CutPrefix(message(line), "now playing: "); ok {
