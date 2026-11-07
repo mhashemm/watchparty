@@ -479,8 +479,10 @@ func main() {
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
 	g.closeWindow = openWindow(url)
-	title := page[bytes.Index(page, []byte("<title>"))+len("<title>"):]
-	go groupWindow(c, g.exe, string(title[:bytes.Index(title, []byte("</title>"))]))
+	_, title, _ := bytes.Cut(page, []byte("<title>"))
+	if title, _, ok := bytes.Cut(title, []byte("</title>")); ok {
+		go groupWindow(c, g.exe, string(title), 200*time.Millisecond)
+	}
 
 	go http.Serve(ln, g)
 	go func() {

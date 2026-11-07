@@ -89,16 +89,17 @@ type propVariant struct {
 
 type propertyStore struct{ vtbl *[8]uintptr }
 
-func groupWindow(c context.Context, exe, title string) {
+func groupWindow(c context.Context, exe, title string, every time.Duration) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
 	defer windows.CoUninitialize()
 	class, _ := windows.UTF16PtrFromString("Chrome_WidgetWin_1")
 	name, _ := windows.UTF16PtrFromString(title)
-	tick := time.NewTicker(200 * time.Millisecond)
+	tick := time.NewTicker(every)
 	defer tick.Stop()
 	timeout := time.After(30 * time.Second)
+	done := map[uintptr]bool{}
 	for {
 		select {
 		case <-c.Done():
@@ -107,16 +108,14 @@ func groupWindow(c context.Context, exe, title string) {
 			return
 		case <-tick.C:
 		}
-		found := false
 		for hwnd := uintptr(0); ; {
 			hwnd, _, _ = findWindowEx.Call(0, hwnd, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(name)))
 			if hwnd == 0 {
 				break
 			}
-			found = setAppID(hwnd, exe) == nil || found
-		}
-		if found {
-			return
+			if !done[hwnd] && setAppID(hwnd, exe) == nil {
+				done[hwnd] = true
+			}
 		}
 	}
 }
