@@ -104,7 +104,7 @@ docker build -f relay/Dockerfile -t watchparty-relay .
 docker run -p 80:80 -e CREATE_KEY=somekey watchparty-relay
 ```
 
-With `CREATE_KEY` set, only someone passing `-createKey somekey` (in the app, under
+`CREATE_KEY` is required: only someone passing `-createKey somekey` (in the app, under
 Settings) can open a room. Guests don't need it. Put it behind a TLS proxy and use
 `wss://`. `relay/CLAUDE.md` lists every setting and abuse limit.
 

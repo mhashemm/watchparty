@@ -133,6 +133,7 @@ type Event struct {
 	Data      string `json:"data"`
 	Entry     *int   `json:"entry,omitempty"`
 	From      *int   `json:"from,omitempty"`
+	Party     bool   `json:"party,omitempty"`
 	Response
 }
 
@@ -461,8 +462,11 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 		select {
 		case e := <-incoming:
 			event := Event{}
-			if json.Unmarshal(e.Event, &event) == nil && (event.Name == pause || event.Name == timePos) {
+			err := json.Unmarshal(e.Event, &event)
+			if err == nil && (event.Name == pause || event.Name == timePos) {
 				latest[event.Name] = e
+			} else if err == nil && (event.Name == startPos || event.Name == playlistPos && event.From == nil) {
+				// an answer to someone else's join: this node hasn't said joined yet
 			} else {
 				notices = append(notices, e)
 			}
@@ -560,7 +564,7 @@ func (c *Client) welcome(hostname string) error {
 	}
 	var entry []byte
 	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading()), Party: !joining})
 	}
 	c.mu.Unlock()
 	if entry != nil {
@@ -621,7 +625,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	takes := event.From != nil || c.takesAnswer(i, heading, hostname)
+	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Party)
 	c.mu.Unlock()
 	if i == heading || lost || !takes {
 		return nil
@@ -657,15 +661,15 @@ func (c *Client) followEntry(event Event, hostname string) error {
 }
 
 // takesAnswer is whether this node follows the entry someone answered a joiner with.
-// Only a node still joining does. The party's answer, from anyone whose join it didn't
-// hear, always; a fellow joiner's only if higher (each answers the other, and following
-// both ways would swap them), and not once the party has answered, since it only says
-// where that joiner was.
-func (c *Client) takesAnswer(i, heading int, hostname string) bool {
+// Only a node still joining does. The party's answer, marked party or from anyone
+// whose join it didn't hear, always; a fellow joiner's only if higher (each
+// answers the other, and following both ways would swap them), and not once the party
+// has answered, since it only says where that joiner was.
+func (c *Client) takesAnswer(i, heading int, hostname string, party bool) bool {
 	if !c.joining {
 		return false
 	}
-	if !slices.Contains(c.joinedWith, hostname) {
+	if party || !slices.Contains(c.joinedWith, hostname) {
 		c.heardParty = true
 		return true
 	}

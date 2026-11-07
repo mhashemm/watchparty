@@ -85,7 +85,9 @@ e2e `[R6b]`, `[R11f]`.
 **It drains `incoming` from `New`, not from `ready`.** A slow load (a URL, a slow disk)
 must never make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked
 relay read lets the relay's 64-frame buffer fill and drop the member. Until `ready` it
-keeps only the latest `pause` and `time-pos` plus the notices in order. Then it seeks where a
+keeps only the latest `pause` and `time-pos` plus the notices in order, and drops answers
+(`start-pos`, a `playlist-pos` with no `From`): they are to someone else's join, since this one
+hasn't said `joined` yet. Then it seeks where a
 continued party stopped (`resumeAt`, marked like a peer's seek, so not broadcast), applies
 position (mpv starts `--pause`d, so it lands before any resume), pause, announces `joined`,
 then the notices. e2e `[R11d]`.
@@ -151,8 +153,10 @@ reason: nobody starts the next one until someone resumes.
   `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
   before two people crossed would otherwise send each to the other's entry, for good.
 - **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
-  answers the other, and following both ways would swap them. An answer from anyone whose
-  join it didn't hear is the party's, and is followed, lower or not; **after one, a fellow
+  answers the other, and following both ways would swap them. An answer **marked `party`**
+  (sent by a member no longer `joining`), or from anyone whose join it didn't hear, is
+  the party's, and is followed, lower or not: a relay opener says `joined` too, before the
+  relay tells it it opened the room. **After one, a fellow
   joiner's entry is ignored** (`heardParty`), since it only says where that joiner was.
 - **`following` queues moves:** the next can overtake mpv's report of the last (`MPV.md`). A
   report drops entries up to its own; `file-loaded` clears the rest once this node is where it

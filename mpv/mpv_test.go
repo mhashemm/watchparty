@@ -689,6 +689,32 @@ func TestJoinerAnnouncesItselfOnceLoaded(t *testing.T) {
 	}
 }
 
+// An answer heard while loading is to someone else's join: this node hasn't said
+// joined yet. Kept, it sent a joiner back to where the party was before its seeks.
+func TestJoinerIgnoresAnswersHeardWhileLoading(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := playlistClient(t)
+	c.paused, c.pos = true, 30
+	incoming := make(chan IncomingMessage)
+	go c.ProcessIncomingEvents(incoming)
+	incoming <- peer("a", `{"name":"playlist-pos","data":"2"}`)
+	incoming <- peer("a", `{"event":"property-change","name":"start-pos","data":"0.000000"}`)
+	incoming <- peer("a", `{"event":"property-change","name":"time-pos","data":"50.000000"}`)
+	close(c.ready)
+
+	if got := next(t, requests); got != "set_property time-pos 50.000000" {
+		t.Fatalf("sent %q, want the party's last seek", got)
+	}
+	next(t, requests)
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want joined", e)
+	}
+	incoming <- peer("a", `{"name":"show-text","data":"mark"}`)
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want the answers to another joiner dropped", got)
+	}
+}
+
 // A node already in the party pauses it for a joiner and answers with where it
 // stopped.
 func TestJoinPausesThePartyAndSendsThePosition(t *testing.T) {

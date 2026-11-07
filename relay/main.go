@@ -200,7 +200,7 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 		}
 		return false, nil, 0, nil
 	}
-	if r.createKey != nil && len(key) == 0 {
+	if len(key) == 0 {
 		// no key for a room never opened is a member early for the party, not a
 		// guess, so it costs no quota and the node keeps retrying
 		if old == nil || !canWait {
@@ -231,18 +231,25 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 	if !r.limiter.allow(ip, r.perHour) {
 		return false, nil, http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
 	}
-	if r.createKey != nil && subtle.ConstantTimeCompare(r.createKey, key) != 1 {
+	if subtle.ConstantTimeCompare(r.createKey, key) != 1 {
 		return false, nil, http.StatusForbidden, fmt.Errorf("bad create key")
 	}
 	if len(r.rooms) >= r.maxRooms {
 		return false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
 	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}}
+	return true, nil, 0, nil
+}
+
+// opened sends anyone held for the room to join, once its key holder is in it: sent
+// sooner, one could be added first and say joined to an empty room.
+func (r *relay) opened(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if o, ok := r.opening[name]; ok {
 		close(o.open)
 		delete(r.opening, name)
 	}
-	return true, nil, 0, nil
 }
 
 func (r *relay) stopWaiting(name string, open <-chan struct{}) {
@@ -347,7 +354,7 @@ func (r *relay) leave(name string, m *member) bool {
 		delete(r.rooms, name)
 	}
 	r.mu.Unlock()
-	if reaped && r.remembered != nil {
+	if reaped {
 		if err := r.remembered.touch(name); err != nil {
 			slog.Error("remembering a room failed", "room", clean(name), "err", err)
 		}
@@ -425,7 +432,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 
 	secret, key, file := []byte(req.Header.Get(wire.SecretHeader)), []byte(req.Header.Get(wire.CreateKeyHeader)), req.URL.Query().Get(wire.FileParam)
 	var old *known
-	if r.remembered != nil && r.createKey != nil && len(key) == 0 {
+	if len(key) == 0 {
 		// read before admit takes r.mu, so a free keyless retry never holds every room up on the disk
 		var err error
 		if old, err = r.remembered.lookup(name); err != nil {
@@ -439,7 +446,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		refuse(res, l, code, err.Error())
 		return
 	}
-	if created && r.remembered != nil {
+	if created {
 		if err := r.remembered.remember(name, secret, file); err != nil {
 			l.Error("remembering a room failed", "err", err)
 		}
@@ -457,8 +464,8 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// a node told it opened the room answers joiners with its position: only a key
-	// holder creates a room, and on a relay without CREATE_KEY nobody's is the party's
-	if created && r.createKey != nil {
+	// holder creates a room
+	if created {
 		res.Header().Set(wire.OpenedHeader, "yes")
 	}
 
@@ -478,6 +485,9 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		l.Info("room closed before the join landed, sent back to redial")
 		conn.Close(websocket.StatusTryAgainLater, "room closed")
 		return
+	}
+	if created {
+		r.opened(name)
 	}
 	replaces := ""
 	if stale != nil {
@@ -549,16 +559,15 @@ func main() {
 		timeout:    writeTimeout,
 		waitFor:    waitForKeyHolder,
 	}
-	if k := env("CREATE_KEY", "", str); k != "" {
-		r.createKey = []byte(k)
-		// without a key anyone may open any room, so there is nothing to bring back
-		db := env("DB", "relay.db", str)
-		var err error
-		if r.remembered, err = openRemembered(db); err != nil {
-			log.Fatalf("DB=%q: %v", db, err)
-		}
-		defer r.remembered.db.Close()
+	if r.createKey = []byte(env("CREATE_KEY", "", str)); len(r.createKey) == 0 {
+		log.Fatal("CREATE_KEY is required: only someone with it can open a room")
 	}
+	db := env("DB", "relay.db", str)
+	var err error
+	if r.remembered, err = openRemembered(db); err != nil {
+		log.Fatalf("DB=%q: %v", db, err)
+	}
+	defer r.remembered.db.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(wire.Path, r.handle)
@@ -579,7 +588,7 @@ func main() {
 		s.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "remembers_rooms", r.remembered != nil, "trust_proxy", r.trusted,
+	slog.Info("listening", "addr", addr, "trust_proxy", r.trusted,
 		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns, "max_waiting", r.maxWaiting)
 	slog.Info("stopped", "reason", s.ListenAndServe())
 }

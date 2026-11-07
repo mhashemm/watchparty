@@ -435,7 +435,8 @@ func TestSeekAndResumeAtOnceDoesNotPauseAnyone(t *testing.T) {
 
 // A party continued later: the key holder opens the room where it stopped, and members
 // who stopped elsewhere, on other entries, all end up where the key holder is. Seed 1675
-// is a fellow joiner's entry winning over the party's.
+// is a fellow joiner's entry winning over the party's. The key holder says joined too,
+// before the relay tells it it opened the room: seed 0 is a joiner taking it for a fellow.
 func TestJoinersTakeTheOpenersSpot(t *testing.T) {
 	forManySeeds(t, 2000, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "o", "g", "h")
@@ -446,6 +447,7 @@ func TestJoinersTakeTheOpenersSpot(t *testing.T) {
 		}
 		o.in <- IncomingMessage{Opened: true}
 		synctest.Wait()
+		o.out <- []byte(`{"name":"joined"}`)
 		g.out <- []byte(`{"name":"joined"}`)
 		h.out <- []byte(`{"name":"joined"}`)
 		s.run()
