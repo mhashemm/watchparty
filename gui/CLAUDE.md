@@ -110,8 +110,8 @@ The download, SHA-256 check and binary swap live in the `update` package
   dropped, `main` logs `gui: window closed` and cancels everything. The browser's process
   can't say: macOS keeps it running without windows, and Edge's startup boost hands the
   window to another process. The page reconnects the moment its stream is cut, never on a
-  timer (a hidden window's run once a minute), so a browser cutting a long request costs
-  nothing; it stops when the request itself fails, the GUI being gone.
+  timer, because a hidden window's timers run once a minute; so a browser cutting a long
+  request costs nothing. It stops when the request itself fails, the GUI being gone.
 - **The browser runs as its own instance** with a fresh temporary profile per launch; a
   shared profile would hand a second GUI's window to the first. On exit the GUI kills it
   and deletes the profile until it stays deleted: Chrome's network service still writes
