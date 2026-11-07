@@ -141,7 +141,7 @@ func TestIdle(t *testing.T) {
 	}
 }
 
-func TestClosingTheWindowEndsTheGUI(t *testing.T) {
+func TestTheLastPageGoingEndsTheGUI(t *testing.T) {
 	t.Parallel()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -150,38 +150,52 @@ func TestClosingTheWindowEndsTheGUI(t *testing.T) {
 	g := newGUI(t.Context(), ln.Addr().String(), openStore(t.TempDir()+"/gui.json"))
 	quit := make(chan struct{})
 	g.quit = func() { close(quit) }
-	g.ownWindow, g.closeGrace = true, 0
 	srv := &http.Server{Handler: g}
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
 
-	req, _ := http.NewRequest("GET", "http://"+g.host+"/alive", nil)
-	req.Header.Set("X-Token", g.token)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	open := func() io.ReadCloser {
+		req, _ := http.NewRequest("GET", "http://"+g.host+"/alive", nil)
+		req.Header.Set("X-Token", g.token)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ct := res.Header.Get("Content-Type"); res.StatusCode != 200 || ct != "text/event-stream" {
+			t.Fatalf("GET /alive = %d %q, want 200 text/event-stream", res.StatusCode, ct)
+		}
+		buf := make([]byte, 3)
+		if _, err := io.ReadFull(res.Body, buf); err != nil || string(buf) != ":\n\n" {
+			t.Fatalf("first heartbeat = %q, %v", buf, err)
+		}
+		return res.Body
 	}
-	if ct := res.Header.Get("Content-Type"); res.StatusCode != 200 || ct != "text/event-stream" {
-		t.Fatalf("GET /alive = %d %q, want 200 text/event-stream", res.StatusCode, ct)
-	}
-	buf := make([]byte, 3)
-	if _, err := io.ReadFull(res.Body, buf); err != nil || string(buf) != ":\n\n" {
-		t.Fatalf("first heartbeat = %q, %v", buf, err)
-	}
-	res.Body.Close()
+	open().Close()
 	<-quit
 }
 
-func TestAPageStillConnectedOrATabDoesNotEndTheGUI(t *testing.T) {
+func TestTheGUIStaysWhileAPageIsConnected(t *testing.T) {
+	t.Parallel()
+	g := newGUI(t.Context(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	quits := 0
+	g.quit = func() { quits++ }
+	g.pages = 2
+	g.pageGone()
+	if quits != 0 {
+		t.Fatal("quit with a page still connected")
+	}
+	g.pageGone()
+	if quits != 1 {
+		t.Fatal("didn't quit when the last page went")
+	}
+}
+
+func TestShuttingDownIsNotAClosedWindow(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	g := newGUI(ctx, "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
 	g.quit = func() { t.Fatal("quit") }
-	g.ownWindow, g.pages = true, 1
-	g.checkPages()
-	g.ownWindow, g.pages = false, 0
-	g.checkPages()
-	g.ownWindow = true
+	g.pages = 1
 	cancel()
-	g.checkPages()
+	g.pageGone()
 }

@@ -1991,7 +1991,6 @@ def gui_suite():
     until(lambda: listening(PORTS["relay"]))
     launch_gui(H)
     launch_gui(G, portal=False)
-    # launched now so it is long past the hand-off guard's 5s when [G32] closes it
     X = launch_gui("guiXvfb", browser="xvfb")
 
     def mpv_of(n):
@@ -2519,10 +2518,7 @@ def gui_suite():
     js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
     ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
 
-    print(f"\n[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
-    nodes[G2]["page"].call("Page.reload")
-    time.sleep(3 + QUIET)  # the GUI's closeGrace
-    ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
+    print(f"\n[G27a] closing {G2}'s window ends it, even with the browser still running, as on macOS")
     try:
         nodes[G2]["page"].call("Page.close")
     except (OSError, RuntimeError, ValueError):

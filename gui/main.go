@@ -102,27 +102,25 @@ type gui struct {
 	ctx         context.Context
 	quit        func()
 	closeWindow func()
-	ownWindow   bool
 	exe         string
 	wg          sync.WaitGroup
 
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	store      *store
-	session    int
-	installed  string
-	run        int
-	lines      []string
-	exitErr    string
-	lastPoll   time.Time
-	idleAfter  time.Duration
-	pages      int
-	closeGrace time.Duration
-	heartbeat  time.Duration
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	store     *store
+	session   int
+	installed string
+	run       int
+	lines     []string
+	exitErr   string
+	lastPoll  time.Time
+	idleAfter time.Duration
+	pages     int
+	heartbeat time.Duration
 }
 
 func newGUI(ctx context.Context, host string, st *store) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, closeGrace: 3 * time.Second, heartbeat: 15 * time.Second, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
+	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, heartbeat: 15 * time.Second, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
 	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
 	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -332,15 +330,9 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 func (g *gui) pageGone() {
 	g.mu.Lock()
 	g.pages--
-	g.mu.Unlock()
-	time.AfterFunc(g.closeGrace, g.checkPages)
-}
-
-func (g *gui) checkPages() {
-	g.mu.Lock()
 	none := g.pages == 0
 	g.mu.Unlock()
-	if g.ownWindow && none && g.ctx.Err() == nil {
+	if none && g.ctx.Err() == nil {
 		log.Println("gui: window closed")
 		g.quit()
 	}
@@ -413,7 +405,7 @@ func newProfile(root string) (string, error) {
 	return profile, nil
 }
 
-func openWindow(url string) (<-chan struct{}, func()) {
+func openWindow(url string) func() {
 	for _, b := range browsers() {
 		profile, err := newProfile(b.root)
 		if err != nil {
@@ -425,17 +417,13 @@ func openWindow(url string) (<-chan struct{}, func()) {
 			os.RemoveAll(profile)
 			continue
 		}
-		closed, gone := make(chan struct{}), make(chan struct{})
-		started := time.Now()
+		gone := make(chan struct{})
 		go func() {
 			cmd.Wait()
 			removeProfile(profile)
 			close(gone)
-			if time.Since(started) > handoffWindow {
-				close(closed)
-			}
 		}()
-		return closed, func() {
+		return func() {
 			cmd.Process.Kill()
 			<-gone
 		}
@@ -450,7 +438,7 @@ func openWindow(url string) (<-chan struct{}, func()) {
 			log.Printf("gui: no browser could be opened (%v), open %s yourself\n", err, url)
 		}
 	}()
-	return nil, nil
+	return func() {}
 }
 
 func removeProfile(dir string) {
@@ -462,8 +450,6 @@ func removeProfile(dir string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
-
-const handoffWindow = 5 * time.Second
 
 func main() {
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -482,18 +468,7 @@ func main() {
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
 	url := "http://" + g.host + "/"
 	log.Printf("gui: %s\n", url)
-	closed, closeWindow := openWindow(url)
-	if closeWindow != nil {
-		g.closeWindow = closeWindow
-		g.ownWindow = true
-	}
-	if closed != nil {
-		go func() {
-			<-closed
-			log.Println("gui: window closed")
-			stop()
-		}()
-	}
+	g.closeWindow = openWindow(url)
 
 	go http.Serve(ln, g)
 	go func() {

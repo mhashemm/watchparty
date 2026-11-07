@@ -43,8 +43,8 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 - **Drive mpv directly:** each party's socket is its mpv's `--input-ipc-server=`
   argument (`pgrep -a mpv`). Write `set_property`/`quit` commands to it.
 - **`make e2e E2E="--mode gui"`** automates the window lifecycle (a real window on Xvfb
-  too), the hand-off guard and self-update (`E2E.md`). The recipe left here is for what
-  it doesn't run.
+  too), a browser handing the page off, and self-update (`E2E.md`). The recipe left
+  here is for what it doesn't run.
 - **A released binary:** `gh release download <tag> -p watchparty-gui_amd64`, run it
   headless, and `GET /update` must report that tag as `current`.
 
@@ -104,19 +104,17 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 - **Stop** cancels the party's context, like Ctrl-C in the CLI, on every OS. On
   SIGINT/SIGTERM `main` cancels the party and waits for `Run`, so no UPNP mapping leaks.
-- **Closing the window shuts everything down.** The browser runs as its own instance
-  with a fresh temporary profile per launch, so the process lives as long as the
-  window; a shared profile would hand a second GUI's window to the first. When it
-  exits, `main` logs `gui: window closed` and cancels everything.
-- **Hand-off guard:** a browser that exits within `handoffWindow` (5s) is assumed to
-  have passed the page to a running instance (Edge's startup boost), not closed.
-- **The page holds `GET /alive` open,** an event stream read with `fetch` so it carries
-  `X-Token`, with a heartbeat every 15s. If the GUI opened its own window and no page is
-  connected `closeGrace` (3s) after the last one left, the window is closed; this is what
-  works when the browser outlives its window (macOS) or hands it off (Edge). A reload
-  reconnects within that. The page reconnects as soon as its stream is cut, never on a
-  timer (hidden windows' timers run once a minute), and stops when the request itself fails.
-- **Idle exit**, when the window can't be watched: no party and no `/log` poll for 2
+- **Closing the window shuts everything down,** the fallback tab too. The page holds
+  `GET /alive` open, an event stream read with `fetch` so it carries `X-Token`, with a
+  heartbeat every 15s; when the last one drops, `main` logs `gui: window closed` and
+  cancels everything. The browser's process can't say: macOS keeps it running without
+  windows, and Edge's startup boost hands the window to another process. A reload drops
+  it too, which is why the page blocks F5 and Ctrl/Cmd+R.
+- **The browser runs as its own instance** with a fresh temporary profile per launch; a
+  shared profile would hand a second GUI's window to the first. On exit the GUI kills it
+  and deletes the profile until it stays deleted: Chrome's network service still writes
+  into it just after the main process is gone.
+- **Idle exit**, for a page that never connects: no party and no `/log` poll for 2
   minutes. Don't shorten it: Chrome throttles hidden windows' timers to about one per
   minute. The first poll gets a minute's grace.
 
@@ -190,5 +188,5 @@ of which lines, and who prints them, is in the root `CLAUDE.md`.
 ## On Windows
 
 CI's `windows` job runs `e2e_windows.py`: Chrome from Program Files (headless), a party
-from the page under `-H=windowsgui`, closing the window, the hand-off guard and the
-`.old` swap. Never run: mpv's video window under that parent, a Windows–Linux party.
+from the page under `-H=windowsgui`, closing the window, a browser handing the page off,
+and the `.old` swap. Never run: mpv's video window under that parent, a Windows–Linux party.

@@ -1227,15 +1227,9 @@ $("restart-now").addEventListener("click", restartNow);
 $("restart-later").addEventListener("click", () => $("restart-dialog").close());
 
 if (["history", "settings"].includes(location.hash.slice(1))) show(location.hash.slice(1));
-async function alive() {
-  const res = await api("/alive").catch(() => null);
-  if (!res?.ok) return;
-  try {
-    for (const r = res.body.getReader(); !(await r.read()).done;);
-  } catch {}
-  alive();
-}
-alive();
+api("/alive").then(async res => {
+  for (const r = res.body.getReader(); !(await r.read()).done;);
+}).catch(() => {});
 loadState();
 poll();
 checkUpdate();

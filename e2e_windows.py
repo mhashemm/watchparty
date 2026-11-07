@@ -4,7 +4,7 @@
 e2e.py covers the behaviour; this covers the Windows half of it: mpv's named pipe,
 mpv in its own console and process group, Ctrl-Break, the mpv.com wrapper, the
 GUI built with -H=windowsgui (as released) starting mpv and Chrome by absolute path,
-closing its window, the hand-off guard, and the self-update's .old swap.
+closing its window, a browser handing the page off, and the self-update's .old swap.
 
     python e2e_windows.py
 
