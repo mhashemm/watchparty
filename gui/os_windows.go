@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 const exeSuffix = ".exe"
@@ -55,4 +56,22 @@ if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }`)
 
 func hide(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+}
+
+const uninstallKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty`
+
+func recordVersion(exe, tag string) {
+	recordVersionAt(uninstallKey, exe, tag)
+}
+
+func recordVersionAt(key, exe, tag string) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, key, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	dir, _, _ := k.GetStringValue("InstallLocation")
+	if dir != "" && strings.EqualFold(filepath.Clean(dir), filepath.Dir(exe)) {
+		k.SetStringValue("DisplayVersion", tag)
+	}
 }

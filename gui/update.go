@@ -53,6 +53,7 @@ func (g *gui) update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	recordVersion(g.exe, tag)
 	g.mu.Lock()
 	g.installed = tag
 	g.mu.Unlock()

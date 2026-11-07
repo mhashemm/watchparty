@@ -65,9 +65,11 @@ jobs:
 
       - name: Build the Windows installer
         if: matrix.goos == 'windows'
+        env:
+          REF: ${{ github.ref_name }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq nsis
-          makensis -V2 -DEXE=$PWD/${{ matrix.gui }} -DOUT=$PWD/watchparty-gui-setup.exe gui/setup.nsi
+          makensis -V2 -DEXE=$PWD/${{ matrix.gui }} -DOUT=$PWD/watchparty-gui-setup.exe "-DVERSION=$REF" gui/setup.nsi
 
       - name: Publish
         # GitHub's upload API has answered 404, 500 and 502 for minutes at a time. --clobber

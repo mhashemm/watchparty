@@ -256,3 +256,5 @@ func fileURIPath(uri string) (string, error) {
 }
 
 func hide(_ *exec.Cmd) {}
+
+func recordVersion(string, string) {}
