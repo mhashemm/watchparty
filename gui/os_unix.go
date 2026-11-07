@@ -25,7 +25,21 @@ var chromiumFamily = regexp.MustCompile(`(?i)chrom|edge|brave|vivaldi`)
 
 func browsers() []browser {
 	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" {
+		return macBrowsers(home)
+	}
 	return desktopBrowsers(os.Getenv, home)
+}
+
+func macBrowsers(home string) []browser {
+	var found []browser
+	for _, app := range []string{"Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium", "Vivaldi"} {
+		for _, dir := range []string{"/Applications", filepath.Join(home, "Applications")} {
+			path := filepath.Join(dir, app+".app", "Contents", "MacOS", app)
+			found = append(found, browser{path, []string{path}, os.TempDir()})
+		}
+	}
+	return found
 }
 
 func desktopBrowsers(getenv func(string) string, home string) []browser {

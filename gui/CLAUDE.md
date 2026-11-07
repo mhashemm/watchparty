@@ -157,7 +157,8 @@ The download, SHA-256 check and binary swap live in the `update` package
   - **A sandboxed browser gets its profile where it can see it:** `X-Flatpak=<id>` →
     `~/.var/app/<id>/cache`, `X-SnapInstanceName` → `~/snap/<name>/common`, else
     `os.TempDir()`. Not run against a snap or a system-wide Flatpak.
-  - Windows tries Chrome, then Edge, by absolute path. macOS always opens a tab.
+  - Windows tries Chrome, then Edge, by absolute path; macOS Chrome, Edge, Brave, Chromium,
+    Vivaldi, in `/Applications` then `~/Applications`, the binary inside the `.app`.
   - If everything fails, the log says `gui: no browser could be opened` with the URL.
 
 ## Page script (`index.html`)
