@@ -59,8 +59,7 @@ Function SetAppID
 				${If} $4 P<> 0
 					System::Call '*${SYSSTRUCT_PROPERTYKEY}(${PKEY_AppUserModel_ID})p.r6'
 					System::Call '*(&w64 "${APPID}")p.r5'
-					System::Call '*${SYSSTRUCT_PROPVARIANT}(${VT_LPWSTR})p.r7'
-					System::Call '*$7(&i8,p r5)'
+					System::Call '*${SYSSTRUCT_PROPVARIANT}(${VT_LPWSTR},,$5)p.r7'
 					${IPropertyStore::SetValue} $4 '($6,$7)'
 					${IPropertyStore::Commit} $4 ""
 					${IUnknown::Release} $4 ""
