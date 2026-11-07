@@ -575,6 +575,14 @@ def stub_stop(p):
     p.stdout.close()
 
 
+def gone(pid):
+    try:
+        os.kill(pid, 0)
+        return open(f"/proc/{pid}/stat").read().split(")")[-1].split()[0] == "Z"
+    except OSError:
+        return True
+
+
 def children(pid):
     out = []
     for d in glob.glob("/proc/[0-9]*"):
@@ -2451,11 +2459,13 @@ def gui_suite():
     ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
     ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
 
-    print(f"\n[G22] SIGTERM ends {H} mid-party, mpv and all")
+    print(f"\n[G22] SIGTERM ends {H} mid-party, mpv, window and all")
     sock = nodes[H]["sock"]
+    window = next(c for c in children(nodes[H]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
     nodes[H]["proc"].send_signal(signal.SIGTERM)
     ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
     ok(f"{H}'s mpv closed", not listening_unix(sock))
+    ok(f"{H}'s window closed", until(lambda: gone(window)))
 
     print(f"\n[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
     tab(G, "history")
@@ -2682,12 +2692,6 @@ time.sleep(600)
     n = launch("hungUp", port=PORTS["upnpNode"], mpv=f"{RUN}/hungup")
     ok("it exits with an error", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and nodes[n]["proc"].returncode == 1, str(nodes[n]["proc"].poll()))
     ok("that says what happened", "mpv stopped answering" in log(n), log(n))
-    def gone(pid):
-        try:
-            os.kill(pid, 0)
-            return open(f"/proc/{pid}/stat").read().split(")")[-1].split()[0] == "Z"
-        except OSError:
-            return True
     ok("and takes mpv with it", until(lambda: gone(int(open(pidfile).read()))))
 
 

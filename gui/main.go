@@ -441,4 +441,5 @@ func main() {
 	<-c.Done()
 	g.stopParty()
 	g.wg.Wait()
+	g.closeWindow()
 }
