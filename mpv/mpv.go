@@ -564,6 +564,9 @@ func (c *Client) welcome(hostname string) error {
 	}
 	c.mu.Unlock()
 	if entry != nil {
+		if !joining {
+			entry = c.tagged(entry)
+		}
 		select {
 		case c.outgoing <- entry:
 		case <-c.ctx.Done():
@@ -621,7 +624,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	takes := event.From != nil || c.takesAnswer(i, heading, hostname)
+	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Entry != nil)
 	c.mu.Unlock()
 	if i == heading || lost || !takes {
 		return nil
@@ -657,15 +660,15 @@ func (c *Client) followEntry(event Event, hostname string) error {
 }
 
 // takesAnswer is whether this node follows the entry someone answered a joiner with.
-// Only a node still joining does. The party's answer, from anyone whose join it didn't
-// hear, always; a fellow joiner's only if higher (each answers the other, and following
-// both ways would swap them), and not once the party has answered, since it only says
-// where that joiner was.
-func (c *Client) takesAnswer(i, heading int, hostname string) bool {
+// Only a node still joining does. The party's answer, tagged with its entry or from
+// anyone whose join it didn't hear, always; a fellow joiner's only if higher (each
+// answers the other, and following both ways would swap them), and not once the party
+// has answered, since it only says where that joiner was.
+func (c *Client) takesAnswer(i, heading int, hostname string, party bool) bool {
 	if !c.joining {
 		return false
 	}
-	if !slices.Contains(c.joinedWith, hostname) {
+	if party || !slices.Contains(c.joinedWith, hostname) {
 		c.heardParty = true
 		return true
 	}

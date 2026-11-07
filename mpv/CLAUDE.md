@@ -151,8 +151,10 @@ reason: nobody starts the next one until someone resumes.
   `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
   before two people crossed would otherwise send each to the other's entry, for good.
 - **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
-  answers the other, and following both ways would swap them. An answer from anyone whose
-  join it didn't hear is the party's, and is followed, lower or not; **after one, a fellow
+  answers the other, and following both ways would swap them. An answer **tagged with its
+  entry** (sent by a member no longer `joining`), or from anyone whose join it didn't hear, is
+  the party's, and is followed, lower or not: a relay opener says `joined` too, before the
+  relay tells it it opened the room. **After one, a fellow
   joiner's entry is ignored** (`heardParty`), since it only says where that joiner was.
 - **`following` queues moves:** the next can overtake mpv's report of the last (`MPV.md`). A
   report drops entries up to its own; `file-loaded` clears the rest once this node is where it
