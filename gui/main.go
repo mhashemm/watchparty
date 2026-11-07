@@ -341,7 +341,7 @@ func (g *gui) pageGone() {
 func (g *gui) idle() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.cancel == nil && time.Since(g.lastPoll) > g.idleAfter
+	return g.cancel == nil && g.pages == 0 && time.Since(g.lastPoll) > g.idleAfter
 }
 
 func defaultMpv() string {

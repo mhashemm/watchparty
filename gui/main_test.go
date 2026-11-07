@@ -139,6 +139,10 @@ func TestIdle(t *testing.T) {
 	if g.idle() {
 		t.Fatal("idle during a party")
 	}
+	g.cancel, g.pages = nil, 1
+	if g.idle() {
+		t.Fatal("idle with a page connected")
+	}
 }
 
 func TestTheLastPageGoingEndsTheGUI(t *testing.T) {
