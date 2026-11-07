@@ -462,8 +462,11 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 		select {
 		case e := <-incoming:
 			event := Event{}
-			if json.Unmarshal(e.Event, &event) == nil && (event.Name == pause || event.Name == timePos) {
+			err := json.Unmarshal(e.Event, &event)
+			if err == nil && (event.Name == pause || event.Name == timePos) {
 				latest[event.Name] = e
+			} else if err == nil && (event.Name == startPos || event.Name == playlistPos && event.From == nil) {
+				// an answer to someone else's join: this node hasn't said joined yet
 			} else {
 				notices = append(notices, e)
 			}
