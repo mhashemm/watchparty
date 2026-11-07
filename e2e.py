@@ -642,6 +642,11 @@ def script(path, body):
     os.chmod(path, 0o755)
 
 
+def profile(n):
+    """The temporary browser profile of the last window this GUI's folder opened."""
+    return next(a.split("=", 1)[1] for a in launches(n)[-1].split() if a.startswith("--user-data-dir="))
+
+
 def launches(n):
     try:
         return open(f"{nodes[n]['home']}/browser.args").read().splitlines()
@@ -1986,7 +1991,6 @@ def gui_suite():
     until(lambda: listening(PORTS["relay"]))
     launch_gui(H)
     launch_gui(G, portal=False)
-    # launched now so it is long past the hand-off guard's 5s when [G32] closes it
     X = launch_gui("guiXvfb", browser="xvfb")
 
     def mpv_of(n):
@@ -2019,6 +2023,12 @@ def gui_suite():
     for name, keys in (("F12", 'key: "F12"'), ("Ctrl+Shift+I", 'key: "I", ctrlKey: true, shiftKey: true'), ("Cmd+Alt+J", 'key: "j", metaKey: true, altKey: true'), ("Ctrl+U", 'key: "u", ctrlKey: true')):
         ok(f"{name} is blocked", prevented("document.body", f'KeyboardEvent("keydown", {{{keys}, bubbles: true, cancelable: true}})'))
     ok("Ctrl+V isn't", not prevented('$("invite")', 'KeyboardEvent("keydown", {key: "v", ctrlKey: true, bubbles: true, cancelable: true})'))
+    js(H, "window.notReloaded = true")
+    for key, code, vk, mods in (("F5", "F5", 116, 0), ("r", "KeyR", 82, 2), ("r", "KeyR", 82, 4), ("R", "KeyR", 82, 10)):
+        for kind in ("rawKeyDown", "keyUp"):
+            nodes[H]["page"].call("Input.dispatchKeyEvent", type=kind, key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk, modifiers=mods)
+    time.sleep(QUIET)
+    ok("F5, Ctrl+R, Cmd+R and Ctrl+Shift+R, pressed for real, don't reload it", js(H, "window.notReloaded") is True)
 
     print("\n[G2] the tabs switch views and the address remembers which")
     for view in ("history", "settings", "party"):
@@ -2466,6 +2476,7 @@ def gui_suite():
     ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
     ok(f"{H}'s mpv closed", not listening_unix(sock))
     ok(f"{H}'s window closed", until(lambda: gone(window)))
+    ok("and its browser profile is deleted", not os.path.exists(profile(H)), profile(H))
 
     print(f"\n[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
     tab(G, "history")
@@ -2506,7 +2517,18 @@ def gui_suite():
     print("\n[G27] the cat")
     js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
     ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
-    stop(G2)
+
+    print(f"\n[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
+    nodes[G2]["page"].call("Page.reload")
+    time.sleep(3 + QUIET)  # the GUI's closeGrace
+    ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
+    try:
+        nodes[G2]["page"].call("Page.close")
+    except (OSError, RuntimeError, ValueError):
+        pass  # the page can go before it answers
+    ok(f"{G2} exited", until(lambda: nodes[G2]["proc"].poll() is not None, 10))
+    ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
+    ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
 
     print("\n[G27b] a history saved by an older version moves to its own file, and is kept")
     folder = f"{nodes[G]['home']}/config/watchparty"
