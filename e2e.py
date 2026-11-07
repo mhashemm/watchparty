@@ -1923,6 +1923,20 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
+    print("\n[R19d] MAX_WAITING: a room holds only so many keyless members, the rest retry")
+    relay = launch_relay({"CREATE_KEY": "k", "MAX_WAITING": "1"})
+    until(lambda: listening(PORTS["relay"]))
+    launch("nodeB", room="keyroom", tag="k7")
+    until(lambda: "not open yet" in log("k7"), BOOT)
+    launch("nodeC", room="keyroom", tag="k8")
+    until(lambda: "503" in log("k8"), BOOT)
+    ok("the second is refused with 503 and keeps trying", "503" in log("k8") and nodes["k8"]["proc"].poll() is None, log("k8")[-300:])
+    launch(A, room="keyroom", tag="k9", create_key="k")
+    ok("both get in once the key holder opens it", until(lambda: all(connected(n) for n in ("k7", "k8", "k9")), 40), str([connected(n) for n in ("k7", "k8", "k9")]))
+    for t in ("k7", "k8", "k9"):
+        stop(t)
+    relay.kill(); relay.wait(timeout=10)
+
     print("\n[R20] a member that stops answering pings is dropped and the room hears it left")
     relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))

@@ -12,7 +12,7 @@ assessment is kept private, out of the repo.
 ```sh
 go test -race ./relay
 docker build -f relay/Dockerfile -t watchparty-relay .     # from the REPO ROOT
-[ADDR=:8080] [CREATE_KEY=k] [DB=relay.db] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [MAX_ROOMS=10000] [MAX_CONNS=5000] ./relay
+[ADDR=:8080] [CREATE_KEY=k] [DB=relay.db] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [MAX_ROOMS=10000] [MAX_CONNS=5000] [MAX_WAITING=20] ./relay
 ```
 
 **Env vars only, no flags.** An empty value means the default; one that doesn't parse
@@ -54,7 +54,9 @@ goes there too. Not in the release; deployed by hand or as the image.
   (older ones get 401 and retry, as before). Nothing is relayed and no room exists. It is
   pinged like a member, and closed with **4001** when a key holder creates the room (the
   node dials again at once and joins) or **4002** after `waitFor`, 30 minutes (it gives up).
-  `opening` counts who waits per room and goes when the last stops.
+  `opening` counts who waits per room and goes when the last stops. **`MAX_WAITING`** (20)
+  per room, then 503 (the node retries): anyone with a secret could otherwise pin every
+  connection for 30 minutes.
 - Notices: "X has joined" and "X has left" to the room, and "connected to Y" to the
   joiner once per member already there, so the last joiner learns who is in the room.
 

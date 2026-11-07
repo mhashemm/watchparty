@@ -15,6 +15,7 @@ ENV ADDR=":80" \
     ROOMS_PER_HOUR="" \
     MAX_ROOMS="" \
     MAX_CONNS="" \
+    MAX_WAITING="" \
     DB="/data/relay.db"
 VOLUME /data
 EXPOSE 80

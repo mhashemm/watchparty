@@ -126,6 +126,7 @@ type relay struct {
 	perHour    int
 	maxRooms   int
 	maxConns   int64
+	maxWaiting int
 	trusted    bool
 	ping       time.Duration
 	timeout    time.Duration
@@ -233,6 +234,10 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 		if !ok {
 			o = &opening{open: make(chan struct{})}
 			r.opening[name] = o
+		}
+		// anyone with the secret could otherwise hold MAX_CONNS connections for 30 minutes each
+		if o.waiting >= r.maxWaiting {
+			return false, nil, http.StatusServiceUnavailable, fmt.Errorf("too many waiting for this room")
 		}
 		o.waiting++
 		return false, o.open, 0, nil
@@ -546,16 +551,17 @@ func main() {
 
 	addr := env("ADDR", ":8080", str)
 	r := &relay{
-		rooms:    map[string]*room{},
-		limiter:  newLimiter(),
-		perHour:  env("ROOMS_PER_HOUR", 10, strconv.Atoi),
-		maxRooms: env("MAX_ROOMS", 10000, strconv.Atoi),
-		maxConns: int64(env("MAX_CONNS", 5000, strconv.Atoi)),
-		trusted:  env("TRUST_PROXY", false, strconv.ParseBool),
-		opening:  map[string]*opening{},
-		ping:     pingInterval,
-		timeout:  writeTimeout,
-		waitFor:  waitForKeyHolder,
+		rooms:      map[string]*room{},
+		limiter:    newLimiter(),
+		perHour:    env("ROOMS_PER_HOUR", 10, strconv.Atoi),
+		maxRooms:   env("MAX_ROOMS", 10000, strconv.Atoi),
+		maxConns:   int64(env("MAX_CONNS", 5000, strconv.Atoi)),
+		maxWaiting: env("MAX_WAITING", 20, strconv.Atoi),
+		trusted:    env("TRUST_PROXY", false, strconv.ParseBool),
+		opening:    map[string]*opening{},
+		ping:       pingInterval,
+		timeout:    writeTimeout,
+		waitFor:    waitForKeyHolder,
 	}
 	if k := env("CREATE_KEY", "", str); k != "" {
 		r.createKey = []byte(k)
@@ -588,6 +594,6 @@ func main() {
 	}()
 
 	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "remembers_rooms", r.remembered != nil, "trust_proxy", r.trusted,
-		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns)
+		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns, "max_waiting", r.maxWaiting)
 	slog.Info("stopped", "reason", s.ListenAndServe())
 }

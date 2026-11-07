@@ -18,15 +18,16 @@ import (
 
 func newRelay(perHour, maxRooms int, maxConns int64) *relay {
 	return &relay{
-		rooms:    map[string]*room{},
-		limiter:  newLimiter(),
-		perHour:  perHour,
-		maxRooms: maxRooms,
-		maxConns: maxConns,
-		opening:  map[string]*opening{},
-		ping:     pingInterval,
-		timeout:  writeTimeout,
-		waitFor:  waitForKeyHolder,
+		rooms:      map[string]*room{},
+		limiter:    newLimiter(),
+		perHour:    perHour,
+		maxRooms:   maxRooms,
+		maxConns:   maxConns,
+		maxWaiting: 20,
+		opening:    map[string]*opening{},
+		ping:       pingInterval,
+		timeout:    writeTimeout,
+		waitFor:    waitForKeyHolder,
 	}
 }
 
@@ -697,4 +698,26 @@ func TestNobodyOpensARoomWithoutCreateKey(t *testing.T) {
 	if first, _ := opened(t, url, "room", "s", "a", "k"); first {
 		t.Fatal("the first in a room on a keyless relay was told it opened it")
 	}
+}
+
+// A room holds at most MAX_WAITING keyless members, so a secret can't pin every
+// connection the relay has; the next one waits its turn through the node's backoff.
+func TestHeldMembersPerRoomAreCapped(t *testing.T) {
+	t.Parallel()
+	r, url := keyed(t, ":memory:")
+	r.mu.Lock()
+	r.maxWaiting = 2
+	r.mu.Unlock()
+	opened(t, url, "room", "s", "a", "k")
+	gone(t, r, "room")
+	held(t, url, "room", "s", "b")
+	c := held(t, url, "room", "s", "c")
+	if _, _, code := dial(t, url, "room", "s", "d"); code != http.StatusServiceUnavailable {
+		t.Fatalf("a third held member got %d, want 503", code)
+	}
+	c.CloseNow()
+	eventually(t, "a member that stopped waiting still counts against the cap", func() bool {
+		_, _, code := dial(t, url, "room", "s", "d")
+		return code == http.StatusSwitchingProtocols
+	})
 }
