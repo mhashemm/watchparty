@@ -54,9 +54,6 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   with user-supplied flags:** `r.Host` must equal the exact `ip:port` (DNS rebinding),
   and every path except `GET /` needs `X-Token`, the `rand.Text()` token templated into
   the page as `{{TOKEN}}` and compared in constant time (CSRF).
-- Routes: `GET /`, `POST /pick`, `/pick-mpv`, `/pick-folder`, `/start` (400 bad form, 409 party running), `/stop`,
-  `GET /log?from=N&run=R`, `GET /state`, `POST /settings`, `/history/clear`, `GET`/`POST
-  /update`, `POST /restart`.
 - **`form.config()`** trims every field; an empty port is `party.DefaultPort`. It
   refuses an empty file, and an empty relay in relay mode, which `party.Run` would
   otherwise treat as direct mode and try UPNP. It does **not** check the file's type,
@@ -66,8 +63,6 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   first error. `Write` takes `g.mu`, so **never `log` while holding `g.mu`**.
 - **`run`** goes up on every `/start`; a poll with an old `run` is answered from line 0,
   so two runs never splice.
-- `party.Run`'s return becomes `exitErr`: `nil` after Stop or when the user closes mpv,
-  `errStopped` when something inside cancelled, a setup error otherwise.
 - An empty mpv field becomes the absolute path of a sibling `mpv(.exe)`, else `mpv` on
   `PATH`. Absolute, because `exec.LookPath` won't resolve a bare name from the current
   directory. mpv is never bundled.
@@ -79,14 +74,17 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   `store.mu`; lock order is always `g.mu` → `store.mu`.
 - **Versions before `history.json` kept the history in `gui.json`.** `openStore` moves it, writing
   the new file first, so stopping in between loses nothing; `history.json` wins if both exist.
-- **Not `localStorage`:** the random port makes the page a new origin every launch.
-  Nothing is kept in browser storage; the page loads everything from `GET /state`.
-- **Settings:** name, and `local`/`port` from the last Wi-Fi party, are remembered
-  automatically. The Settings page's fields are saved by its button. The first relay
-  used becomes the default if none is set.
-- **History**, up to 100 parties. `begin` records the form on `/start`, `end` stamps
-  the end. `observe` fills in the *real* room and secret from the invite line, people
-  from the join notices, and one entry per file switched to, opened and left, from `now playing:`.
+- **Not `localStorage`:** the random port makes the page a new origin every launch; it loads everything from `GET /state`.
+- **Settings:** name, and `local`/`port` from the last peer-to-peer party, are remembered automatically,
+  the rest by the Settings page's button. The first relay used becomes the default if none is set.
+- **History**, up to 100 parties, filled in from log lines (`observe`): the *real* room and
+  secret come from the invite line, not the form, which can leave them empty.
+- **Continue** posts the form plus `continue`, the party's `started`. Same room and secret, so
+  the same party: `begin` moves its entry to the end, open again, and `Run` starts at `stopped`,
+  which the node chose (with keep-open=always, the file after one it finished). So the slice
+  order is the truth; `mergeHistory` sorts only when it merges. Hidden (`continuable`) for
+  peer-to-peer (a guest's saved address can change; Watch again only fills the form), a
+  `finished` party, or 30 days after it ended, when the relay has forgotten the room.
 
 ## Self-update (`update.go`)
 
@@ -173,9 +171,7 @@ The download, SHA-256 check and binary swap live in the `update` package
 - **Save chart** re-fetches `/log?from=0`, since the `<pre>` is trimmed to 150k
   characters. **Copy invite** uses `navigator.clipboard` (127.0.0.1 is a secure
   context) and selects the text if that fails.
-- The invite paste box parses `-relay … -room … -secret …` or `-addrs … -secret …`, and
-  strips a whole pasted log line up to `your address to share is`. `-createKey` is never
-  in an invite.
+- `-createKey` is never in an invite, so the paste box never fills it.
 
 ## Log lines
 
@@ -186,10 +182,6 @@ of which lines, and who prints them, is in the root `CLAUDE.md`.
 
 ## On Windows
 
-Run by hand on Windows 11 with Edge 156 and mpv 0.40: the picker, the named pipe,
-sync between Windows nodes over both transports, Edge's app window and its lifetime,
-and the self-update swap (`.old` survives one start, the next removes it).
-
 CI's `windows` job runs `e2e_windows.py`: Chrome from Program Files (headless), a party
 from the page under `-H=windowsgui`, closing the window, the hand-off guard and the
-`.old` swap. Not yet run: mpv's video window under that parent, a Windows–Linux party.
+`.old` swap. Never run: mpv's video window under that parent, a Windows–Linux party.

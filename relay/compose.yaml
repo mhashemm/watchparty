@@ -5,8 +5,17 @@ services:
       dockerfile: relay/Dockerfile
     restart: unless-stopped
     env_file: .env
+    # the owner of relay/data, so the database is yours and not root's
+    user: "${UID:?set UID and GID in relay/.env}:${GID:?set UID and GID in relay/.env}"
     ports:
       - "${PORT:-80}:80"
+    volumes:
+      # inside the repo; it exists in git, so compose never creates it as root
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
     logging:
       driver: "json-file"
       options:

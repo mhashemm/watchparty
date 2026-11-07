@@ -288,8 +288,12 @@ func (s *sim) together(seed uint64) {
 }
 
 func forSeeds(t *testing.T, f func(t *testing.T, seed uint64)) {
+	forManySeeds(t, 200, f)
+}
+
+func forManySeeds(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64)) {
 	t.Parallel()
-	for seed := range uint64(200) {
+	for seed := range seeds {
 		synctest.Test(t, func(t *testing.T) { f(t, seed) })
 		if t.Failed() {
 			return
@@ -297,8 +301,10 @@ func forSeeds(t *testing.T, f func(t *testing.T, seed uint64)) {
 	}
 }
 
+// Members stop a moment apart and hear each other in any order; seeds 391 and 474 were
+// the first to strand one 0.2s away, so these run 1000.
 func TestPartySettlesAfterAJoin(t *testing.T) {
-	forSeeds(t, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, 0, "a", "b", "c", "j")
 		a, b, c, j := s.nodes[0], s.nodes[1], s.nodes[2], s.nodes[3]
 		play(30, a, b, c)
@@ -316,7 +322,7 @@ func TestPartySettlesAfterAJoin(t *testing.T) {
 }
 
 func TestPartySettlesAfterALeave(t *testing.T) {
-	forSeeds(t, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, 0, "a", "b", "c")
 		play(30, s.nodes...)
 		s.ticks = 20
@@ -423,6 +429,33 @@ func TestSeekAndResumeAtOnceDoesNotPauseAnyone(t *testing.T) {
 			if slices.ContainsFunc(n.notices, func(text string) bool { return strings.HasSuffix(text, ": seek") }) {
 				t.Errorf("seed %d: %s took it for a seek while playing: %q", seed, n.name, n.notices)
 			}
+		}
+	})
+}
+
+// A party continued later: the key holder opens the room where it stopped, and members
+// who stopped elsewhere, on other entries, all end up where the key holder is. Seed 1675
+// is a fellow joiner's entry winning over the party's.
+func TestJoinersTakeTheOpenersSpot(t *testing.T) {
+	forManySeeds(t, 2000, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, simEntries, "o", "g", "h")
+		o, g, h := s.nodes[0], s.nodes[1], s.nodes[2]
+		for n, at := range map[*simNode][2]float64{o: {1, 40}, g: {2, 10}, h: {0, 5}} {
+			n.entry, n.c.current, n.c.joining = int(at[0]), int(at[0]), true
+			n.pos, n.c.pos = at[1], at[1]
+		}
+		o.in <- IncomingMessage{Opened: true}
+		synctest.Wait()
+		g.out <- []byte(`{"name":"joined"}`)
+		h.out <- []byte(`{"name":"joined"}`)
+		s.run()
+		for _, n := range []*simNode{g, h} {
+			if n.entry != o.entry || n.pos != o.pos {
+				t.Errorf("seed %d: %s is on %d at %.1f, the key holder on %d at %.1f: %q", seed, n.name, n.entry, n.pos, o.entry, o.pos, n.notices)
+			}
+		}
+		if o.entry != 1 || o.pos != 40 {
+			t.Errorf("seed %d: the key holder moved to %d at %.1f: %q", seed, o.entry, o.pos, o.notices)
 		}
 	})
 }

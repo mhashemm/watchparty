@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -25,11 +26,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/relay/wire"
 )
 
 const (
-	secretHeaderKey = "room-secret"
-	createHeaderKey = "create-key"
+	waitForKeyHolder = 30 * time.Minute
 
 	sendBuffer    = 64
 	pingInterval  = 30 * time.Second
@@ -40,13 +41,6 @@ const (
 	rows = 4
 	cols = 1 << 20
 )
-
-// declared again in party/ws.go; importing party would drag upnp, server and mpv into
-// the relay binary, and four lines beat a package that exists only to share them
-type message struct {
-	Hostname string          `json:"hostname"`
-	Event    json.RawMessage `json:"event"`
-}
 
 // count-min sketch, a fixed 8MB however many addresses it sees
 type limiter struct {
@@ -99,19 +93,30 @@ type room struct {
 	members map[*member]struct{}
 }
 
-type relay struct {
-	mu    sync.Mutex
-	rooms map[string]*room
+// opening is a remembered room that keyless members are waiting in; open closes when a
+// key holder creates it.
+type opening struct {
+	open    chan struct{}
+	waiting int
+}
 
-	limiter   *limiter
-	createKey []byte
-	conns     atomic.Int64
-	perHour   int
-	maxRooms  int
-	maxConns  int64
-	trusted   bool
-	ping      time.Duration
-	timeout   time.Duration
+type relay struct {
+	mu      sync.Mutex
+	rooms   map[string]*room
+	opening map[string]*opening
+
+	limiter    *limiter
+	createKey  []byte
+	remembered *remembered
+	conns      atomic.Int64
+	perHour    int
+	maxRooms   int
+	maxConns   int64
+	maxWaiting int
+	trusted    bool
+	ping       time.Duration
+	timeout    time.Duration
+	waitFor    time.Duration
 }
 
 func (r *relay) ip(req *http.Request) string {
@@ -143,7 +148,7 @@ func clean(s string) string {
 
 func notice(hostname, text string) []byte {
 	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
-	b, _ := json.Marshal(message{Hostname: hostname, Event: event})
+	b, _ := json.Marshal(wire.Message{Hostname: hostname, Event: event})
 	return b
 }
 
@@ -172,8 +177,11 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 }
 
 // admit enforces the caps in cost order, creating the room if it is new. It runs
-// before the upgrade so a refused caller never becomes a websocket.
-func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, error) {
+// before the upgrade so a refused caller never becomes a websocket. old is the room as
+// it was remembered: a keyless member of it that can wait gets a channel that closes
+// when a key holder opens it, since only a key holder creates a room. Whoever gets one
+// must call stopWaiting.
+func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known, canWait bool) (bool, <-chan struct{}, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -183,31 +191,103 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string) (int, er
 			// a wrong secret is the only lock on the door, so grind attempts cost
 			// quota and eventually stop being answered at all
 			if !r.limiter.allow(ip, r.perHour) {
-				return http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
+				return false, nil, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
 			}
-			return http.StatusForbidden, fmt.Errorf("bad secret")
+			return false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if rm.file != file {
-			return http.StatusConflict, fmt.Errorf("not the same file")
+			return false, nil, http.StatusConflict, fmt.Errorf("not the same file")
 		}
-		return 0, nil
+		return false, nil, 0, nil
 	}
-	// no key is a member waiting for the host to open the room, not a guess, so
-	// it costs no quota and the node keeps retrying
 	if r.createKey != nil && len(key) == 0 {
-		return http.StatusUnauthorized, fmt.Errorf("room not open yet")
+		// no key for a room never opened is a member early for the party, not a
+		// guess, so it costs no quota and the node keeps retrying
+		if old == nil || !canWait {
+			return false, nil, http.StatusUnauthorized, fmt.Errorf("room not open yet")
+		}
+		sum := sha256.Sum256(secret)
+		if subtle.ConstantTimeCompare(old.secret[:], sum[:]) != 1 {
+			if !r.limiter.allow(ip, r.perHour) {
+				return false, nil, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
+			}
+			return false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
+		}
+		if old.file != file {
+			return false, nil, http.StatusConflict, fmt.Errorf("not the same file")
+		}
+		o, ok := r.opening[name]
+		if !ok {
+			o = &opening{open: make(chan struct{})}
+			r.opening[name] = o
+		}
+		// anyone with the secret could otherwise hold MAX_CONNS connections for 30 minutes each
+		if o.waiting >= r.maxWaiting {
+			return false, nil, http.StatusServiceUnavailable, fmt.Errorf("too many waiting for this room")
+		}
+		o.waiting++
+		return false, o.open, 0, nil
 	}
 	if !r.limiter.allow(ip, r.perHour) {
-		return http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
+		return false, nil, http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
 	}
 	if r.createKey != nil && subtle.ConstantTimeCompare(r.createKey, key) != 1 {
-		return http.StatusForbidden, fmt.Errorf("bad create key")
+		return false, nil, http.StatusForbidden, fmt.Errorf("bad create key")
 	}
 	if len(r.rooms) >= r.maxRooms {
-		return http.StatusServiceUnavailable, fmt.Errorf("relay is full")
+		return false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
 	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}}
-	return 0, nil
+	if o, ok := r.opening[name]; ok {
+		close(o.open)
+		delete(r.opening, name)
+	}
+	return true, nil, 0, nil
+}
+
+func (r *relay) stopWaiting(name string, open <-chan struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if o, ok := r.opening[name]; ok && o.open == open {
+		if o.waiting--; o.waiting == 0 {
+			delete(r.opening, name)
+		}
+	}
+}
+
+// hold keeps a keyless member of a closed room until a key holder opens it, then tells
+// it to join; after waitFor it tells it the room didn't open. It relays nothing.
+func (r *relay) hold(c context.Context, conn *websocket.Conn, open <-chan struct{}, l *slog.Logger) {
+	c = conn.CloseRead(c)
+	timer, ticker := time.NewTimer(r.waitFor), time.NewTicker(r.ping)
+	defer timer.Stop()
+	defer ticker.Stop()
+	start := time.Now()
+	for {
+		select {
+		case <-open:
+			l.Info("room opened, sent to join", "seconds", int(time.Since(start).Seconds()))
+			conn.Close(wire.StatusRoomOpen, "room open")
+			return
+		case <-timer.C:
+			l.Info("room did not open", "seconds", int(time.Since(start).Seconds()))
+			conn.Close(wire.StatusNotOpened, "room did not open")
+			return
+		case <-c.Done():
+			l.Info("stopped waiting", "seconds", int(time.Since(start).Seconds()))
+			return
+		case <-ticker.C:
+			// hours behind NAT and proxies are no different from a member's
+			ctx, cancel := context.WithTimeout(c, r.timeout)
+			err := conn.Ping(ctx)
+			cancel()
+			if err != nil {
+				l.Info("stopped waiting", "reason", err)
+				conn.CloseNow()
+				return
+			}
+		}
+	}
 }
 
 // add registers the member only once its conn is set, so broadcast can never
@@ -262,10 +342,16 @@ func (r *relay) leave(name string, m *member) bool {
 	}
 	_, present := rm.members[m]
 	delete(rm.members, m)
-	if len(rm.members) == 0 {
+	reaped := len(rm.members) == 0
+	if reaped {
 		delete(r.rooms, name)
 	}
 	r.mu.Unlock()
+	if reaped && r.remembered != nil {
+		if err := r.remembered.touch(name); err != nil {
+			slog.Error("remembering a room failed", "room", clean(name), "err", err)
+		}
+	}
 	if present {
 		r.broadcast(name, m, notice(m.hostname, fmt.Sprintf("%s has left", m.hostname)))
 	}
@@ -328,8 +414,8 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	defer r.conns.Add(-1)
 
-	name := req.URL.Query().Get("room")
-	hostname := clean(req.URL.Query().Get("hostname"))
+	name := req.URL.Query().Get(wire.RoomParam)
+	hostname := clean(req.URL.Query().Get(wire.HostnameParam))
 	ip := r.ip(req)
 	l := slog.With("conn", id, "ip", ip, "room", clean(name), "hostname", hostname)
 	if name == "" || hostname == "" {
@@ -337,13 +423,46 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	code, err := r.admit(name, []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file"), ip)
+	secret, key, file := []byte(req.Header.Get(wire.SecretHeader)), []byte(req.Header.Get(wire.CreateKeyHeader)), req.URL.Query().Get(wire.FileParam)
+	var old *known
+	if r.remembered != nil && r.createKey != nil && len(key) == 0 {
+		// read before admit takes r.mu, so a free keyless retry never holds every room up on the disk
+		var err error
+		if old, err = r.remembered.lookup(name); err != nil {
+			l.Error("reading remembered rooms failed", "err", err)
+			refuse(res, l, http.StatusServiceUnavailable, "relay storage failed")
+			return
+		}
+	}
+	created, open, code, err := r.admit(name, secret, key, file, ip, old, req.URL.Query().Get(wire.WaitParam) == "1")
 	if err != nil {
 		refuse(res, l, code, err.Error())
 		return
 	}
+	if created && r.remembered != nil {
+		if err := r.remembered.remember(name, secret, file); err != nil {
+			l.Error("remembering a room failed", "err", err)
+		}
+	}
+	if open != nil {
+		defer r.stopWaiting(name, open)
+		res.Header().Set(wire.WaitingHeader, "yes")
+		conn, err := websocket.Accept(res, req, nil)
+		if err != nil {
+			l.Info("upgrade failed", "err", err)
+			return
+		}
+		l.Info("waiting for a key holder")
+		r.hold(req.Context(), conn, open, l)
+		return
+	}
+	// a node told it opened the room answers joiners with its position: only a key
+	// holder creates a room, and on a relay without CREATE_KEY nobody's is the party's
+	if created && r.createKey != nil {
+		res.Header().Set(wire.OpenedHeader, "yes")
+	}
 
-	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer), log: l}
+	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get(wire.SessionParam), ch: make(chan []byte, sendBuffer), log: l}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
@@ -418,21 +537,31 @@ func main() {
 
 	addr := env("ADDR", ":8080", str)
 	r := &relay{
-		rooms:    map[string]*room{},
-		limiter:  newLimiter(),
-		perHour:  env("ROOMS_PER_HOUR", 10, strconv.Atoi),
-		maxRooms: env("MAX_ROOMS", 10000, strconv.Atoi),
-		maxConns: int64(env("MAX_CONNS", 5000, strconv.Atoi)),
-		trusted:  env("TRUST_PROXY", false, strconv.ParseBool),
-		ping:     pingInterval,
-		timeout:  writeTimeout,
+		rooms:      map[string]*room{},
+		limiter:    newLimiter(),
+		perHour:    env("ROOMS_PER_HOUR", 10, strconv.Atoi),
+		maxRooms:   env("MAX_ROOMS", 10000, strconv.Atoi),
+		maxConns:   int64(env("MAX_CONNS", 5000, strconv.Atoi)),
+		maxWaiting: env("MAX_WAITING", 20, strconv.Atoi),
+		trusted:    env("TRUST_PROXY", false, strconv.ParseBool),
+		opening:    map[string]*opening{},
+		ping:       pingInterval,
+		timeout:    writeTimeout,
+		waitFor:    waitForKeyHolder,
 	}
 	if k := env("CREATE_KEY", "", str); k != "" {
 		r.createKey = []byte(k)
+		// without a key anyone may open any room, so there is nothing to bring back
+		db := env("DB", "relay.db", str)
+		var err error
+		if r.remembered, err = openRemembered(db); err != nil {
+			log.Fatalf("DB=%q: %v", db, err)
+		}
+		defer r.remembered.db.Close()
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", r.handle)
+	mux.HandleFunc(wire.Path, r.handle)
 	s := &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -450,7 +579,7 @@ func main() {
 		s.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "trust_proxy", r.trusted,
-		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns)
+	slog.Info("listening", "addr", addr, "create_key", r.createKey != nil, "remembers_rooms", r.remembered != nil, "trust_proxy", r.trusted,
+		"rooms_per_hour", r.perHour, "max_rooms", r.maxRooms, "max_conns", r.maxConns, "max_waiting", r.maxWaiting)
 	slog.Info("stopped", "reason", s.ListenAndServe())
 }

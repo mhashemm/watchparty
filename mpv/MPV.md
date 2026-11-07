@@ -24,7 +24,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
 | `--no-shuffle --playlist-start=<n>` | **Pinned, playlists only.** An index only means the same file to everyone in our order, and it starts on the file that was picked. |
-| `--vo=null --ao=null` | Tests only (e2e, GUI checks): no window, no sound. |
+| *(no `--start`)* | **Continuing a party seeks over IPC** once the first file is open. `--start` applies to every later entry, and a file-local `--{ --start=… file --}` (even undone with `file-local-options/start`) comes back on every return to it (probed on 0.37.0). |
 
 **We don't pass `--no-config`, on purpose:** people keep their subtitle languages,
 audio device, key bindings and volume. Instead, **the four options that change sync
@@ -48,8 +48,7 @@ config still applies, for example `keep-open` (see "Ending").
 - **One JSON object per line**, `\n`-terminated, no raw newline inside. UTF-8. mpv
   can emit invalid UTF-8 in corner cases (odd filenames, tags).
 - **Request:** `{"command": [name, args...], "request_id": N}`. Arguments are native
-  JSON values. A line not starting with `{` is an `input.conf`-style text command
-  and gets **no reply**.
+  JSON values. A line not starting with `{` is an `input.conf`-style text command and gets **no reply**.
 - **Reply:** `{"request_id": N, "error": "success", "data": ...}`.
   - `request_id` is echoed verbatim and should be an integer; other types are
     deprecated. **A request without one is answered with `request_id: 0`.** That's why
@@ -63,15 +62,11 @@ config still applies, for example `keep-open` (see "Ending").
 
 ## Commands we send
 
-| Command | Sent by | Notes |
-|---|---|---|
-| `["observe_property_string", id, name]` | `New`, ids 1 = `filename`, 2 = `pause`, 3 = `time-pos`, 4 = `paused-for-cache`, 5 = `duration` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
-| `["set_property", "pause", bool]` | `pause()` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. |
-| `["set_property", "time-pos", "<string>"]` | `sync()` | A string is accepted, so the received event's `data` is forwarded as is. This is an **absolute seek**. |
-| `["set_property", "playlist-pos", n]` | `followEntry()` | Observed with id 6, playlists only. A no-op set emits nothing. |
-| `["show-text", text, ms]` | `showText()` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Its log line is how e2e and the GUI read notices. |
-
-By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absolute"]`.
+| Command | Notes |
+|---|---|
+| `["observe_property_string", id, name]` | Values arrive as strings: `"yes"`/`"no"`, `"77.000000"` (6 decimals). Fires once immediately (see "Observing"). |
+| `["set_property", name, value]` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. `time-pos` takes a string, so a peer's `data` is forwarded as is, and is an **absolute seek**. |
+| `["show-text", text, ms]` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. |
 
 ## Properties we watch
 
@@ -87,8 +82,7 @@ By hand: `["get_property", name]`, `["quit"]`, `["seek", secs, "relative"|"absol
 
 ## Events
 
-Every event goes through `handleEvent`; anything but `property-change` is
-`errDoNotSend`. Seen during a normal run:
+Seen during a normal run:
 
 | Event | When |
 |---|---|
@@ -106,10 +100,8 @@ Every event goes through `handleEvent`; anything but `property-change` is
   `property-change` with the current value. This is what `seen` swallows.
 - **If the file isn't loaded yet**, `time-pos`'s immediate event has no `data`, and
   the real value follows after `file-loaded`: `0.000000` for a fresh file, the saved
-  position for a resumed one. **`handleEvent` ignores a data-less change entirely**
-  (it neither broadcasts it nor counts it for `seen`), so `seen` swallows the real
-  value instead. Otherwise that value would be broadcast and rewind (or seek) the
-  whole party.
+  position for a resumed one, so `seen` must swallow that one, not the data-less first
+  (`mpv/CLAUDE.md`).
 
 ### Seeking (while paused)
 
@@ -124,9 +116,7 @@ Every event goes through `handleEvent`; anything but `property-change` is
   time-pos` read `50.0` while `seeking` still read `true` (it was `false` 2s later). On a slow
   stream that lasts until the new range arrives, and a node resumed in that window
   "plays" with `time-pos` stuck at the target, without `paused-for-cache`. A check that
-  a seek finished must wait for `seeking` to be `false`. `e2e.py` `[R11d]` once ended
-  on `time-pos` alone, and its joiner then answered `[R11d2]`'s joiner with 50.0
-  while the party was at 53.
+  a seek finished must wait for `seeking` to be `false`.
 - **A relative seek** (arrow keys, `seek N relative`) **is exact too, because we pin
   `--hr-seek=yes`**: +7 from 12 sent exactly one position, `19.000000`. Under mpv's
   default it would snap to a keyframe instead: +10 from 123.458 sent `133.458000`
@@ -157,9 +147,6 @@ Every event goes through `handleEvent`; anything but `property-change` is
   not verified): the reply, then (if `time-pos` is observed) a **data-less
   `time-pos` change**, then `end-file` with `reason: "quit"`, then socket EOF, exit
   code 0.
-  - `handleEvent` drops that data-less change; `sync()` also ignores an empty one.
-  - The EOF is what ends `watch()` and the party (see `party/CLAUDE.md`, "Return
-    values").
 - **End of file:** without `keep-open`, mpv plays to the end, sends `end-file`
   `reason: "eof"`, closes the socket and exits 0. To the party that is the same as
   a quit, so each node's party ends with the video. A user's `keep-open` instead

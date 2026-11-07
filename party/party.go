@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -52,6 +54,10 @@ type Config struct {
 	PublicPort int
 	Addrs      string
 	EvictAfter time.Duration
+	// Entry and Start continue a party where this node stopped: the playlist entry by
+	// name, and seconds into it. An entry no longer in the playlist starts as usual.
+	Entry string
+	Start float64
 }
 
 var (
@@ -104,6 +110,14 @@ func Run(parent context.Context, cfg Config) error {
 		}
 	}
 	log.Printf("file fingerprint: %s\n", file)
+	startAt := cfg.Start
+	if playlist && cfg.Entry != "" {
+		if i := slices.Index(names, cfg.Entry); i >= 0 {
+			start = i
+		} else {
+			startAt = 0
+		}
+	}
 	if cfg.Secret == "" {
 		cfg.Secret = rand.Text()
 	}
@@ -127,6 +141,7 @@ func Run(parent context.Context, cfg Config) error {
 			file:      file,
 			incoming:  incoming,
 			retry:     minBackoff,
+			wait:      notOpenFor,
 			up:        make(chan struct{}, 1),
 		}
 		defer conn.Close()
@@ -180,12 +195,12 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	mpvQuit := atomic.Bool{}
-	_, err = mpv.New(c, func() {
+	client, err := mpv.New(c, func() {
 		if c.Err() == nil {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names)
+	}, conn, outgoing, incoming, names, start, startAt)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():
@@ -205,6 +220,18 @@ func Run(parent context.Context, cfg Config) error {
 	log.Println("init done. now you can start watching")
 
 	err = <-exited
+	if client.Finished() {
+		log.Println("finished: played to the end")
+	} else {
+		entry, at := client.Position()
+		if entry < len(names) {
+			// the name Config.Entry looks up, from the same list
+			name, _ := json.Marshal(names[entry])
+			log.Printf("stopped at: %s in %s\n", strconv.FormatFloat(at, 'f', 3, 64), name)
+		} else {
+			log.Printf("stopped at: %s\n", strconv.FormatFloat(at, 'f', 3, 64))
+		}
+	}
 	if err != nil {
 		log.Println(err)
 	}

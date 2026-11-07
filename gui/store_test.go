@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -213,5 +214,73 @@ func TestObserveReadsAPILinesOnlyAtTheStart(t *testing.T) {
 	}
 	if got := s.History[i]; got.Secret != "REAL" || len(got.People) != 0 {
 		t.Fatalf("a forged line got through: %+v", got)
+	}
+}
+
+// Continue is the same party again: its entry moves to the top, open again, and keeps
+// its people and videos. It starts where the last video was left, through a reload.
+func TestStoreContinuesAParty(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "gui.json")
+	s := openStore(path)
+	first := s.begin(form{Mode: "relay", File: "/m/a.mkv", Relay: "ws://r", Room: "R", Secret: "S", Playlist: true})
+	s.observe(first, noticeLine("Sam has joined"))
+	s.observe(first, `2026/10/30 18:00:00 now playing: "a.mkv"`)
+	s.observe(first, `2026/10/30 18:00:00 now playing: "b.mkv"`)
+	s.observe(first, `2026/10/30 18:00:00 stopped at: 754.250 in "b.mkv"`)
+	s.end(first)
+	s.end(s.begin(form{Mode: "direct", File: "/m/other.mkv"}))
+
+	s = openStore(path)
+	started, _ := json.Marshal(s.History[0].Started)
+	i := s.begin(form{Mode: "relay", File: "/m/a.mkv", Relay: "ws://r", Room: "R", Secret: "S", Continue: strings.Trim(string(started), `"`)})
+	if len(s.History) != 2 || i != 1 || s.History[i].File != "/m/a.mkv" || !s.History[i].Ended.IsZero() || !slices.Equal(s.History[i].People, []string{"Sam"}) {
+		t.Fatalf("continuing didn't reopen the party at the top: %d %+v", i, s.History)
+	}
+	if entry, at := s.stoppedAt(i); entry != "b.mkv" || at != 754.25 {
+		t.Fatalf("starts on %q at %v, want b.mkv at 754.25", entry, at)
+	}
+	s.observe(i, `2026/10/30 19:00:00 now playing: "b.mkv"`)
+	s.end(i)
+	if got := openStore(path).History; got[1].File != "/m/a.mkv" || len(got[1].Videos) != 3 {
+		t.Fatalf("after a reload: %+v", got)
+	}
+	if j := s.begin(form{Mode: "relay", File: "/m/a.mkv", Continue: "not a time"}); j != 2 {
+		t.Fatalf("an unknown party to continue made entry %d, want a new one", j)
+	}
+}
+
+// A party played to the end of its last file has nothing left to continue.
+func TestStoreRecordsAFinishedParty(t *testing.T) {
+	t.Parallel()
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "relay", File: "/m/a.mkv"})
+	s.observe(i, "2026/10/30 18:00:00 stopped at: 12.000")
+	if s.History[i].Finished {
+		t.Fatal("a party stopped midway counts as finished")
+	}
+	s.observe(i, "2026/10/30 18:00:00 finished: played to the end")
+	if !s.History[i].Finished {
+		t.Fatal("a party played to the end isn't finished")
+	}
+}
+
+// The node says where to continue, which can be a file nobody opened yet: the next one,
+// when it stopped at the end of another. A single file has no name to say.
+func TestStoreKeepsWhereToContinue(t *testing.T) {
+	t.Parallel()
+	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
+	i := s.begin(form{Mode: "relay", File: "/m/a.mkv", Playlist: true})
+	s.observe(i, `2026/10/30 18:00:00 now playing: "b.mkv"`)
+	s.observe(i, `2026/10/30 18:00:00 stopped at: 0.000 in "c\n.mkv"`)
+	if entry, at := s.stoppedAt(i); entry != "c\n.mkv" || at != 0 {
+		t.Fatalf("continues on %q at %v, want the next file at 0", entry, at)
+	}
+	if len(s.History[i].Videos) != 1 {
+		t.Fatalf("the history gained a file nobody opened: %+v", s.History[i].Videos)
+	}
+	s.observe(i, "2026/10/30 18:00:00 stopped at: 12.500")
+	if entry, at := s.stoppedAt(i); entry != "" || at != 12.5 {
+		t.Fatalf("a single file continues on %q at %v, want no entry at 12.5", entry, at)
 	}
 }

@@ -14,23 +14,15 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/relay/wire"
 	"github.com/mhashemm/watchparty/server"
 )
 
 const (
-	secretHeaderKey = "room-secret"
-	createHeaderKey = "create-key"
-
 	minBackoff = 1 * time.Second
 	maxBackoff = 30 * time.Second
+	notOpenFor = 30 * time.Minute
 )
-
-// declared again in relay/main.go, which is package main and cannot be imported; four
-// lines beat a package that exists only to share them
-type message struct {
-	Hostname string          `json:"hostname"`
-	Event    json.RawMessage `json:"event"`
-}
 
 type relayConn struct {
 	mu   sync.Mutex
@@ -46,6 +38,8 @@ type relayConn struct {
 	file      string
 	incoming  chan<- mpv.IncomingMessage
 	retry     time.Duration
+	wait      time.Duration
+	waiting   time.Time
 	up        chan struct{}
 }
 
@@ -65,25 +59,64 @@ func (r *relayConn) set(conn *websocket.Conn) {
 // only burns its rate limiter.
 var errRejected = errors.New("rejected by relay")
 
+// dial returns a connection in the room. A keyless member of a room the relay remembers
+// is held until a key holder opens it, then dials again at once and joins.
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
-	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}, "file": {r.file}}
-	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+"/ws?"+q.Encode(), &websocket.DialOptions{
-		HTTPHeader: http.Header{secretHeaderKey: {r.secret}, createHeaderKey: {r.createKey}},
+	for {
+		conn, held, err := r.dialOnce(c)
+		if !held {
+			return conn, err
+		}
+		log.Printf("relay: dial: room %s is not open yet, waiting for someone with -createKey\n", r.room)
+		_, _, err = conn.Read(c)
+		conn.CloseNow()
+		switch websocket.CloseStatus(err) {
+		case wire.StatusRoomOpen:
+			continue
+		case wire.StatusNotOpened:
+			return nil, fmt.Errorf("%w: room %s did not open while the relay held this node", errRejected, r.room)
+		}
+		return nil, fmt.Errorf("waiting for room %s: %w", r.room, err)
+	}
+}
+
+func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
+	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}, wire.WaitParam: {"1"}}
+	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+wire.Path+"?"+q.Encode(), &websocket.DialOptions{
+		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
 		case http.StatusForbidden, http.StatusBadRequest:
-			return nil, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
+			return nil, false, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
 		case http.StatusConflict:
-			return nil, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
+			return nil, false, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
 		case http.StatusUnauthorized:
 			if r.creating {
-				return nil, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
+				return nil, false, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
 			}
-			return nil, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
+			// a room nobody opens (a fake invite, a host who never comes) must not
+			// keep a node waiting forever
+			if r.waiting.IsZero() {
+				r.waiting = time.Now()
+			}
+			if time.Since(r.waiting) >= r.wait {
+				return nil, false, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
+			}
+			return nil, false, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
 	}
-	return conn, err
+	if err == nil && res.Header.Get(wire.WaitingHeader) == "yes" {
+		return conn, true, nil
+	}
+	// ahead of the first frame, so mpv knows it opened the room before anyone joins
+	if err == nil && res.Header.Get(wire.OpenedHeader) == "yes" {
+		select {
+		case r.incoming <- mpv.IncomingMessage{Opened: true}:
+		case <-c.Done():
+		}
+	}
+	return conn, false, err
 }
 
 func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
@@ -92,7 +125,7 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 		if err != nil {
 			return err
 		}
-		msg := message{}
+		msg := wire.Message{}
 		err = json.Unmarshal(b, &msg)
 		if err != nil {
 			log.Printf("relay: unmarshal: %s: %s\n", err, b)
@@ -127,7 +160,7 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
-		backoff = r.retry
+		backoff, r.waiting = r.retry, time.Time{}
 		r.set(conn)
 		log.Printf("relay: connected to %s room %s\n", r.addr, r.room)
 
@@ -160,7 +193,7 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 		case <-c.Done():
 			return
 		}
-		b, err := json.Marshal(message{Hostname: r.hostname, Event: event})
+		b, err := json.Marshal(wire.Message{Hostname: r.hostname, Event: event})
 		if err != nil {
 			log.Printf("relay: marshal: %s\n", err)
 			continue

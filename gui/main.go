@@ -48,6 +48,7 @@ type form struct {
 	Addrs     string `json:"addrs"`
 	Mpv       string `json:"mpv"`
 	MpvFlags  string `json:"mpvFlags"`
+	Continue  string `json:"continue"`
 }
 
 var pickExts = append(slices.Clone(party.VideoExts), ".torrent")
@@ -180,6 +181,9 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	g.cancel, g.lines, g.exitErr = cancel, nil, ""
 	g.run++
 	g.session = g.store.begin(f)
+	if f.Continue != "" && f.Mode == "relay" {
+		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
+	}
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()

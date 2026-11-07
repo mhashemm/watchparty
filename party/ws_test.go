@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/relay/wire"
 )
 
 // stub serves /ws with handle and returns the ws:// address a relayConn dials.
@@ -37,7 +38,7 @@ func accept(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Con
 }
 
 func newRelayConn(addr string, incoming chan mpv.IncomingMessage) *relayConn {
-	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, up: make(chan struct{}, 1)}
+	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, wait: time.Hour, up: make(chan struct{}, 1)}
 }
 
 func waitDone(t *testing.T, done <-chan struct{}, what string) {
@@ -101,6 +102,45 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 	}
 }
 
+// Nobody opening the room (a fake invite, a host who never comes) must not keep the
+// node waiting forever. The wait counts from the first 401, and a connection resets it.
+func TestNotOpenGivesUpAfterAWhile(t *testing.T) {
+	t.Parallel()
+	const wait = 50 * time.Millisecond
+	var connected atomic.Int64
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n != 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// outlast the wait the first 401 started, so only a reset keeps the node going
+		time.Sleep(2 * wait)
+		conn := accept(t, w, r)
+		connected.Store(time.Now().UnixNano())
+		conn.Close(websocket.StatusGoingAway, "relay restarting")
+	})
+	r := newRelayConn(addr, nil)
+	r.wait = wait
+
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan struct{})
+	go func() {
+		r.Connect(c, cancel)
+		close(returned)
+	}()
+	waitDone(t, returned, "Connect kept waiting for a room that never opened")
+	if c.Err() == nil {
+		t.Fatal("Connect gave up without ending the party")
+	}
+	if connected.Load() == 0 {
+		t.Fatal("gave up before the room ever opened")
+	}
+	if waited := time.Since(time.Unix(0, connected.Load())); waited < wait {
+		t.Fatalf("gave up %s after the connection, before its own %s of 401s", waited, wait)
+	}
+}
+
 // A generated room is known to nobody else, so no host is coming to open it: waiting
 // would look like a working party that no one can ever join.
 func TestOpeningARoomWithoutTheKeyEndsTheParty(t *testing.T) {
@@ -134,8 +174,8 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 	t.Parallel()
 	sessions := make(chan string, 2)
 	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(secretHeaderKey) != "secret" || r.URL.Query().Has("secret") {
-			t.Errorf("secret sent as %q, query %q", r.Header.Get(secretHeaderKey), r.URL.RawQuery)
+		if r.Header.Get(wire.SecretHeader) != "secret" || r.URL.Query().Has("secret") {
+			t.Errorf("secret sent as %q, query %q", r.Header.Get(wire.SecretHeader), r.URL.RawQuery)
 		}
 		sessions <- r.URL.Query().Get("session")
 		conn := accept(t, w, r)
@@ -255,7 +295,7 @@ func TestEventsBeforeTheFirstConnectionAreHeld(t *testing.T) {
 func TestTrailingSlashOnRelayAddress(t *testing.T) {
 	t.Parallel()
 	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ws" {
+		if r.URL.Path != wire.Path {
 			http.NotFound(w, r)
 			return
 		}
@@ -267,4 +307,80 @@ func TestTrailingSlashOnRelayAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.CloseNow()
+}
+
+// The relay tells the node that opened the room, and mpv hears it before any frame from
+// that connection, so it answers whoever joins with its position.
+func TestOpenedReachesMpvFirst(t *testing.T) {
+	t.Parallel()
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			w.Header().Set(wire.OpenedHeader, "yes")
+		}
+		conn := accept(t, w, r)
+		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"a","event":{"name":"joined"}}`))
+		if n == 1 {
+			conn.Close(websocket.StatusGoingAway, "relay restarting")
+			return
+		}
+		conn.Read(r.Context())
+	})
+	incoming := make(chan mpv.IncomingMessage, 8)
+	r := newRelayConn(addr, incoming)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Connect(c, cancel)
+
+	var got []string
+	for len(got) < 3 {
+		select {
+		case m := <-incoming:
+			if m.Opened {
+				got = append(got, "opened")
+			} else {
+				got = append(got, m.HostName)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("got only %v", got)
+		}
+	}
+	if want := []string{"opened", "a", "a"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v, want %v: opened first, and only for the connection that opened the room", got, want)
+	}
+}
+
+// A keyless member of a room the relay remembers is held, not refused: it asks to be
+// (wait=1), joins as soon as the relay says a key holder opened the room, and gives up
+// when the relay says the room didn't open.
+func TestHeldUntilTheRoomOpens(t *testing.T) {
+	t.Parallel()
+	joined := make(chan struct{})
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("wait") != "1" {
+			t.Error("the node didn't ask to be held")
+		}
+		if n == 1 {
+			w.Header().Set(wire.WaitingHeader, "yes")
+			accept(t, w, r).Close(wire.StatusRoomOpen, "room open")
+			return
+		}
+		conn := accept(t, w, r)
+		close(joined)
+		conn.Read(r.Context())
+	})
+	r := newRelayConn(addr, nil)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Connect(c, cancel)
+	waitDone(t, joined, "never joined once the room opened")
+
+	addr = stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(wire.WaitingHeader, "yes")
+		accept(t, w, r).Close(wire.StatusNotOpened, "room did not open")
+	})
+	r = newRelayConn(addr, nil)
+	_, err := r.dial(context.Background())
+	if !errors.Is(err, errRejected) || !strings.Contains(err.Error(), "did not open") {
+		t.Fatalf("got %v, want errRejected saying the room did not open", err)
+	}
 }

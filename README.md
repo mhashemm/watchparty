@@ -35,7 +35,7 @@ Run `watchparty-gui`. It opens a small window.
 
 1. Pick your video, a `.torrent` file or a magnet link. To play the rest of a video's folder too, tick
    **Also load the other videos in this folder**.
-2. Choose **Over the internet** (through a relay) or **Same Wi-Fi**.
+2. Choose **Over the internet** (through a relay) or **Peer-to-Peer**.
 3. The first person leaves the room and secret empty and presses **Start the party**.
    An invite appears. Send it to your friends.
 4. Friends paste the invite into **Got an invite?**, pick the same video, and start.

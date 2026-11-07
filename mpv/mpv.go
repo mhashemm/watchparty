@@ -53,6 +53,9 @@ var (
 type IncomingMessage struct {
 	HostName string
 	Event    []byte
+	// Opened is set only by this node's relay client, never from the wire: this node
+	// opened the room with the key, so its position is the party's.
+	Opened bool
 }
 
 type connection struct {
@@ -169,9 +172,13 @@ type Client struct {
 	movedFrom  int
 	following  []string
 	joinedWith []string
+	heardParty bool
+	resumeAt   float64
 	loading    bool
 	heldSeek   string
 	settling   bool
+	earliest   float64
+	heard      bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -225,12 +232,15 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		return nil, errDoNotSend
 
 	case fileLoaded:
-		c.loading = false
-		if c.heading() == c.current {
-			c.following = nil
+		// a file on the way to where this node is headed: a seek let go here lands on it
+		if c.heading() != c.current {
+			return nil, errDoNotSend
 		}
+		c.loading, c.following = false, nil
 		if held := c.heldSeek; held != "" {
-			c.heldSeek = ""
+			// still on its way until seekTo has marked the seek, or target sees neither
+			pos, _ := strconv.ParseFloat(held, 64)
+			c.heldSeek, c.peerSeek, c.seeks = "", true, append(c.seeks, pos)
 			go func() {
 				if err := c.seekTo(held); err != nil {
 					log.Println("seek after loading:", err)
@@ -263,7 +273,7 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			log.Printf("now playing: %s\n", name)
 		case playlistPos:
 			if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-				c.current, c.pos, c.seeking = n, 0, false
+				c.current, c.pos, c.seeking, c.heard = n, 0, false, false
 				changed = c.seen[timePos]
 				if changed {
 					c.seeks = []float64{0}
@@ -289,12 +299,19 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 			}
 			c.paused = event.paused()
 			if !c.paused {
-				c.seeks = nil
-				c.seeking, c.joining, c.settling = false, false, false
+				c.seeks, c.seeking = nil, false
+				c.resumed()
 			} else {
 				c.pausedBy = ""
 				if len(extra) == 0 {
 					extra = [][]byte{position(pausedAt, c.pos)}
+				}
+				if at, ok := c.earlierStop(); ok {
+					go func() {
+						if err := c.seekTo(at); err != nil {
+							log.Println("settling:", err)
+						}
+					}()
 				}
 			}
 		case timePos:
@@ -455,6 +472,14 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			return
 		}
 	}
+	// a continued party seeks only the file it continues on, before the party's position
+	// is applied and before joining, so whatever the party says lands after it. Not
+	// --start: mpv applies it to every later entry too. If it fails, the file is at 0.
+	if c.resumeAt > 0 {
+		if err := c.seekTo(strconv.FormatFloat(c.resumeAt, 'f', 6, 64)); err != nil {
+			log.Println("continuing where it stopped:", err)
+		}
+	}
 	for _, name := range []string{timePos, pause} {
 		if e, ok := latest[name]; ok {
 			c.apply(e)
@@ -483,6 +508,12 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 }
 
 func (c *Client) apply(e IncomingMessage) {
+	if e.Opened {
+		c.mu.Lock()
+		c.joining = false
+		c.mu.Unlock()
+		return
+	}
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
 	if err == nil && c.fromAnotherEntry(event) {
@@ -520,14 +551,16 @@ func (c *Client) apply(e IncomingMessage) {
 func (c *Client) welcome(hostname string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
+	var at string
+	var earlier bool
 	if joining {
 		c.joinedWith = append(c.joinedWith, hostname)
 	} else {
-		c.settling = true
+		at, earlier = c.settle()
 	}
 	var entry []byte
 	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.current)})
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
 	}
 	c.mu.Unlock()
 	if entry != nil {
@@ -540,6 +573,11 @@ func (c *Client) welcome(hostname string) error {
 	if joining {
 		return nil
 	}
+	if earlier {
+		if err := c.seekTo(at); err != nil {
+			return err
+		}
+	}
 	if playing {
 		err := c.pauseReq(true)
 		if err != nil {
@@ -548,7 +586,7 @@ func (c *Client) welcome(hostname string) error {
 	}
 	c.showText(fmt.Sprintf("paused for %s: joining", hostname))
 	c.mu.Lock()
-	b := position(startPos, c.pos)
+	b := position(startPos, c.target())
 	c.mu.Unlock()
 	select {
 	case c.outgoing <- c.tagged(b):
@@ -559,10 +597,12 @@ func (c *Client) welcome(hostname string) error {
 
 func (c *Client) left(hostname string) error {
 	c.mu.Lock()
-	c.settling = true
-	playing := !c.paused
-	ending := c.duration > 0 && c.duration-c.pos <= endGraceSeconds
+	playing, ending := !c.paused, c.ending()
+	at, earlier := c.settle()
 	c.mu.Unlock()
+	if earlier {
+		return c.seekTo(at)
+	}
 	if !playing || ending {
 		return nil
 	}
@@ -581,9 +621,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	c.mu.Lock()
 	heading := c.heading()
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	notForUs := event.From == nil && (!c.joining || slices.Contains(c.joinedWith, hostname) && i < heading)
+	takes := event.From != nil || c.takesAnswer(i, heading, hostname)
 	c.mu.Unlock()
-	if i == heading || lost || notForUs {
+	if i == heading || lost || !takes {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -614,6 +654,22 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return err
 	}
 	return c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
+}
+
+// takesAnswer is whether this node follows the entry someone answered a joiner with.
+// Only a node still joining does. The party's answer, from anyone whose join it didn't
+// hear, always; a fellow joiner's only if higher (each answers the other, and following
+// both ways would swap them), and not once the party has answered, since it only says
+// where that joiner was.
+func (c *Client) takesAnswer(i, heading int, hostname string) bool {
+	if !c.joining {
+		return false
+	}
+	if !slices.Contains(c.joinedWith, hostname) {
+		c.heardParty = true
+		return true
+	}
+	return i > heading && !c.heardParty
 }
 
 func (c *Client) entryName(i int) string {
@@ -684,7 +740,7 @@ func (c *Client) pause(event Event, hostname string) error {
 	if paused {
 		c.pausedBy = hostname
 	} else {
-		c.joining, c.settling = false, false
+		c.resumed()
 	}
 	c.mu.Unlock()
 
@@ -746,11 +802,12 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	stopped := c.pos
-	if n := len(c.seeks); n > 0 {
-		stopped = c.seeks[n-1]
+	if !c.heard || pos < c.earliest {
+		c.earliest, c.heard = pos, true
 	}
-	follow := c.paused && !c.at(pos) && (c.pausedBy == hostname || c.settling && pos < stopped)
+	// while settling only an earlier stop counts, even from the peer whose pause we applied:
+	// its paused-at can land after another member's earlier one
+	follow := c.paused && !c.at(pos) && (c.settling && pos < c.target() || !c.settling && c.pausedBy == hostname)
 	c.mu.Unlock()
 	if !follow {
 		return nil
@@ -758,17 +815,80 @@ func (c *Client) align(event Event, hostname string) error {
 	return c.seekTo(event.Data)
 }
 
+// target is where this node is, or where a seek it applied will land: a member that
+// just arrived is still on its way, and answering another joiner with the old spot
+// would drag the party back to it.
+func (c *Client) target() float64 {
+	held := c.heldSeek
+	if held == "" && c.peerSeek && len(c.seeks) > 0 {
+		return c.seeks[len(c.seeks)-1]
+	}
+	if pos, err := strconv.ParseFloat(held, 64); err == nil {
+		return pos
+	}
+	return c.pos
+}
+
+// settle starts settling, after a join or a leave: members stop a moment apart, so until
+// the next resume this node follows only an earlier stop. It returns one heard already.
+func (c *Client) settle() (string, bool) {
+	c.settling = true
+	return c.earlierStop()
+}
+
+// resumed ends joining and settling: the party is playing again.
+func (c *Client) resumed() {
+	c.joining, c.settling, c.heard = false, false, false
+}
+
+// earlierStop is the earliest stop a peer sent since the last resume, if this node is
+// settling and stopped later. It can have arrived before this node knew to settle: a
+// member that applied someone's pause ignores everyone else's position until a leave or
+// a join makes it settle.
+func (c *Client) earlierStop() (string, bool) {
+	if !c.paused || !c.settling || !c.heard || c.earliest >= c.target() || c.at(c.earliest) {
+		return "", false
+	}
+	return strconv.FormatFloat(c.earliest, 'f', 6, 64), true
+}
+
 func (c *Client) at(pos float64) bool {
 	near := func(x float64) bool { return math.Abs(pos-x) <= timePosTolerance }
 	return near(c.pos) || slices.ContainsFunc(c.seeks, near)
+}
+
+// Position is the entry and the second to continue the party from. Within
+// endGraceSeconds of an entry's end that is the next entry's start: with keep-open=always
+// mpv stays on the finished one, and continuing there would only end it again.
+func (c *Client) Position() (int, float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ending() {
+		return c.current, c.pos
+	}
+	return min(c.current+1, max(len(c.names)-1, 0)), 0
+}
+
+// Finished is the last entry, or the only file, played to its end: nothing is left to
+// continue.
+func (c *Client) Finished() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ending() && c.current >= len(c.names)-1
+}
+
+func (c *Client) ending() bool {
+	return c.duration > 0 && c.duration-c.pos <= endGraceSeconds
 }
 
 func (c *Client) showText(text string) error {
 	return c.conn.do(showText, text, showTextDurationSeconds*1000)
 }
 
-// New wires up one mpv. names are its playlist entries in order, and nil for a single file.
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string) (*Client, error) {
+// New wires up one mpv. names are its playlist entries in order, and nil for a single file;
+// start is the entry it opens on, which a peer's answer can arrive before mpv reports. A
+// continued party seeks that entry to at once it is open (see ProcessIncomingEvents).
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int, at float64) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -784,6 +904,8 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		applied:   map[string]string{},
 		seen:      map[string]bool{},
 		names:     names,
+		current:   start,
+		resumeAt:  at,
 		movedFrom: -1,
 	}
 

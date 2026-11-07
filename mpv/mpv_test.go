@@ -361,7 +361,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil)
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0)
 		close(loaded)
 	}()
 	select {
@@ -390,7 +390,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 		start := time.Now()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil)
+		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0)
 		if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 		}
@@ -430,7 +430,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 	incoming := make(chan IncomingMessage)
 	loaded := make(chan error, 1)
 	go func() {
-		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil)
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil, 0, 0)
 		loaded <- err
 	}()
 	send := func(name, data string) {
@@ -1167,6 +1167,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"property-change","name":"playlist-pos","data":"1"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
 		t.Fatalf("sent %q, want the held seek", got)
@@ -1323,6 +1324,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"property-change","name":"playlist-pos","data":"1"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 41.000000" {
 		t.Fatalf("sent %q, want the seek on the new entry", got)
@@ -1480,5 +1482,145 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 	send(propertyChangeLine(pause, "no", 0))
 	if e := nextEvent(t, outgoing); e.Name != pause {
 		t.Fatalf("broadcast %+v, want nothing before the resume", e)
+	}
+}
+
+// Where a node stopped is where a continued party starts, except right at an entry's
+// end (mpv's keep-open=always stays there): then it is the next entry, from its start.
+func TestPositionToContinueFrom(t *testing.T) {
+	t.Parallel()
+	three := []string{"e1", "e2", "e3"}
+	for _, c := range []struct {
+		names    []string
+		current  int
+		pos, dur float64
+		entry    int
+		at       float64
+	}{
+		{nil, 0, 50, 100, 0, 50},
+		{nil, 0, 97, 100, 0, 0},
+		{nil, 0, 12, 0, 0, 12},
+		{three, 1, 50, 100, 1, 50},
+		{three, 1, 97, 100, 2, 0},
+		{three, 2, 97, 100, 2, 0},
+	} {
+		entry, at := (&Client{names: c.names, current: c.current, pos: c.pos, duration: c.dur}).Position()
+		if entry != c.entry || at != c.at {
+			t.Errorf("%d entries, on %d at %v of %v: entry %d at %v, want %d at %v", len(c.names), c.current, c.pos, c.dur, entry, at, c.entry, c.at)
+		}
+	}
+}
+
+// Only the end of the last entry, or of the only file, finishes the party: any other
+// entry has a next one to continue from.
+func TestFinishedOnlyAtTheEndOfTheLastEntry(t *testing.T) {
+	t.Parallel()
+	three := []string{"e1", "e2", "e3"}
+	for _, c := range []struct {
+		names    []string
+		current  int
+		pos      float64
+		finished bool
+	}{{nil, 0, 97, true}, {nil, 0, 50, false}, {three, 2, 97, true}, {three, 1, 97, false}, {three, 2, 50, false}} {
+		if got := (&Client{names: c.names, current: c.current, pos: c.pos, duration: 100}).Finished(); got != c.finished {
+			t.Errorf("%d entries, on %d at %v: %v, want %v", len(c.names), c.current, c.pos, got, c.finished)
+		}
+	}
+}
+
+// A node that opens on a later entry can hear the party name that entry before mpv has
+// reported where it is. Taking itself for entry 0, it set the entry it was already on,
+// which mpv answers with nothing, and waited for that load forever.
+func TestJoinerKnowsItsStartingEntryBeforeMpvSaysSo(t *testing.T) {
+	t.Parallel()
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	sent := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			if req.Command[0] != "observe_property_string" {
+				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+			} else if req.Command[2] == timePos {
+				fmt.Fprint(theirs, `{"event":"property-change","id":3,"name":"time-pos","data":"0.000000"}`+"\n")
+			}
+		}
+	}()
+	incoming := make(chan IncomingMessage, 2)
+	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"event":"property-change","name":"playlist-pos","data":"1"}`)}
+	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"name":"show-text","data":"mark"}`)}
+	if _, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, []string{"e1", "e2", "e3"}, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, sent); got != "show-text mark 5000" {
+		t.Fatalf("sent %q before the mark, want nothing: it is already on that entry", got)
+	}
+}
+
+// Settling compares a peer's stop with where this node really is. Its own seek after a
+// peer's had landed isn't in seeks, so the peer's older seek is not where it stopped.
+func TestSettlingComparesWithItsOwnLastSeek(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused, c.seeks, c.pos = true, []float64{40}, 60
+	go func() {
+		c.apply(peer("x", `{"name":"show-text","data":"x has left"}`))
+		c.apply(peer("a", `{"event":"property-change","name":"paused-at","data":"50.000000"}`))
+	}()
+	for _, want := range []string{"show-text x has left 5000", "set_property time-pos 50.000000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q: 50 is earlier than its 60", got, want)
+		}
+	}
+}
+
+// A continued party seeks the file it continues on once it is open, and only it. Then
+// whatever the party sent while it loaded is applied, so the party's position wins.
+// The seek is its own echo, so nobody else is moved by it.
+func TestContinuingSeeksBeforeThePartyIsHeard(t *testing.T) {
+	t.Parallel()
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	sent := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			switch {
+			case req.Command[0] != "observe_property_string":
+				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+				if req.Command[1] == timePos {
+					fmt.Fprintf(theirs, `{"event":"property-change","id":3,"name":"time-pos","data":"%s"}`+"\n", req.Command[2])
+				}
+			case req.Command[2] == timePos:
+				fmt.Fprint(theirs, `{"event":"property-change","id":3,"name":"time-pos","data":"0.000000"}`+"\n")
+			}
+		}
+	}()
+	incoming := make(chan IncomingMessage, 2)
+	incoming <- peer("a", `{"event":"property-change","name":"time-pos","data":"55.000000"}`)
+	incoming <- peer("a", `{"name":"show-text","data":"mark"}`)
+	outgoing := make(chan []byte, 16)
+	if _, err := New(c, func() {}, ours, outgoing, incoming, nil, 0, 40); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"set_property time-pos 40.000000", "set_property time-pos 55.000000", "show-text synced by a 5000", "show-text mark 5000"} {
+		if got := next(t, sent); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	for len(outgoing) > 0 {
+		if e := <-outgoing; strings.Contains(string(e), "time-pos") {
+			t.Fatalf("broadcast %s: continuing moved the party", e)
+		}
 	}
 }

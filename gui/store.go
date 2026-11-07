@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,8 @@ type session struct {
 	Secret   string    `json:"secret,omitempty"`
 	Addrs    string    `json:"addrs,omitempty"`
 	Invite   string    `json:"invite,omitempty"`
+	Finished bool      `json:"finished,omitempty"`
+	Stopped  stop      `json:"stopped,omitzero"`
 	People   []string  `json:"people"`
 	Videos   []played  `json:"videos,omitempty"`
 }
@@ -46,6 +49,12 @@ type played struct {
 	Name    string    `json:"name"`
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended,omitzero"`
+}
+
+// stop is where Continue starts: a playlist's entry, by name, and the second into it.
+type stop struct {
+	Entry string  `json:"entry,omitempty"`
+	At    float64 `json:"at,omitempty"`
 }
 
 func (sess *session) openVideo(name string, at time.Time) {
@@ -101,6 +110,10 @@ func openStore(path string) *store {
 }
 
 func mergeHistory(history, others []session) []session {
+	if len(others) == 0 {
+		// a continued party moved to the end; sorting by start would bury it again
+		return history
+	}
 	for _, o := range others {
 		if !slices.ContainsFunc(history, func(h session) bool { return h.Started.Equal(o.Started) && h.File == o.File }) {
 			history = append(history, o)
@@ -163,6 +176,15 @@ func (s *store) begin(f form) int {
 			s.Settings.Port = p
 		}
 	}
+	if i := s.find(f.Continue); i >= 0 {
+		// the same room and secret, so the same party: it moves to the top, open again
+		sess := s.History[i]
+		sess.Ended = time.Time{}
+		s.History = append(slices.Delete(s.History, i, i+1), sess)
+		s.saveSettings()
+		s.saveHistory()
+		return len(s.History) - 1
+	}
 	sess := session{Started: time.Now(), File: strings.TrimSpace(f.File), Playlist: f.Playlist, Mode: f.Mode, Secret: strings.TrimSpace(f.Secret), People: []string{}}
 	if f.Mode == "relay" {
 		sess.Relay, sess.Room = strings.TrimSpace(f.Relay), strings.TrimSpace(f.Room)
@@ -174,6 +196,24 @@ func (s *store) begin(f form) int {
 	s.saveSettings()
 	s.saveHistory()
 	return len(s.History) - 1
+}
+
+func (s *store) find(started string) int {
+	t, err := time.Parse(time.RFC3339Nano, started)
+	if err != nil {
+		return -1
+	}
+	return slices.IndexFunc(s.History, func(h session) bool { return h.Started.Equal(t) })
+}
+
+// stoppedAt is where the party at i continues: the entry and the second.
+func (s *store) stoppedAt(i int) (string, float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i < 0 || i >= len(s.History) {
+		return "", 0
+	}
+	return s.History[i].Stopped.Entry, s.History[i].Stopped.At
 }
 
 func (s *store) observe(i int, line string) {
@@ -191,6 +231,23 @@ func (s *store) observe(i int, line string) {
 				}
 			}
 		})
+		return
+	}
+	if strings.HasPrefix(message(line), "finished: ") {
+		s.update(i, func(sess *session) { sess.Finished = true })
+		return
+	}
+	if after, ok := strings.CutPrefix(message(line), "stopped at: "); ok {
+		secs, name, playlist := strings.Cut(after, " in ")
+		var to stop
+		var err error
+		if to.At, err = strconv.ParseFloat(strings.TrimSpace(secs), 64); err != nil {
+			return
+		}
+		if playlist && json.Unmarshal([]byte(name), &to.Entry) != nil {
+			return
+		}
+		s.update(i, func(sess *session) { sess.Stopped = to })
 		return
 	}
 	if after, ok := strings.CutPrefix(message(line), "now playing: "); ok {

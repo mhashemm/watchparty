@@ -264,7 +264,9 @@ details[open] summary { margin-bottom: 14px; }
 #history-list > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 #history-list b { word-break: break-word; }
 #history-list .meta { grid-column: 1; font-size: .875rem; color: var(--ink-soft); }
-#history-list .again { grid-column: 2; grid-row: 1 / span 2; }
+#history-list li > button { grid-column: 2; grid-row: 1 / span 2; }
+#history-list .continue { background: var(--moss); border-color: var(--moss-deep); color: #fff; }
+#history-list .continue:hover:not(:disabled) { background: var(--moss-deep); }
 .videos { grid-column: 1 / -1; list-style: none; margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: .9rem; }
 .videos li { padding: 4px 0; display: flex; flex-direction: column; word-break: break-word; }
 .videos .when { color: var(--ink-soft); font-size: .875rem; }
@@ -438,7 +440,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <h2>Connecting</h2>
         <ul>
           <li><b>Over the internet</b> goes through a relay, and works from anywhere. A relay can ask for a create key to open a party: add it in Settings.</li>
-          <li><b>Same Wi-Fi</b> connects straight to your friends. Untick the box there to reach them through your router instead.</li>
+          <li><b>Peer-to-Peer</b> connects straight to your friends, with no relay. Untick its Wi-Fi box to reach them through your router instead.</li>
         </ul>
   </section>
   <svg class="cat" viewBox="0 0 200 220" role="img" aria-label="Fosdo2 the cat">
@@ -565,7 +567,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <span class="label" id="mode-label">How are you connecting?</span>
           <div class="seg" role="radiogroup" aria-labelledby="mode-label">
             <label><input type="radio" name="mode" value="relay" checked><span><b>Over the internet</b><small>Through a relay, works from anywhere</small></span></label>
-            <label><input type="radio" name="mode" value="direct"><span><b>Same Wi-Fi</b><small>Or straight to a friend's address</small></span></label>
+            <label><input type="radio" name="mode" value="direct"><span><b>Peer-to-Peer</b><small>Straight to your friends, no relay</small></span></label>
           </div>
         </div>
 
@@ -800,12 +802,12 @@ const fileName = path => /^magnet:/i.test(path || "")
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
 const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
-function videoList(videos, title) {
+function videoList(videos, hide) {
   const ul = document.createElement("ul");
   ul.className = "videos";
   ul.append(...videos.map(v => {
     const li = document.createElement("li");
-    if (v.name !== title) {
+    if (v.name !== hide) {
       const name = document.createElement("span");
       name.textContent = v.name;
       li.append(name);
@@ -818,12 +820,17 @@ function videoList(videos, title) {
   }));
   return ul;
 }
+// the full path of the file, or of its folder for a playlist; a magnet link has no path
 function partyTitle(p, files) {
-  if (files === 0) return fileName(p.file);
-  if (files === 1) return p.videos[0].name;
-  const place = /^magnet:|\.torrent$/i.test(p.file) ? fileName(p.file) : p.file.split(/[\\/]/).at(-2);
-  return place ? `${place} (${files} videos)` : `${files} videos`;
+  const place = /^magnet:/i.test(p.file) ? fileName(p.file)
+    : p.playlist && !/\.torrent$/i.test(p.file) ? p.file.replace(/[\\/][^\\/]*$/, "").replace(/^[^\\/]*$/, "")
+    : p.file;
+  const count = files > 1 ? `${files} videos` : "";
+  return place && count ? `${place} (${count})` : place || count;
 }
+// the relay forgets a closed room 30 days after its last use (forgetAfter in relay/rooms.go)
+const continuable = p => p.mode !== "direct" && !!p.room && !!p.secret && !p.finished
+  && Date.now() - new Date(p.ended || p.started) < 30 * 864e5;
 function renderHistory() {
   const parties = (saved.history || []).slice().reverse();
   $("history-empty").hidden = parties.length > 0;
@@ -838,32 +845,47 @@ function renderHistory() {
     meta.className = "meta";
     const when = new Date(p.started).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     const who = p.people && p.people.length ? `with ${names(p.people)}` : "just you";
-    meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "on Wi-Fi" : "over the internet"}`;
-    const again = document.createElement("button");
-    again.type = "button";
-    again.className = "small again";
-    again.textContent = "Watch again";
-    again.disabled = running;
-    again.addEventListener("click", () => watchAgain(p));
-    li.append(title, meta, again);
-    if (videos.length) li.append(videoList(videos, title.textContent));
+    meta.textContent = `${when}, ${who}, ${p.mode === "direct" ? "peer-to-peer" : "over the internet"}`;
+    li.append(title, meta);
+    if (continuable(p)) {
+      const resume = document.createElement("button");
+      resume.type = "button";
+      resume.className = "small continue";
+      resume.textContent = "Continue";
+      resume.disabled = running;
+      resume.addEventListener("click", () => continueParty(p));
+      li.append(resume);
+    }
+    if (p.mode === "direct") {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "small again";
+      again.textContent = "Watch again";
+      again.disabled = running;
+      again.addEventListener("click", () => watchAgain(p));
+      li.append(again);
+    }
+    if (videos.length) li.append(videoList(videos, p.playlist ? null : fileName(p.file)));
     return li;
   }));
 }
 function watchAgain(p) {
   $("file").value = p.file;
   $("playlist").checked = !!p.playlist;
-  if (p.mode === "direct") {
-    setMode("direct");
-    $("addrs").value = p.addrs || "";
-    $("psecret").value = p.secret || "";
-  } else {
-    setMode("relay");
-    $("relay").value = p.relay || $("relay").value;
-    $("room").value = p.room || "";
-    $("secret").value = p.secret || "";
-  }
+  setMode("direct");
+  $("addrs").value = p.addrs || "";
+  $("psecret").value = p.secret || "";
   show("party");
+}
+async function continueParty(p) {
+  $("file").value = p.file;
+  $("playlist").checked = !!p.playlist;
+  setMode("relay");
+  $("relay").value = p.relay || $("relay").value;
+  $("room").value = p.room;
+  $("secret").value = p.secret;
+  show("party");
+  await startParty({ continue: p.started });
 }
 $("clear-history").addEventListener("click", async () => {
   if (!confirm("Clear the whole party history?")) return;
@@ -944,15 +966,18 @@ $("form").addEventListener("submit", async e => {
     }
     return;
   }
+  await startParty({});
+});
+async function startParty(extra) {
   showError("");
   if (!$("file").value.trim()) { showError("Pick a video first."); $("file").focus(); return; }
-  const res = await api("/start", collect());
+  const res = await api("/start", { ...collect(), ...extra });
   if (!res.ok) {
     const text = (await res.text()).trim();
     showError("Diagnosis: " + text + ".");
   }
   if (res.ok) loadState();
-});
+}
 
 let run = 0, from = 0, state = {};
 function reset() {
@@ -1019,7 +1044,7 @@ function handle(line) {
     state.reconnecting = true;
     state.waiting = /is not open yet/.test(msg);
   }
-  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /-createKey/.test(msg) ? "key" : "secret";
+  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
   if (/^torrent: /.test(msg)) state.finding = /^torrent: finding/.test(msg);
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
@@ -1051,6 +1076,8 @@ function render(exitErr) {
   let text, bad = false, mood = "awake", walking = false;
   if (state.rejected === "file") {
     text = notSameFile(); bad = true;
+  } else if (state.rejected === "unopened") {
+    text = "Diagnosis: nobody opened this room for 30 minutes. Start again once someone with the create key is in."; bad = true;
   } else if (state.rejected === "key") {
     text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
   } else if (state.rejected) {
@@ -1089,7 +1116,7 @@ function render(exitErr) {
   $("update").disabled = running;
   $("restart").disabled = running;
   $("restart-now").disabled = running;
-  document.querySelectorAll(".again").forEach(b => b.disabled = running);
+  document.querySelectorAll("#history-list button").forEach(b => b.disabled = running);
 }
 
 async function poll() {
