@@ -26,18 +26,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/relay/wire"
 )
 
 const (
-	secretHeaderKey  = "room-secret"
-	createHeaderKey  = "create-key"
-	openedHeaderKey  = "room-opened"
-	waitingHeaderKey = "room-waiting"
-
-	// close codes for a member held until the room opens, declared again in party/ws.go
-	statusRoomOpen   websocket.StatusCode = 4001
-	statusNotOpened  websocket.StatusCode = 4002
-	waitForKeyHolder                      = 30 * time.Minute
+	waitForKeyHolder = 30 * time.Minute
 
 	sendBuffer    = 64
 	pingInterval  = 30 * time.Second
@@ -48,13 +41,6 @@ const (
 	rows = 4
 	cols = 1 << 20
 )
-
-// declared again in party/ws.go; importing party would drag upnp, server and mpv into
-// the relay binary, and four lines beat a package that exists only to share them
-type message struct {
-	Hostname string          `json:"hostname"`
-	Event    json.RawMessage `json:"event"`
-}
 
 // count-min sketch, a fixed 8MB however many addresses it sees
 type limiter struct {
@@ -162,7 +148,7 @@ func clean(s string) string {
 
 func notice(hostname, text string) []byte {
 	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
-	b, _ := json.Marshal(message{Hostname: hostname, Event: event})
+	b, _ := json.Marshal(wire.Message{Hostname: hostname, Event: event})
 	return b
 }
 
@@ -281,11 +267,11 @@ func (r *relay) hold(c context.Context, conn *websocket.Conn, open <-chan struct
 		select {
 		case <-open:
 			l.Info("room opened, sent to join", "seconds", int(time.Since(start).Seconds()))
-			conn.Close(statusRoomOpen, "room open")
+			conn.Close(wire.StatusRoomOpen, "room open")
 			return
 		case <-timer.C:
 			l.Info("room did not open", "seconds", int(time.Since(start).Seconds()))
-			conn.Close(statusNotOpened, "room did not open")
+			conn.Close(wire.StatusNotOpened, "room did not open")
 			return
 		case <-c.Done():
 			l.Info("stopped waiting", "seconds", int(time.Since(start).Seconds()))
@@ -428,8 +414,8 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	defer r.conns.Add(-1)
 
-	name := req.URL.Query().Get("room")
-	hostname := clean(req.URL.Query().Get("hostname"))
+	name := req.URL.Query().Get(wire.RoomParam)
+	hostname := clean(req.URL.Query().Get(wire.HostnameParam))
 	ip := r.ip(req)
 	l := slog.With("conn", id, "ip", ip, "room", clean(name), "hostname", hostname)
 	if name == "" || hostname == "" {
@@ -437,7 +423,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	secret, key, file := []byte(req.Header.Get(secretHeaderKey)), []byte(req.Header.Get(createHeaderKey)), req.URL.Query().Get("file")
+	secret, key, file := []byte(req.Header.Get(wire.SecretHeader)), []byte(req.Header.Get(wire.CreateKeyHeader)), req.URL.Query().Get(wire.FileParam)
 	var old *known
 	if r.remembered != nil && r.createKey != nil && len(key) == 0 {
 		// read before admit takes r.mu, so a free keyless retry never holds every room up on the disk
@@ -448,7 +434,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	created, open, code, err := r.admit(name, secret, key, file, ip, old, req.URL.Query().Get("wait") == "1")
+	created, open, code, err := r.admit(name, secret, key, file, ip, old, req.URL.Query().Get(wire.WaitParam) == "1")
 	if err != nil {
 		refuse(res, l, code, err.Error())
 		return
@@ -460,7 +446,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	if open != nil {
 		defer r.stopWaiting(name, open)
-		res.Header().Set(waitingHeaderKey, "yes")
+		res.Header().Set(wire.WaitingHeader, "yes")
 		conn, err := websocket.Accept(res, req, nil)
 		if err != nil {
 			l.Info("upgrade failed", "err", err)
@@ -473,10 +459,10 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	// a node told it opened the room answers joiners with its position: only a key
 	// holder creates a room, and on a relay without CREATE_KEY nobody's is the party's
 	if created && r.createKey != nil {
-		res.Header().Set(openedHeaderKey, "yes")
+		res.Header().Set(wire.OpenedHeader, "yes")
 	}
 
-	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get("session"), ch: make(chan []byte, sendBuffer), log: l}
+	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get(wire.SessionParam), ch: make(chan []byte, sendBuffer), log: l}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
@@ -575,7 +561,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", r.handle)
+	mux.HandleFunc(wire.Path, r.handle)
 	s := &http.Server{
 		Addr:    addr,
 		Handler: mux,

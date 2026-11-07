@@ -14,30 +14,15 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/relay/wire"
 	"github.com/mhashemm/watchparty/server"
 )
 
 const (
-	secretHeaderKey  = "room-secret"
-	createHeaderKey  = "create-key"
-	openedHeaderKey  = "room-opened"
-	waitingHeaderKey = "room-waiting"
-
-	// how the relay ends a member it held until the room opened, declared again in relay/main.go
-	statusRoomOpen  websocket.StatusCode = 4001
-	statusNotOpened websocket.StatusCode = 4002
-
 	minBackoff = 1 * time.Second
 	maxBackoff = 30 * time.Second
 	notOpenFor = 30 * time.Minute
 )
-
-// declared again in relay/main.go, which is package main and cannot be imported; four
-// lines beat a package that exists only to share them
-type message struct {
-	Hostname string          `json:"hostname"`
-	Event    json.RawMessage `json:"event"`
-}
 
 type relayConn struct {
 	mu   sync.Mutex
@@ -86,9 +71,9 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 		_, _, err = conn.Read(c)
 		conn.CloseNow()
 		switch websocket.CloseStatus(err) {
-		case statusRoomOpen:
+		case wire.StatusRoomOpen:
 			continue
-		case statusNotOpened:
+		case wire.StatusNotOpened:
 			return nil, fmt.Errorf("%w: room %s did not open while the relay held this node", errRejected, r.room)
 		}
 		return nil, fmt.Errorf("waiting for room %s: %w", r.room, err)
@@ -96,9 +81,9 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 }
 
 func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
-	q := url.Values{"room": {r.room}, "hostname": {r.hostname}, "session": {r.session}, "file": {r.file}, "wait": {"1"}}
-	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+"/ws?"+q.Encode(), &websocket.DialOptions{
-		HTTPHeader: http.Header{secretHeaderKey: {r.secret}, createHeaderKey: {r.createKey}},
+	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}, wire.WaitParam: {"1"}}
+	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+wire.Path+"?"+q.Encode(), &websocket.DialOptions{
+		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
@@ -121,11 +106,11 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 			return nil, false, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
 		}
 	}
-	if err == nil && res.Header.Get(waitingHeaderKey) == "yes" {
+	if err == nil && res.Header.Get(wire.WaitingHeader) == "yes" {
 		return conn, true, nil
 	}
 	// ahead of the first frame, so mpv knows it opened the room before anyone joins
-	if err == nil && res.Header.Get(openedHeaderKey) == "yes" {
+	if err == nil && res.Header.Get(wire.OpenedHeader) == "yes" {
 		select {
 		case r.incoming <- mpv.IncomingMessage{Opened: true}:
 		case <-c.Done():
@@ -140,7 +125,7 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 		if err != nil {
 			return err
 		}
-		msg := message{}
+		msg := wire.Message{}
 		err = json.Unmarshal(b, &msg)
 		if err != nil {
 			log.Printf("relay: unmarshal: %s: %s\n", err, b)
@@ -208,7 +193,7 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 		case <-c.Done():
 			return
 		}
-		b, err := json.Marshal(message{Hostname: r.hostname, Event: event})
+		b, err := json.Marshal(wire.Message{Hostname: r.hostname, Event: event})
 		if err != nil {
 			log.Printf("relay: marshal: %s\n", err)
 			continue

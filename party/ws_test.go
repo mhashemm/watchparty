@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
+	"github.com/mhashemm/watchparty/relay/wire"
 )
 
 // stub serves /ws with handle and returns the ws:// address a relayConn dials.
@@ -173,8 +174,8 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 	t.Parallel()
 	sessions := make(chan string, 2)
 	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(secretHeaderKey) != "secret" || r.URL.Query().Has("secret") {
-			t.Errorf("secret sent as %q, query %q", r.Header.Get(secretHeaderKey), r.URL.RawQuery)
+		if r.Header.Get(wire.SecretHeader) != "secret" || r.URL.Query().Has("secret") {
+			t.Errorf("secret sent as %q, query %q", r.Header.Get(wire.SecretHeader), r.URL.RawQuery)
 		}
 		sessions <- r.URL.Query().Get("session")
 		conn := accept(t, w, r)
@@ -294,7 +295,7 @@ func TestEventsBeforeTheFirstConnectionAreHeld(t *testing.T) {
 func TestTrailingSlashOnRelayAddress(t *testing.T) {
 	t.Parallel()
 	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ws" {
+		if r.URL.Path != wire.Path {
 			http.NotFound(w, r)
 			return
 		}
@@ -314,7 +315,7 @@ func TestOpenedReachesMpvFirst(t *testing.T) {
 	t.Parallel()
 	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
 		if n == 1 {
-			w.Header().Set(openedHeaderKey, "yes")
+			w.Header().Set(wire.OpenedHeader, "yes")
 		}
 		conn := accept(t, w, r)
 		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"a","event":{"name":"joined"}}`))
@@ -359,8 +360,8 @@ func TestHeldUntilTheRoomOpens(t *testing.T) {
 			t.Error("the node didn't ask to be held")
 		}
 		if n == 1 {
-			w.Header().Set(waitingHeaderKey, "yes")
-			accept(t, w, r).Close(statusRoomOpen, "room open")
+			w.Header().Set(wire.WaitingHeader, "yes")
+			accept(t, w, r).Close(wire.StatusRoomOpen, "room open")
 			return
 		}
 		conn := accept(t, w, r)
@@ -374,8 +375,8 @@ func TestHeldUntilTheRoomOpens(t *testing.T) {
 	waitDone(t, joined, "never joined once the room opened")
 
 	addr = stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(waitingHeaderKey, "yes")
-		accept(t, w, r).Close(statusNotOpened, "room did not open")
+		w.Header().Set(wire.WaitingHeader, "yes")
+		accept(t, w, r).Close(wire.StatusNotOpened, "room did not open")
 	})
 	r = newRelayConn(addr, nil)
 	_, err := r.dial(context.Background())

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/mhashemm/watchparty/relay/wire"
 )
 
 func newRelay(perHour, maxRooms int, maxConns int64) *relay {
@@ -62,8 +63,8 @@ func join(t *testing.T, url, roomName, secret, hostname string, createKey ...str
 	r := v.(*relay)
 	before := members(r, roomName)
 	conn, res, err := websocket.Dial(context.Background(),
-		url+"/ws?room="+roomName+"&hostname="+hostname,
-		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}, createHeaderKey: createKey}})
+		url+wire.Path+"?room="+roomName+"&hostname="+hostname,
+		&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {secret}, wire.CreateKeyHeader: createKey}})
 	if err != nil {
 		if res != nil {
 			return nil, res.StatusCode
@@ -91,7 +92,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // an absence without waiting out a timeout.
 func mark(t *testing.T, conn *websocket.Conn, from string) {
 	t.Helper()
-	b, _ := json.Marshal(message{Hostname: from, Event: json.RawMessage(`{"name":"mark"}`)})
+	b, _ := json.Marshal(wire.Message{Hostname: from, Event: json.RawMessage(`{"name":"mark"}`)})
 	if err := conn.Write(context.Background(), websocket.MessageText, b); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func noticesBefore(t *testing.T, conn *websocket.Conn) []string {
 		if err != nil {
 			t.Fatalf("no playback frame after %v: %s", got, err)
 		}
-		m := message{}
+		m := wire.Message{}
 		json.Unmarshal(b, &m)
 		e := struct {
 			Name string `json:"name"`
@@ -124,16 +125,16 @@ func noticesBefore(t *testing.T, conn *websocket.Conn) []string {
 
 // recvEvent reads until it sees a real playback frame, skipping the join/leave
 // notices the relay synthesizes, or gives up after timeout.
-func recvEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration) (message, bool) {
+func recvEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration) (wire.Message, bool) {
 	t.Helper()
 	c, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for {
 		_, b, err := conn.Read(c)
 		if err != nil {
-			return message{}, false
+			return wire.Message{}, false
 		}
-		m := message{}
+		m := wire.Message{}
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatalf("bad frame: %s", b)
 		}
@@ -158,7 +159,7 @@ func TestBroadcastReachesEveryoneButTheSender(t *testing.T) {
 	b, _ := join(t, url, "room", "s3cret", "b")
 	c, _ := join(t, url, "room", "s3cret", "c")
 
-	sent, _ := json.Marshal(message{Hostname: "a", Event: json.RawMessage(`{"name":"pause","data":"yes"}`)})
+	sent, _ := json.Marshal(wire.Message{Hostname: "a", Event: json.RawMessage(`{"name":"pause","data":"yes"}`)})
 	if err := a.Write(context.Background(), websocket.MessageText, sent); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +239,7 @@ func queued(m *member) []string {
 	for {
 		select {
 		case b := <-m.ch:
-			msg := message{}
+			msg := wire.Message{}
 			json.Unmarshal(b, &msg)
 			e := struct {
 				Data string `json:"data"`
@@ -531,8 +532,8 @@ func TestHostnameIsSanitizedInNotices(t *testing.T) {
 func dial(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, *http.Response, int) {
 	t.Helper()
 	conn, res, err := websocket.Dial(context.Background(),
-		url+"/ws?wait=1&room="+roomName+"&hostname="+hostname,
-		&websocket.DialOptions{HTTPHeader: http.Header{secretHeaderKey: {secret}, createHeaderKey: createKey}})
+		url+wire.Path+"?wait=1&room="+roomName+"&hostname="+hostname,
+		&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {secret}, wire.CreateKeyHeader: createKey}})
 	if err != nil {
 		if res != nil {
 			return nil, res, res.StatusCode
@@ -540,7 +541,7 @@ func dial(t *testing.T, url, roomName, secret, hostname string, createKey ...str
 		t.Fatalf("dial %s: %s", roomName, err)
 	}
 	t.Cleanup(func() { conn.CloseNow() })
-	if res.Header.Get(waitingHeaderKey) != "yes" {
+	if res.Header.Get(wire.WaitingHeader) != "yes" {
 		conn.CloseNow()
 	}
 	return conn, res, http.StatusSwitchingProtocols
@@ -549,14 +550,14 @@ func dial(t *testing.T, url, roomName, secret, hostname string, createKey ...str
 func opened(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (bool, int) {
 	t.Helper()
 	_, res, code := dial(t, url, roomName, secret, hostname, createKey...)
-	return res != nil && res.Header.Get(openedHeaderKey) == "yes", code
+	return res != nil && res.Header.Get(wire.OpenedHeader) == "yes", code
 }
 
 // held dials as a keyless member and fails unless the relay holds it.
 func held(t *testing.T, url, roomName, secret, hostname string) *websocket.Conn {
 	t.Helper()
 	conn, res, code := dial(t, url, roomName, secret, hostname)
-	if code != http.StatusSwitchingProtocols || res.Header.Get(waitingHeaderKey) != "yes" {
+	if code != http.StatusSwitchingProtocols || res.Header.Get(wire.WaitingHeader) != "yes" {
 		t.Fatalf("%s got %d, want to be held until the room opens", hostname, code)
 	}
 	return conn
@@ -638,8 +639,8 @@ func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 		t.Fatalf("key holder got %d, opened=%v; want an upgrade and opened", code, first)
 	}
 	for _, conn := range []*websocket.Conn{b, c} {
-		if got := closedWith(t, conn); got != statusRoomOpen {
-			t.Fatalf("a held member was closed with %d, want %d", got, statusRoomOpen)
+		if got := closedWith(t, conn); got != wire.StatusRoomOpen {
+			t.Fatalf("a held member was closed with %d, want %d", got, wire.StatusRoomOpen)
 		}
 	}
 	gone(t, r, "room")
@@ -648,8 +649,8 @@ func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 	held(t, url2, "room", "s", "b&file=f")
 	r3 := newRelay(100, 100, 100)
 	r3.createKey, r3.remembered, r3.waitFor = r2.createKey, r2.remembered, 0
-	if got := closedWith(t, held(t, serve(t, r3), "room", "s", "c&file=f")); got != statusNotOpened {
-		t.Fatalf("a member held past waitFor was closed with %d, want %d", got, statusNotOpened)
+	if got := closedWith(t, held(t, serve(t, r3), "room", "s", "c&file=f")); got != wire.StatusNotOpened {
+		t.Fatalf("a member held past waitFor was closed with %d, want %d", got, wire.StatusNotOpened)
 	}
 	if _, err := r2.remembered.db.Exec(`UPDATE rooms SET used = 0`); err != nil {
 		t.Fatal(err)
