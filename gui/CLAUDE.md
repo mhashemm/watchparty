@@ -163,6 +163,10 @@ The download, SHA-256 check and binary swap live in the `update` package
   - **A sandboxed browser gets its profile where it can see it:** `X-Flatpak=<id>` →
     `~/.var/app/<id>/cache`, `X-SnapInstanceName` → `~/snap/<name>/common`, else
     `os.TempDir()`. Not run against a snap or a system-wide Flatpak.
+  - **Windows taskbar:** `groupWindow` finds the window by its class and the page's `<title>`
+    and gives it the AppUserModelID `setup.nsi` puts on the shortcuts, plus relaunch
+    properties naming `watchparty-gui.exe`. Without it a pinned shortcut gets a second
+    button, and pinning the window pins the browser.
   - Windows tries Chrome, then Edge, by absolute path; macOS Chrome, Edge, Brave, Chromium,
     Vivaldi, in `/Applications` then `~/Applications`, the binary inside the `.app`.
   - If everything fails, the log says `gui: no browser could be opened` with the URL.

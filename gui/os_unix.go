@@ -4,6 +4,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -256,5 +257,7 @@ func fileURIPath(uri string) (string, error) {
 }
 
 func hide(_ *exec.Cmd) {}
+
+func groupWindow(context.Context, string, string) {}
 
 func recordVersion(string, string) {}
