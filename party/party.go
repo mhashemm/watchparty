@@ -160,10 +160,6 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
-	if startAt > 0 {
-		// cleared once the file is open, or every entry would start there
-		args = append(args, "--start="+strconv.FormatFloat(startAt, 'f', 3, 64))
-	}
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {
@@ -204,7 +200,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names, start)
+	}, conn, outgoing, incoming, names, start, startAt)
 	if err != nil {
 		switch {
 		case mpvQuit.Load():
@@ -221,11 +217,6 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 
-	if startAt > 0 {
-		if err := client.ClearStart(); err != nil {
-			log.Println("clearing start:", err)
-		}
-	}
 	log.Println("init done. now you can start watching")
 
 	err = <-exited

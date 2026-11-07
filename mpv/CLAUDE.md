@@ -90,9 +90,10 @@ e2e `[R6b]`, `[R11f]`.
 **It drains `incoming` from `New`, not from `ready`.** A slow load (a URL, a slow disk)
 must never make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked
 relay read lets the relay's 64-frame buffer fill and drop the member. Until `ready` it
-keeps only the latest `pause` and `time-pos` plus the notices in order, then applies
-position first (mpv starts `--pause`d, so the seek lands before any resume), then
-pause, then announces `joined`, then the notices. e2e `[R11d]`.
+keeps only the latest `pause` and `time-pos` plus the notices in order. Then it seeks where a
+continued party stopped (`resumeAt`, marked like a peer's seek, so not broadcast), applies
+position (mpv starts `--pause`d, so it lands before any resume), pause, announces `joined`,
+then the notices. e2e `[R11d]`.
 
 - `pause` shows "paused by X"/"resumed by X" and records `pausedBy`; our own pause clears
   it. `time-pos` is applied only while paused.
@@ -180,8 +181,7 @@ reason: nobody starts the next one until someone resumes.
 - Accepted: a seek reaching someone just before the move it depends on is lost. A node
   that really is on another entry stays paused until the next move, since its resumes
   and everyone else's are dropped. A seek right after a move can lose to a stop on its way.
-
-e2e `[16]`, `[R15c]`.
+  e2e `[16]`, `[R15c]`.
 
 ## Windows
 

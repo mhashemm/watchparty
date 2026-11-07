@@ -24,7 +24,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
 | `--no-shuffle --playlist-start=<n>` | **Pinned, playlists only.** An index only means the same file to everyone in our order, and it starts on the file that was picked. |
-| `--start=<secs>` | **Continuing a party only**, then `set_property start none` once the first file is open: it applies to every later entry too. Not `--{ --start=… file --}`: a file-local option comes back on every return to that entry, with a `seek` (probed on 0.37.0). |
+| *(no `--start`)* | **Continuing a party seeks over IPC** once the first file is open. `--start` applies to every later entry, and a file-local `--{ --start=… file --}` (even undone with `file-local-options/start`) comes back on every return to it (probed on 0.37.0). |
 | `--vo=null --ao=null` | Tests only (e2e, GUI checks): no window, no sound. |
 
 **We don't pass `--no-config`, on purpose:** people keep their subtitle languages,

@@ -173,6 +173,7 @@ type Client struct {
 	following  []string
 	joinedWith []string
 	heardParty bool
+	resumeAt   float64
 	loading    bool
 	heldSeek   string
 	settling   bool
@@ -469,6 +470,14 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			loading = false
 		case <-c.ctx.Done():
 			return
+		}
+	}
+	// a continued party seeks only the file it continues on, before the party's position
+	// is applied and before joining, so whatever the party says lands after it. Not
+	// --start: mpv applies it to every later entry too. If it fails, the file is at 0.
+	if c.resumeAt > 0 {
+		if err := c.seekTo(strconv.FormatFloat(c.resumeAt, 'f', 6, 64)); err != nil {
+			log.Println("continuing where it stopped:", err)
 		}
 	}
 	for _, name := range []string{timePos, pause} {
@@ -848,12 +857,6 @@ func (c *Client) at(pos float64) bool {
 	return near(c.pos) || slices.ContainsFunc(c.seeks, near)
 }
 
-// ClearStart undoes --start once the first file is open: mpv would start every later
-// entry, and every return to this one, there too.
-func (c *Client) ClearStart() error {
-	return c.conn.do(setProperty, "start", "none")
-}
-
 // Position is the entry and the second to continue the party from. Within
 // endGraceSeconds of an entry's end that is the next entry's start: with keep-open=always
 // mpv stays on the finished one, and continuing there would only end it again.
@@ -883,8 +886,9 @@ func (c *Client) showText(text string) error {
 }
 
 // New wires up one mpv. names are its playlist entries in order, and nil for a single file;
-// start is the entry it opens on, which a peer's answer can arrive before mpv reports.
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int) (*Client, error) {
+// start is the entry it opens on, which a peer's answer can arrive before mpv reports. A
+// continued party seeks that entry to at once it is open (see ProcessIncomingEvents).
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int, at float64) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -901,6 +905,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		seen:      map[string]bool{},
 		names:     names,
 		current:   start,
+		resumeAt:  at,
 		movedFrom: -1,
 	}
 

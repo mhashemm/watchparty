@@ -361,7 +361,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0)
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0)
 		close(loaded)
 	}()
 	select {
@@ -390,7 +390,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 		start := time.Now()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0)
+		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0)
 		if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 		}
@@ -430,7 +430,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 	incoming := make(chan IncomingMessage)
 	loaded := make(chan error, 1)
 	go func() {
-		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil, 0)
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil, 0, 0)
 		loaded <- err
 	}()
 	send := func(name, data string) {
@@ -1554,7 +1554,7 @@ func TestJoinerKnowsItsStartingEntryBeforeMpvSaysSo(t *testing.T) {
 	incoming := make(chan IncomingMessage, 2)
 	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"event":"property-change","name":"playlist-pos","data":"1"}`)}
 	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"name":"show-text","data":"mark"}`)}
-	if _, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, []string{"e1", "e2", "e3"}, 1); err != nil {
+	if _, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, []string{"e1", "e2", "e3"}, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := next(t, sent); got != "show-text mark 5000" {
@@ -1575,6 +1575,52 @@ func TestSettlingComparesWithItsOwnLastSeek(t *testing.T) {
 	for _, want := range []string{"show-text x has left 5000", "set_property time-pos 50.000000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q: 50 is earlier than its 60", got, want)
+		}
+	}
+}
+
+// A continued party seeks the file it continues on once it is open, and only it. Then
+// whatever the party sent while it loaded is applied, so the party's position wins.
+// The seek is its own echo, so nobody else is moved by it.
+func TestContinuingSeeksBeforeThePartyIsHeard(t *testing.T) {
+	t.Parallel()
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	sent := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		for sc.Scan() {
+			req := Request{}
+			json.Unmarshal(sc.Bytes(), &req)
+			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			switch {
+			case req.Command[0] != "observe_property_string":
+				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+				if req.Command[1] == timePos {
+					fmt.Fprintf(theirs, `{"event":"property-change","id":3,"name":"time-pos","data":"%s"}`+"\n", req.Command[2])
+				}
+			case req.Command[2] == timePos:
+				fmt.Fprint(theirs, `{"event":"property-change","id":3,"name":"time-pos","data":"0.000000"}`+"\n")
+			}
+		}
+	}()
+	incoming := make(chan IncomingMessage, 2)
+	incoming <- peer("a", `{"event":"property-change","name":"time-pos","data":"55.000000"}`)
+	incoming <- peer("a", `{"name":"show-text","data":"mark"}`)
+	outgoing := make(chan []byte, 16)
+	if _, err := New(c, func() {}, ours, outgoing, incoming, nil, 0, 40); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"set_property time-pos 40.000000", "set_property time-pos 55.000000", "show-text synced by a 5000", "show-text mark 5000"} {
+		if got := next(t, sent); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	for len(outgoing) > 0 {
+		if e := <-outgoing; strings.Contains(string(e), "time-pos") {
+			t.Fatalf("broadcast %s: continuing moved the party", e)
 		}
 	}
 }
