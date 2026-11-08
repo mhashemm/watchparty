@@ -388,6 +388,18 @@ def gui_suite():
         argv = launches(n)[0]
         ok(f"{n} opened {nodes[n]['url']} at 560x940", f"--app={nodes[n]['url']}" in argv and "--window-size=560,940" in argv, argv)
 
+    print("\n[W9b] About lists mpv, ffmpeg and yt-dlp, each run for its version under the windowsgui parent")
+    nodes[H]["page"].tab("settings")
+    ok("a row each", until(lambda: js(H, '$("tools").children.length') == 3), js(H, '$("tools").innerText'))
+    tools = {t["name"]: t for t in js(H, 'api("/tools").then(r => r.json())')}
+    ok("mpv and ffmpeg from PATH, with a version", all(tools[n].get("version") and os.path.isabs(tools[n].get("path", "")) for n in ("mpv", "ffmpeg")), tools)
+    ok("they show only that: no note, no steps", not any(tools[n].get(k) for n in ("mpv", "ffmpeg") for k in ("update", "steps")), tools)
+    y = tools["yt-dlp"]
+    ok("yt-dlp from elsewhere shows no update line; missing, how to install it", not y.get("update") if y.get("path") else
+       y.get("update") == "Not found." and y.get("steps", [""])[-1].startswith("Restart Watchparty") and js(H, 'document.querySelectorAll("#tools .info").length') == 1, y)
+
+    nodes[H]["page"].tab("party")
+
     print("\n[W10] a relay party from the page: mpv starts under the windowsgui parent")
     fill(H, hostname=H, file=MEDIA, relay=RELAY_URL, createKey="k", mpvFlags=MPVFLAGS)
     go(H)

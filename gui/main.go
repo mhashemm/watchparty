@@ -135,6 +135,7 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 	g.mux.HandleFunc("GET /log", g.log)
 	g.mux.HandleFunc("GET /alive", g.alive)
 	g.mux.HandleFunc("GET /update", g.checkUpdate)
+	g.mux.HandleFunc("GET /tools", g.tools)
 	g.mux.HandleFunc("POST /update", g.update)
 	g.mux.HandleFunc("POST /restart", g.restart)
 	g.mux.HandleFunc("GET /state", g.state)
@@ -355,14 +356,19 @@ func (g *gui) idle() bool {
 }
 
 func defaultMpv() string {
-	if path := sibling("mpv" + exeSuffix); path != "" {
+	if path, err := exec.LookPath("mpv"); err == nil {
 		return path
 	}
-	path, err := exec.LookPath("mpv")
-	if err != nil {
-		return "mpv"
+	return cmp.Or(sibling("mpv"+exeSuffix), ownCopy("mpv"), "mpv")
+}
+
+// the copy setup.nsi put in the app's folder, or ""
+func ownCopy(name string) string {
+	dir := name
+	if name == "ffmpeg" {
+		dir = filepath.Join(name, "bin")
 	}
-	return path
+	return sibling(filepath.Join(dir, name+exeSuffix))
 }
 
 func sibling(name string) string {

@@ -100,3 +100,29 @@ func TestBrowsersComeFromDesktopEntries(t *testing.T) {
 		t.Errorf("with no default:\n got %v\nwant %v", got, want)
 	}
 }
+
+func TestProbeReadsEachToolsVersionLine(t *testing.T) {
+	dir := t.TempDir()
+	for name, out := range map[string]string{
+		"mpv":    "mpv v0.42.0 Copyright © 2000-2026 mpv/MPlayer/mplayer2 projects",
+		"ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+		"yt-dlp": "2026.10.26",
+	} {
+		script := "#!/bin/sh\n[ \"$1\" = " + versionFlags[name].flag + " ] && printf '%s\\nmore\\n' '" + out + "'\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// only now: a parallel test forking while a script is still open for writing hands the
+	// child that fd, and exec of the script fails with "text file busy" (golang/go#22315)
+	t.Parallel()
+	for name, want := range map[string]string{"mpv": "0.42.0", "ffmpeg": "9.0.2-full_build-www.gyan.dev", "yt-dlp": "2026.10.26"} {
+		path, version := probe(t.Context(), name, filepath.Join(dir, name))
+		if path != filepath.Join(dir, name) || version != want {
+			t.Errorf("probe(%s) = %q, %q, want %q", name, path, version, want)
+		}
+	}
+	if path, version := probe(t.Context(), "mpv", filepath.Join(dir, "missing")); path != "" || version != "" {
+		t.Errorf("a missing tool probed as %q, %q", path, version)
+	}
+}

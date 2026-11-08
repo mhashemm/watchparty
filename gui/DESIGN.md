@@ -80,8 +80,9 @@ that.
   - **History**: recent parties, newest first, each titled by its file's full path (a
     playlist by its folder's), and **Continue** (filled moss) on a party over the internet,
     **Watch again** (outlined) on a peer-to-peer one
-  - **Settings**: the defaults, then **About** (version, Update button, saved-files
-    folder). A red dot on the tab means an update is available.
+  - **Settings**: the defaults, then **About** (version, Update button; on Windows and macOS
+    one row each for mpv, ffmpeg and yt-dlp: version and path, how to update yt-dlp, and for
+    a missing one an `i` that unfolds how to install it by hand; saved-files folder). A red dot on the tab means an update is available.
 - **The `?`** in the card's corner opens the help over the page, on every view and during
   a party. One topic per section, named for what it is, never for one kind of video.
 - **Vitals** is hidden until the first `/start`. While a party runs the form fieldset

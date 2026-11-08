@@ -63,9 +63,10 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
   first error. `Write` takes `g.mu`, so **never `log` while holding `g.mu`**.
 - **`run`** goes up on every `/start`; a poll with an old `run` is answered from line 0,
   so two runs never splice.
-- An empty mpv field becomes the absolute path of a sibling `mpv(.exe)`, else `mpv` on
-  `PATH`. Absolute, because `exec.LookPath` won't resolve a bare name from the current
-  directory. mpv is never bundled.
+- An empty mpv field becomes `mpv` on `PATH`, else the absolute path of a sibling `mpv(.exe)`
+  or the installer's `mpv\mpv.exe` (`ownCopy`), so the installed mpv works even if its Path
+  entry is missing. Absolute, because `exec.LookPath` won't resolve a bare name from the
+  current directory.
 
 ## Saved settings and history (`store.go`)
 
