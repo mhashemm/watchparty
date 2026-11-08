@@ -9,14 +9,17 @@ between you. Only pause and seek events are sent, so a slow connection is fine.
 
 ## Install
 
-1. Install mpv (`apt install mpv`, `brew install mpv`, or [mpv.io](https://mpv.io/installation/)).
+1. On Linux, install mpv (`apt install mpv`, or [mpv.io](https://mpv.io/installation/)), and yt-dlp to play links.
+   The macOS and Windows installs below bring mpv, ffmpeg and yt-dlp themselves.
 2. Install the app:
 
    - **Linux and macOS:** `curl -fsSL https://raw.githubusercontent.com/mhashemm/watchparty/master/install.sh | sh`.
      On Linux it lands in `~/.local/bin` with an entry in your app menu; on macOS it is
-     `~/Applications/Watchparty.app`.
+     `~/Applications/Watchparty.app`, and [Homebrew](https://brew.sh) (required) installs whichever of mpv, ffmpeg and
+     yt-dlp you don't have.
    - **Windows:** run `watchparty-gui-setup.exe` from [Releases](https://github.com/mhashemm/watchparty/releases).
-     It installs for your user only, with Start menu and desktop shortcuts.
+     It installs for your user only, with Start menu and desktop shortcuts, and downloads
+     mpv, ffmpeg and yt-dlp onto your `PATH` unless they are already there.
 
    The app updates itself from Settings.
 

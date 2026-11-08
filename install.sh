@@ -18,9 +18,41 @@ Darwin)
 	asset=watchparty-gui_mac_$arch
 	app=$HOME/Applications/Watchparty.app
 	bin=$app/Contents/MacOS
+	# the app's PATH (Info.plist below): launched from Finder it sees nothing else
+	apppath=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 	;;
 *) echo "use watchparty-gui-setup.exe from https://github.com/mhashemm/watchparty/releases on Windows" >&2 && exit 1 ;;
 esac
+
+# before the app, so a failure leaves nothing installed and running this again carries on
+if [ "$(uname -s)" = Darwin ]; then
+	again="curl -fsSL https://raw.githubusercontent.com/mhashemm/watchparty/master/install.sh | sh"
+	for brew in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$brew" ] && break; done
+	if ! [ -x "$brew" ]; then
+		cat >&2 <<EOF
+watchparty needs mpv, ffmpeg and yt-dlp, and installs them with Homebrew, which isn't
+installed in /opt/homebrew or /usr/local. Nothing was installed. To continue:
+  1. install Homebrew from https://brew.sh
+  2. run this again: $again
+Or put mpv, ffmpeg and yt-dlp in /opt/homebrew/bin or /usr/local/bin some other way, the
+folders Watchparty looks in, and run it again.
+EOF
+		exit 1
+	fi
+	for tool in mpv ffmpeg yt-dlp; do
+		(PATH=$apppath && command -v $tool >/dev/null) || "$brew" install $tool </dev/null || {
+			cat >&2 <<EOF
+
+brew install $tool failed: Homebrew's own message is above. Nothing of watchparty was
+installed. To continue:
+  1. fix what Homebrew reported; often "brew update" or "brew doctor" says how
+  2. run "$brew install $tool" until it succeeds
+  3. run this again: $again
+EOF
+			exit 1
+		}
+	done
+fi
 
 mkdir -p "$bin"
 tmp=$bin/.watchparty-gui-install
@@ -46,7 +78,7 @@ Categories=AudioVideo;Video;
 EOF
 	files="\"$bin/watchparty-gui\" \"$data/applications/watchparty.desktop\" \"$data/icons/hicolor/scalable/apps/watchparty.svg\""
 else
-	cat >"$app/Contents/Info.plist" <<'EOF'
+	cat >"$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,7 +90,7 @@ else
 	<key>LSUIElement</key><true/>
 	<key>LSEnvironment</key>
 	<dict>
-		<key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PATH</key><string>$apppath</string>
 	</dict>
 </dict>
 </plist>
@@ -67,5 +99,5 @@ EOF
 fi
 
 echo "installed $bin/watchparty-gui, it updates itself from Settings"
-command -v mpv >/dev/null || [ -x /opt/homebrew/bin/mpv ] || echo "watchparty needs mpv: https://mpv.io/installation/"
+[ "$(uname -s)" = Darwin ] || command -v mpv >/dev/null || echo "watchparty needs mpv: https://mpv.io/installation/"
 echo "to uninstall: rm -r $files"
