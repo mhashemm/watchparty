@@ -2724,9 +2724,9 @@ def install_suite():
     script(stubs + "/uname", 'case $1 in -m) echo "$FAKE_M" ;; *) echo "$FAKE_S" ;; esac')
     script(stubs + "/curl", 'echo "$5" >> "$HOME/urls"\n[ -z "$CURL_FAIL" ] || { echo partial > "$4"; exit 22; }\necho the-binary > "$4"')
 
-    def install(home, s, m, **env):
+    def install(home, s, m, src=REPO + "/install.sh", **env):
         os.makedirs(home, exist_ok=True)
-        return subprocess.run(["sh", REPO + "/install.sh"], capture_output=True, text=True, timeout=SETTLE,
+        return subprocess.run(["sh", src], capture_output=True, text=True, timeout=SETTLE,
                               env={"HOME": home, "PATH": f"{stubs}:/usr/bin:/bin", "FAKE_S": s, "FAKE_M": m, **env})
 
     def asked(home):
@@ -2751,14 +2751,21 @@ def install_suite():
     ok("arm64 gets its asset, in the XDG folders", res.returncode == 0 and asked(home)[0].endswith("/watchparty-gui_arm64") and os.path.exists(home + "/b/watchparty-gui") and os.path.exists(home + "/d/applications/watchparty.desktop"), res.stderr)
 
     home = f"{RUN}/install-mac"
-    res = install(home, "Darwin", "arm64")
+    # Homebrew's prefix moved into the run, with brew and the three tools already in it
+    brew = home + "/homebrew"
+    os.makedirs(brew + "/bin")
+    for tool in ("brew", "mpv", "ffmpeg", "yt-dlp"):
+        script(f"{brew}/bin/{tool}", "exit 0")
+    with open(REPO + "/install.sh") as f, open(f"{RUN}/install-mac.sh", "w") as out:
+        out.write(f.read().replace("/opt/homebrew", brew))
+    res = install(home, "Darwin", "arm64", src=f"{RUN}/install-mac.sh")
     ok("macOS installs", res.returncode == 0, res.stderr)
     ok("it asks for the mac asset", asked(home)[0].endswith("/watchparty-gui_mac_arm64"), str(asked(home)))
     contents = home + "/Applications/Watchparty.app/Contents"
     with open(contents + "/Info.plist", "rb") as f:
         plist = plistlib.load(f)
     ok("the bundle's plist names the binary inside it", os.access(f"{contents}/MacOS/{plist['CFBundleExecutable']}", os.X_OK), str(plist))
-    ok("and can find Homebrew's mpv from Finder", "/opt/homebrew/bin" in plist["LSEnvironment"]["PATH"], str(plist))
+    ok("and can find Homebrew's mpv from Finder", brew + "/bin" in plist["LSEnvironment"]["PATH"], str(plist))
 
     for s, m, why in (("Linux", "armv7l", "an architecture with no build"), ("FreeBSD", "amd64", "an OS with no build")):
         home = f"{RUN}/install-{m}"
