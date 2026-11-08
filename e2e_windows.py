@@ -388,6 +388,18 @@ def gui_suite():
         argv = launches(n)[0]
         ok(f"{n} opened {nodes[n]['url']} at 560x940", f"--app={nodes[n]['url']}" in argv and "--window-size=560,940" in argv, argv)
 
+    print("\n[W9b] About lists mpv, ffmpeg and yt-dlp, each run for its version under the windowsgui parent")
+    nodes[H]["page"].tab("settings")
+    ok("a row each", until(lambda: js(H, '$("tools").children.length') == 3), js(H, '$("tools").innerText'))
+    tools = {t["name"]: t for t in js(H, 'api("/tools").then(r => r.json())')}
+    ok("mpv and ffmpeg from PATH, with a version", all(tools[n].get("version") and os.path.isabs(tools[n].get("path", "")) for n in ("mpv", "ffmpeg")), tools)
+    ok("they show only that: no note, no steps", not any(tools[n].get(k) for n in ("mpv", "ffmpeg") for k in ("update", "steps")), tools)
+    y = tools["yt-dlp"]
+    ok("yt-dlp from elsewhere shows no update line; missing, how to install it", not y.get("update") if y.get("path") else
+       y.get("update") == "Not found." and y.get("steps", [""])[-1].startswith("Restart Watchparty") and js(H, 'document.querySelectorAll("#tools .info").length') == 1, y)
+
+    nodes[H]["page"].tab("party")
+
     print("\n[W10] a relay party from the page: mpv starts under the windowsgui parent")
     fill(H, hostname=H, file=MEDIA, relay=RELAY_URL, createKey="k", mpvFlags=MPVFLAGS)
     go(H)
@@ -472,11 +484,11 @@ def gui_suite():
     res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
     ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
 
-    print("\n[W16] the installer: per user, silent, and its uninstaller leaves nothing")
-    def setup(version):
+    print("\n[W16] the installer: per user, silent, mpv, ffmpeg and yt-dlp, and its uninstaller leaves nothing")
+    def setup(version, env=None):
         out = os.path.join(RUN, f"watchparty-gui-setup-{version}.exe")
         subprocess.run([MAKENSIS, "/V2", f"/DEXE={GUI_BIN}", f"/DOUT={out}", f"/DVERSION={version}", os.path.join(REPO, "gui", "setup.nsi")], cwd=REPO, check=True)
-        code = subprocess.run([out, "/S", f"/D={target}"], timeout=BOOT).returncode
+        code = subprocess.run([out, "/S", f"/D={target}"], env=env, timeout=600).returncode
         crash = "(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000} -MaxEvents 1).Message"
         must(f"the {version} installer exits 0", code == 0, "" if code == 0 else f"{code:#x} " + subprocess.run(["powershell", "-NoProfile", "-Command", crash], capture_output=True, text=True, timeout=BOOT).stdout)
 
@@ -488,9 +500,28 @@ def gui_suite():
         ps = f"(New-Object -ComObject Shell.Application).NameSpace('{os.path.dirname(lnk)}').ParseName('{os.path.basename(lnk)}').ExtendedProperty('System.AppUserModel.ID')"
         return subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=BOOT).stdout.strip()
 
+    def user_path():
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+                return [d for d in winreg.QueryValueEx(k, "Path")[0].split(";") if d]
+        except FileNotFoundError:
+            return []
+
     target = os.path.join(RUN, "installed")
     key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
-    setup("v0.0.9")
+    tools = {"mpv": r"mpv\mpv.exe", "ffmpeg": r"ffmpeg\bin\ffmpeg.exe", "yt-dlp": r"yt-dlp\yt-dlp.exe"}
+    tool = lambda t: os.path.join(target, tools[t])
+    on_path = {t for t in tools if shutil.which(t)}
+    path_before = user_path()
+    bare = os.pathsep.join(os.path.join(os.environ["SystemRoot"], d) for d in ("System32", "", r"System32\WindowsPowerShell\v1.0"))
+    offline = "http://127.0.0.1:9"
+    out = os.path.join(RUN, "watchparty-gui-setup-offline.exe")
+    subprocess.run([MAKENSIS, "/V2", f"/DEXE={GUI_BIN}", f"/DOUT={out}", "/DVERSION=v0.0.9", os.path.join(REPO, "gui", "setup.nsi")], cwd=REPO, check=True)
+    code = subprocess.run([out, "/S", f"/D={target}"], env=environ(PATH=bare, HTTPS_PROXY=offline), timeout=BOOT).returncode
+    ok("mpv failing to download, silent, cancels the install", code != 0, f"exit {code}")
+    ok("and leaves nothing behind", not os.path.exists(target) and user_path() == path_before, str(os.path.exists(target) and os.listdir(target)))
+    setup("v0.0.9", environ(HTTPS_PROXY=offline))
+    ok("with mpv on PATH, ffmpeg or yt-dlp failing to download, silent, goes on without them", not any(os.path.exists(tool(t)) for t in tools), os.listdir(target))
     exe = os.path.join(target, "watchparty-gui.exe")
     ok("the exe is the one it was built from", sha(exe) == sha(GUI_BIN))
     menu = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Watchparty.lnk")
@@ -499,13 +530,23 @@ def gui_suite():
     ok("both carry the id the GUI gives its window, so a pinned one groups it", app_id(menu) == app_id(desktop) == "mhashemm.watchparty", (app_id(menu), app_id(desktop)))
     ok("Add/Remove Programs points at its uninstaller", os.path.join(target, "uninstall.exe") in installed("UninstallString"))
     ok("and knows its version and folder", installed("DisplayVersion") == "v0.0.9" and installed("InstallLocation") == target, (installed("DisplayVersion"), installed("InstallLocation")))
-    setup("v0.0.1")
+    stray = os.path.join(RUN, "mpv.exe")
+    open(stray, "w").close()
+    setup("v0.0.1", environ(PATH=bare))
+    os.remove(stray)
     ok("an older installer, silent, answers yes to replacing a newer one", installed("DisplayVersion") == "v0.0.1", installed("DisplayVersion"))
+    ok("with nothing on PATH, and an mpv.exe next to the installer that isn't on it, it downloads mpv, ffmpeg and yt-dlp", all(os.path.exists(tool(t)) for t in tools), os.listdir(target))
+    ok("their folders are on the user's PATH", all(os.path.dirname(tool(t)) in user_path() for t in tools), user_path())
+    res = subprocess.run([tool("yt-dlp"), "-v"], env=environ(PATH=os.pathsep.join(user_path() + [bare])), capture_output=True, text=True, timeout=BOOT)
+    ok("yt-dlp finds that ffmpeg on the user's PATH", "exe versions: ffmpeg" in res.stdout + res.stderr, (res.stdout + res.stderr)[-2000:])
+    res = subprocess.run([tool("mpv"), "--version"], capture_output=True, text=True, timeout=BOOT)
+    ok("and mpv runs", res.returncode == 0 and res.stdout.startswith("mpv"), res.stdout + res.stderr)
     for left in (exe + ".old", os.path.join(target, ".watchparty-update-1"), os.path.join(target, ".watchparty-gui-update-1")):
         open(left, "w").close()
     subprocess.run([os.path.join(target, "uninstall.exe"), "/S"], check=True, timeout=BOOT)
-    ok("uninstalling removes the folder, with a self-update's leftovers", until(lambda: not os.path.exists(target)), str(os.path.exists(target) and os.listdir(target)))
+    ok("uninstalling removes the folder, mpv, ffmpeg and yt-dlp, and a self-update's leftovers", until(lambda: not os.path.exists(target)), str(os.path.exists(target) and os.listdir(target)))
     ok("and both shortcuts", not os.path.exists(menu) and not os.path.exists(desktop))
+    ok("and gives the user's PATH back as it was", user_path() == path_before, (path_before, user_path()))
     try:
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, key).Close()
         ok("and its Add/Remove Programs entry", False)

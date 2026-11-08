@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,4 +210,24 @@ func TestShuttingDownIsNotAClosedWindow(t *testing.T) {
 	g.quit = func() { t.Fatal("quit") }
 	cancel()
 	g.checkPages()
+}
+
+func TestInstallStepsMatchTheInstaller(t *testing.T) {
+	t.Parallel()
+	app := `C:\Users\me\AppData\Local\Programs\watchparty`
+	for name, want := range map[string][]string{
+		"mpv":    {"mpv-<version>-x86_64-w64-mingw32-full.zip", "into " + app + `\mpv.`, "Add " + app + `\mpv to your Path`},
+		"ffmpeg": {"ffmpeg-<version>-essentials_build.zip", "top folder into " + app + `\ffmpeg.`, "Add " + app + `\ffmpeg\bin to your Path`},
+		"yt-dlp": {"yt-dlp.exe from github.com/yt-dlp/yt-dlp/releases/latest into " + app + `\yt-dlp.`, "Add " + app + `\yt-dlp to your Path`},
+	} {
+		steps := strings.Join(installSteps("windows", name, app), "\n")
+		for _, w := range want {
+			if !strings.Contains(steps, w) {
+				t.Errorf("%s's steps lack %q:\n%s", name, w, steps)
+			}
+		}
+	}
+	if steps := installSteps("darwin", "yt-dlp", "/Applications"); steps[len(steps)-1] != "Run brew install yt-dlp in Terminal." {
+		t.Errorf("macOS steps: %q", steps)
+	}
 }

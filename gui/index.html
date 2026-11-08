@@ -273,6 +273,14 @@ details[open] summary { margin-bottom: 14px; }
 .about { margin-top: 26px; border-top: 2px dashed var(--line); padding-top: 18px; }
 .about p { margin: 0 0 10px; }
 .about code { font-size: .85rem; word-break: break-all; color: var(--soil); }
+.tools { list-style: none; padding: 0; margin: 14px 0; }
+.tools > li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.tools .ver { color: var(--ink-soft); font-size: .875rem; text-align: right; }
+.tools code, .tools .hint { grid-column: 1 / -1; margin: 0; }
+.tools .name { display: inline-flex; align-items: center; gap: 6px; }
+.info { width: 20px; height: 20px; padding: 0; border-radius: 50%; font: 700 .75rem var(--display); background: var(--paper); line-height: 1; }
+.steps { grid-column: 1 / -1; margin: 6px 0 0; padding-left: 20px; font-size: .875rem; }
+.steps li { padding: 2px 0; word-break: break-word; }
 #settings-saved { margin-left: 10px; }
 dialog {
   border: 2px solid var(--bark);
@@ -663,6 +671,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
       <div class="about">
         <h2>About</h2>
         <p><span id="version-text">Checking the version…</span> <button type="button" class="small" id="update" hidden></button> <button type="button" class="small" id="restart" hidden>Restart now</button></p>
+        <ul class="tools" id="tools" hidden></ul>
         <p class="hint">Your name, settings and party history are saved on this computer in <code id="store-path"></code></p>
       </div>
     </section>
@@ -791,7 +800,9 @@ function show(view) {
   for (const v of ["party", "history", "settings"]) $("view-" + v).hidden = v !== view;
   document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-current", b.dataset.view === view ? "page" : "false"));
   history.replaceState(null, "", view === "party" ? location.pathname : "#" + view);
+  if (view === "settings" && !toolsChecked) checkTools();
 }
+let toolsChecked = false;
 document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
   show(b.dataset.view);
   if (b.dataset.view === "history") loadState();
@@ -919,6 +930,10 @@ $("settings-form").addEventListener("submit", async e => {
   $("settings-saved").hidden = false;
   setTimeout(() => $("settings-saved").hidden = true, 3000);
   if (res.ok && !$("relay").value) $("relay").value = body.relay;
+  if (!res.ok) return;
+  const mpvChanged = body.mpv.trim() !== (saved.settings.mpv || "");
+  for (const [k, v] of Object.entries(body)) saved.settings[k] = v.trim();
+  if (mpvChanged) checkTools();
 });
 
 $("invite").addEventListener("input", () => {
@@ -1223,6 +1238,46 @@ async function restartNow() {
   window.close();
 }
 $("restart").addEventListener("click", restartNow);
+let toolsAsked = 0;
+async function checkTools() {
+  const asked = ++toolsAsked;
+  try {
+    const list = await (await api("/tools")).json();
+    if (asked !== toolsAsked) return;
+    toolsChecked = true;
+    $("tools").replaceChildren(...list.map(t => {
+      const li = document.createElement("li"), name = document.createElement("span"), ver = document.createElement("span");
+      const path = document.createElement("code"), note = document.createElement("p");
+      const b = document.createElement("b"), info = document.createElement("button"), steps = document.createElement("ol");
+      b.textContent = t.name;
+      info.type = "button";
+      info.className = "info";
+      info.textContent = "i";
+      info.setAttribute("aria-label", `How to install ${t.name} by hand`);
+      info.setAttribute("aria-expanded", "false");
+      info.addEventListener("click", () => {
+        steps.hidden = !steps.hidden;
+        info.setAttribute("aria-expanded", !steps.hidden);
+      });
+      name.className = "name";
+      name.append(b);
+      if (t.steps) name.append(info);
+      steps.className = "steps";
+      steps.hidden = true;
+      steps.append(...(t.steps || []).map(text => Object.assign(document.createElement("li"), { textContent: text })));
+      ver.className = "ver";
+      ver.textContent = t.version || "";
+      path.textContent = t.path || "";
+      path.hidden = !t.path;
+      note.className = "hint";
+      note.textContent = t.update;
+      note.hidden = !t.update;
+      li.append(name, ver, path, note, steps);
+      return li;
+    }));
+    $("tools").hidden = !list.length;
+  } catch {}
+}
 $("restart-now").addEventListener("click", restartNow);
 $("restart-later").addEventListener("click", () => $("restart-dialog").close());
 

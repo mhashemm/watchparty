@@ -3,6 +3,7 @@
 Unicode true
 Name "Watchparty"
 OutFile "${OUT}"
+!define UNINST "Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
 InstallDir "$LOCALAPPDATA\Programs\watchparty"
 RequestExecutionLevel user
 Icon "icon.ico"
@@ -15,10 +16,10 @@ Page instfiles
 !include WordFunc.nsh
 !include Win\COM.nsh
 !include Win\Propkey.nsh
+!include WinMessages.nsh
 !ifndef VERSION
 	!define VERSION dev
 !endif
-!define UNINST "Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty"
 ; the GUI gives its browser window the same id (appID in os_windows.go)
 !define APPID "mhashemm.watchparty"
 
@@ -84,7 +85,103 @@ Function SetAppID
 	Pop $1
 FunctionEnd
 
+; $0 is curl's exit code; curl.exe and tar.exe ship with Windows 10 1803 and later
+!macro Fetch URL FILE
+	nsExec::ExecToLog '"$SYSDIR\curl.exe" -fsSL --retry 3 -o "${FILE}" "${URL}"'
+	Pop $0
+!macroend
+
+; $1 is the tag /releases/latest redirects to, so the newest release at install time
+!macro Latest REPO
+	nsExec::ExecToStack '"$SYSDIR\curl.exe" -fsS --retry 3 -o NUL -w "%{redirect_url}" "https://github.com/${REPO}/releases/latest"'
+	Pop $0
+	Pop $1
+	${WordFind} "$1" "/" "-1" $1
+	${If} $0 != 0
+		StrCpy $1 ""
+	${EndIf}
+!macroend
+
+; Downloads NAME into $INSTDIR\NAME unless PATH has it or it is already there. $1 in URL is
+; REPO's latest tag; TAR is tar's options for a zip, or - for a bare exe. If it fails, mpv,
+; which Watchparty needs and which comes first, asks Retry or Cancel the install; the others
+; ask Retry or go on without it.
+!macro Get NAME EXE REPO URL TAR LABEL SIZE NEEDED
+	; on PATH only: SearchPath would also look in the installer's folder and the current one
+	System::Call 'kernel32::SearchPathW(p R9, w "${NAME}.exe", p 0, i ${NSIS_MAX_STRLEN}, w .r0, p 0) i .r2'
+	${If} $2 = 0
+	${AndIfNot} ${FileExists} "$INSTDIR\${NAME}\${EXE}"
+		${LABEL}:
+		DetailPrint "Downloading ${NAME}${SIZE}"
+		CreateDirectory "$INSTDIR\${NAME}"
+		!if "${TAR}" == "-"
+			!insertmacro Fetch "${URL}" "$INSTDIR\${NAME}\${EXE}"
+		!else
+			!insertmacro Latest "${REPO}"
+			!insertmacro Fetch "${URL}" "$PLUGINSDIR\${NAME}.zip"
+			${If} $0 == 0
+				nsExec::ExecToLog '"$SYSDIR\tar.exe" -xf "$PLUGINSDIR\${NAME}.zip" ${TAR} -C "$INSTDIR\${NAME}"'
+				Pop $0
+			${EndIf}
+		!endif
+		; curl leaves a truncated file and tar a half-unpacked folder when they fail partway
+		${If} $0 != 0
+		${OrIfNot} ${FileExists} "$INSTDIR\${NAME}\${EXE}"
+			RMDir /r "$INSTDIR\${NAME}"
+			!if "${NEEDED}" == "needed"
+				MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Couldn't download ${NAME}, which Watchparty needs. Check your connection and retry, or cancel the install." /SD IDCANCEL IDRETRY ${LABEL}
+				RMDir "$INSTDIR"
+				Abort "Couldn't download ${NAME}"
+			!else
+				MessageBox MB_YESNO|MB_ICONEXCLAMATION "Couldn't download ${NAME}. Try again? No goes on without it, and Watchparty's Settings page says how to get it later." /SD IDNO IDYES ${LABEL}
+			!endif
+		${EndIf}
+	${EndIf}
+!macroend
+
+; adds BIN to $1 when NAME is in the install folder
+!macro OnPath NAME EXE BIN
+	${If} ${FileExists} "$INSTDIR\${NAME}\${EXE}"
+		StrCpy $1 "$1$INSTDIR\${BIN};"
+	${EndIf}
+!macroend
+
+Function Players
+	InitPluginsDir
+	; PATH can be longer than NSIS's strings, so it stays in this buffer
+	System::Alloc 65536
+	Pop $R9
+	System::Call 'kernel32::GetEnvironmentVariableW(w "PATH", p R9, i 32767)'
+	; mingw, not msvc: the msvc build needs the Visual C++ runtime, which a fresh Windows lacks
+	!insertmacro Get mpv "mpv.exe" "mpv-player/mpv" "https://github.com/mpv-player/mpv/releases/download/$1/mpv-$1-x86_64-w64-mingw32-full.zip" "" getmpv ", about 65 MB" needed
+	!insertmacro Get ffmpeg "bin\ffmpeg.exe" "GyanD/codexffmpeg" "https://github.com/GyanD/codexffmpeg/releases/download/$1/ffmpeg-$1-essentials_build.zip" "--strip-components 1" getffmpeg ", about 115 MB" optional
+	!insertmacro Get yt-dlp "yt-dlp.exe" "" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" "-" getytdlp "" optional
+	StrCpy $1 ""
+	!insertmacro OnPath mpv "mpv.exe" "mpv"
+	!insertmacro OnPath ffmpeg "bin\ffmpeg.exe" "ffmpeg\bin"
+	!insertmacro OnPath yt-dlp "yt-dlp.exe" "yt-dlp"
+	${If} $1 != ""
+		File "/oname=$PLUGINSDIR\path.ps1" "path.ps1"
+		nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\path.ps1" add "$1"'
+		Pop $0
+		${If} $0 != 0
+			MessageBox MB_ICONEXCLAMATION "Couldn't add these folders to your Path: $1$\r$\nAdd them by hand: Start, type environment variables, open Edit environment variables for your account, then Path." /SD IDOK
+		${EndIf}
+		SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+		; The GUI started at the end inherits this process's PATH, which predates the change; every
+		; later launch gets the new one from Windows. A result over 32767 characters, the most PATH
+		; can hold, would leave the buffer empty.
+		System::Call 'kernel32::ExpandEnvironmentStringsW(w "$1%PATH%", p R9, i 32767) i .r2'
+		${If} $2 > 0
+		${AndIf} $2 <= 32767
+			System::Call 'kernel32::SetEnvironmentVariableW(w "PATH", p R9)'
+		${EndIf}
+	${EndIf}
+	System::Free $R9
+FunctionEnd
+
 Section
+	Call Players
 	SetOutPath "$INSTDIR"
 	File "/oname=watchparty-gui.exe" "${EXE}"
 	File "icon.ico"
@@ -113,6 +210,15 @@ Section "Uninstall"
 	Delete "$INSTDIR\.watchparty-*"
 	Delete "$INSTDIR\icon.ico"
 	Delete "$INSTDIR\uninstall.exe"
+	; mpv, ffmpeg and yt-dlp go only from the install folder; copies elsewhere are left alone
+	RMDir /r "$INSTDIR\mpv"
+	RMDir /r "$INSTDIR\ffmpeg"
+	RMDir /r "$INSTDIR\yt-dlp"
+	InitPluginsDir
+	File "/oname=$PLUGINSDIR\path.ps1" "path.ps1"
+	nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\path.ps1" remove "$INSTDIR\mpv;$INSTDIR\ffmpeg\bin;$INSTDIR\yt-dlp"'
+	Pop $0
+	SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 	RMDir "$INSTDIR"
 	Delete "$SMPROGRAMS\Watchparty.lnk"
 	Delete "$DESKTOP\Watchparty.lnk"
