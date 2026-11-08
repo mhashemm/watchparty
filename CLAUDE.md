@@ -88,7 +88,6 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 
 ## Conventions
 
-- Almost no code comments. Reasoning goes in the commit message.
 - Every Go test calls `t.Parallel()` and finishes in milliseconds. A delay the code
   owns is a struct field the test shortens, never a package `var`. Prove an absence
   with an ordering (a marker sent after), not a timeout. The only serial test is
