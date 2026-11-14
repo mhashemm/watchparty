@@ -2128,7 +2128,7 @@ func TestAResumeToANodeThatPlaysStopsTheParty(t *testing.T) {
 				}
 				n.apply(peer("a", c.resume))
 			}()
-			for _, want := range []string{"show-text paused for a: out of sync 5000", "set_property pause true"} {
+			for _, want := range []string{"show-text paused: out of sync with a 5000", "set_property pause true"} {
 				if got := next(t, requests); got != want {
 					t.Fatalf("sent %q, want %q", got, want)
 				}
@@ -2247,7 +2247,7 @@ func TestMembersWithOneNameAreToldApart(t *testing.T) {
 			n.apply(laptop("l2", `{"stamp":1,"at":30,"name":"pause","data":"no"}`))
 			n.apply(laptop("l1", `{"stamp":1,"at":30,"name":"pause","data":"no"}`))
 		}()
-		if got := next(t, requests); got != "show-text paused for laptop: out of sync 5000" {
+		if got := next(t, requests); got != "show-text paused: out of sync with laptop 5000" {
 			t.Fatalf("sent %q, want the party stopped for l1, and only for it", got)
 		}
 		n.mu.Lock()

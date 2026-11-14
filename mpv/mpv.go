@@ -922,7 +922,10 @@ func (c *Client) answer(hostname, reason string) error {
 	}
 	// why first, like a leave: the GUI's feed takes the pause that follows for this one, not
 	// for a pause of the person's own
-	if reason != "" {
+	if reason == outOfSync {
+		// the member only showed it: it may be this node that is out of step
+		c.showText(fmt.Sprintf("paused: %s with %s", outOfSync, hostname))
+	} else if reason != "" {
 		c.showText(fmt.Sprintf("paused for %s: %s", hostname, reason))
 	}
 	if playing {

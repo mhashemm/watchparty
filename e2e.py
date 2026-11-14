@@ -1150,7 +1150,7 @@ def p2p_suite():
     code = raw(nodes[A]["addr"], "/event", {"hit-me-up": STUB_ADDR, "counter": "999999", "hostname": STUB_HOST, "secret": SECRET},
                json.dumps(resume).encode())
     ok(f"a newer resume reaching {A} while it plays stops the party",
-       code == 204 and until(lambda: f"paused for {STUB_HOST}: out of sync" in osd(A) and get(A, "pause") is True, 5),
+       code == 204 and until(lambda: f"paused: out of sync with {STUB_HOST}" in osd(A) and get(A, "pause") is True, 5),
        f"HTTP {code}, {osd(A)[-3:]}")
     stub_stop(s5)
     drops = lambda: sum(s.startswith("dropped " + STUB_ADDR) for s in osd(A))
@@ -2427,9 +2427,9 @@ def gui_suite():
     ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
     js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
     ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
-    for why in ("joining", "out of sync"):
-        js(G, f'handle({json.dumps(notice("paused for Sam: " + why, "18:01:30"))}); handle({stops})')
-        ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and f"paused for Sam: {why}" not in feed(G), str(feed(G)[:3]))
+    for why, text in (("joining", "paused for Sam: joining"), ("out of sync", "paused: out of sync with Sam")):
+        js(G, f'handle({json.dumps(notice(text, "18:01:30"))}); handle({stops})')
+        ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
     js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")

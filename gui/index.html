@@ -1073,8 +1073,8 @@ function handle(line) {
       const li = addFeed(text, at);
       if (/^paused for .*: left$|^paused: lost the relay$/.test(text)) state.leftPause = true;
       // if this node was playing it stops next, and that is this line, not a pause of its own
-      const why = text.match(/^paused for .*: (joining|catching up|out of sync)$/);
-      state.stopping = why ? { li, why: why[1] } : null;
+      const why = text.match(/^paused for .*: (joining|catching up)$|^paused: (out of sync) with .*$/);
+      state.stopping = why ? { li, why: why[1] || why[2] } : null;
     } catch {}
   }
   if ((m = msg.match(/^now playing: (".*")$/))) {

@@ -816,7 +816,7 @@ func TestAMemberThatMissedAChangeIsChasedIntoStep(t *testing.T) {
 		"a resume, then it seeks":              {false, []func(*simNode) func(){resume}, func(b *simNode) func() { return seeks(b, 20) }, ""},
 		"a pause, alone":                       {true, []func(*simNode) func(){pause}, nil, ""},
 		"a pause, then it pauses":              {true, []func(*simNode) func(){pause}, func(b *simNode) func() { return sets(b, true) }, ""},
-		"a pause and a resume, alone":          {true, []func(*simNode) func(){pause, resume}, nil, "b said paused for a: out of sync"},
+		"a pause and a resume, alone":          {true, []func(*simNode) func(){pause, resume}, nil, "b said paused: out of sync with a"},
 		"a pause and a resume, then it pauses": {true, []func(*simNode) func(){pause, resume}, func(b *simNode) func() { return sets(b, true) }, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
