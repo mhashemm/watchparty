@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -258,6 +259,19 @@ func fileURIPath(uri string) (string, error) {
 }
 
 func hide(_ *exec.Cmd) {}
+
+// ownGroup starts the browser in a process group of its own, so killGroup reaches its
+// helpers too: Chrome's network service outlives the main process and writes into the
+// profile after it was deleted.
+func ownGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+// killGroup kills the browser and whatever of its helpers are still running. Called
+// again after the browser exited, the group is its helpers alone, or gone.
+func killGroup(cmd *exec.Cmd) {
+	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}
 
 func groupWindow(context.Context, string, string, time.Duration) {}
 

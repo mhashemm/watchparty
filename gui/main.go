@@ -435,6 +435,7 @@ func openWindow(url string) func() {
 		}
 		cmd := exec.Command(b.cmd[0], append(b.cmd[1:], browserArgs(b.name, url, profile)...)...)
 		cmd.Env = append(os.Environ(), "GOOGLE_API_KEY=no", "GOOGLE_DEFAULT_CLIENT_ID=no", "GOOGLE_DEFAULT_CLIENT_SECRET=no")
+		ownGroup(cmd)
 		if cmd.Start() != nil {
 			os.RemoveAll(profile)
 			continue
@@ -442,11 +443,13 @@ func openWindow(url string) func() {
 		gone := make(chan struct{})
 		go func() {
 			cmd.Wait()
+			// its helpers would write into the profile after it was deleted
+			killGroup(cmd)
 			removeProfile(profile)
 			close(gone)
 		}()
 		return func() {
-			cmd.Process.Kill()
+			killGroup(cmd)
 			<-gone
 		}
 	}
