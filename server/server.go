@@ -230,15 +230,20 @@ func (s *Server) AddAddress(addr string) error {
 	}
 	s.mu.RUnlock()
 
-	for a, p := range addresses {
-		_, _, err := s.hi(a, counter)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		p.address = a
-		s.add(p)
+	// together: one by one, each peer that vanished without a /bye held the join up
+	// for its own timeout
+	var wg sync.WaitGroup
+	for a := range addresses {
+		wg.Go(func() {
+			p, _, err := s.hi(a, counter)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			s.add(p)
+		})
 	}
+	wg.Wait()
 	return nil
 }
 

@@ -38,9 +38,10 @@ and then every event is rejected with `does not exists`. Use the printed address
 
 - `addr` may be `ip:port|hostname`, overriding the hostname the peer reports. Not
   documented anywhere else.
-- `/hi` goes to the bootstrap peer, then to every peer in its answer not yet known:
-  that gossip closes the mesh, so nobody needs the full list. Gossiped peers' counter
-  and hostname come from the bootstrap's map.
+- `/hi` goes to the bootstrap peer, then to every peer in its answer not yet known,
+  **all at once**: that gossip closes the mesh, so nobody needs the full list. One by
+  one, each peer that vanished without a `/bye` cost the joiner 30s before mpv opened.
+  Each peer's counter and hostname come from its own answer.
 - **Each peer is stored as soon as its own `/hi` succeeds**, not after the loop. It
   already has us and may send an event (a `joined`) while we greet the others; stored at
   the end, that event was refused with `does not exists` and counted as a strike.
