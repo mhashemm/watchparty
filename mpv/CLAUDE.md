@@ -179,7 +179,8 @@ reason: nobody starts the next one until someone resumes.
   (`heldSeek`): sent earlier it lands on another file, which loses it. A joiner hits this
   every time: `answer` sends the entry, then where on it. Another move drops the held seek.
 - **A position or a resume for another entry that doesn't win is dropped**, against where
-  this node is `heading`: it was sent before someone moved. A pause still stops it.
+  this node is `heading`: it was sent before someone moved. A pause still stops it. Its
+  sender is told where the party is (`answer`): the move may never have reached it.
 - Accepted: a seek reaching someone just before the move it depends on is lost, and a
   seek right after a move can lose to a stop on its way. e2e `[16]`, `[R15c]`.
 

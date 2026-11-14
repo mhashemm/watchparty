@@ -797,3 +797,35 @@ func TestNothingAJoinerDoesBeforeItIsAnsweredMovesTheParty(t *testing.T) {
 		})
 	}
 }
+
+// A node misses a move, which a mesh allows, and then does something on the entry the
+// party has left. What it sends carries the same stamp as the move it never heard, so it
+// is no older: it was dropped as belonging to another entry, and that node stayed behind
+// until someone else did something. Now it is told where the party is.
+func TestANodeThatMissedAMoveIsBroughtOver(t *testing.T) {
+	for name, does := range map[string]func(*simNode) func(){
+		"it seeks":   func(b *simNode) func() { return seeks(b, 40) },
+		"it resumes": func(b *simNode) func() { return sets(b, false) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, simEntries, "a", "b", "c")
+				a, b := s.nodes[0], s.nodes[1]
+				stopped(30, s.nodes...)
+				s.drop(a, b, playlistPos)
+				s.script = []func(){moves(a, 1)}
+				s.run()
+				delete(s.lost, [2]string{"a", "b"})
+				s.ticks = 20
+				s.script = []func(){does(b)}
+				s.run()
+				for _, n := range s.nodes {
+					if n.entry != 1 {
+						t.Errorf("seed %d: %s is on entry %d, want 1", seed, n.name, n.entry)
+					}
+				}
+				s.together(seed)
+			})
+		})
+	}
+}

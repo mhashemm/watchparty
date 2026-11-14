@@ -708,7 +708,14 @@ func (c *Client) apply(e IncomingMessage) {
 		err = c.followEntry(Event{Data: strconv.Itoa(*event.Entry), Stamp: event.Stamp, At: event.At, Entry: event.Entry}, e.HostName)
 	}
 	if err == nil && c.fromAnotherEntry(event) {
+		// made at the same moment as the move that took the party from that entry, which
+		// wins. The move may never reach its sender, so it is told where the party is.
 		log.Printf("ProcessIncomingEvents: from another entry [event=%s] [host=%s]\n", e.Event, e.HostName)
+		if event.Stamp >= 0 {
+			if err := c.answer(e.HostName, ""); err != nil {
+				log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
+			}
+		}
 		return
 	}
 	if err == nil {
