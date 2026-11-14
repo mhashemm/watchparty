@@ -1071,7 +1071,7 @@ function handle(line) {
     try {
       const text = JSON.parse(m[1]).command[1];
       const li = addFeed(text, at);
-      if (/^paused for .*: left$|^paused: lost the relay$/.test(text)) state.leftPause = true;
+      if (/^paused for .*: left$/.test(text)) state.leftPause = true;
       // if this node was playing it stops next, and that is this line, not a pause of its own
       const why = text.match(/^paused for .*: (joining|catching up)$|^paused: (out of sync) with .*$/);
       state.stopping = why ? { li, why: why[1] || why[2] } : null;
