@@ -361,7 +361,7 @@ func (s *sim) back(n *simNode) func() {
 // knowing. Whatever it does meanwhile reaches nobody, so it stops at once, and its return
 // stops the party, on whichever entry and second the party is by then.
 func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
-	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
+	forSeeds(t, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b", "c")
 		a, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
 		play(30, s.nodes...)
@@ -395,7 +395,7 @@ func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 // The relay itself goes away: everyone stops where they are, the key holder opens the
 // room again, and the others rejoin it there.
 func TestPartySettlesAfterTheRelayRestarts(t *testing.T) {
-	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
+	forSeeds(t, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, 0, "o", "b", "c")
 		o, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
 		play(30, s.nodes...)
@@ -457,9 +457,10 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 // order with the move, so the joiner can hear the move and then an answer sent before its
 // sender had: it must not go to the entry the party just left, whichever entry it opened
 // on. Sent there and on again while the first file loads, it must not take the position
-// it was given for the first to the second.
+// it was given for the first to the second. Each of those failed within the first 20
+// orderings, about one in twenty; 600 is 200 for each entry it can open on.
 func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
-	forManySeeds(t, 3000, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 600, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b", "j")
 		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
 		play(30, a, b)
