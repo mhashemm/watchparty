@@ -809,13 +809,18 @@ func (c *Client) answer(hostname, reason, name string) error {
 			return err
 		}
 	}
+	// for a node that fell behind it says why first, like a leave: the GUI's feed takes the
+	// pause that follows for this one, not for a pause of the person's own
+	if reason == catchingUp {
+		c.showText(fmt.Sprintf("paused for %s: %s", hostname, reason))
+	}
 	if playing {
 		err := c.pauseReq(true)
 		if err != nil {
 			return err
 		}
 	}
-	if reason != "" {
+	if reason != "" && reason != catchingUp {
 		c.showText(fmt.Sprintf("paused for %s: %s", hostname, reason))
 	}
 	c.mu.Lock()

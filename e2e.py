@@ -2380,6 +2380,11 @@ def gui_suite():
     got = js(G, f'[+{row}.dataset.at, {row}.querySelector("time").textContent]')
     want = js(G, '[+new Date(2026, 10, 5, 18, 0, 20), clock(new Date(2026, 10, 5, 18, 0, 20))]')
     ok("a row's moment and time are the log line's own", got == want, str((got, want)))
+    stops = json.dumps(line('Watch: broadcasted event: {"name":"pause","data":"yes"}', "18:01:00"))
+    js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:00"))}); handle({stops})')
+    ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
+    js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
+    ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
     js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")

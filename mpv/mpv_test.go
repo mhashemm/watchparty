@@ -1897,8 +1897,11 @@ func TestAnOlderChangeIsAnsweredNotApplied(t *testing.T) {
 	c, send, outgoing, requests := liveClient(t)
 	c.pos, c.stamp = 30, 3
 	go c.apply(peer("b", `{"stamp":2,"at":10,"name":"pause","data":"yes"}`))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("a playing party sent %q, want to stop itself", got)
+	// why first, so the GUI's feed doesn't take the pause for the person's own
+	for _, want := range []string{"show-text paused for b: catching up 5000", "set_property pause true"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("a playing party sent %q, want %q", got, want)
+		}
 	}
 	send(propertyChangeLine(pause, "yes", 0))
 	// its own pause, newer, and where it is, as for a party already stopped: in either
