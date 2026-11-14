@@ -376,8 +376,9 @@ func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 			a.setPause(false)
 		}}
 		s.run()
-		// only once the move has reached everyone still there: a join that crosses a move
-		// still in flight can strand the joiner, a first join as much as this one
+		// only once the move has reached everyone still there: c never hears it, and could
+		// take a stale position from a member who hasn't yet. The relay's order prevents
+		// that; this network, which delivers each pair's messages independently, doesn't.
 		s.ticks = 20
 		s.script = []func(){s.back(c)}
 		s.run()
@@ -454,13 +455,16 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 
 // A member moves to another entry just as someone joins. Members answer the joiner in any
 // order with the move, so the joiner can hear the move and then an answer sent before its
-// sender had: it must not go back to the entry the party just left.
+// sender had: it must not go to the entry the party just left, whichever entry it opened
+// on. Sent there and on again while the first file loads, it must not take the position
+// it was given for the first to the second.
 func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
-	forManySeeds(t, 1500, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 3000, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b", "j")
 		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
 		play(30, a, b)
 		j.c.joining = true
+		j.entry, j.c.current = int(seed%simEntries), int(seed%simEntries)
 		s.ticks = 20
 		s.script = []func(){func() {
 			a.mu.Lock()

@@ -733,7 +733,8 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	if c.joining {
 		c.passed = append(c.passed, c.heading())
 	}
-	c.loading = true
+	// a seek held for the entry it was heading to is not for this one
+	c.loading, c.heldSeek = true, ""
 	c.following = append(c.following, event.Data)
 	c.movedFrom = heading
 	if event.From != nil {
