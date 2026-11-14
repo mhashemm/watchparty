@@ -3,12 +3,15 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mhashemm/watchparty/mpv"
@@ -144,6 +147,162 @@ func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 	}
 }
 
+// answer is mpv handing back nothing to send again.
+func answer(m mpv.IncomingMessage) mpv.IncomingMessage {
+	if m.Reply != nil {
+		m.Reply <- nil
+	}
+	return m
+}
+
+// An event that fails to reach a peer leaves it behind on the sender's state: mpv is told
+// at once, and asked to send it again after 1s, 2s, 4s… up to 30s, until a send gets
+// through. More failures meanwhile start no second chase, and a send to a peer that
+// missed nothing tells mpv nothing.
+func TestAPeerThatMissedAnEventIsChased(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		incoming := make(chan mpv.IncomingMessage, 64)
+		s := New(t.Context(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+		p := &peer{address: "127.0.0.1:2", Hostname: "p"}
+		s.addresses[p.address] = p
+		fail := errors.New("peer unreachable")
+
+		s.track(p, nil)
+		s.track(p, fail)
+		s.track(p, fail)
+		start := time.Now()
+		var told []string
+		for range 8 {
+			synctest.Wait()
+			for len(incoming) > 0 {
+				m := answer(<-incoming)
+				told = append(told, fmt.Sprintf("%s (%s) missed %v, resend %v at %v", m.HostName, m.From, m.Missed, m.Resend, time.Since(start)))
+			}
+			time.Sleep(time.Second)
+		}
+		want := []string{"p (127.0.0.1:2) missed true, resend false at 0s", "p (127.0.0.1:2) missed false, resend true at 1s", "p (127.0.0.1:2) missed false, resend true at 3s", "p (127.0.0.1:2) missed false, resend true at 7s"}
+		if !slices.Equal(told, want) {
+			t.Fatalf("told mpv %q, want %q", told, want)
+		}
+		time.Sleep(100 * time.Second)
+		synctest.Wait()
+		for len(incoming) > 0 {
+			answer(<-incoming)
+		}
+		s.track(p, nil)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if len(incoming) > 0 {
+			t.Fatalf("told mpv %+v after p was reached", <-incoming)
+		}
+	})
+}
+
+// A wait in which this node sent the peer something anyway asks mpv for nothing: that send
+// carried its state, and each send to a peer that is down is a strike.
+func TestAChaseSkipsAWaitWithASendInIt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		incoming := make(chan mpv.IncomingMessage, 64)
+		c, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		s := New(c, incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+		p := &peer{address: "127.0.0.1:2", Hostname: "p"}
+		s.addresses[p.address] = p
+		fail := errors.New("peer unreachable")
+		start := time.Now()
+		var at []time.Duration
+		for i := range 8 {
+			if i == 0 || i == 1 {
+				s.track(p, fail)
+			}
+			synctest.Wait()
+			for len(incoming) > 0 {
+				if answer(<-incoming).Resend {
+					at = append(at, time.Since(start))
+				}
+			}
+			time.Sleep(time.Second / 2)
+		}
+		// sends at 0s and 0.5s: the wait to 1s had one, the wait to 3s none
+		if want := []time.Duration{3 * time.Second}; !slices.Equal(at, want) {
+			t.Fatalf("asked mpv at %v, want %v", at, want)
+		}
+	})
+}
+
+// The state mpv hands back goes to the peer that missed something, and to it alone: to a
+// member that holds it, a resume sent again says it got the first one late. Once it gets
+// through, the chase ends.
+func TestAResendGoesToThatPeerAlone(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		incoming := make(chan mpv.IncomingMessage, 64)
+		s := New(t.Context(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+		sent := make(chan string, 8)
+		s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			b, _ := io.ReadAll(r.Body)
+			sent <- r.URL.Host + r.URL.Path + " " + string(b)
+			return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})}
+		p, q := &peer{address: "127.0.0.1:2", Hostname: "p"}, &peer{address: "127.0.0.1:3", Hostname: "q"}
+		s.addresses[p.address], s.addresses[q.address] = p, q
+		s.track(p, errors.New("peer unreachable"))
+		synctest.Wait()
+		<-incoming
+		time.Sleep(time.Second)
+		synctest.Wait()
+		m := <-incoming
+		if !m.Resend || m.From != p.address {
+			t.Fatalf("told mpv %+v, want to hand back its state for p", m)
+		}
+		m.Reply <- []byte(`{"name":"pause","data":"no","again":true}`)
+		synctest.Wait()
+		if got := <-sent; got != `127.0.0.1:2/event {"name":"pause","data":"no","again":true}` {
+			t.Fatalf("sent %s, want the state to p alone", got)
+		}
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if len(sent) > 0 || len(incoming) > 0 {
+			t.Fatalf("sent %d and told mpv %d more after it got through", len(sent), len(incoming))
+		}
+	})
+}
+
+// The chase ends with the peer, dropped or replaced by its own /hi, and with the party.
+func TestAChaseEndsWithThePeerAndTheParty(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]func(*Server, *peer, context.CancelFunc){
+		"dropped":  func(s *Server, p *peer, _ context.CancelFunc) { delete(s.addresses, p.address) },
+		"replaced": func(s *Server, p *peer, _ context.CancelFunc) { s.addresses[p.address] = &peer{address: p.address} },
+		"party":    func(_ *Server, _ *peer, cancel context.CancelFunc) { cancel() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				incoming := make(chan mpv.IncomingMessage, 64)
+				c, cancel := context.WithCancel(t.Context())
+				s := New(c, incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+				p := &peer{address: "127.0.0.1:2", Hostname: "p"}
+				s.addresses[p.address] = p
+				s.track(p, errors.New("peer unreachable"))
+				synctest.Wait()
+				<-incoming
+				s.mu.Lock()
+				end(s, p, cancel)
+				s.mu.Unlock()
+				// returns only once every goroutine in the bubble has
+				time.Sleep(time.Hour)
+				synctest.Wait()
+				if len(incoming) > 0 {
+					t.Fatalf("told mpv %+v once the chase should have ended", <-incoming)
+				}
+			})
+		})
+	}
+}
+
 // /hi from a node playing another file is refused before it becomes a peer.
 func TestHiRefusesADifferentFile(t *testing.T) {
 	t.Parallel()
@@ -232,6 +391,24 @@ func TestPeerIsKnownAsSoonAsItAnswersHi(t *testing.T) {
 	}
 	if res.Code != http.StatusNoContent {
 		t.Fatalf("b's event while c was being greeted: %d, want 204", res.Code)
+	}
+}
+
+// Members are told apart by the address they advertise, not by name: two can share one.
+// mpv keys every per-member rule on From, and shows HostName.
+func TestAnEventSaysWhichMemberSentIt(t *testing.T) {
+	t.Parallel()
+	incoming := make(chan mpv.IncomingMessage, 8)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+	for _, addr := range []string{"127.0.0.1:2", "127.0.0.1:3"} {
+		s.addresses[addr] = &peer{address: addr, Hostname: "laptop"}
+		req := httptest.NewRequest(http.MethodPost, "/event", strings.NewReader(`{"name":"joined"}`))
+		req.Header.Set(addressHeaderKey, addr)
+		req.Header.Set(counterHeaderKey, "1")
+		s.Event(httptest.NewRecorder(), req)
+		if m := <-incoming; m.HostName != "laptop" || m.From != addr {
+			t.Fatalf("%s's event reached mpv from %q (%q), want laptop (%s)", addr, m.HostName, m.From, addr)
+		}
 	}
 }
 

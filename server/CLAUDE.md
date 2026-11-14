@@ -74,6 +74,21 @@ stops replays and out-of-order deliveries from the parallel fan-out. `Shutdown` 
 - Only the node that generated an event broadcasts it, so a node notices a dead peer
   only when it drives something itself: eviction is per node, not simultaneous.
 
+## Missed events (`track`, `chase`)
+
+Each event is the sender's whole state, so a peer that missed one is behind until another
+reaches it. mpv is told `Missed`; after 1s, 2s, 4s… up to 30s, `resend` asks it for its state
+(`Resend`, `Reply`) and posts it to that peer alone, until a send gets through
+(`mpv/CLAUDE.md`). `/bye` is not tracked. A "failed" send may still land, late: a stalled
+process reads it when it runs again.
+
+- **From a goroutine, never the failing send:** `BroadcastEvents` is waiting for it.
+- **To that peer alone:** a resume sent again tells a member that already plays it that it
+  got the first late, which would be wrong for everyone else.
+- **Not at once, and not after a wait that had a send to that peer:** that one carried the
+  state, and every send to a peer that is down is a strike. e2e's `-evictAfter` of 1ms
+  evicts on the third, and `[13]`, `[13c]` count them.
+
 ## Traps
 
 - **Notices go through `notify`, a non-blocking send.** `AddAddress` runs before mpv has

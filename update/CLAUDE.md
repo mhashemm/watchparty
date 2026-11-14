@@ -20,5 +20,6 @@ mindset and trust model: `SECURITY.md` (repo root).
   adds the suffix per `GOOS`/`GOARCH`.
 - **`replaceExe` is split by OS.** Unix renames over the running file (the kernel keeps
   the open inode). Windows can't, so it renames the running `.exe` to `.old` (removed on
-  the next swap) with a rollback. `go build` compiles only one half, so check the other
-  with `GOOS=windows go build ./update`.
+  the next swap) with a rollback, waiting out (`busyFor`) a file another process holds,
+  such as an antivirus scanning a new `.exe`. `go build` compiles only one half, so check
+  the other with `GOOS=windows go build ./update`.

@@ -37,21 +37,22 @@ Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), 
 - **The first change per property is swallowed (`seen`).** An observe makes mpv send the
   current value at once; a fresh node is paused, so it would broadcast `time-pos=0` and
   rewind everyone. The state is still recorded.
-- **Every `time-pos` updates `c.pos`, echo or not.** It is what every pause carries.
-- **A pause goes out with its position:** `paused-at` = `c.pos`, or, if `pauseParty` set
-  a reason, a `time-pos` plus `pause-reason` (`pauseExtras`). Those extras go out even
-  when the pause itself was an echo, so a seek that raced a peer's pause isn't lost.
+- **Every `time-pos` updates `c.pos`, echo or not.** It is what every pause carries (`at`).
+- **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
+  (`pauseExtras`), even when the pause itself was an echo, so a seek that raced a peer's
+  pause isn't lost.
+- **mpv's report of a pause this node applied is when it stops or starts** (`c.paused`),
+  not the reply to the set: the next `time-pos` can come first, and while stopped it reads
+  as a seek, which stops the party it was resuming with.
 
 ### Echo suppression (`applied`, `seeks`)
 
 Applying a peer's change makes mpv report it back. Without suppression b rebroadcasts
-a's pause to a, and the relay, which has no counters, loops forever. An origin id in
-the envelope was rejected: re-stamping an echo needs the same correlation, plus a wire
-change every transport must honour.
+a's pause to a, and the relay, which has no counters, loops forever.
 
-- **Mark before the IPC call** (`pause()` sets `applied`, `seekTo()` appends to `seeks`): the echo can arrive before `do()` returns.
+- **Mark before the IPC call** (`commit` and `resume` set `applied`, `mark` appends to `seeks`): the echo can arrive before `do()` returns.
 - `pause` matches exactly and deletes the marker. A no-op set emits nothing, so
-  `pause()` returns early on one and leaves no marker dangling.
+  none is marked for a pause mpv already has.
 - `time-pos` matches any entry of `seeks` (every seek applied since the last resume,
   capped at 16) within **±0.1s**. On a match at entry *i*, earlier entries are dropped
   (mpv handles seeks in order) and *i* becomes the echoed value, because one seek can
@@ -69,7 +70,7 @@ step, so that node pauses everyone with a reason:
   `c.paused` is false, so until `playback-restart` (`peerSeek`) a `seek` isn't ours. mpv folds seeks.
 - **`buffering`**: `paused-for-cache` turns `yes` while playing.
 - **`still buffering`**: a local resume while `stalled` is caught and not broadcast.
-  A **peer's** resume while `stalled` never reaches mpv: `pause()` refuses it and sends
+  A **peer's** resume while `stalled` never reaches mpv: `resume()` refuses it and sends
   pause, position and reason itself. Applying it and re-pausing doesn't work, since mpv
   folds the two sets into no `property-change`.
 
@@ -84,41 +85,60 @@ e2e `[R6b]`, `[R11f]`.
 **It drains `incoming` from `New`, not from `ready`.** A slow load (a URL, a slow disk)
 must never make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked
 relay read lets the relay's 64-frame buffer fill and drop the member. Until `ready` it
-keeps only the latest `pause` and `time-pos` plus the notices in order, and drops answers
-(`start-pos`, a `playlist-pos` with no `From`): they are to someone else's join, since this one
-hasn't said `joined` yet. Then it seeks where a
-continued party stopped (`resumeAt`, marked like a peer's seek, so not broadcast), applies
-position (mpv starts `--pause`d, so it lands before any resume), pause, announces `joined`,
-then the notices. e2e `[R11d]`.
+keeps the notices in order and, of every `pause` and `time-pos`, only the newest **by
+stamp**: each says the party's whole state, and an older one applied after would be
+answered as behind. Then it seeks where a continued party stopped (`resumeAt`, marked like
+a peer's seek, so not broadcast), applies that one, announces `joined`, then the notices.
+e2e `[R11d]`.
 
-- `time-pos` is applied only while paused.
-- **`paused-at` is followed only from the peer whose pause we applied** (`pausedBy`), so
-  two nodes pausing at once don't swap positions, and not if within 0.1s (`at`). `[R11g]`.
+### One rule for who follows whom (`stamp`)
 
-### Joining mid-party (`joined` → `welcome` → `start-pos` → `arrive`)
+Every message says the state it was sent from (`tag`, `held`): a `stamp` (a Lamport clock),
+`paused`, `at` (where it stopped, or resumes from), in a playlist `entry`; one missing any is
+refused (`stateOf`), and `take` weighs it. A move while playing says stopped. A node's own
+change takes the next stamp, **written under the lock that decided the event goes out**
+(`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
+
+- **Newer is taken. The same stamp means made at once, and the safer wins for everyone**
+  (`over`): the higher entry, stopped over playing, the earlier second.
+- **Older and saying another state means its sender missed something** (`answer`, "catching
+  up"): the party stops as for a join and says where it is. Older and the same (`agrees`), or
+  sent `again`, only crossed something newer. A tie's loser is told quietly: it may not have heard.
+- **A resume reaching a node that plays stops the party** ("out of sync"): newer, it missed
+  the pause between; a tie from a member the mesh failed to reach (`Missed`) that sent
+  nothing newer since; or the resume it took from a member, sent `again` by it: the first
+  came late, as a stalled node's does (`[13d]`). `Resend` goes to that member alone.
+- **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
+  relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
+  it is answered wins, while joiners still order among themselves; `Opened` takes 1.
+- **A newer state is taken whole, under the lock that weighed it, before mpv is told**
+  (`commit`: stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv
+  refuses is unmarked by `release`, where a new step adds its undo, and the node `announce`s
+  unless mpv is gone). Taken apart, it holds the party's stamp on its own entry or second, a
+  tie it can win; so it speaks for the entry it is **heading** to, never mpv's (`held`). A
+  newer resume on another entry stops the party: loading, it can't keep up.
+- **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
+  stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
+
+### Joining mid-party (`joined` → `answer`)
 
 A joiner opens at 0, paused, and would stay behind until the next seek.
 
-1. Once its file has loaded, the joiner sets `joining` and broadcasts `joined`, after the
-   held events so a held resume can't clear it. So the party pauses only when the
-   joiner can actually play, and a joiner whose mpv fails pauses nobody.
-2. Every member, in `welcome`, pauses its own mpv if playing (not marked `applied`, so
-   it goes out as its own pause), shows "paused for X: joining" either way (another
-   member's pause often arrives first), and broadcasts `start-pos` = `target()`, which counts
-   a seek not landed yet, or `settling` drags everyone back to the spot it is leaving. A
-   member still `joining` doesn't answer: its position isn't the party's.
-3. The joiner takes the **first** `start-pos` only: applies a pause as from that peer
-   (it can beat the pauses), then the seek, unless already within 0.1s. Members stop a moment
-   apart, so everyone then settles on the earliest stop (`settling`, below).
-4. Any resume or seek clears `joining`, so the room's first node stops being a joiner.
-   **So does `Opened`**, queued locally by the relay client before its first frame when this
-   node opened the room with the key, so a continued party resumes where the key holder stopped.
-5. **A dropped relay connection is a join again.** The relay client queues `Lost`, and the
-   node pauses itself, notice first like a leave, as nothing it does reaches the party;
-   then `Back`, and it says `joined` again (`announce`). Neither within `endGraceSeconds` of
-   the end. Accepted: if every member returns before the relay missed any, nobody answers.
-
-e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
+1. Once its file has loaded, the joiner broadcasts `joined`, after what it heard while
+   loading. So the party pauses only when the joiner can actually play, and a joiner whose
+   mpv fails pauses nobody.
+2. Every member, in `answer`, shows "paused for X: joining", **then** stops (the GUI's feed
+   merges the two into "paused by you: joining", as for catching up) and says where it is.
+   **One that was playing answers by stopping:** it pauses its own mpv (not marked
+   `applied`, so it goes out as its own pause, which says where); a `time-pos` beside it
+   could carry the stamp from before that pause, and read as falling behind. One stopped
+   sends a `time-pos`. A joiner only says where it is, quietly: only joiners take it.
+3. The joiner takes whatever it hears first, as newer; members stop a moment apart with
+   one stamp, so everyone, joiner included, settles on the earliest (`over`).
+4. **A dropped relay connection is a join again:** `Lost`, and the node pauses itself, notice
+   first like a leave, as nothing it does reaches the party; then `Back`, and `joined` again.
+   Neither within `endGraceSeconds` of the end. Accepted: if every member returns before
+   the relay missed any, nobody answers. e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]`.
 
 ### A member leaving (`left`)
 
@@ -127,14 +147,13 @@ relay loses, pauses the party. Reading the text means an already deployed relay 
 P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's next send.
 
 - Each node pauses itself and it goes out as its own pause, so a node whose notice was
-  lost still stops. Nodes stop a moment apart, so until the next resume `settling` makes
-  `align` follow only an earlier `paused-at`, even over the pauser's: they settle on the
-  earliest stop. One heard before settling began is kept (`earliest`) and followed then.
+  lost still stops. Nodes stop a moment apart with one stamp, so they settle on the
+  earliest stop (`over`).
 - **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
   and a pause would hold everyone else just short of it. So `duration` is observed.
 - A notice shows first, so the GUI's feed can tell this pause from a person's. `[14]`, `[R14]`, `[R15h]`.
 
-### Playlists (`entries`, `followEntry`)
+### Playlists (`entries`, `adopt`)
 
 Only with `Config.Playlist` (`MPV.md`, "Playlists"), where everyone's list is identical
 (`party/CLAUDE.md`), so an index means the same file to all. `playlist-pos` moving, by hand
@@ -142,47 +161,28 @@ or at the end of a file, goes out raw, and while playing also pauses the party w
 reason: nobody starts the next one until someone resumes.
 
 - A peer's index is bounds-checked and only ever sets `playlist-pos`.
-- **`followEntry` checks again after pausing, under the lock that sets `loading`.** Two
-  players reach the end together, and its own move can arrive during the pause. Setting
-  the same entry then emits nothing, and `loading` waits for a load that already happened.
-- **`welcome` always names the entry it is heading to**, even while `joining`.
-- **`followEntry` pauses first**, so the file opens stopped, and marks `applied`, so
+- **`commit` sets `loading` before mpv is told.** Two players reach the end together, so
+  mpv's own move can land while it stops; set later, `loading` waited for a load already
+  done, holding every seek. Setting the entry mpv already reached is a no-op (`MPV.md`).
+- **`adopt` pauses before a move**, so the file opens stopped, and marks `applied`, so
   mpv's report isn't sent back. It skips one it is on or already headed to: every member
   answers a joiner, and two nodes often reach the end together.
-- **Only a node still `joining` follows an answer to a joiner** (a `playlist-pos` with no
-  `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
-  before two people crossed would otherwise send each to the other's entry, for good.
-  **Never to an entry it, or a move it heard, left since it joined (`passed`):** a member
-  answers before it hears of a move, and that answer took the joiner back for good.
-- **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
-  answers the other, and following both ways would swap them. An answer **marked `party`**
-  (sent by a member no longer `joining`), or from anyone whose join it didn't hear, is
-  the party's, and is followed, lower or not: a relay opener says `joined` too, before the
-  relay tells it it opened the room. **After one, a fellow
-  joiner's entry is ignored** (`heardParty`), since it only says where that joiner was.
 - **`following` queues moves:** the next can overtake mpv's report of the last (`MPV.md`). A
   report drops entries up to its own; `file-loaded` clears the rest once this node is where it
   headed, as there-and-back can report nothing. mpv's first report of where it started uses up
   nothing: it can land after a peer sent this node elsewhere.
 - **Any other report is a key press and clears the queue,** so the party hears every report
-  from there on. Its `From` is where this node was heading, or the tie rule takes it for a crossing.
-- **A switch resets `c.pos` and `seeks` to 0.** The old position would go out with the
-  pause, and the new file's `time-pos` 0 would go out as a seek.
-- **`loading` holds a seek until the `file-loaded` of the entry it is heading to**
-  (`heldSeek`): sent earlier it lands on another file, which loses it. A joiner hits this
-  every time: `welcome` sends the entry, then `start-pos`. Another move drops the held seek.
-- **Every message says its entry (`tagged`).** A position or a resume for another
-  entry is dropped, against where this node is `heading`, since it was sent before someone
-  moved. A pause still counts. A table of who is on what can't do this: a follower doesn't
-  announce its move, so the table would go stale and drop its later seeks.
-- **Two moves that left the same entry settle on the higher (`movedFrom`, `From`).** Each
-  would otherwise follow the other and swap. Dropping them would strand both. Any other
-  move is followed, lower or not, so someone who missed one catches up on the next.
-- Accepted: a seek reaching someone just before the move it depends on is lost. A node
-  that really is on another entry stays paused until the next move, since its resumes
-  and everyone else's are dropped. A seek right after a move can lose to a stop on its way.
-  A joiner that missed a move can take a stale position, which ends `joining` before the
-  true entry arrives: P2P only, the relay keeps each member's order. e2e `[16]`, `[R15c]`.
+  from there on.
+- **A switch resets `c.pos` and `seeks` to 0** (`clear`). The old position would go out with
+  the pause, and the new file's `time-pos` 0 would go out as a seek.
+- **`loading` holds a seek until the entry it is heading to has loaded** (`heldSeek`), or it
+  lands on another file and is lost; another move drops it. **The loaded entry is `start-file`'s
+  id, never `current`:** mpv can report the entry after `file-loaded` (`MPV.md`).
+- **A pause, seek or resume from another entry that doesn't win** was sent before someone
+  moved: it loses on the entry, and its sender is told where the party is (`answer`, which
+  stops a playing node): the move may never have reached it.
+- Accepted: a seek reaching someone just before the move it depends on is lost, and a
+  seek right after a move can lose to a stop on its way. e2e `[16]`, `[R15c]`.
 
 ## Windows
 

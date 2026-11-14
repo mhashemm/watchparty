@@ -129,6 +129,8 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   failed bind.
 - A failed `-addrs` peer is logged, not fatal, except `ErrDifferentFile` and
   `ErrWrongSecret`, **unless every one failed** (`errNobody`): that joiner would play alone.
+- **Given no `-addrs`, it tells mpv `Opened`**, as the relay client does for the key holder:
+  this node started the party, so its entry and position are the party's.
 - An `EvictAfter` of zero (the GUI) means `DefaultEvictAfter`.
 - **`upnpLogger` flattens control characters:** its values come from whatever answers
   SSDP on the LAN, and a newline in one would start a new line for the GUI to read.

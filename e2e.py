@@ -64,10 +64,16 @@ STUB_HOST = "slowpeer"
 
 def run_stub(addr, peer, register):
     port = int(addr.rsplit(":", 1)[1])
+    # SIGINT goes to any thread that doesn't block it: a handler thread's only sets a flag,
+    # and the main thread slept on, so blocked in every thread, the main one waits for it
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = self.rfile.read(int(self.headers.get("content-length") or 0))
+            if self.path == "/event" and os.environ.get("E2E_STUB_EVENTS"):
+                with open(os.environ["E2E_STUB_EVENTS"], "ab") as f:
+                    f.write(body + b"\n")
             if self.path == "/hi":
                 body = b"{}"
                 self.send_response(200)
@@ -91,11 +97,7 @@ def run_stub(addr, peer, register):
                                               "file": os.environ["E2E_FILE"], "secret": os.environ["E2E_SECRET"]})
         urllib.request.urlopen(req, timeout=10).read()
     print("ready", flush=True)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+    signal.sigwait({signal.SIGINT})
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "--stub":
@@ -556,11 +558,12 @@ def raw(addr, endpoint, headers, body=b""):
         return e.code
 
 
-def stub(peer, register=True):
+def stub(peer, register=True, events=""):
     cmd = [sys.executable, __file__, "--stub", STUB_ADDR, peer]
     if not register:
         cmd.append("noregister")
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={**os.environ, "E2E_FILE": fingerprint(A), "E2E_SECRET": SECRET})
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True,
+                         env={**os.environ, "E2E_FILE": fingerprint(A), "E2E_SECRET": SECRET, "E2E_STUB_EVENTS": events})
     stubs.append(p)
     # blocks until the stub is listening and registered; a stale stub left on the
     # port would answer for it and the strike loops in [13] would never end
@@ -708,6 +711,9 @@ def end(n):
     js(n, "window.asked = null")
     click(n, "#go")
     until(lambda: status(n) == "The party has ended.")
+    # seeing the party stop, the page reloads the saved settings without waiting; landing
+    # after the next case's fill, it put the saved mpv options back ([G19e] under --jitter)
+    until(lambda: js(n, "window.loading") == 0)
     return js(n, "window.asked")
 
 
@@ -1118,6 +1124,41 @@ def p2p_suite():
     until(lambda: dropped(A, STUB_ADDR), 5)
     ok("3rd consecutive strike evicts", dropped(A, STUB_ADDR))
 
+    print("\n[13c] a peer that missed a pause and a resume is sent the state again once it is back; a newer resume reaching a node that plays stops the party")
+    s4 = stub(nodes[A]["addr"])
+    must("stub peer joined again", until(lambda: osd(A).count(f"{STUB_HOST} has joined") >= 2, 5))
+    setp(A, "pause", False)
+    must(f"{A} plays", until(lambda: get(A, "pause") is False))
+    stub_stop(s4)
+    base = strikes(A, STUB_ADDR, STUB_HOST)
+    toggle()
+    toggle()
+    ok("both were missed", strikes(A, STUB_ADDR, STUB_HOST) == base + 2 and get(A, "pause") is False,
+       f"{strikes(A, STUB_ADDR, STUB_HOST) - base} failures logged")
+    # back before the chase's next try, 2s after the last send
+    events = os.path.join(os.path.dirname(nodes[A]["log"]), "stub-events.log")
+    s5 = stub(nodes[A]["addr"], register=False, events=events)
+    got = lambda: [json.loads(l) for l in open(events).read().splitlines()] if os.path.exists(events) else []
+    ok("it was sent the state again, playing", until(lambda: any(e.get("again") and e.get("paused") is False for e in got()), 10),
+       f"{got()}")
+    ok(f"{A} stopped nobody for it: the state lands where it is behind", get(A, "pause") is False and
+       not any("out of sync" in t for t in osd(A)), osd(A)[-3:])
+    # the stub plays out of step now, and resumes: newer than anything A holds
+    resume = {"stamp": 1 << 20, "paused": False, "at": max(get(A, "time-pos") - 10, 0), "event": "property-change",
+              "name": "pause", "data": "no"}
+    code = raw(nodes[A]["addr"], "/event", {"hit-me-up": STUB_ADDR, "counter": "999999", "hostname": STUB_HOST, "secret": SECRET},
+               json.dumps(resume).encode())
+    ok(f"a newer resume reaching {A} while it plays stops the party",
+       code == 204 and until(lambda: f"paused: out of sync with {STUB_HOST}" in osd(A) and get(A, "pause") is True, 5),
+       f"HTTP {code}, {osd(A)[-3:]}")
+    stub_stop(s5)
+    drops = lambda: sum(s.startswith("dropped " + STUB_ADDR) for s in osd(A))
+    before, tries = drops(), 0
+    while drops() == before and tries < 8:
+        toggle()
+        tries += 1
+    must("and is dropped once gone", drops() > before)
+
     print("\n[13b] with the default -evictAfter, a burst of strikes does not evict a peer")
     launch("nodeKeep", evict=None)
     until(lambda: booted("nodeKeep"), BOOT)
@@ -1133,6 +1174,25 @@ def p2p_suite():
        strikes("nodeKeep", STUB_ADDR, STUB_HOST) >= 4 and not dropped("nodeKeep", STUB_ADDR),
        f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
     stop("nodeKeep")
+
+    print("\n[13d] a member whose process stalls past the send timeout misses a resume; once it runs, the party ends in step")
+    X, Y = survivors[-1], survivors[1]
+    setp(Y, "pause", True)
+    must("the party is stopped", until(lambda: all(get(n, "pause") is True for n in survivors)) and quiet(survivors))
+    base = strikes(Y, nodes[X]["addr"], X)
+    os.kill(nodes[X]["proc"].pid, signal.SIGSTOP)
+    try:
+        setp(Y, "pause", False)
+        stalled = until(lambda: strikes(Y, nodes[X]["addr"], X) > base, 15)
+    finally:
+        os.kill(nodes[X]["proc"].pid, signal.SIGCONT)
+    ok(f"{Y}'s resume timed out on {X}", stalled, log(Y)[-300:])
+    quiet(survivors, 30)
+    end = {n: (get(n, "pause"), get(n, "time-pos")) for n in survivors}
+    spread = max(t for _, t in end.values()) - min(t for _, t in end.values())
+    stopped = {p for p, _ in end.values()}
+    ok("the party ends in step", len(stopped) == 1 and spread < (0.5 if True in stopped else 1.5),
+       f"{end}; {X} saw {osd(X)[-3:]}, {Y} saw {osd(Y)[-3:]}")
 
     print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor, which pauses the party")
     setp(survivors[1], "pause", False)
@@ -1167,6 +1227,7 @@ def p2p_suite():
     launch("epGuest", nodes["epHost"]["addr"], media=f"{folder}/e1.mkv", port=PORTS["lagB"], playlist=True)
     must("the second node is up", until(lambda: booted("epGuest") and "epGuest has joined" in osd("epHost"), BOOT))
     resolve("epGuest")
+    ok("whoever started the party answers a joiner before anyone has played", until(lambda: "paused for epGuest: joining" in osd("epHost")), osd("epHost"))
     ipc(nodes["epHost"]["sock"], "playlist-next")
     ok("the other node follows", until(lambda: get("epGuest", "filename") == "e2.mkv"), get("epGuest", "filename"))
     ok("the invite asks for the playlist", re.search(r"share is -addrs \S+ -secret \S+ -playlist\n", log("epHost")), log("epHost")[:300])
@@ -1830,21 +1891,46 @@ def media_suite():
         stop(n)
     slow.close()
 
-    print("\n[R15g] two people moving at once end up together, on the higher entry")
-    slow = lag(PORTS["upnpNode"], PORTS["relay"], 0.5)
+    print("\n[R15g] a joiner syncs with the party, never the party with it; then two people moving at once end up together, on the higher entry")
+    hop = {"s": 1.5}  # slow enough at first that epG can act before epF's answer to its join arrives
+    slow = lag(PORTS["upnpNode"], PORTS["relay"], lambda _: lambda: hop["s"])
     via = f"ws://127.0.0.1:{PORTS['upnpNode']}"
     for n in ("epF", "epG"):
         launch(n, room="crossing", media=f"{folder}/video3.mkv", relay=via, playlist=True)
     must("both are in", until(lambda: booted("epF") and booted("epG") and ("epG has joined" in osd("epF") or "epF has joined" in osd("epG")), BOOT))
     for n in ("epF", "epG"):
         resolve(n)
+    # epF opened the room and has done nothing since, so its stamp is the lowest a party's can be
+    ipc(nodes["epG"]["sock"], "playlist-next")
+    ok("a joiner that moves before it is answered is brought back to the party's entry", until(lambda: "from video10.mkv to video3.mkv, by epF" in osd("epG")), str(osd("epG")))
+    ok("and the party never followed it", get("epF", "filename") == "video3.mkv" and not any(t.startswith("from ") for t in osd("epF")), str(osd("epF")))
+    hop["s"] = 0.5
     must("on the middle entry", until(lambda: get("epF", "filename") == get("epG", "filename") == "video3.mkv"))
-    time.sleep(QUIET)
+    # epF opened the room. Until its answer reaches epG, a move by epG is older than epF's
+    # and loses to it, whichever entry is higher: the relay keeps epF's order, so a seek
+    # that arrives proves the answer before it did.
+    must("epF has answered the join", until(lambda: "paused for epG: joining" in osd("epF")))
+    setp("epF", "time-pos", 1)
+    must("and the answer has arrived", until(lambda: "synced by epF" in osd("epG")))
     ipc(nodes["epF"]["sock"], "playlist-prev")
     ipc(nodes["epG"]["sock"], "playlist-next")
     ok("they settle on the higher one", until(lambda: get("epF", "filename") == get("epG", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epF", "epG")]))
     time.sleep(2)
     ok("and stay there", get("epF", "filename") == get("epG", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epF", "epG")]))
+
+    print("\n[R15g2] two people seeking at once end up on the earlier second, and a resume crossing a seek stops both there")
+    where = lambda: [get(n, "time-pos") for n in ("epF", "epG")]
+    setp("epF", "time-pos", 3)
+    setp("epG", "time-pos", 6)
+    ok("both seeks end on the earlier one", until(lambda: all(near(v, 3, 0.3) for v in where())), str(where()))
+    time.sleep(2)
+    ok("and stay there, not swapped", all(near(v, 3, 0.3) for v in where()), str(where()))
+    setp("epF", "pause", False)
+    setp("epG", "time-pos", 8)
+    stopped = lambda: all(near(v, 8, 0.3) for v in where()) and all(get(n, "pause") is True for n in ("epF", "epG"))
+    ok("a resume crossing a seek stops both where the seek went", until(stopped), f'{where()} {[get(n, "pause") for n in ("epF", "epG")]}')
+    time.sleep(2)
+    ok("and neither plays on alone", stopped(), f'{where()} {[get(n, "pause") for n in ("epF", "epG")]}')
     for n in ("epF", "epG"):
         stop(n)
 
@@ -2354,6 +2440,14 @@ def gui_suite():
     got = js(G, f'[+{row}.dataset.at, {row}.querySelector("time").textContent]')
     want = js(G, '[+new Date(2026, 10, 5, 18, 0, 20), clock(new Date(2026, 10, 5, 18, 0, 20))]')
     ok("a row's moment and time are the log line's own", got == want, str((got, want)))
+    stops = json.dumps(line('Watch: broadcasted event: {"name":"pause","data":"yes"}', "18:01:00"))
+    js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:00"))}); handle({stops})')
+    ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
+    js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
+    ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
+    for why, text in (("joining", "paused for Sam: joining"), ("out of sync", "paused: out of sync with Sam")):
+        js(G, f'handle({json.dumps(notice(text, "18:01:30"))}); handle({stops})')
+        ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
     js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")

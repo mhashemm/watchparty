@@ -42,7 +42,7 @@ func newRelayConn(addr string, incoming chan mpv.IncomingMessage) *relayConn {
 		// a test that doesn't read it still drops connections, and Connect tells mpv
 		incoming = make(chan mpv.IncomingMessage, 16)
 	}
-	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, wait: time.Hour, up: make(chan struct{}, 1)}
+	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", id: "i1", session: "s1", incoming: incoming, retry: time.Millisecond, wait: time.Hour, up: make(chan struct{}, 1)}
 }
 
 func waitDone(t *testing.T, done <-chan struct{}, what string) {
@@ -212,7 +212,7 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 		}
 		sessions <- r.URL.Query().Get("session")
 		conn := accept(t, w, r)
-		frame := `{"hostname":"peer","event":{"event":"property-change","name":"pause","data":"yes"}}`
+		frame := `{"hostname":"peer","from":"p1","event":{"event":"property-change","name":"pause","data":"yes"}}`
 		conn.Write(r.Context(), websocket.MessageText, []byte(frame))
 		if n == 1 {
 			conn.CloseNow()
@@ -234,7 +234,7 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 			}
 			i++
 			e := mpv.Event{}
-			if err := json.Unmarshal(m.Event, &e); err != nil || m.HostName != "peer" || e.Name != "pause" {
+			if err := json.Unmarshal(m.Event, &e); err != nil || m.HostName != "peer" || m.From != "p1" || e.Name != "pause" {
 				t.Fatalf("frame %d arrived as %+v (%v)", i, m, err)
 			}
 		case <-time.After(5 * time.Second):
@@ -346,7 +346,7 @@ func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
 
 	select {
 	case b := <-got:
-		want := `{"hostname":"me","event":` + event + `}`
+		want := `{"hostname":"me","from":"i1","event":` + event + `}`
 		if string(b) != want {
 			t.Fatalf("sent %s, want %s", b, want)
 		}
@@ -383,7 +383,7 @@ func TestEventsBeforeTheFirstConnectionAreHeld(t *testing.T) {
 
 	select {
 	case b := <-got:
-		if want := `{"hostname":"me","event":{"name":"joined"}}`; string(b) != want {
+		if want := `{"hostname":"me","from":"i1","event":{"name":"joined"}}`; string(b) != want {
 			t.Fatalf("sent %s, want %s", b, want)
 		}
 	case <-time.After(5 * time.Second):
