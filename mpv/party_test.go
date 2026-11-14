@@ -662,7 +662,7 @@ func TestJoinersTakeTheOpenersSpot(t *testing.T) {
 
 // joins makes n a node that hasn't heard the party yet, as announce does.
 func joins(n *simNode) {
-	n.c.joining, n.c.stamp = true, unheard
+	n.c.stamp = unheard
 }
 
 // stopped starts these nodes paused together at pos, in a party someone opened.
