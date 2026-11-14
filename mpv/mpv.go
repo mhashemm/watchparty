@@ -3,6 +3,7 @@ package mpv
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -150,10 +151,11 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
-	// Stamp, At and Entry are the state its sender was in when it sent this (tag)
-	Stamp int      `json:"stamp,omitempty"`
-	At    *float64 `json:"at,omitempty"`
-	Entry *int     `json:"entry,omitempty"`
+	// Stamp, Paused, At and Entry are the state its sender was in when it sent this (tag)
+	Stamp  int      `json:"stamp,omitempty"`
+	Paused *bool    `json:"paused,omitempty"`
+	At     *float64 `json:"at,omitempty"`
+	Entry  *int     `json:"entry,omitempty"`
 	Response
 }
 
@@ -203,7 +205,8 @@ type Client struct {
 	stamp int
 
 	resumeAt float64
-	pausedBy string
+	// by: who sent the state this node last adopted
+	by string
 
 	// playlist
 	names     []string
@@ -263,7 +266,7 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	}
 	if len(out) > 0 {
 		// this node's own change, or what it adds to a peer's: the next stamp
-		c.stamp++
+		c.stamp, c.by = c.stamp+1, ""
 	}
 	for i, b := range out {
 		out[i] = c.tag(b)
@@ -394,7 +397,7 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 		return extra, nil
 	}
 	// stopped from playing: where it is now, whatever seek was on its way
-	c.pausedBy, c.landing = "", false
+	c.landing = false
 	return extra, nil
 }
 
@@ -425,71 +428,72 @@ func (c *Client) entryChanged(moved bool) error {
 	return nil
 }
 
-// tag says what state a message was sent from: its stamp, where this node is stopped or
-// resumes from, and in a playlist the entry, so a peer that has moved on can drop it. Only
-// this node knows, at the moment it sends.
-func (c *Client) tag(b []byte) []byte {
-	at := c.pos
-	if c.paused {
-		at = c.target()
-	}
-	return c.tagAs(b, c.current, at)
+// state is what the party shares, and what every message says its sender holds: a stamp
+// (a Lamport clock), the entry, stopped or playing, and where it is stopped or resumes from.
+type state struct {
+	stamp  int
+	entry  int
+	paused bool
+	at     float64
 }
 
-func (c *Client) tagAs(b []byte, entry int, at float64) []byte {
-	head := fmt.Appendf(nil, `{"stamp":%d,"at":%.6f,`, c.stamp, at)
+// over orders two states the same way on every node: the higher stamp; with the same
+// stamp the two were made at once and the safer wins: the higher entry, stopped over
+// playing, then the earlier second. 0 is the same state.
+func (s state) over(h state) int {
+	switch {
+	case s.stamp != h.stamp:
+		return cmp.Compare(s.stamp, h.stamp)
+	case s.entry != h.entry:
+		return cmp.Compare(s.entry, h.entry)
+	case s.paused != h.paused:
+		if s.paused {
+			return 1
+		}
+		return -1
+	case !s.paused || math.Abs(s.at-h.at) <= timePosTolerance:
+		return 0
+	}
+	return cmp.Compare(h.at, s.at)
+}
+
+// held is the state this node holds: the entry it is heading to and its second there,
+// which is the start of a file still loading unless a seek waits for it. Never the file
+// mpv happens to be on: a state with the party's stamp on the entry it left is a tie it
+// could win, and would drag the party back. Stopped once it is stopping the party
+// (pauseParty): its own move says so, before mpv has stopped.
+func (c *Client) held() state {
+	s := state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
+	if s.entry != c.current && c.heldSeek == "" {
+		s.at = 0
+	}
+	return s
+}
+
+// tag says what state a message was sent from, so whoever gets it knows whether it is
+// newer than theirs. Only this node knows, at the moment it sends.
+func (c *Client) tag(b []byte) []byte {
+	s := c.held()
+	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,`, s.stamp, s.paused, s.at)
 	if len(c.names) > 0 {
-		head = fmt.Appendf(head, `"entry":%d,`, entry)
+		head = fmt.Appendf(head, `"entry":%d,`, s.entry)
 	}
 	return append(head, b[1:]...)
 }
 
-// holds is where this node is as an answer says it: the entry it is heading to and its
-// second on that one, which is the start of a file still loading unless a seek waits for
-// it. What mpv reports is tagged with the file it is on (tag); an answer made while a move
-// loads would otherwise name the new entry with the old file's second.
-func (c *Client) holds() (entry int, at float64) {
-	if entry = c.heading(); entry != c.current && c.heldSeek == "" {
-		return entry, 0
+// stateOf is the state a peer's pause, seek or move says its sender holds. Every node
+// sends it whole (tag), so one that doesn't is refused, not filled in from this node's.
+func (c *Client) stateOf(e Event) (state, error) {
+	if e.Paused == nil || e.At == nil || len(c.names) > 0 && e.Entry == nil {
+		return state{}, errors.New("no state")
 	}
-	return entry, c.target()
-}
-
-// How a peer's pause or seek stands against what this node holds.
-const (
-	older = iota // its sender is behind: catch it up
-	loses        // sent at the same moment as this node's, which wins: tell it
-	same         // nothing to do
-	newer        // take it
-)
-
-// weigh compares a peer's pause or seek with what this node holds. A higher stamp is
-// newer. With the same stamp the two were made at once and the safer wins, for everyone
-// alike: stopped over playing, then the earlier second.
-func (c *Client) weigh(stamp int, paused bool, at float64) int {
-	if stamp < c.stamp {
-		if stamp < 0 {
-			// a joiner, not a member that missed something: its join is being answered
-			return same
+	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At}
+	if len(c.names) > 0 {
+		if s.entry = *e.Entry; s.entry < 0 || s.entry >= len(c.names) {
+			return s, errors.New("no such entry")
 		}
-		return older
 	}
-	if stamp > c.stamp {
-		return newer
-	}
-	if paused != c.paused {
-		if paused {
-			return newer
-		}
-		return loses
-	}
-	if !paused || c.on(at) {
-		return same
-	}
-	if at < c.target() {
-		return newer
-	}
-	return loses
+	return s, nil
 }
 
 // on is whether pos is the second this node is on, or on its way to. Not at: that also
@@ -497,13 +501,6 @@ func (c *Client) weigh(stamp int, paused bool, at float64) int {
 // a second it has since left is not where it is.
 func (c *Client) on(pos float64) bool {
 	return math.Abs(pos-c.target()) <= timePosTolerance
-}
-
-// beats is whether an entry a peer named wins over the one this node is heading to: a
-// newer stamp does, and of two with the same stamp the higher entry. Everyone applies it
-// alike, so two who moved at once, or joined at once, end on the same one.
-func (c *Client) beats(stamp, entry int) bool {
-	return stamp > c.stamp || stamp == c.stamp && entry > c.heading()
 }
 
 // heading is the entry this node is on, or on its way to.
@@ -514,17 +511,6 @@ func (c *Client) heading() int {
 		}
 	}
 	return c.current
-}
-
-// fromAnotherEntry is a position or a resume sent before its sender moved, or before
-// we did. A pause still counts, since stopping is always safe.
-func (c *Client) fromAnotherEntry(event Event) bool {
-	if event.Entry == nil || event.Name != timePos && (event.Name != pause || event.paused()) {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return *event.Entry != c.heading()
 }
 
 func (c *Client) pauseExtras() [][]byte {
@@ -594,18 +580,20 @@ func (c *Client) watch() error {
 // time-pos are kept; position goes first because mpv starts paused.
 func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 	var newest *IncomingMessage
-	stamp := 0
+	var best state
 	notices := []IncomingMessage{}
 	for loading := true; loading; {
 		select {
 		case e := <-incoming:
 			event := Event{}
 			err := json.Unmarshal(e.Event, &event)
-			if err != nil || event.Name != pause && event.Name != timePos {
+			if err != nil || !shared(event) {
 				notices = append(notices, e)
-			} else if newest == nil || event.Stamp >= stamp {
-				// each says the party's whole state, so the newest is all there is to know
-				newest, stamp = &e, event.Stamp
+				continue
+			}
+			// each says the party's whole state, so the newest is all there is to know
+			if s, err := c.stateOf(event); err == nil && (newest == nil || s.over(best) > 0) {
+				newest, best = &e, s
 			}
 		case <-c.ready:
 			loading = false
@@ -696,34 +684,10 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
-	if err == nil && c.behind(event) {
-		if err := c.answer(e.HostName, catchingUp); err != nil {
-			log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
-		}
-		return
-	}
-	if err == nil && c.elsewhere(event) {
-		// a pause or a seek that wins was made on its sender's entry: go there first, or
-		// this node would hold the party's stamp on a file the party has left
-		err = c.followEntry(Event{Data: strconv.Itoa(*event.Entry), Stamp: event.Stamp, At: event.At, Entry: event.Entry}, e.HostName)
-	}
-	if err == nil && c.fromAnotherEntry(event) {
-		// made at the same moment as the move that took the party from that entry, which
-		// wins. The move may never reach its sender, so it is told where the party is.
-		log.Printf("ProcessIncomingEvents: from another entry [event=%s] [host=%s]\n", e.Event, e.HostName)
-		if event.Stamp >= 0 {
-			if err := c.answer(e.HostName, ""); err != nil {
-				log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
-			}
-		}
-		return
-	}
-	if err == nil {
+	if err == nil && shared(event) {
+		err = c.take(event, e.HostName)
+	} else if err == nil {
 		switch event.Name {
-		case pause:
-			err = c.pause(event, e.HostName)
-		case timePos:
-			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
 			if event.Data == e.HostName+HasLeft {
@@ -733,8 +697,6 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
 			err = c.answer(e.HostName, "joining")
-		case playlistPos:
-			err = c.followEntry(event, e.HostName)
 		}
 	}
 	if err != nil {
@@ -742,26 +704,122 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 }
 
-// behind is a pause or a seek older than what this node holds: its sender missed
-// something, whatever entry it thinks it is on.
-func (c *Client) behind(event Event) bool {
-	if event.Name != pause && event.Name != timePos {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return event.Stamp < c.stamp && event.Stamp >= 0
+// shared is a message that says what state its sender holds.
+func shared(e Event) bool {
+	return e.Name == pause || e.Name == timePos || e.Name == playlistPos
 }
 
-// elsewhere is a pause or a seek made on another entry than the one this node is heading
-// to, which wins over what this node holds.
-func (c *Client) elsewhere(event Event) bool {
-	if event.Name != pause && event.Name != timePos || event.Entry == nil {
-		return false
+// take weighs a peer's state against what this node holds: newer is adopted; older means
+// its sender missed something, and the party stops for it to catch up; one made at the
+// same moment as this node's, which wins, is told quietly, as it may never hear this one.
+// A joiner's is neither: its join is being answered.
+func (c *Client) take(e Event, hostname string) error {
+	s, err := c.stateOf(e)
+	if err != nil {
+		return err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return *event.Entry != c.heading() && c.beats(event.Stamp, *event.Entry)
+	h := c.held()
+	over, told := s.over(h), c.by == hostname
+	var a adoption
+	if over > 0 {
+		a = c.commit(s, hostname)
+	}
+	c.mu.Unlock()
+	switch {
+	case over > 0:
+		return c.adopt(a, e.Name, hostname)
+	case over == 0:
+		// where the pause it came with already took this node
+		if e.Name == timePos && told {
+			c.showText(fmt.Sprintf("synced by %s", hostname))
+		}
+		return nil
+	case s.stamp < h.stamp && s.stamp < 0:
+		return nil
+	case s.stamp < h.stamp:
+		return c.answer(hostname, catchingUp)
+	}
+	return c.answer(hostname, "")
+}
+
+// adoption is a newer state this node has taken, and what mpv must do to get there.
+type adoption struct {
+	state
+	from string
+	// seek: not on its second yet; now: mpv is told at once, or it waits for the file
+	stop, moving, seek, now bool
+}
+
+// commit takes a newer state under the lock that weighed it: the stamp with the entry, the
+// stop and the second it stands for, all marked before mpv is told. Taken apart, this node
+// would hold the party's stamp on its own entry or second, a tie it could win; and whatever
+// it says meanwhile already names where it is going.
+func (c *Client) commit(s state, hostname string) adoption {
+	a := adoption{state: s, moving: s.entry != c.heading(), from: c.entryName(c.heading())}
+	// a file opens stopped, and a seek is made stopped: one that plays on stays where it is
+	a.stop = (a.moving || s.paused) && !c.paused
+	there := a.moving && s.at <= timePosTolerance || !a.moving && c.on(s.at)
+	a.seek = !there && (a.stop || c.paused)
+	c.stamp, c.by = s.stamp, hostname
+	if a.stop {
+		c.applied[pause] = "yes"
+	}
+	if a.moving {
+		// a seek held for the entry it was heading to is not for this one
+		c.loading, c.heldSeek = true, ""
+		c.following = append(c.following, strconv.Itoa(s.entry))
+	}
+	if a.seek {
+		a.now = c.mark(s.at)
+	}
+	return a
+}
+
+// adopt tells mpv to go where commit took this node: stopped, on the entry, on the second,
+// then playing if the state is. One that plays on another entry stops the party instead:
+// loading it, this node can't be in step.
+func (c *Client) adopt(a adoption, name, hostname string) error {
+	if a.stop {
+		if err := c.pauseReq(true); err != nil {
+			// mpv refuses only while it quits or between files
+			c.mu.Lock()
+			delete(c.applied, pause)
+			c.mu.Unlock()
+			return err
+		}
+		c.mu.Lock()
+		c.paused = true
+		c.mu.Unlock()
+		c.showText(fmt.Sprintf("paused by %s", hostname))
+	}
+	if a.moving {
+		if err := c.conn.do(setProperty, playlistPos, a.entry); err != nil {
+			c.mu.Lock()
+			c.loading = false
+			if n := slices.Index(c.following, strconv.Itoa(a.entry)); n >= 0 {
+				c.following = slices.Delete(c.following, n, n+1)
+			}
+			c.mu.Unlock()
+			return err
+		}
+		c.showText(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname))
+	}
+	if a.now {
+		if err := c.seekReq(a.at); err != nil {
+			return err
+		}
+	}
+	if a.seek && name != pause {
+		c.showText(fmt.Sprintf("synced by %s", hostname))
+	}
+	if a.paused {
+		return nil
+	}
+	if a.moving {
+		return c.answer(hostname, "")
+	}
+	return c.resume(hostname)
 }
 
 // answer tells a node that isn't where the party is where that is: a joiner, a node that
@@ -769,29 +827,21 @@ func (c *Client) elsewhere(event Event) bool {
 // made at the same moment as one that won (with none: that one stopped the party already).
 // A node that was playing answers by stopping: its own pause says where, with a stamp
 // newer than anything it could say before mpv has reported it. One already stopped says
-// its entry, then its second. One that hasn't heard the party itself names only its entry:
-// its second isn't the party's.
+// where it is. A joiner only says where it is: it stops nobody, and only another joiner
+// can take it.
 func (c *Client) answer(hostname, reason string) error {
 	c.mu.Lock()
 	joiner, playing := c.stamp < 0, !c.paused
-	heading, second := c.holds()
-	var entry, where []byte
-	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(heading)})
-		entry = c.tagAs(entry, heading, second)
-	}
-	if !joiner && !playing {
-		where = c.tagAs(position(timePos, second), heading, second)
+	var where []byte
+	if joiner || !playing {
+		where = c.tag(position(timePos, c.held().at))
 	}
 	c.mu.Unlock()
-	if entry != nil {
-		select {
-		case c.outgoing <- entry:
-		case <-c.ctx.Done():
-			return nil
-		}
-	}
 	if joiner {
+		select {
+		case c.outgoing <- where:
+		case <-c.ctx.Done():
+		}
 		return nil
 	}
 	// for a node that fell behind it says why first, like a leave: the GUI's feed takes the
@@ -828,74 +878,6 @@ func (c *Client) left(hostname string) error {
 	return c.pauseReq(true)
 }
 
-// followEntry takes the entry a peer moved to, or answered with, if it beats what this
-// node holds. A peer that knows of a later move has the higher stamp, so an answer sent
-// before its sender heard of one moves nobody back. Its sender stopped for it, or is about
-// to, and says where: taking the stamp without that would leave this node holding the
-// party's stamp on its own second, a tie it could win.
-func (c *Client) followEntry(event Event, hostname string) error {
-	i, err := strconv.Atoi(event.Data)
-	if err != nil {
-		return err
-	}
-	if i < 0 || i >= len(c.names) {
-		return errors.New("no such entry")
-	}
-	c.mu.Lock()
-	beats := c.beats(event.Stamp, i)
-	c.mu.Unlock()
-	if !beats {
-		return nil
-	}
-	err = c.setPause(true, hostname)
-	if err != nil {
-		return err
-	}
-	c.mu.Lock()
-	// again: this node's own move can have happened during the pause
-	if !c.beats(event.Stamp, i) {
-		c.mu.Unlock()
-		return nil
-	}
-	c.stamp = event.Stamp
-	moving, from := i != c.heading(), c.entryName(c.heading())
-	if moving {
-		// a seek held for the entry it was heading to is not for this one
-		c.loading, c.heldSeek = true, ""
-		c.following = append(c.following, event.Data)
-	}
-	// a file opens at its start, and anywhere else on this one is already there
-	at, known := c.where(event, i)
-	there := !known || moving && at <= timePosTolerance || !moving && c.on(at)
-	c.mu.Unlock()
-	if moving {
-		err = c.conn.do(setProperty, playlistPos, i)
-		if err != nil {
-			c.mu.Lock()
-			c.loading = false
-			if n := slices.Index(c.following, event.Data); n >= 0 {
-				c.following = slices.Delete(c.following, n, n+1)
-			}
-			c.mu.Unlock()
-			return err
-		}
-		c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
-	}
-	if there {
-		return nil
-	}
-	return c.seekBy(strconv.FormatFloat(at, 'f', 6, 64), hostname)
-}
-
-// where is the second a message says its sender is on, if that is on entry: a node still
-// loading the entry it names, or pausing while a move reaches it, is on another file.
-func (c *Client) where(event Event, entry int) (float64, bool) {
-	if event.At == nil || len(c.names) > 0 && (event.Entry == nil || *event.Entry != entry) {
-		return 0, false
-	}
-	return *event.At, true
-}
-
 func (c *Client) entryName(i int) string {
 	if i < 0 || i >= len(c.names) {
 		return "another video"
@@ -907,61 +889,20 @@ func (c *Client) pauseReq(paused bool) error {
 	return c.conn.do(setProperty, pause, paused)
 }
 
-// pause is a peer's pause or resume, which says where it stopped or resumes from, so it
-// is enough by itself when the seek that came with it was lost.
-func (c *Client) pause(event Event, hostname string) error {
-	paused := event.paused()
+// resume applies a peer's resume. One that reaches a node still waiting on its cache never
+// reaches mpv: the node stops the party again, with where and why.
+func (c *Client) resume(hostname string) error {
 	c.mu.Lock()
-	at, there := c.target(), true
-	if said, ok := c.where(event, c.heading()); ok {
-		at, there = said, c.on(said)
-	}
-	w := c.weigh(event.Stamp, paused, at)
-	if w == newer {
-		c.stamp = event.Stamp
-	}
-	stopped := c.paused
-	c.mu.Unlock()
-	switch w {
-	case older:
-		return c.answer(hostname, catchingUp)
-	case loses:
-		return c.answer(hostname, "")
-	case same:
-		return nil
-	}
-	data := strconv.FormatFloat(at, 'f', 6, 64)
-	if !paused && stopped && !there {
-		if err := c.seekTo(data); err != nil {
-			return err
-		}
-	}
-	if err := c.setPause(paused, hostname); err != nil {
-		return err
-	}
-	if paused && !there {
-		return c.seekTo(data)
-	}
-	return nil
-}
-
-// setPause applies a pause or a resume as hostname's.
-func (c *Client) setPause(paused bool, hostname string) error {
-	data, did := "no", "resumed"
-	if paused {
-		data, did = "yes", "paused"
-	}
-	c.mu.Lock()
-	if c.paused == paused {
+	if !c.paused {
 		c.mu.Unlock()
 		return nil
 	}
-	if !paused && c.stalled {
+	if c.stalled {
 		c.reason = "still buffering"
 		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
 		out := append([][]byte{again}, c.pauseExtras()...)
 		// this node's own pause, newer than the resume it refuses
-		c.stamp++
+		c.stamp, c.by = c.stamp+1, ""
 		for i, b := range out {
 			out[i] = c.tag(b)
 		}
@@ -975,10 +916,10 @@ func (c *Client) setPause(paused bool, hostname string) error {
 		}
 		return c.showText("paused for everyone: still buffering")
 	}
-	c.applied[pause] = data
+	c.applied[pause] = "no"
 	c.mu.Unlock()
 
-	err := c.pauseReq(paused)
+	err := c.pauseReq(false)
 	if err != nil {
 		// no echo is coming for a set mpv refused; if it only answered late, its report
 		// goes out as this node's own, which peers already in that state ignore
@@ -988,61 +929,10 @@ func (c *Client) setPause(paused bool, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	c.paused = paused
-	c.pausedBy, c.landing = "", false
-	if paused {
-		c.pausedBy = hostname
-	}
+	c.paused, c.landing = false, false
 	c.mu.Unlock()
 
-	c.showText(fmt.Sprintf("%s by %s", did, hostname))
-	return nil
-}
-
-// sync is a peer's seek. It was made while stopped, so a node still playing stops first:
-// that seek and its own resume were made at the same moment, or the pause before it was lost.
-func (c *Client) sync(event Event, hostname string) error {
-	pos, err := strconv.ParseFloat(event.Data, 64)
-	if err != nil {
-		return nil
-	}
-	c.mu.Lock()
-	w := c.weigh(event.Stamp, true, pos)
-	if w == newer {
-		c.stamp = event.Stamp
-	}
-	playing, told, there := !c.paused, c.pausedBy == hostname, c.on(pos)
-	c.mu.Unlock()
-	switch w {
-	case older:
-		return c.answer(hostname, catchingUp)
-	case loses:
-		return c.answer(hostname, "")
-	case same:
-		// where the pause it came with already took this node
-		if told {
-			c.showText(fmt.Sprintf("synced by %s", hostname))
-		}
-		return nil
-	}
-	if !playing && there {
-		// an answer to its join, when what it heard while loading already brought it here
-		return nil
-	}
-	if playing {
-		if err := c.setPause(true, hostname); err != nil {
-			return err
-		}
-	}
-	return c.seekBy(event.Data, hostname)
-}
-
-func (c *Client) seekBy(data, hostname string) error {
-	err := c.seekTo(data)
-	if err != nil {
-		return err
-	}
-	c.showText(fmt.Sprintf("synced by %s", hostname))
+	c.showText(fmt.Sprintf("resumed by %s", hostname))
 	return nil
 }
 
@@ -1052,16 +942,30 @@ func (c *Client) seekTo(data string) error {
 		return err
 	}
 	c.mu.Lock()
+	now := c.mark(pos)
+	c.mu.Unlock()
+	if !now {
+		return nil
+	}
+	return c.seekReq(pos)
+}
+
+// mark makes a seek this node applies its own before mpv is told: where it is heading, and
+// not to be broadcast when mpv reports it. While a move loads it is held for the file it
+// opens (false: not for mpv yet).
+func (c *Client) mark(pos float64) bool {
 	c.seeks = append(c.seeks, pos)
 	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
 	if c.loading {
-		c.heldSeek = data
-		c.mu.Unlock()
-		return nil
+		c.heldSeek = strconv.FormatFloat(pos, 'f', 6, 64)
+		return false
 	}
 	c.peerSeek, c.landing = true, true
-	c.mu.Unlock()
-	err = c.conn.do(setProperty, timePos, data)
+	return true
+}
+
+func (c *Client) seekReq(pos float64) error {
+	err := c.conn.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
 	if err != nil {
 		c.mu.Lock()
 		c.peerSeek, c.landing = false, false

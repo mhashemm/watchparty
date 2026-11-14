@@ -442,7 +442,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 			at = data
 		}
 		select {
-		case incoming <- IncomingMessage{HostName: "a", Event: []byte(stamped(stamp, `{"at":`+at+`,"name":"`+name+`","data":"`+data+`"}`))}:
+		case incoming <- IncomingMessage{HostName: "a", Event: []byte(stamped(stamp, `{"paused":`+fmt.Sprint(data != "no")+`,"at":`+at+`,"name":"`+name+`","data":"`+data+`"}`))}:
 		case <-time.After(time.Second):
 			t.Fatalf("a peer blocked on %s=%s", name, data)
 		}
@@ -568,7 +568,7 @@ func TestPeerSeekReportedAfterAResumeIsNotASeek(t *testing.T) {
 	c, send, _, requests := liveClient(t)
 	c.paused = true
 	send(propertyChangeLine(pause, "yes", 0))
-	go c.apply(peer("a", stamped(1, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
+	go c.apply(peer("a", stamped(1, `{"paused":true,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`)))
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
 		t.Fatalf("sent %q, want the seek", got)
 	}
@@ -649,7 +649,7 @@ func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
 	c, _, outgoing, requests := liveClient(t)
 	c.paused, c.stalled, c.pos = true, true, 20
 
-	c.pause(Event{Name: pause, Data: "no", Stamp: 1}, "a")
+	c.apply(peer("a", `{"stamp":1,"paused":false,"at":20,"name":"pause","data":"no"}`))
 	for _, want := range []string{pause + "=yes", timePos + "=20.000000", pauseReason + "=still buffering"} {
 		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
 			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
@@ -680,7 +680,7 @@ func TestARefusedPauseLeavesNoMarker(t *testing.T) {
 		fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
 	}()
 
-	if err := c.pause(Event{Name: pause, Data: "yes"}, "a"); err == nil {
+	if err := c.take(Event{Name: pause, Data: "yes", Stamp: 1, Paused: new(true), At: new(0.0)}, "a"); err == nil {
 		t.Fatal("the refusal was not reported")
 	}
 	fmt.Fprint(theirs, propertyChangeLine(pause, "yes", 0))
@@ -705,14 +705,14 @@ func TestJoinerAnnouncesItselfOnceLoaded(t *testing.T) {
 	if e := nextEvent(t, outgoing); e.Name != joined {
 		t.Fatalf("broadcast %+v, want joined", e)
 	}
-	incoming <- peer("a", `{"stamp":1,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`)
+	incoming <- peer("a", `{"paused":true,"stamp":1,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`)
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
 		t.Fatalf("sent %q, want the party's position", got)
 	}
 	next(t, requests)
 
 	// every member answers, and the rest say the same
-	incoming <- peer("b", `{"stamp":1,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`)
+	incoming <- peer("b", `{"paused":true,"stamp":1,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`)
 	incoming <- peer("b", `{"name":"show-text","data":"mark"}`)
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want nothing for the same answer again", got)
@@ -724,30 +724,31 @@ func TestJoinerAnnouncesItselfOnceLoaded(t *testing.T) {
 	}
 }
 
-// What the party says while this node loads is applied once it has, before it says joined,
-// and an entry after: the party's own answer to its join can only be newer.
+// What the party says while this node loads is applied once it has, before it says joined:
+// the newest, which says the entry and where on it.
 func TestWhatIsHeardWhileLoadingIsAppliedBeforeJoining(t *testing.T) {
 	t.Parallel()
 	c, _, outgoing, requests := playlistClient(t)
 	c.paused, c.pos = true, 30
 	incoming := make(chan IncomingMessage)
 	go c.ProcessIncomingEvents(incoming)
-	incoming <- peer("a", `{"name":"playlist-pos","data":"2"}`)
-	incoming <- peer("a", stamped(1, `{"event":"property-change","name":"time-pos","data":"50.000000"}`))
+	incoming <- peer("a", move(1, 2))
+	incoming <- peer("a", stamped(2, tagged(2, `{"paused":true,"at":50,"event":"property-change","name":"time-pos","data":"50.000000"}`)))
 	close(c.ready)
 
-	if got := next(t, requests); got != "set_property time-pos 50.000000" {
-		t.Fatalf("sent %q, want the party's last seek", got)
+	for _, want := range []string{"set_property playlist-pos 2", "show-text from e1 to e3, by a 5000", "show-text synced by a 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q: the party's entry and second", got, want)
+		}
 	}
-	next(t, requests)
 	if e := nextEvent(t, outgoing); e.Name != joined {
 		t.Fatalf("broadcast %+v, want joined", e)
 	}
-	incoming <- peer("a", `{"name":"show-text","data":"mark"}`)
-	for _, want := range []string{"set_property playlist-pos 2", "show-text from e1 to e3, by a 5000", "show-text mark 5000"} {
-		if got := next(t, requests); got != want {
-			t.Fatalf("sent %q, want %q: the entry followed after joining", got, want)
-		}
+	c.mu.Lock()
+	held := c.heldSeek
+	c.mu.Unlock()
+	if held != "50.000000" {
+		t.Fatalf("holds %q, want the seek waiting for the file", held)
 	}
 }
 
@@ -789,24 +790,6 @@ func TestJoinWhilePausedStillShowsWhy(t *testing.T) {
 	}
 	if e := nextEvent(t, outgoing); e.Name != timePos {
 		t.Fatalf("broadcast %s, want the position", e.Name)
-	}
-}
-
-// A node that hasn't heard the party has no position to give, so it doesn't answer.
-func TestJoiningNodeDoesNotAnswerAnotherJoiner(t *testing.T) {
-	t.Parallel()
-	c, _, outgoing, requests := liveClient(t)
-	c.paused, c.stamp = true, unheard
-
-	c.apply(peer("j", `{"name":"joined"}`))
-	c.apply(peer("j", `{"name":"show-text","data":"mark"}`))
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("sent %q before the mark", got)
-	}
-	select {
-	case e := <-outgoing:
-		t.Fatalf("answered another joiner with %s", e)
-	default:
 	}
 }
 
@@ -898,7 +881,7 @@ func TestOnlyALeaveNoticePauses(t *testing.T) {
 func TestStopsAMomentApartSettleOnTheEarliest(t *testing.T) {
 	t.Parallel()
 	stop := func(at float64) string {
-		return fmt.Sprintf(`{"stamp":2,"at":%f,"name":"pause","data":"yes"}`, at)
+		return fmt.Sprintf(`{"paused":true,"stamp":2,"at":%f,"name":"pause","data":"yes"}`, at)
 	}
 	c, _, _, requests := liveClient(t)
 	c.paused, c.pos, c.stamp = true, 40, 2
@@ -968,7 +951,7 @@ func TestTwoJoinersSettleOnTheHigherEntry(t *testing.T) {
 func TestAJoinerFollowsAnEarlierAnswer(t *testing.T) {
 	t.Parallel()
 	answer := func(at float64) string {
-		return fmt.Sprintf(`{"stamp":1,"at":%f,"name":"time-pos","data":"%f"}`, at, at)
+		return fmt.Sprintf(`{"paused":true,"stamp":1,"at":%f,"name":"time-pos","data":"%f"}`, at, at)
 	}
 	c, _, _, requests := liveClient(t)
 	c.paused, c.stamp = true, unheard
@@ -999,8 +982,8 @@ func TestAnAnswerWhereItAlreadyIsSeeksNowhere(t *testing.T) {
 	c, _, _, requests := liveClient(t)
 	c.paused, c.stamp, c.pos = true, unheard, 40
 
-	c.apply(peer("a", `{"stamp":1,"at":40.05,"event":"property-change","name":"time-pos","data":"40.050000"}`))
-	c.apply(peer("b", `{"stamp":1,"at":55,"event":"property-change","name":"time-pos","data":"55.000000"}`))
+	c.apply(peer("a", `{"paused":true,"stamp":1,"at":40.05,"event":"property-change","name":"time-pos","data":"40.050000"}`))
+	c.apply(peer("b", `{"paused":true,"stamp":1,"at":55,"event":"property-change","name":"time-pos","data":"55.000000"}`))
 	c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want neither answer to seek: it is there, and the later one loses", got)
@@ -1047,7 +1030,7 @@ func TestLosingTheRelayPausesAndComingBackRejoins(t *testing.T) {
 	if e := nextEvent(t, outgoing); e.Name != joined {
 		t.Fatalf("broadcast %+v, want joined", e)
 	}
-	c.apply(peer("a", `{"stamp":9,"at":42,"event":"property-change","name":"time-pos","data":"42.000000"}`))
+	c.apply(peer("a", `{"paused":true,"stamp":9,"at":42,"event":"property-change","name":"time-pos","data":"42.000000"}`))
 	if got := next(t, requests); got != "set_property time-pos 42.000000" {
 		t.Fatalf("sent %q, want the party's position taken", got)
 	}
@@ -1207,10 +1190,10 @@ func TestEntryAlreadyHeadedThereIsNotRepeated(t *testing.T) {
 	c.paused, c.current = true, 1
 
 	go func() {
-		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`))
-		c.apply(peer("a", `{"event":"property-change","name":"playlist-pos","data":"2"}`))
-		c.apply(peer("b", `{"event":"property-change","name":"playlist-pos","data":"2"}`))
-		c.apply(peer("b", `{"event":"property-change","name":"playlist-pos","data":"3"}`))
+		c.apply(peer("a", `{"paused":true,"at":0,"entry":1,"event":"property-change","name":"playlist-pos","data":"1"}`))
+		c.apply(peer("a", `{"paused":true,"at":0,"entry":2,"event":"property-change","name":"playlist-pos","data":"2"}`))
+		c.apply(peer("b", `{"paused":true,"at":0,"entry":2,"event":"property-change","name":"playlist-pos","data":"2"}`))
+		c.apply(peer("b", `{"paused":true,"at":0,"entry":3,"event":"property-change","name":"playlist-pos","data":"3"}`))
 		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
 	}()
 	for _, want := range []string{"set_property playlist-pos 2", "show-text from e2 to e3, by a 5000", "show-text mark 5000"} {
@@ -1229,7 +1212,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 
 	go func() {
 		c.apply(peer("a", move(1, 1)))
-		c.apply(peer("a", stamped(2, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
+		c.apply(peer("a", stamped(2, tagged(1, `{"paused":true,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`))))
 	}()
 	for _, want := range []string{"set_property playlist-pos 1", "show-text from e1 to e2, by a 5000", "show-text synced by a 5000"} {
 		if got := next(t, requests); got != want {
@@ -1243,40 +1226,28 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 	}
 }
 
-// A node that hasn't heard the party has no position to give, but it does know which
-// entry it opened.
-func TestJoiningNodeStillNamesItsEntry(t *testing.T) {
+// A node that hasn't heard the party answers too, with what it holds: its stamp is below
+// any the party has, so only a fellow joiner can take it.
+func TestJoiningNodeAnswersWithAnUnheardStamp(t *testing.T) {
 	t.Parallel()
-	c, _, outgoing, requests := playlistClient(t)
-	c.paused, c.stamp, c.current = true, unheard, 2
+	c, _, outgoing, _ := playlistClient(t)
+	c.paused, c.stamp, c.current, c.pos = true, unheard, 2, 7
 
-	c.apply(peer("j", `{"name":"joined"}`))
-	c.apply(peer("j", `{"name":"show-text","data":"mark"}`))
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("sent %q before the mark", got)
-	}
-	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Data != "2" {
-		t.Fatalf("broadcast %+v, want the entry", e)
-	}
-	select {
-	case e := <-outgoing:
-		t.Fatalf("answered with a position too: %s", e)
-	default:
+	go c.apply(peer("j", `{"name":"joined"}`))
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Stamp != unheard || e.Entry == nil || *e.Entry != 2 || *e.At != 7 {
+		t.Fatalf("broadcast %+v, want its state, unheard", e)
 	}
 }
 
-// A joiner opens on the first entry, so it is told which one before where in it.
-func TestJoinAnswerNamesTheEntryFirst(t *testing.T) {
+// An answer is one message: the entry, and where on it.
+func TestJoinAnswerSaysTheEntryAndWhereOnIt(t *testing.T) {
 	t.Parallel()
 	c, _, outgoing, _ := playlistClient(t)
 	c.paused, c.current, c.pos = true, 2, 33
 
 	go c.apply(peer("j", `{"name":"joined"}`))
-	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Data != "2" {
-		t.Fatalf("broadcast %+v, want the entry", e)
-	}
-	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "33.000000" {
-		t.Fatalf("broadcast %+v, want the position", e)
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "33.000000" || e.Entry == nil || *e.Entry != 2 {
+		t.Fatalf("broadcast %+v, want the entry and the position", e)
 	}
 }
 
@@ -1294,8 +1265,10 @@ func TestAnAnswerIsFollowedOnlyIfItIsNewer(t *testing.T) {
 		c.apply(peer("a", move(2, 2)))
 		c.apply(peer("a", mark))
 	}()
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("a member followed an older answer: %q", got)
+	for _, want := range []string{"show-text paused for a: catching up 5000", "show-text mark 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("a member sent %q for an older answer, want %q", got, want)
+		}
 	}
 
 	c, send, outgoing, requests := playlistClient(t)
@@ -1412,9 +1385,9 @@ func TestMessagesFromAnEntryThePartyLeftAreDropped(t *testing.T) {
 	c.paused, c.current, c.stamp = true, 1, 2
 
 	go func() {
-		c.apply(peer("a", stamped(2, tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`))))
-		c.apply(peer("a", stamped(2, tagged(0, `{"name":"pause","data":"no"}`))))
-		c.apply(peer("a", stamped(3, tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`))))
+		c.apply(peer("a", stamped(2, tagged(0, `{"paused":true,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`))))
+		c.apply(peer("a", stamped(2, tagged(0, `{"paused":false,"name":"pause","data":"no"}`))))
+		c.apply(peer("a", stamped(3, tagged(1, `{"paused":true,"at":41,"event":"property-change","name":"time-pos","data":"41.000000"}`))))
 	}()
 	if got := next(t, requests); got != "set_property time-pos 41.000000" {
 		t.Fatalf("sent %q, want only the seek on our entry", got)
@@ -1428,7 +1401,7 @@ func TestANewerSeekFromAnotherEntryBringsThisNodeThere(t *testing.T) {
 	c, send, _, requests := playlistClient(t)
 	c.paused, c.stamp = true, 1
 
-	go c.apply(peer("a", `{"stamp":3,"at":40,"entry":2,"event":"property-change","name":"time-pos","data":"40.000000"}`))
+	go c.apply(peer("a", `{"paused":true,"stamp":3,"at":40,"entry":2,"event":"property-change","name":"time-pos","data":"40.000000"}`))
 	for _, want := range []string{"set_property playlist-pos 2", "show-text from e1 to e3, by a 5000", "show-text synced by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
@@ -1441,17 +1414,17 @@ func TestANewerSeekFromAnotherEntryBringsThisNodeThere(t *testing.T) {
 	}
 }
 
-// It stops this node where it is: the second it names is on a file this node has left.
+// It loses to the higher entry, and this node, playing, answers by stopping where it is.
 func TestAPauseFromAnotherEntryStillStops(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
 	c.current, c.pos = 1, 5
 
 	go func() {
-		c.apply(peer("a", `{"at":30,"entry":0,"name":"pause","data":"yes"}`))
+		c.apply(peer("a", `{"paused":true,"at":30,"entry":0,"name":"pause","data":"yes"}`))
 		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 	}()
-	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "show-text mark 5000"} {
+	for _, want := range []string{"set_property pause true", "show-text mark 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q: the pause, and no seek", got, want)
 		}
@@ -1466,8 +1439,8 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 
 	go func() {
 		c.apply(peer("a", move(1, 1)))
-		c.apply(peer("a", stamped(1, tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`))))
-		c.apply(peer("a", stamped(2, tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`))))
+		c.apply(peer("a", stamped(1, tagged(0, `{"paused":true,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`))))
+		c.apply(peer("a", stamped(2, tagged(1, `{"paused":true,"at":41,"event":"property-change","name":"time-pos","data":"41.000000"}`))))
 	}()
 	for _, want := range []string{"set_property playlist-pos 1", "show-text from e1 to e2, by a 5000", "show-text synced by a 5000"} {
 		if got := next(t, requests); got != want {
@@ -1483,7 +1456,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 
 // move is a peer's playlist entry as it arrives: a move, or an answer to a joiner.
 func move(stamp, to int) string {
-	return fmt.Sprintf(`{"stamp":%d,"event":"property-change","name":"playlist-pos","data":"%d"}`, stamp, to)
+	return fmt.Sprintf(`{"stamp":%d,"paused":true,"at":0,"entry":%d,"event":"property-change","name":"playlist-pos","data":"%d"}`, stamp, to, to)
 }
 
 // Two people move at once, one forward and one back, so their moves carry the same
@@ -1607,11 +1580,10 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	go c.watch()
 
 	c.apply(peer("a", move(1, 2)))
-	c.apply(peer("a", stamped(2, tagged(2, `{"event":"property-change","name":"time-pos","data":"5.000000"}`))))
+	c.apply(peer("a", stamped(2, tagged(2, `{"paused":true,"at":5,"event":"property-change","name":"time-pos","data":"5.000000"}`))))
+	// setting the entry mpv reached by itself is a no-op (MPV.md), and loading, set before
+	// mpv was told, was cleared by that file's file-loaded
 	for got := next(t, sent); got != "set_property time-pos 5.000000"; got = next(t, sent) {
-		if got == "set_property playlist-pos 2" {
-			t.Fatal("set the entry it was already on")
-		}
 	}
 }
 
@@ -1703,7 +1675,7 @@ func TestJoinerKnowsItsStartingEntryBeforeMpvSaysSo(t *testing.T) {
 		}
 	}()
 	incoming := make(chan IncomingMessage, 2)
-	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"event":"property-change","name":"playlist-pos","data":"1"}`)}
+	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"paused":true,"at":0,"entry":1,"event":"property-change","name":"playlist-pos","data":"1"}`)}
 	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"name":"show-text","data":"mark"}`)}
 	if _, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, []string{"e1", "e2", "e3"}, 1, 0); err != nil {
 		t.Fatal(err)
@@ -1741,7 +1713,7 @@ func TestContinuingSeeksBeforeThePartyIsHeard(t *testing.T) {
 		}
 	}()
 	incoming := make(chan IncomingMessage, 2)
-	incoming <- peer("a", stamped(1, `{"event":"property-change","name":"time-pos","data":"55.000000"}`))
+	incoming <- peer("a", stamped(1, `{"paused":true,"at":55,"event":"property-change","name":"time-pos","data":"55.000000"}`))
 	incoming <- peer("a", `{"name":"show-text","data":"mark"}`)
 	outgoing := make(chan []byte, 16)
 	if _, err := New(c, func() {}, ours, outgoing, incoming, nil, 0, 40); err != nil {
@@ -1765,7 +1737,7 @@ func TestAPauseSaysWhereAndASeekSaysStopped(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := liveClient(t)
 	c.pos = 30
-	go c.apply(peer("a", `{"stamp":1,"at":40,"name":"pause","data":"yes"}`))
+	go c.apply(peer("a", `{"paused":true,"stamp":1,"at":40,"name":"pause","data":"yes"}`))
 	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property time-pos 40.000000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("a pause alone sent %q, want %q", got, want)
@@ -1774,7 +1746,7 @@ func TestAPauseSaysWhereAndASeekSaysStopped(t *testing.T) {
 
 	c, _, _, requests = liveClient(t)
 	c.pos = 30
-	go c.apply(peer("a", `{"stamp":1,"at":40,"name":"time-pos","data":"40.000000"}`))
+	go c.apply(peer("a", `{"paused":true,"stamp":1,"at":40,"name":"time-pos","data":"40.000000"}`))
 	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property time-pos 40.000000", "show-text synced by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("a seek alone sent %q, want %q", got, want)
@@ -1787,7 +1759,7 @@ func TestAResumeSaysWhereFrom(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := liveClient(t)
 	c.paused, c.pos = true, 30
-	go c.apply(peer("a", `{"stamp":1,"at":40,"name":"pause","data":"no"}`))
+	go c.apply(peer("a", `{"paused":false,"stamp":1,"at":40,"name":"pause","data":"no"}`))
 	for _, want := range []string{"set_property time-pos 40.000000", "set_property pause false"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
@@ -1801,8 +1773,8 @@ func TestAResumeSaysWhereFrom(t *testing.T) {
 func TestAnOlderChangeIsAnsweredNotApplied(t *testing.T) {
 	t.Parallel()
 	for name, old := range map[string]string{
-		"a resume": `{"stamp":2,"at":10,"name":"pause","data":"no"}`,
-		"a seek":   `{"stamp":2,"at":10,"name":"time-pos","data":"10.000000"}`,
+		"a resume": `{"paused":false,"stamp":2,"at":10,"name":"pause","data":"no"}`,
+		"a seek":   `{"paused":true,"stamp":2,"at":10,"name":"time-pos","data":"10.000000"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1820,7 +1792,7 @@ func TestAnOlderChangeIsAnsweredNotApplied(t *testing.T) {
 
 	c, send, outgoing, requests := liveClient(t)
 	c.pos, c.stamp = 30, 3
-	go c.apply(peer("b", `{"stamp":2,"at":10,"name":"pause","data":"yes"}`))
+	go c.apply(peer("b", `{"paused":true,"stamp":2,"at":10,"name":"pause","data":"yes"}`))
 	// why first, so the GUI's feed doesn't take the pause for the person's own
 	for _, want := range []string{"show-text paused for b: catching up 5000", "set_property pause true"} {
 		if got := next(t, requests); got != want {
@@ -1841,12 +1813,12 @@ func TestChangesMadeAtOnceGoToTheSaferOne(t *testing.T) {
 	t.Parallel()
 	mark := `{"name":"show-text","data":"mark"}`
 	for name, c := range map[string]struct{ event, does string }{
-		"a resume loses to a seek":    {`{"stamp":1,"at":30,"name":"pause","data":"no"}`, ""},
-		"a later seek loses":          {`{"stamp":1,"at":50,"name":"time-pos","data":"50.000000"}`, ""},
-		"a later stop loses":          {`{"stamp":1,"at":50,"name":"pause","data":"yes"}`, ""},
-		"an earlier seek wins":        {`{"stamp":1,"at":20,"name":"time-pos","data":"20.000000"}`, "set_property time-pos 20.000000"},
-		"an earlier stop wins":        {`{"stamp":1,"at":20,"name":"pause","data":"yes"}`, "set_property time-pos 20.000000"},
-		"the same second is the same": {`{"stamp":1,"at":40,"name":"time-pos","data":"40.000000"}`, "show-text mark 5000"},
+		"a resume loses to a seek":    {`{"paused":false,"stamp":1,"at":30,"name":"pause","data":"no"}`, ""},
+		"a later seek loses":          {`{"paused":true,"stamp":1,"at":50,"name":"time-pos","data":"50.000000"}`, ""},
+		"a later stop loses":          {`{"paused":true,"stamp":1,"at":50,"name":"pause","data":"yes"}`, ""},
+		"an earlier seek wins":        {`{"paused":true,"stamp":1,"at":20,"name":"time-pos","data":"20.000000"}`, "set_property time-pos 20.000000"},
+		"an earlier stop wins":        {`{"paused":true,"stamp":1,"at":20,"name":"pause","data":"yes"}`, "set_property time-pos 20.000000"},
+		"the same second is the same": {`{"paused":true,"stamp":1,"at":40,"name":"time-pos","data":"40.000000"}`, "show-text mark 5000"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1871,7 +1843,7 @@ func TestChangesMadeAtOnceGoToTheSaferOne(t *testing.T) {
 
 	c, _, _, requests := liveClient(t)
 	c.pos, c.stamp = 40, 1
-	go c.apply(peer("b", `{"stamp":1,"at":50,"name":"time-pos","data":"50.000000"}`))
+	go c.apply(peer("b", `{"paused":true,"stamp":1,"at":50,"name":"time-pos","data":"50.000000"}`))
 	for _, want := range []string{"set_property pause true", "show-text paused by b 5000", "set_property time-pos 50.000000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("a node playing sent %q, want %q: a seek made as it resumed stops it", got, want)
@@ -1885,7 +1857,7 @@ func TestAJoinerTakesThePartysStampWithItsPosition(t *testing.T) {
 	t.Parallel()
 	c, send, outgoing, requests := liveClient(t)
 	c.paused, c.stamp = true, unheard
-	go c.apply(peer("a", `{"stamp":5,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`))
+	go c.apply(peer("a", `{"paused":true,"stamp":5,"at":40,"event":"property-change","name":"time-pos","data":"40.000000"}`))
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
 		t.Fatalf("sent %q, want the party's position", got)
 	}
@@ -1903,9 +1875,9 @@ func TestATieIsWeighedAgainstWhereThisNodeIsHeading(t *testing.T) {
 	c, _, _, requests := liveClient(t)
 	c.paused = true
 	go func() {
-		c.apply(peer("a", `{"stamp":1,"at":10,"name":"time-pos","data":"10.000000"}`))
-		c.apply(peer("a", `{"stamp":2,"at":20,"name":"time-pos","data":"20.000000"}`))
-		c.apply(peer("b", `{"stamp":2,"at":10,"name":"pause","data":"yes"}`))
+		c.apply(peer("a", `{"paused":true,"stamp":1,"at":10,"name":"time-pos","data":"10.000000"}`))
+		c.apply(peer("a", `{"paused":true,"stamp":2,"at":20,"name":"time-pos","data":"20.000000"}`))
+		c.apply(peer("b", `{"paused":true,"stamp":2,"at":10,"name":"pause","data":"yes"}`))
 	}()
 	for _, want := range []string{"set_property time-pos 10.000000", "show-text synced by a 5000", "set_property time-pos 20.000000", "show-text synced by a 5000", "set_property time-pos 10.000000"} {
 		if got := next(t, requests); got != want {
@@ -1920,7 +1892,7 @@ func TestAnEntryAnswerSaysWhereOnIt(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
 	c.paused, c.current, c.pos, c.stamp = true, 1, 10, 1
-	go c.apply(peer("a", `{"stamp":4,"at":30,"entry":1,"event":"property-change","name":"playlist-pos","data":"1"}`))
+	go c.apply(peer("a", `{"paused":true,"stamp":4,"at":30,"entry":1,"event":"property-change","name":"playlist-pos","data":"1"}`))
 	if got := next(t, requests); got != "set_property time-pos 30.000000" {
 		t.Fatalf("sent %q, want the party's second on the entry it is already on", got)
 	}
@@ -1937,11 +1909,8 @@ func TestAnAnswerWhileAMoveLoadsIsAboutTheNewEntry(t *testing.T) {
 	next(t, requests)
 	next(t, requests)
 	go c.apply(peer("j", `{"name":"joined"}`))
-	for _, name := range []string{playlistPos, timePos} {
-		e := nextEvent(t, outgoing)
-		if e.Name != name || e.Entry == nil || *e.Entry != 1 || e.At == nil || *e.At != 0 || e.Stamp != 2 {
-			t.Fatalf("answered %+v, want %s on entry 1 at its start, with the move's stamp", e, name)
-		}
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "0.000000" || e.Entry == nil || *e.Entry != 1 || e.Stamp != 2 {
+		t.Fatalf("answered %+v, want entry 1 at its start, with the move's stamp", e)
 	}
 }
 
@@ -1955,9 +1924,9 @@ func TestASeekIsStillOnItsWayAfterAStrayPlaybackRestart(t *testing.T) {
 	c, _, outgoing, requests := liveClient(t)
 	c.paused, c.stamp = true, unheard
 	go func() {
-		c.apply(peer("a", `{"stamp":8,"at":53.1,"name":"pause","data":"yes"}`))
+		c.apply(peer("a", `{"paused":true,"stamp":8,"at":53.1,"name":"pause","data":"yes"}`))
 		c.handleEvent(Event{EventType: playbackRestart}, nil)
-		c.apply(peer("b", `{"stamp":8,"at":53.3,"name":"pause","data":"yes"}`))
+		c.apply(peer("b", `{"paused":true,"stamp":8,"at":53.3,"name":"pause","data":"yes"}`))
 		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
 	}()
 	if got := next(t, requests); got != "set_property time-pos 53.100000" {
@@ -1980,8 +1949,8 @@ func TestTheNewestHeardWhileLoadingIsByStampNotArrival(t *testing.T) {
 	c.paused, c.stamp = true, unheard
 	incoming := make(chan IncomingMessage)
 	go c.ProcessIncomingEvents(incoming)
-	incoming <- peer("a", `{"stamp":5,"at":30,"name":"pause","data":"yes"}`)
-	incoming <- peer("b", `{"stamp":3,"at":10,"event":"property-change","name":"time-pos","data":"10.000000"}`)
+	incoming <- peer("a", `{"paused":true,"stamp":5,"at":30,"name":"pause","data":"yes"}`)
+	incoming <- peer("b", `{"paused":true,"stamp":3,"at":10,"event":"property-change","name":"time-pos","data":"10.000000"}`)
 	close(c.ready)
 	if got := next(t, requests); got != "set_property time-pos 30.000000" {
 		t.Fatalf("sent %q, want only the newer of the two", got)
@@ -1997,8 +1966,8 @@ func TestAJoinersOwnChangeIsNotCaughtUp(t *testing.T) {
 	t.Parallel()
 	c, _, outgoing, requests := liveClient(t)
 	c.paused, c.pos, c.stamp = true, 30, 3
-	c.apply(peer("j", fmt.Sprintf(`{"stamp":%d,"at":10,"event":"property-change","name":"time-pos","data":"10.000000"}`, unheard+1)))
-	c.apply(peer("j", fmt.Sprintf(`{"stamp":%d,"at":10,"name":"pause","data":"no"}`, unheard+2)))
+	c.apply(peer("j", fmt.Sprintf(`{"paused":true,"stamp":%d,"at":10,"event":"property-change","name":"time-pos","data":"10.000000"}`, unheard+1)))
+	c.apply(peer("j", fmt.Sprintf(`{"paused":false,"stamp":%d,"at":10,"name":"pause","data":"no"}`, unheard+2)))
 	c.apply(peer("j", `{"name":"show-text","data":"mark"}`))
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want nothing before the mark", got)
@@ -2007,5 +1976,88 @@ func TestAJoinersOwnChangeIsNotCaughtUp(t *testing.T) {
 	case e := <-outgoing:
 		t.Fatalf("answered %s", e)
 	default:
+	}
+}
+
+// Its user's own change while a move it followed loads is about the entry it is heading
+// to. Tagged with the file mpv is still on, it carried the party's newest stamp on the
+// entry the party left, and dragged everyone back there.
+func TestOwnChangeWhileAMoveLoadsIsAboutTheNewEntry(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := playlistClient(t)
+	c.paused, c.pos, c.stamp = true, 30, 1
+	c.apply(peer("a", move(2, 1)))
+	next(t, requests)
+	next(t, requests)
+	send(propertyChangeLine(pause, "no", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause || e.Entry == nil || *e.Entry != 1 || e.At == nil || *e.At != 0 || e.Stamp != 3 {
+		t.Fatalf("resumed with %+v, want entry 1 from its start, newer than the move", e)
+	}
+}
+
+// A newer resume from another entry means this node missed the move. It goes there
+// stopped, as the file has to load, and stops the party instead of playing that far behind.
+func TestANewerResumeFromAnotherEntryStopsTheParty(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := playlistClient(t)
+	c.pos, c.stamp = 5, 1
+	go c.apply(peer("a", `{"paused":false,"stamp":2,"at":10,"entry":2,"name":"pause","data":"no"}`))
+	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property playlist-pos 2", "show-text from e1 to e3, by a 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "10.000000" || e.Stamp != 2 || *e.Entry != 2 {
+		t.Fatalf("answered %+v, want where it holds the party is, stopped", e)
+	}
+}
+
+// Every node sends its whole state, so a message missing part of it is refused rather than
+// filled in from this node's own: each of these is newer, and would move it.
+func TestAMessageWithoutItsStateIsRefused(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.pos, c.stamp = true, 40, 1
+	go func() {
+		c.apply(peer("a", `{"stamp":2,"at":10,"entry":0,"name":"time-pos","data":"10.000000"}`))
+		c.apply(peer("a", `{"stamp":2,"paused":true,"entry":0,"name":"pause","data":"yes"}`))
+		c.apply(peer("a", `{"stamp":2,"paused":true,"at":10,"name":"time-pos","data":"10.000000"}`))
+		c.apply(peer("a", `{"stamp":2,"paused":true,"at":0,"entry":3,"name":"playlist-pos","data":"3"}`))
+		c.apply(peer("a", `{"stamp":2,"paused":true,"at":1e999,"entry":0,"name":"time-pos","data":"10.000000"}`))
+		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing for a message without its state", got)
+	}
+}
+
+// A move while playing stops the party, so it says stopped before mpv has: whoever takes it
+// opens the file stopped instead of answering a node it thinks plays on.
+func TestAMoveWhilePlayingSaysStopped(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, _ := playlistClient(t)
+	send(propertyChangeLine(playlistPos, "2", 0))
+	if e := nextEvent(t, outgoing); e.Name != playlistPos || e.Paused == nil || !*e.Paused {
+		t.Fatalf("broadcast %+v, want the move, stopped", e)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reason != "video changed" {
+		t.Fatalf("stopping for %q, want the party stopped for the move", c.reason)
+	}
+}
+
+// A newer resume reaching a node that is already playing moves nothing: playback is never
+// synced, and where it resumed from is a moment ago on another machine.
+func TestANewerResumeDoesNotSeekANodeThatPlays(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.pos, c.stamp = 40, 1
+	go func() {
+		c.apply(peer("a", `{"stamp":2,"paused":false,"at":30,"name":"pause","data":"no"}`))
+		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing for a node already playing", got)
 	}
 }
