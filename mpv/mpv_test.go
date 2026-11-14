@@ -718,9 +718,10 @@ func TestJoinerAnnouncesItselfOnceLoaded(t *testing.T) {
 	}
 }
 
-// An answer heard while loading is to someone else's join: this node hasn't said
-// joined yet. Kept, it sent a joiner back to where the party was before its seeks.
-func TestJoinerIgnoresAnswersHeardWhileLoading(t *testing.T) {
+// A position heard while loading is to someone else's join: this node hasn't said joined
+// yet. Kept, it sent a joiner back to where the party was before its seeks. The entry is
+// kept, and followed once this node has joined: the party's own answer can only be newer.
+func TestJoinerIgnoresPositionsForAnotherJoinHeardWhileLoading(t *testing.T) {
 	t.Parallel()
 	c, _, outgoing, requests := playlistClient(t)
 	c.paused, c.pos = true, 30
@@ -739,8 +740,10 @@ func TestJoinerIgnoresAnswersHeardWhileLoading(t *testing.T) {
 		t.Fatalf("broadcast %+v, want joined", e)
 	}
 	incoming <- peer("a", `{"name":"show-text","data":"mark"}`)
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("sent %q, want the answers to another joiner dropped", got)
+	for _, want := range []string{"set_property playlist-pos 2", "show-text from e1 to e3, by a 5000", "show-text mark 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q: the entry followed, the position for another join dropped", got, want)
+		}
 	}
 }
 
@@ -941,9 +944,10 @@ func TestPausesForAJoinSettleOnTheEarliest(t *testing.T) {
 	}
 }
 
-// Two people start at once on different entries, and each hears the other's join. Each
-// answering and each following would swap them, for good, so the higher one wins, as it
-// does for two moves. Hearing no join from whoever answers means a party to go to.
+// Two people start at once on different entries, and each answers the other. Neither
+// knows anything yet, so their stamps tie and the higher entry wins, as it does for two
+// moves: each following the other would swap them, for good. A party's answer has a
+// stamp, and that is followed, lower or not.
 func TestTwoJoinersSettleOnTheHigherEntry(t *testing.T) {
 	t.Parallel()
 	answer := func(i int) string {
@@ -976,9 +980,9 @@ func TestTwoJoinersSettleOnTheHigherEntry(t *testing.T) {
 
 	c, _, _, requests = playlistClient(t)
 	c.paused, c.joining, c.current = true, true, 2
-	go c.apply(peer("a", answer(0)))
+	go c.apply(peer("a", move(1, 0)))
 	if got := next(t, requests); got != "set_property playlist-pos 0" {
-		t.Fatalf("sent %q, want to follow a party whose join it never heard", got)
+		t.Fatalf("sent %q, want to follow the party", got)
 	}
 }
 
@@ -1144,7 +1148,6 @@ func playlistClient(t *testing.T) (*Client, func(string), chan []byte, chan stri
 	c, send, outgoing, requests := liveClient(t)
 	c.names = []string{"e1", "e2", "e3"}
 	c.seen[playlistPos] = true
-	c.movedFrom = -1
 	return c, send, outgoing, requests
 }
 
@@ -1237,7 +1240,7 @@ func TestFollowingAnEntryStopsFirstAndStaysQuiet(t *testing.T) {
 	t.Parallel()
 	c, send, outgoing, requests := playlistClient(t)
 
-	go c.apply(peer("a", move(0, 2)))
+	go c.apply(peer("a", move(1, 2)))
 	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "set_property playlist-pos 2", "show-text from e1 to e3, by a 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
@@ -1280,7 +1283,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 	c.paused = true
 
 	go func() {
-		c.apply(peer("a", move(0, 1)))
+		c.apply(peer("a", move(1, 1)))
 		c.apply(peer("a", `{"event":"property-change","name":"time-pos","data":"40.000000"}`))
 	}()
 	for _, want := range []string{"set_property playlist-pos 1", "show-text from e1 to e2, by a 5000", "show-text synced by a 5000"} {
@@ -1332,22 +1335,22 @@ func TestJoinAnswerNamesTheEntryFirst(t *testing.T) {
 	}
 }
 
-// Everyone hears the answer to a joiner, and it can arrive after someone has moved on.
-// Only the joiner may act on it: followed by the rest, an answer sent just before two
-// people crossed sends each to the other's entry, and they stay apart.
-func TestAnswerToAJoinerMovesOnlyTheJoiner(t *testing.T) {
+// Everyone hears the answer to a joiner, and it can arrive after someone has moved on. It
+// carries the stamp its sender had, so one sent just before two people crossed is older
+// than both moves and sends nobody to the other's entry. One from someone who knows of a
+// later move is followed by anyone, joiner or not.
+func TestAnAnswerIsFollowedOnlyIfItIsNewer(t *testing.T) {
 	t.Parallel()
-	answer := `{"event":"property-change","name":"playlist-pos","data":"2"}`
 	mark := `{"name":"show-text","data":"mark"}`
 
 	c, _, _, requests := playlistClient(t)
-	c.paused, c.current = true, 1
+	c.paused, c.current, c.stamp = true, 1, 3
 	go func() {
-		c.apply(peer("a", answer))
+		c.apply(peer("a", move(2, 2)))
 		c.apply(peer("a", mark))
 	}()
 	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("a member followed it: %q", got)
+		t.Fatalf("a member followed an older answer: %q", got)
 	}
 
 	c, send, outgoing, requests := playlistClient(t)
@@ -1355,18 +1358,67 @@ func TestAnswerToAJoinerMovesOnlyTheJoiner(t *testing.T) {
 	send(propertyChangeLine(playlistPos, "0", 0))
 	next(t, outgoing)
 	go func() {
-		c.apply(peer("a", answer))
+		c.apply(peer("a", move(0, 2)))
 		c.apply(peer("a", mark))
 	}()
 	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("a joiner who has moved by hand followed it: %q", got)
+		t.Fatalf("a joiner who has moved by hand followed a fellow joiner: %q", got)
 	}
 
 	c, _, _, requests = playlistClient(t)
-	c.paused, c.current, c.joining = true, 1, true
-	go c.apply(peer("a", answer))
-	if got := next(t, requests); got != "set_property playlist-pos 2" {
-		t.Fatalf("a joiner sent %q, want to follow it", got)
+	c.paused, c.current, c.stamp = true, 1, 3
+	go c.apply(peer("a", move(4, 0)))
+	if got := next(t, requests); got != "set_property playlist-pos 0" {
+		t.Fatalf("a member sent %q, want to follow a newer answer", got)
+	}
+	next(t, requests)
+	c.mu.Lock()
+	stamp := c.stamp
+	c.mu.Unlock()
+	if stamp != 4 {
+		t.Fatalf("its stamp is %d, want the one it followed", stamp)
+	}
+}
+
+// A newer stamp for the entry this node is already on moves nothing, and is still taken:
+// its next move must beat it.
+func TestANewerStampForTheSameEntryIsTaken(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := playlistClient(t)
+	c.paused, c.current, c.stamp = true, 1, 1
+	c.apply(peer("a", move(5, 1)))
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing for the entry it is on", got)
+	}
+	send(propertyChangeLine(playlistPos, "2", 0))
+	if e := nextEvent(t, outgoing); e.Stamp != 6 {
+		t.Fatalf("moved with stamp %d, want one past the highest it heard", e.Stamp)
+	}
+}
+
+// A joiner knows nothing, whatever it knew before its connection dropped, and whoever
+// opened the party is the party from the start.
+func TestAJoinForgetsTheStampAndOpeningTakesOne(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, _ := playlistClient(t)
+	stamp := func() int {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.stamp
+	}
+	c.stamp = 7
+	go c.announce()
+	nextEvent(t, outgoing)
+	joiner := stamp()
+	c.apply(IncomingMessage{Opened: true})
+	opener := stamp()
+	c.mu.Lock()
+	c.stamp = 7
+	c.mu.Unlock()
+	c.apply(IncomingMessage{Opened: true})
+	if again := stamp(); joiner != 0 || opener != 1 || again != 7 {
+		t.Fatalf("stamps %d, %d and %d, want 0 for a joiner, 1 for an opener, and 7 kept by one who reopens", joiner, opener, again)
 	}
 }
 
@@ -1374,8 +1426,8 @@ func tagged(entry int, event string) string {
 	return fmt.Sprintf(`{"entry":%d,%s`, entry, event[1:])
 }
 
-// Everything a playlist node sends says which entry it belongs to, and a move also
-// says which one it left. A single file's messages stay exactly as they were.
+// Everything a node sends says its stamp, which a move of its own raises, and in a
+// playlist which entry it belongs to.
 func TestMessagesSayWhichEntryTheyBelongTo(t *testing.T) {
 	t.Parallel()
 	c, send, outgoing, _ := playlistClient(t)
@@ -1383,20 +1435,20 @@ func TestMessagesSayWhichEntryTheyBelongTo(t *testing.T) {
 
 	send(propertyChangeLine(playlistPos, "2", 0))
 	e := nextEvent(t, outgoing)
-	if e.Name != playlistPos || e.From == nil || *e.From != 0 || e.Entry == nil || *e.Entry != 2 {
-		t.Fatalf("broadcast %+v, want a move from 0 to 2", e)
+	if e.Name != playlistPos || e.Stamp != 1 || e.Entry == nil || *e.Entry != 2 {
+		t.Fatalf("broadcast %+v, want a move to 2 with a new stamp", e)
 	}
 	send(propertyChangeLine(timePos, "0.000000", 0))
 	send(propertyChangeLine(timePos, "9.000000", 0))
-	if e := nextEvent(t, outgoing); e.Name != timePos || e.Entry == nil || *e.Entry != 2 {
-		t.Fatalf("broadcast %+v, want a seek on entry 2", e)
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Stamp != 1 || e.Entry == nil || *e.Entry != 2 {
+		t.Fatalf("broadcast %+v, want a seek on entry 2 with the same stamp", e)
 	}
 
 	single, send, outgoing, _ := liveClient(t)
 	single.paused = true
 	send(propertyChangeLine(timePos, "9.000000", 0))
-	if msg := string(next(t, outgoing)); strings.Contains(msg, "entry") {
-		t.Fatalf("a single file sent %s", msg)
+	if msg := string(next(t, outgoing)); strings.Contains(msg, "entry") || !strings.Contains(msg, `"stamp":0`) {
+		t.Fatalf("a single file sent %s, want a stamp and no entry", msg)
 	}
 }
 
@@ -1436,7 +1488,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 	c.paused = true
 
 	go func() {
-		c.apply(peer("a", move(0, 1)))
+		c.apply(peer("a", move(1, 1)))
 		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
 		c.apply(peer("a", tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`)))
 	}()
@@ -1452,13 +1504,14 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 	}
 }
 
-func move(from, to int) string {
-	return fmt.Sprintf(`{"from":%d,"event":"property-change","name":"playlist-pos","data":"%d"}`, from, to)
+// move is a peer's playlist entry as it arrives: a move, or an answer to a joiner.
+func move(stamp, to int) string {
+	return fmt.Sprintf(`{"stamp":%d,"event":"property-change","name":"playlist-pos","data":"%d"}`, stamp, to)
 }
 
-// Two people leave entry 5 at once, one forward and one back. Without a rule each
-// follows the other and they swap. Everyone applies the same rule, so they end up
-// together on the higher one.
+// Two people move at once, one forward and one back, so their moves carry the same
+// stamp. Without a rule each follows the other and they swap. Everyone applies the same
+// rule, so they end up together on the higher one.
 func TestTwoMovesFromTheSameEntrySettleOnTheHigher(t *testing.T) {
 	t.Parallel()
 	const left = 1
@@ -1474,7 +1527,7 @@ func TestTwoMovesFromTheSameEntrySettleOnTheHigher(t *testing.T) {
 			send(propertyChangeLine(playlistPos, fmt.Sprint(c.mine), 0))
 			next(t, outgoing)
 			go func() {
-				client.apply(peer("a", move(left, c.theirs)))
+				client.apply(peer("a", move(1, c.theirs)))
 				client.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 			}()
 			got := next(t, requests)
@@ -1515,8 +1568,8 @@ func TestAThirdMemberSettlesOnTheHigherInEitherOrder(t *testing.T) {
 	}
 }
 
-// Someone behind everyone else hears a tie too, and what it compares is where the moves
-// left from, not where it happens to be.
+// Someone behind everyone else hears a tie too, and what it compares is the stamps, not
+// where it happens to be.
 func TestATieIsSeenFromAnyEntry(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
@@ -1534,12 +1587,12 @@ func TestATieIsSeenFromAnyEntry(t *testing.T) {
 	}
 }
 
-// The rule only settles a tie. Any other move is followed, lower or not, so someone who
-// missed a message catches up on the next one instead of staying apart.
+// The higher entry only settles a tie. A newer move is followed, lower or not, so someone
+// who missed a message catches up on the next one instead of staying apart.
 func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
-	c.paused, c.current, c.movedFrom = true, 2, 1
+	c.paused, c.current, c.stamp = true, 2, 1
 
 	go c.apply(peer("a", move(2, 0)))
 	if got := next(t, requests); got != "set_property playlist-pos 0" {
@@ -1557,7 +1610,7 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
 	c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
 	c.conn.conn = ours
-	c.names, c.movedFrom = []string{"e1", "e2", "e3"}, -1
+	c.names = []string{"e1", "e2", "e3"}
 	c.current = 1
 	c.seen[pause], c.seen[timePos], c.seen[playlistPos] = true, true, true
 	sent := make(chan string, 16)
@@ -1594,7 +1647,7 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 	c.paused = true
 	delete(c.seen, playlistPos)
 
-	go c.apply(peer("a", move(0, 1)))
+	go c.apply(peer("a", move(1, 1)))
 	if got := next(t, requests); got != "set_property playlist-pos 1" {
 		t.Fatalf("sent %q", got)
 	}

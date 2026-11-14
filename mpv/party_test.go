@@ -56,7 +56,7 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 		ours, theirs := net.Pipe()
 		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true}
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
-		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names, n.c.movedFrom = ctx, ours, true, slices.Repeat([]string{"e"}, entries), -1
+		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names = ctx, ours, true, slices.Repeat([]string{"e"}, entries)
 		n.c.seen[pause], n.c.seen[timePos], n.c.seen[playlistPos] = true, true, true
 		t.Cleanup(func() { ours.Close(); theirs.Close(); close(n.c.conn.closed) })
 		go n.model(ctx, theirs)
@@ -271,11 +271,11 @@ func (n *simNode) said(text string) bool {
 	return slices.Contains(n.notices, text)
 }
 
-// play starts these nodes at pos as if someone had resumed long ago.
+// play starts these nodes at pos as if someone had opened the party and resumed long ago.
 func play(pos float64, nodes ...*simNode) {
 	for _, n := range nodes {
 		n.paused, n.pos = false, pos
-		n.c.paused, n.c.pos = false, pos
+		n.c.paused, n.c.pos, n.c.stamp = false, pos, 1
 	}
 }
 
@@ -376,9 +376,12 @@ func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 			a.setPause(false)
 		}}
 		s.run()
-		// only once the move has reached everyone still there: c never hears it, and could
-		// take a stale position from a member who hasn't yet. The relay's order prevents
-		// that; this network, which delivers each pair's messages independently, doesn't.
+		// only once the move and the resume have reached everyone still there. c ends on the
+		// party's entry either way, but not always on its second: a member that hasn't heard
+		// of the move answers with a position for the old entry, and one that answers before
+		// the resume reaches it is started again by it and stops later than the rest. The
+		// relay's order prevents both; this network, which delivers each pair's messages
+		// independently, doesn't.
 		s.ticks = 20
 		s.script = []func(){s.back(c)}
 		s.run()
@@ -473,6 +476,35 @@ func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
 			a.request(1)
 		}, func() { j.out <- []byte(`{"name":"joined"}`) }}
 		s.rng.Shuffle(2, func(i, j int) { s.script[i], s.script[j] = s.script[j], s.script[i] })
+		s.run()
+		if a.entry != 1 || b.entry != 1 || j.entry != 1 {
+			t.Errorf("seed %d: on entries %d, %d and %d, want 1: j heard %q", seed, a.entry, b.entry, j.entry, j.notices)
+		}
+		s.together(seed)
+	})
+}
+
+// A member moves and the joiner never hears it: it was not there yet. The other member
+// can answer the joiner before it has heard of the move itself, so the joiner is told the
+// old entry by one and the new one by the other, in either order. On this network each
+// pair's messages travel independently, as in a mesh; a relay keeps each member's order.
+func TestAJoinerThatMissedAMoveEndsOnThePartysEntry(t *testing.T) {
+	forSeeds(t, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, simEntries, "a", "b", "j")
+		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, a, b)
+		j.c.joining = true
+		j.entry, j.c.current = int(seed%simEntries), int(seed%simEntries)
+		s.down["j"] = true
+		s.ticks = 20
+		s.script = []func(){func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.request(1)
+		}, func() {
+			s.down["j"] = false
+			j.out <- []byte(`{"name":"joined"}`)
+		}}
 		s.run()
 		if a.entry != 1 || b.entry != 1 || j.entry != 1 {
 			t.Errorf("seed %d: on entries %d, %d and %d, want 1: j heard %q", seed, a.entry, b.entry, j.entry, j.notices)

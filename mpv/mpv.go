@@ -145,9 +145,9 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
-	Entry     *int   `json:"entry,omitempty"`
-	From      *int   `json:"from,omitempty"`
-	Party     bool   `json:"party,omitempty"`
+	// Stamp and Entry are the state its sender was in when it sent this (tag)
+	Stamp int  `json:"stamp,omitempty"`
+	Entry *int `json:"entry,omitempty"`
 	Response
 }
 
@@ -188,12 +188,13 @@ type Client struct {
 	seeking  bool
 	reason   string
 
-	// joining: taking the party's entry and position
-	joining    bool
-	joinedWith []string
-	heardParty bool
-	passed     []int
-	resumeAt   float64
+	// stamp orders what the party shares (a Lamport clock): the highest this node has
+	// made or followed. 0 knows nothing, so a joiner follows whatever it hears first.
+	stamp int
+
+	// joining: taking the party's position
+	joining  bool
+	resumeAt float64
 
 	// settling: after a join or a leave, on the earliest stop
 	settling bool
@@ -204,7 +205,6 @@ type Client struct {
 	// playlist
 	names     []string
 	current   int
-	movedFrom int
 	following []string
 	loading   bool
 	heldSeek  string
@@ -246,9 +246,23 @@ func (c *Client) isEcho(event Event) bool {
 	return applied == event.Data
 }
 
-func (c *Client) handleEvent(event Event) ([][]byte, error) {
+// handleEvent returns what goes out for one line from mpv: the line itself when it is
+// this node's own change, and whatever must follow it. Each is tagged under the lock that
+// decided it, so its stamp is the one that change was given.
+func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	out, err := c.react(event)
+	if err == nil {
+		out = append([][]byte{line}, out...)
+	}
+	for i, b := range out {
+		out[i] = c.tag(b)
+	}
+	return out
+}
+
+func (c *Client) react(event Event) ([][]byte, error) {
 	switch event.EventType {
 	case seek:
 		if !c.paused && !c.peerSeek {
@@ -288,7 +302,6 @@ func (c *Client) fileLoaded() {
 // propertyChanged is what a property-change with data means for the party: what to
 // broadcast after it, or instead of it, and nil only if the event itself goes out.
 func (c *Client) propertyChanged(event Event) ([][]byte, error) {
-	previous := c.heading()
 	extra, moved := c.record(event)
 	if c.isEcho(event) {
 		return extra, errEcho
@@ -311,7 +324,7 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 		}
 		return nil, errDoNotSend
 	case playlistPos:
-		return c.entryChanged(event.Data, previous, moved && !first)
+		return nil, c.entryChanged(moved && !first)
 	default:
 		return nil, errDoNotSend
 	}
@@ -395,30 +408,41 @@ func (c *Client) positionChanged() error {
 	return errDoNotSend
 }
 
-// entryChanged is this node moving to another entry by itself: it goes out saying where
-// from, in place of mpv's report, and pauses the party if it was playing.
-func (c *Client) entryChanged(entry string, previous int, moved bool) ([][]byte, error) {
+// entryChanged is this node moving to another entry by itself: it goes out with a new
+// stamp, and pauses the party if it was playing.
+func (c *Client) entryChanged(moved bool) error {
 	if !moved {
-		return nil, errDoNotSend
+		return errDoNotSend
 	}
 	if !c.paused {
 		c.pauseParty("video changed")
 	}
-	c.movedFrom, c.joining = previous, false
-	b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: entry, From: &previous})
-	return [][]byte{b}, errDoNotSend
+	c.stamp++
+	c.joining = false
+	return nil
 }
 
-// tagged says which entry a message belongs to, so a peer that has moved on can drop
-// it. Only this node knows, at the moment it sends.
-func (c *Client) tagged(b []byte) []byte {
+// tag says what state a message was sent from: its stamp, and in a playlist the entry it
+// belongs to, so a peer that has moved on can drop it. Only this node knows, at the
+// moment it sends.
+func (c *Client) tag(b []byte) []byte {
 	if len(c.names) == 0 {
-		return b
+		return append(fmt.Appendf(nil, `{"stamp":%d,`, c.stamp), b[1:]...)
 	}
+	return append(fmt.Appendf(nil, `{"stamp":%d,"entry":%d,`, c.stamp, c.current), b[1:]...)
+}
+
+func (c *Client) tagged(b []byte) []byte {
 	c.mu.Lock()
-	current := c.current
-	c.mu.Unlock()
-	return append(fmt.Appendf(nil, `{"entry":%d,`, current), b[1:]...)
+	defer c.mu.Unlock()
+	return c.tag(b)
+}
+
+// beats is whether an entry a peer named wins over the one this node is heading to: a
+// newer stamp does, and of two with the same stamp the higher entry. Everyone applies it
+// alike, so two who moved at once, or joined at once, end on the same one.
+func (c *Client) beats(stamp, entry int) bool {
+	return stamp > c.stamp || stamp == c.stamp && entry > c.heading()
 }
 
 // heading is the entry this node is on, or on its way to.
@@ -491,13 +515,7 @@ func (c *Client) watch() error {
 		if event.EventType == "" {
 			continue
 		}
-		extra, err := c.handleEvent(event)
-		out := extra
-		if err == nil {
-			out = append([][]byte{bytes.Clone(scanner.Bytes())}, extra...)
-		}
-		for _, b := range out {
-			b = c.tagged(b)
+		for _, b := range c.handleEvent(event, bytes.Clone(scanner.Bytes())) {
 			select {
 			case c.outgoing <- b:
 				log.Printf("Watch: broadcasted event: %s\n", b)
@@ -523,8 +541,8 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			err := json.Unmarshal(e.Event, &event)
 			if err == nil && (event.Name == pause || event.Name == timePos) {
 				latest[event.Name] = e
-			} else if err == nil && (event.Name == startPos || event.Name == playlistPos && event.From == nil) {
-				// an answer to someone else's join: this node hasn't said joined yet
+			} else if err == nil && event.Name == startPos {
+				// a position for someone else's join: this node hasn't said joined yet
 			} else {
 				notices = append(notices, e)
 			}
@@ -566,7 +584,7 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 // sent or was sent meanwhile is gone.
 func (c *Client) announce() {
 	c.mu.Lock()
-	c.joining, c.joinedWith, c.heardParty, c.passed = true, nil, false, nil
+	c.joining, c.stamp = true, 0
 	c.mu.Unlock()
 	hello, _ := json.Marshal(Event{Name: joined})
 	select {
@@ -603,7 +621,7 @@ func (c *Client) back() {
 func (c *Client) apply(e IncomingMessage) {
 	if e.Opened {
 		c.mu.Lock()
-		c.joining = false
+		c.joining, c.stamp = false, max(c.stamp, 1)
 		c.mu.Unlock()
 		return
 	}
@@ -656,14 +674,13 @@ func (c *Client) welcome(hostname string) error {
 	joining, playing := c.joining, !c.paused
 	var at string
 	var earlier bool
-	if joining {
-		c.joinedWith = append(c.joinedWith, hostname)
-	} else {
+	if !joining {
 		at, earlier = c.settle()
 	}
 	var entry []byte
 	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading()), Party: !joining})
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
+		entry = c.tag(entry)
 	}
 	c.mu.Unlock()
 	if entry != nil {
@@ -713,6 +730,9 @@ func (c *Client) left(hostname string) error {
 	return c.pauseReq(true)
 }
 
+// followEntry goes to the entry a peer moved to, or answered a joiner with, if it beats
+// the one this node is heading to. A peer that knows of a later move has the higher stamp,
+// so an answer sent before its sender heard of one moves nobody back.
 func (c *Client) followEntry(event Event, hostname string) error {
 	i, err := strconv.Atoi(event.Data)
 	if err != nil {
@@ -722,15 +742,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return errors.New("no such entry")
 	}
 	c.mu.Lock()
-	heading := c.heading()
-	if c.joining && event.From != nil {
-		// the party left it, even if this node was never there or is already where it went
-		c.passed = append(c.passed, *event.From)
-	}
-	lost := event.From != nil && *event.From == c.movedFrom && i < heading
-	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Party)
+	stays := c.stays(event.Stamp, i)
 	c.mu.Unlock()
-	if i == heading || lost || !takes {
+	if stays {
 		return nil
 	}
 	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
@@ -738,21 +752,15 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
-	if i == c.heading() {
+	// again: this node's own move can have happened during the pause
+	if c.stays(event.Stamp, i) {
 		c.mu.Unlock()
 		return nil
 	}
 	from := c.entryName(c.heading())
-	if c.joining {
-		c.passed = append(c.passed, c.heading())
-	}
 	// a seek held for the entry it was heading to is not for this one
-	c.loading, c.heldSeek = true, ""
+	c.loading, c.heldSeek, c.stamp = true, "", event.Stamp
 	c.following = append(c.following, event.Data)
-	c.movedFrom = heading
-	if event.From != nil {
-		c.movedFrom = *event.From
-	}
 	c.mu.Unlock()
 	err = c.conn.do(setProperty, playlistPos, i)
 	if err != nil {
@@ -767,22 +775,14 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	return c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
 }
 
-// takesAnswer is whether this node follows the entry someone answered a joiner with.
-// Only a node still joining does. The party's answer, marked party or from anyone
-// whose join it didn't hear, always; a fellow joiner's only if higher (each
-// answers the other, and following both ways would swap them), and not once the party
-// has answered, since it only says where that joiner was. Never to an entry it or a move
-// it heard has left since it joined (passed): that answer was sent before its sender heard
-// of the move, and a move back there would come as a move.
-func (c *Client) takesAnswer(i, heading int, hostname string, party bool) bool {
-	if !c.joining || slices.Contains(c.passed, i) {
-		return false
-	}
-	if party || !slices.Contains(c.joinedWith, hostname) {
-		c.heardParty = true
+// stays is whether this node keeps heading where it is after a peer named an entry: that
+// one loses to its own, or it is already heading there, which still takes the stamp.
+func (c *Client) stays(stamp, entry int) bool {
+	if entry == c.heading() {
+		c.stamp = max(c.stamp, stamp)
 		return true
 	}
-	return i > heading && !c.heardParty
+	return !c.beats(stamp, entry)
 }
 
 func (c *Client) entryName(i int) string {
@@ -1014,17 +1014,16 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		closed:  make(chan struct{}),
 	}
 	client := &Client{
-		ctx:       c,
-		ready:     make(chan struct{}),
-		conn:      conn,
-		outgoing:  outgoing,
-		paused:    true,
-		applied:   map[string]string{},
-		seen:      map[string]bool{},
-		names:     names,
-		current:   start,
-		resumeAt:  at,
-		movedFrom: -1,
+		ctx:      c,
+		ready:    make(chan struct{}),
+		conn:     conn,
+		outgoing: outgoing,
+		paused:   true,
+		applied:  map[string]string{},
+		seen:     map[string]bool{},
+		names:    names,
+		current:  start,
+		resumeAt: at,
 	}
 
 	go client.ProcessIncomingEvents(incoming)

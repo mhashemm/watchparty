@@ -1840,7 +1840,12 @@ def media_suite():
     for n in ("epF", "epG"):
         resolve(n)
     must("on the middle entry", until(lambda: get("epF", "filename") == get("epG", "filename") == "video3.mkv"))
-    time.sleep(QUIET)
+    # epF opened the room. Until its answer reaches epG, a move by epG is older than epF's
+    # and loses to it, whichever entry is higher: the relay keeps epF's order, so a seek
+    # that arrives proves the answer before it did.
+    must("epF has answered the join", until(lambda: "paused for epG: joining" in osd("epF")))
+    setp("epF", "time-pos", 1)
+    must("and the answer has arrived", until(lambda: "synced by epF" in osd("epG")))
     ipc(nodes["epF"]["sock"], "playlist-prev")
     ipc(nodes["epG"]["sock"], "playlist-next")
     ok("they settle on the higher one", until(lambda: get("epF", "filename") == get("epG", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epF", "epG")]))
