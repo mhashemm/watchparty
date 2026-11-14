@@ -289,6 +289,16 @@ func seeks(n *simNode, pos float64) func() {
 	}
 }
 
+// moves is the person at n moving to another entry by hand, and mpv doing it at once.
+func moves(n *simNode, i int) func() {
+	return func() {
+		n.mu.Lock()
+		n.request(i)
+		n.mu.Unlock()
+		n.landMove()
+	}
+}
+
 func sets(n *simNode, paused bool) func() {
 	return func() {
 		n.mu.Lock()
@@ -359,7 +369,7 @@ func TestPartySettlesAfterAJoin(t *testing.T) {
 		s := newSim(t, seed, 0, "a", "b", "c", "j")
 		a, b, c, j := s.nodes[0], s.nodes[1], s.nodes[2], s.nodes[3]
 		play(30, a, b, c)
-		j.c.joining = true
+		joins(j)
 		s.ticks = 20
 		j.out <- []byte(`{"name":"joined"}`)
 		s.run()
@@ -468,8 +478,10 @@ func TestTwoJoinersEndOnOneEntry(t *testing.T) {
 	forSeeds(t, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b")
 		a, b := s.nodes[0], s.nodes[1]
-		a.entry, a.c.current, a.c.joining = 0, 0, true
-		b.entry, b.c.current, b.c.joining = 2, 2, true
+		a.entry, a.c.current = 0, 0
+		b.entry, b.c.current = 2, 2
+		joins(a)
+		joins(b)
 		a.out <- []byte(`{"name":"joined"}`)
 		b.out <- []byte(`{"name":"joined"}`)
 		s.run()
@@ -484,7 +496,8 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 		s := newSim(t, seed, simEntries, "a", "b")
 		a, b := s.nodes[0], s.nodes[1]
 		for _, n := range s.nodes {
-			n.entry, n.c.current, n.c.joining = 1, 1, true
+			n.entry, n.c.current = 1, 1
+			joins(n)
 			n.out <- []byte(`{"name":"joined"}`)
 		}
 		hand := func(n *simNode, i int) func() {
@@ -514,7 +527,7 @@ func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
 		s := newSim(t, seed, simEntries, "a", "b", "j")
 		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
 		play(30, a, b)
-		j.c.joining = true
+		joins(j)
 		j.entry, j.c.current = int(seed%simEntries), int(seed%simEntries)
 		s.ticks = 20
 		s.script = []func(){func() {
@@ -536,11 +549,11 @@ func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
 // old entry by one and the new one by the other, in either order. On this network each
 // pair's messages travel independently, as in a mesh; a relay keeps each member's order.
 func TestAJoinerThatMissedAMoveEndsOnThePartysEntry(t *testing.T) {
-	forSeeds(t, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 100, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b", "j")
 		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
 		play(30, a, b)
-		j.c.joining = true
+		joins(j)
 		j.entry, j.c.current = int(seed%simEntries), int(seed%simEntries)
 		s.down["j"] = true
 		s.ticks = 20
@@ -626,7 +639,8 @@ func TestJoinersTakeTheOpenersSpot(t *testing.T) {
 		s := newSim(t, seed, simEntries, "o", "g", "h")
 		o, g, h := s.nodes[0], s.nodes[1], s.nodes[2]
 		for n, at := range map[*simNode][2]float64{o: {1, 40}, g: {2, 10}, h: {0, 5}} {
-			n.entry, n.c.current, n.c.joining = int(at[0]), int(at[0]), true
+			n.entry, n.c.current = int(at[0]), int(at[0])
+			joins(n)
 			n.pos, n.c.pos = at[1], at[1]
 		}
 		o.in <- IncomingMessage{Opened: true}
@@ -644,6 +658,11 @@ func TestJoinersTakeTheOpenersSpot(t *testing.T) {
 			t.Errorf("seed %d: the key holder moved to %d at %.1f: %q", seed, o.entry, o.pos, o.notices)
 		}
 	})
+}
+
+// joins makes n a node that hasn't heard the party yet, as announce does.
+func joins(n *simNode) {
+	n.c.joining, n.c.stamp = true, unheard
 }
 
 // stopped starts these nodes paused together at pos, in a party someone opened.
@@ -735,6 +754,44 @@ func TestANodeThatFellBehindIsCaughtUp(t *testing.T) {
 				s.together(seed)
 				if c.told && !a.said("paused for b: catching up") {
 					t.Errorf("seed %d: a never said why: %q", seed, a.notices)
+				}
+			})
+		})
+	}
+}
+
+// Someone joins and does something before the party has answered: seeks to an earlier
+// second, moves to a later entry, or resumes. The party never follows it, even one whose
+// opener has done nothing yet: the joiner ends where the party is.
+func TestNothingAJoinerDoesBeforeItIsAnsweredMovesTheParty(t *testing.T) {
+	for name, does := range map[string]func(*simNode) func(){
+		"seeks":   func(j *simNode) func() { return seeks(j, 10) },
+		"moves":   func(j *simNode) func() { return moves(j, 2) },
+		"resumes": func(j *simNode) func() { return sets(j, false) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, simEntries, "a", "b", "j")
+				a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
+				stopped(30, a, b)
+				for _, n := range []*simNode{a, b, j} {
+					n.entry, n.c.current = 1, 1
+				}
+				joins(j)
+				s.ticks = 20
+				// before anything can have reached it: just before it says joined, or right after
+				says := func() { j.out <- []byte(`{"name":"joined"}`) }
+				s.script = []func(){does(j), says}
+				if seed%2 == 0 {
+					s.script = []func(){func() { says(); does(j)() }}
+				}
+				s.run()
+				if a.entry != 1 || b.entry != 1 || j.entry != 1 {
+					t.Errorf("seed %d: on entries %d, %d and %d, want 1: a heard %q", seed, a.entry, b.entry, j.entry, a.notices)
+				}
+				s.together(seed)
+				if a.pos != 30 {
+					t.Errorf("seed %d: the party went to %.1f, want it to stay at 30", seed, a.pos)
 				}
 			})
 		})

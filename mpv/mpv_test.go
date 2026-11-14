@@ -1420,8 +1420,8 @@ func TestAJoinForgetsTheStampAndOpeningTakesOne(t *testing.T) {
 	c.stamp = 7
 	c.mu.Unlock()
 	c.apply(IncomingMessage{Opened: true})
-	if again := stamp(); joiner != 0 || opener != 1 || again != 7 {
-		t.Fatalf("stamps %d, %d and %d, want 0 for a joiner, 1 for an opener, and 7 kept by one who reopens", joiner, opener, again)
+	if again := stamp(); joiner != unheard || opener != 1 || again != 7 {
+		t.Fatalf("stamps %d, %d and %d, want unheard for a joiner, 1 for an opener, and 7 kept by one who reopens", joiner, opener, again)
 	}
 }
 
@@ -1461,16 +1461,17 @@ func TestMessagesSayWhichEntryTheyBelongTo(t *testing.T) {
 	}
 }
 
-// A seek sent just before its sender moved, or just before we did, belongs to a file
-// we're not playing. So does a resume. A pause still stops us: stopping is always safe.
-func TestMessagesFromAnotherEntryAreDropped(t *testing.T) {
+// A seek or a resume made at the same moment as the move that brought this node here
+// carries the move's stamp and a lower entry: it belongs to a file the party has left. A
+// pause still stops us: stopping is always safe.
+func TestMessagesFromAnEntryThePartyLeftAreDropped(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
-	c.paused, c.current = true, 1
+	c.paused, c.current, c.stamp = true, 1, 2
 
 	go func() {
-		c.apply(peer("a", stamped(1, tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`))))
-		c.apply(peer("a", tagged(0, `{"event":"property-change","name":"start-pos","data":"40.000000"}`)))
+		c.apply(peer("a", stamped(2, tagged(0, `{"event":"property-change","name":"time-pos","data":"40.000000"}`))))
+		c.apply(peer("a", stamped(2, tagged(0, `{"event":"property-change","name":"start-pos","data":"40.000000"}`))))
 		c.apply(peer("a", stamped(2, tagged(0, `{"name":"pause","data":"no"}`))))
 		c.apply(peer("a", stamped(3, tagged(1, `{"event":"property-change","name":"time-pos","data":"41.000000"}`))))
 	}()
@@ -1479,14 +1480,40 @@ func TestMessagesFromAnotherEntryAreDropped(t *testing.T) {
 	}
 }
 
+// A newer pause or seek from another entry means the party is there: this node missed the
+// move. It goes there first, then to the second it was told, once the file has loaded.
+func TestANewerSeekFromAnotherEntryBringsThisNodeThere(t *testing.T) {
+	t.Parallel()
+	c, send, _, requests := playlistClient(t)
+	c.paused, c.stamp = true, 1
+
+	go c.apply(peer("a", `{"stamp":3,"at":40,"entry":2,"event":"property-change","name":"time-pos","data":"40.000000"}`))
+	for _, want := range []string{"set_property playlist-pos 2", "show-text from e1 to e3, by a 5000", "show-text synced by a 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	send(`{"event":"property-change","name":"playlist-pos","data":"2"}` + "\n")
+	send(`{"event":"file-loaded"}` + "\n")
+	if got := next(t, requests); got != "set_property time-pos 40.000000" {
+		t.Fatalf("sent %q, want the second it was told, on the new file", got)
+	}
+}
+
+// It stops this node where it is: the second it names is on a file this node has left.
 func TestAPauseFromAnotherEntryStillStops(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := playlistClient(t)
-	c.current = 1
+	c.current, c.pos = 1, 5
 
-	go c.apply(peer("a", tagged(0, `{"name":"pause","data":"yes"}`)))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("sent %q, want the pause", got)
+	go func() {
+		c.apply(peer("a", `{"at":30,"entry":0,"name":"pause","data":"yes"}`))
+		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	}()
+	for _, want := range []string{"set_property pause true", "show-text paused by a 5000", "show-text mark 5000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q: the pause, and no seek", got, want)
+		}
 	}
 }
 
@@ -1943,5 +1970,80 @@ func TestAJoinerTakesThePartysStampWithItsPosition(t *testing.T) {
 	send(propertyChangeLine(pause, "no", 0))
 	if e := nextEvent(t, outgoing); e.Name != pause || e.Stamp != 6 {
 		t.Fatalf("resumed with %+v, want a stamp newer than the party's", e)
+	}
+}
+
+// Where this node is, for a tie, is where it is heading: not any second it has been sent
+// to since the last resume, which is kept only to know mpv's echo of that seek.
+func TestATieIsWeighedAgainstWhereThisNodeIsHeading(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused = true
+	go func() {
+		c.apply(peer("a", `{"stamp":1,"at":10,"name":"time-pos","data":"10.000000"}`))
+		c.apply(peer("a", `{"stamp":2,"at":20,"name":"time-pos","data":"20.000000"}`))
+		c.apply(peer("b", `{"stamp":2,"at":10,"name":"pause","data":"yes"}`))
+	}()
+	for _, want := range []string{"set_property time-pos 10.000000", "show-text synced by a 5000", "set_property time-pos 20.000000", "show-text synced by a 5000", "set_property time-pos 10.000000"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q: the earlier of two stops made at once, though this node was there before", got, want)
+		}
+	}
+}
+
+// An entry a peer answers with says where on it, so a node that takes the party's stamp
+// from it takes the party's second too. A node already on that entry does as well.
+func TestAnEntryAnswerSaysWhereOnIt(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.current, c.pos, c.stamp = true, 1, 10, 1
+	go c.apply(peer("a", `{"stamp":4,"at":30,"entry":1,"event":"property-change","name":"playlist-pos","data":"1"}`))
+	if got := next(t, requests); got != "set_property time-pos 30.000000" {
+		t.Fatalf("sent %q, want the party's second on the entry it is already on", got)
+	}
+}
+
+// A node that answers while a move it followed is still loading names the entry it is
+// heading to, and the start of that file, or the seek waiting for it: not the second it is
+// on in the file it is leaving.
+func TestAnAnswerWhileAMoveLoadsIsAboutTheNewEntry(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := playlistClient(t)
+	c.paused, c.pos, c.stamp = true, 30, 1
+	c.apply(peer("a", move(2, 1)))
+	next(t, requests)
+	next(t, requests)
+	go c.apply(peer("j", `{"name":"joined"}`))
+	for _, name := range []string{playlistPos, startPos} {
+		e := nextEvent(t, outgoing)
+		if e.Name != name || e.Entry == nil || *e.Entry != 1 || e.At == nil || *e.At != 0 || e.Stamp != 2 {
+			t.Fatalf("answered %+v, want %s on entry 1 at its start, with the move's stamp", e, name)
+		}
+	}
+}
+
+// mpv says playback-restart when a file is ready, and on a slow stream that can come after
+// this node was already sent somewhere. It doesn't mean the seek has landed: until mpv
+// reports that second, this node is still heading to it. Taken for where mpv last was, the
+// start, a joiner lost a tie to the next member's stop and told the party it was at 0, and
+// the party went there.
+func TestASeekIsStillOnItsWayAfterAStrayPlaybackRestart(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.paused, c.stamp = true, unheard
+	go func() {
+		c.apply(peer("a", `{"stamp":8,"at":53.1,"name":"pause","data":"yes"}`))
+		c.handleEvent(Event{EventType: playbackRestart}, nil)
+		c.apply(peer("b", `{"stamp":8,"at":53.3,"name":"pause","data":"yes"}`))
+		c.apply(peer("b", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "set_property time-pos 53.100000" {
+		t.Fatalf("sent %q, want the party's second", got)
+	}
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing more", got)
+	}
+	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "53.100000" {
+		t.Fatalf("answered %+v, want the earlier of the two stops, where it is heading", e)
 	}
 }

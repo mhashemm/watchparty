@@ -101,19 +101,23 @@ change takes the next stamp, **written under the lock that decided the event goe
 - **Newer is taken. The same stamp means made at once, and the safer wins for everyone**
   (`weigh`, `beats`): the higher entry, stopped over playing, the earlier second. Two who
   moved or sought at once used to swap, and a resume crossing a seek left one playing. A
-  seek means its sender was stopped, so a node still playing stops first.
-- **A pause says where and a resume where from:** a mesh send can fail, and either half of
-  "pause, then where" must be enough.
+  seek means its sender was stopped, so a node still playing stops first; a pause says where
+  and a resume where from, so half of "pause, then where" is enough when a mesh send fails.
 - **Older means its sender missed something (`answer`, "catching up"):** not applied; the
   party stops as for a join and says where it is as a `time-pos`, newer to that node. The
   loser of a tie is told too, quietly: it may never have heard the winner.
-- **`announce` forgets the stamp and `Opened` takes 1.** At 0 a joiner takes what the party
-  says, also after a lost relay, and the stamp with it (`arrive`), or its first change would
-  be older. The opener is the party before anyone acts, or a guest on a later entry wins.
-- **A stamp, not a vector clock:** the party picks one winner and never merges. Changes at
-  once whose stamps differ are settled by the stamp, and the lower is answered as behind:
-  still one state. Revisit only with a simulation or a party that ends split, and ask.
-- Not detectable: one that missed a resume and resumes later looks like two resuming at once.
+- **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
+  relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
+  it is answered wins, while joiners still order among themselves; `Opened` takes 1.
+- **A stamp is only ever taken with the state it stands for**, or this node holds the
+  party's stamp on its own entry or second, a tie it can win. So an entry a peer names says
+  where on it (`followEntry`), an answer is about what its sender is heading to even while
+  that loads (`holds`), a winning pause or seek from another entry is followed there first
+  (`elsewhere`), and `at` counts only for the entry it is tagged with (`where`).
+- **A stamp, not a vector clock:** the party picks one winner and never merges; changes at
+  once whose stamps differ go by the stamp, still one state. Revisit only with a simulation
+  or a party that ends split, and ask. Neither can tell a node that missed a resume and
+  resumes later from two resuming at once.
 
 ### Joining mid-party (`joined` → `answer` → `start-pos` → `arrive`)
 
@@ -175,14 +179,10 @@ reason: nobody starts the next one until someone resumes.
 - **`loading` holds a seek until the `file-loaded` of the entry it is heading to**
   (`heldSeek`): sent earlier it lands on another file, which loses it. A joiner hits this
   every time: `answer` sends the entry, then `start-pos`. Another move drops the held seek.
-- **A position or a resume for another entry is dropped**, against where this node is
-  `heading`: it was sent before someone moved. A pause still counts, and so does an older
-  one of either, which is answered first (`behind`).
-- Accepted: a seek reaching someone just before the move it depends on is lost. A node
-  that really is on another entry stays paused until the next move, since its resumes
-  and everyone else's are dropped. A seek right after a move can lose to a stop on its way.
-  A joiner that missed a move ends on the party's entry, but can first take a position
-  meant for the old one: P2P only, the relay keeps each member's order. e2e `[16]`, `[R15c]`.
+- **A position or a resume for another entry that doesn't win is dropped**, against where
+  this node is `heading`: it was sent before someone moved. A pause still stops it.
+- Accepted: a seek reaching someone just before the move it depends on is lost, and a
+  seek right after a move can lose to a stop on its way. e2e `[16]`, `[R15c]`.
 
 ## Windows
 

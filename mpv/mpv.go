@@ -36,6 +36,10 @@ const (
 	pausedAt        = "paused-at"
 
 	lostRelay = "paused: lost the relay"
+	// unheard is the stamp of a node that hasn't heard the party yet: so far below any the
+	// party can hold that nothing a joiner does before it is answered wins over the party,
+	// while joiners still order what they do among themselves.
+	unheard = -1 << 30
 	// catchingUp is why the party stops for a node whose pause or seek was older than
 	// what the party holds: it missed something, and is told where the party is.
 	catchingUp = "catching up"
@@ -189,11 +193,15 @@ type Client struct {
 	applied  map[string]string
 	seeks    []float64
 	peerSeek bool
-	seeking  bool
-	reason   string
+	// landing: mpv hasn't reported the last seek this node applied, so it is not yet on
+	// the second it is heading to. Not peerSeek: a playback-restart ends that, and one from
+	// a slow load can arrive after the first seek was sent.
+	landing bool
+	seeking bool
+	reason  string
 
 	// stamp orders what the party shares (a Lamport clock): the highest this node has
-	// made or followed. 0 knows nothing, so a joiner follows whatever it hears first.
+	// made or followed. A joiner starts at unheard.
 	stamp int
 
 	// joining: taking the party's position
@@ -222,6 +230,8 @@ func (c *Client) isEcho(event Event) bool {
 		}
 		for i, want := range c.seeks {
 			if math.Abs(got-want) <= timePosTolerance {
+				// landed once mpv reports the second of the last one, whichever it matched
+				c.landing = c.landing && math.Abs(got-c.seeks[len(c.seeks)-1]) > timePosTolerance
 				c.seeks = c.seeks[i:]
 				c.seeks[0] = got
 				return true
@@ -298,7 +308,7 @@ func (c *Client) fileLoaded() {
 	if held := c.heldSeek; held != "" {
 		// still on its way until seekTo has marked the seek, or target sees neither
 		pos, _ := strconv.ParseFloat(held, 64)
-		c.heldSeek, c.peerSeek, c.seeks = "", true, append(c.seeks, pos)
+		c.heldSeek, c.peerSeek, c.landing, c.seeks = "", true, true, append(c.seeks, pos)
 		go func() {
 			if err := c.seekTo(held); err != nil {
 				log.Println("seek after loading:", err)
@@ -363,7 +373,7 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 		log.Printf("now playing: %s\n", name)
 	case playlistPos:
 		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-			c.current, c.pos, c.seeking, c.heard = n, 0, false, false
+			c.current, c.pos, c.seeking, c.heard, c.landing = n, 0, false, false, false
 			moved = c.seen[timePos]
 			if moved {
 				c.seeks = []float64{0}
@@ -388,7 +398,8 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 		c.resumed()
 		return extra, nil
 	}
-	c.pausedBy = ""
+	// stopped from playing: where it is now, whatever seek was on its way
+	c.pausedBy, c.landing = "", false
 	if len(extra) == 0 {
 		extra = [][]byte{position(pausedAt, c.pos)}
 	}
@@ -406,7 +417,8 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 // doesn't, unless it is where a seek while playing landed: that pauses the party.
 func (c *Client) positionChanged() error {
 	if c.paused {
-		c.joining = false
+		// its own seek: wherever it was being sent, this is where it is now
+		c.joining, c.landing = false, false
 		return nil
 	}
 	if c.seeking {
@@ -437,11 +449,26 @@ func (c *Client) tag(b []byte) []byte {
 	if c.paused {
 		at = c.target()
 	}
+	return c.tagAs(b, c.current, at)
+}
+
+func (c *Client) tagAs(b []byte, entry int, at float64) []byte {
 	head := fmt.Appendf(nil, `{"stamp":%d,"at":%.6f,`, c.stamp, at)
 	if len(c.names) > 0 {
-		head = fmt.Appendf(head, `"entry":%d,`, c.current)
+		head = fmt.Appendf(head, `"entry":%d,`, entry)
 	}
 	return append(head, b[1:]...)
+}
+
+// holds is where this node is as an answer says it: the entry it is heading to and its
+// second on that one, which is the start of a file still loading unless a seek waits for
+// it. What mpv reports is tagged with the file it is on (tag); an answer made while a move
+// loads would otherwise name the new entry with the old file's second.
+func (c *Client) holds() (entry int, at float64) {
+	if entry = c.heading(); entry != c.current && c.heldSeek == "" {
+		return entry, 0
+	}
+	return entry, c.target()
 }
 
 // How a peer's pause or seek stands against what this node holds.
@@ -468,13 +495,20 @@ func (c *Client) weigh(stamp int, paused bool, at float64) int {
 		}
 		return loses
 	}
-	if !paused || c.at(at) {
+	if !paused || c.on(at) {
 		return same
 	}
 	if at < c.target() {
 		return newer
 	}
 	return loses
+}
+
+// on is whether pos is the second this node is on, or on its way to. Not at: that also
+// matches every seek it has applied since the last resume, to know mpv's echo of one, and
+// a second it has since left is not where it is.
+func (c *Client) on(pos float64) bool {
+	return math.Abs(pos-c.target()) <= timePosTolerance
 }
 
 // beats is whether an entry a peer named wins over the one this node is heading to: a
@@ -623,7 +657,7 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 // sent or was sent meanwhile is gone.
 func (c *Client) announce() {
 	c.mu.Lock()
-	c.joining, c.stamp = true, 0
+	c.joining, c.stamp = true, unheard
 	c.mu.Unlock()
 	hello, _ := json.Marshal(Event{Name: joined})
 	select {
@@ -682,6 +716,11 @@ func (c *Client) apply(e IncomingMessage) {
 		}
 		return
 	}
+	if err == nil && c.elsewhere(event) {
+		// a pause or a seek that wins was made on its sender's entry: go there first, or
+		// this node would hold the party's stamp on a file the party has left
+		err = c.followEntry(Event{Data: strconv.Itoa(*event.Entry), Stamp: event.Stamp, At: event.At, Entry: event.Entry}, e.HostName)
+	}
 	if err == nil && c.fromAnotherEntry(event) {
 		log.Printf("ProcessIncomingEvents: from another entry [event=%s] [host=%s]\n", e.Event, e.HostName)
 		return
@@ -725,6 +764,17 @@ func (c *Client) behind(event Event) bool {
 	return event.Stamp < c.stamp
 }
 
+// elsewhere is a pause or a seek made on another entry than the one this node is heading
+// to, which wins over what this node holds.
+func (c *Client) elsewhere(event Event) bool {
+	if event.Name != pause && event.Name != timePos || event.Entry == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *event.Entry != c.heading() && c.beats(event.Stamp, *event.Entry)
+}
+
 // answer tells a node that isn't where the party is where that is: its entry, then its
 // second, as name. For a reason, a joiner or a node that fell behind, the party stops
 // first and settles like after a leave. With none, the node's change was made at the same
@@ -739,8 +789,9 @@ func (c *Client) answer(hostname, reason, name string) error {
 	}
 	var entry []byte
 	if len(c.names) > 0 {
-		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(c.heading())})
-		entry = c.tag(entry)
+		heading, second := c.holds()
+		entry, _ = json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: strconv.Itoa(heading)})
+		entry = c.tagAs(entry, heading, second)
 	}
 	c.mu.Unlock()
 	if entry != nil {
@@ -768,7 +819,8 @@ func (c *Client) answer(hostname, reason, name string) error {
 		c.showText(fmt.Sprintf("paused for %s: %s", hostname, reason))
 	}
 	c.mu.Lock()
-	b := c.tag(position(name, c.target()))
+	heading, second := c.holds()
+	b := c.tagAs(position(name, second), heading, second)
 	c.mu.Unlock()
 	select {
 	case c.outgoing <- b:
@@ -792,9 +844,11 @@ func (c *Client) left(hostname string) error {
 	return c.pauseReq(true)
 }
 
-// followEntry goes to the entry a peer moved to, or answered a joiner with, if it beats
-// the one this node is heading to. A peer that knows of a later move has the higher stamp,
-// so an answer sent before its sender heard of one moves nobody back.
+// followEntry takes the entry a peer moved to, or answered with, if it beats what this
+// node holds. A peer that knows of a later move has the higher stamp, so an answer sent
+// before its sender heard of one moves nobody back. Its sender stopped for it, or is about
+// to, and says where: taking the stamp without that would leave this node holding the
+// party's stamp on its own second, a tie it could win.
 func (c *Client) followEntry(event Event, hostname string) error {
 	i, err := strconv.Atoi(event.Data)
 	if err != nil {
@@ -804,9 +858,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return errors.New("no such entry")
 	}
 	c.mu.Lock()
-	stays := c.stays(event.Stamp, i)
+	beats := c.beats(event.Stamp, i)
 	c.mu.Unlock()
-	if stays {
+	if !beats {
 		return nil
 	}
 	err = c.setPause(true, hostname)
@@ -815,36 +869,47 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	// again: this node's own move can have happened during the pause
-	if c.stays(event.Stamp, i) {
+	if !c.beats(event.Stamp, i) {
 		c.mu.Unlock()
 		return nil
 	}
-	from := c.entryName(c.heading())
-	// a seek held for the entry it was heading to is not for this one
-	c.loading, c.heldSeek, c.stamp = true, "", event.Stamp
-	c.following = append(c.following, event.Data)
-	c.mu.Unlock()
-	err = c.conn.do(setProperty, playlistPos, i)
-	if err != nil {
-		c.mu.Lock()
-		c.loading = false
-		if n := slices.Index(c.following, event.Data); n >= 0 {
-			c.following = slices.Delete(c.following, n, n+1)
-		}
-		c.mu.Unlock()
-		return err
+	c.stamp = event.Stamp
+	moving, from := i != c.heading(), c.entryName(c.heading())
+	if moving {
+		// a seek held for the entry it was heading to is not for this one
+		c.loading, c.heldSeek = true, ""
+		c.following = append(c.following, event.Data)
 	}
-	return c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
+	// a file opens at its start, and anywhere else on this one is already there
+	at, known := c.where(event, i)
+	there := !known || moving && at <= timePosTolerance || !moving && c.on(at)
+	c.mu.Unlock()
+	if moving {
+		err = c.conn.do(setProperty, playlistPos, i)
+		if err != nil {
+			c.mu.Lock()
+			c.loading = false
+			if n := slices.Index(c.following, event.Data); n >= 0 {
+				c.following = slices.Delete(c.following, n, n+1)
+			}
+			c.mu.Unlock()
+			return err
+		}
+		c.showText(fmt.Sprintf("from %s to %s, by %s", from, c.names[i], hostname))
+	}
+	if there {
+		return nil
+	}
+	return c.seekBy(strconv.FormatFloat(at, 'f', 6, 64), hostname)
 }
 
-// stays is whether this node keeps heading where it is after a peer named an entry: that
-// one loses to its own, or it is already heading there, which still takes the stamp.
-func (c *Client) stays(stamp, entry int) bool {
-	if entry == c.heading() {
-		c.stamp = max(c.stamp, stamp)
-		return true
+// where is the second a message says its sender is on, if that is on entry: a node still
+// loading the entry it names, or pausing while a move reaches it, is on another file.
+func (c *Client) where(event Event, entry int) (float64, bool) {
+	if event.At == nil || len(c.names) > 0 && (event.Entry == nil || *event.Entry != entry) {
+		return 0, false
 	}
-	return !c.beats(stamp, entry)
+	return *event.At, true
 }
 
 func (c *Client) entryName(i int) string {
@@ -892,8 +957,8 @@ func (c *Client) pause(event Event, hostname string) error {
 	paused := event.paused()
 	c.mu.Lock()
 	at, there := c.target(), true
-	if event.At != nil {
-		at, there = *event.At, c.at(*event.At)
+	if said, ok := c.where(event, c.heading()); ok {
+		at, there = said, c.on(said)
 	}
 	w := c.weigh(event.Stamp, paused, at)
 	if w == newer {
@@ -969,7 +1034,7 @@ func (c *Client) setPause(paused bool, hostname string) error {
 	c.mu.Lock()
 	c.paused = paused
 	if paused {
-		c.pausedBy = hostname
+		c.pausedBy, c.landing = hostname, false
 	} else {
 		c.resumed()
 	}
@@ -1036,12 +1101,12 @@ func (c *Client) seekTo(data string) error {
 		c.mu.Unlock()
 		return nil
 	}
-	c.peerSeek = true
+	c.peerSeek, c.landing = true, true
 	c.mu.Unlock()
 	err = c.conn.do(setProperty, timePos, data)
 	if err != nil {
 		c.mu.Lock()
-		c.peerSeek = false
+		c.peerSeek, c.landing = false, false
 		c.mu.Unlock()
 	}
 	return err
@@ -1076,7 +1141,7 @@ func (c *Client) align(event Event, hostname string) error {
 // would drag the party back to it.
 func (c *Client) target() float64 {
 	held := c.heldSeek
-	if held == "" && c.peerSeek && len(c.seeks) > 0 {
+	if held == "" && c.landing && len(c.seeks) > 0 {
 		return c.seeks[len(c.seeks)-1]
 	}
 	if pos, err := strconv.ParseFloat(held, 64); err == nil {
@@ -1094,7 +1159,7 @@ func (c *Client) settle() (string, bool) {
 
 // resumed ends joining and settling: the party is playing again.
 func (c *Client) resumed() {
-	c.joining, c.settling, c.heard = false, false, false
+	c.joining, c.settling, c.heard, c.landing = false, false, false, false
 }
 
 // earlierStop is the earliest stop a peer sent since the last resume, if this node is
@@ -1162,6 +1227,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		names:    names,
 		current:  start,
 		resumeAt: at,
+		stamp:    unheard,
 	}
 
 	go client.ProcessIncomingEvents(incoming)

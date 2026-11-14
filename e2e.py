@@ -1831,14 +1831,20 @@ def media_suite():
         stop(n)
     slow.close()
 
-    print("\n[R15g] two people moving at once end up together, on the higher entry")
-    slow = lag(PORTS["upnpNode"], PORTS["relay"], 0.5)
+    print("\n[R15g] a joiner syncs with the party, never the party with it; then two people moving at once end up together, on the higher entry")
+    hop = {"s": 1.5}  # slow enough at first that epG can act before epF's answer to its join arrives
+    slow = lag(PORTS["upnpNode"], PORTS["relay"], lambda _: lambda: hop["s"])
     via = f"ws://127.0.0.1:{PORTS['upnpNode']}"
     for n in ("epF", "epG"):
         launch(n, room="crossing", media=f"{folder}/video3.mkv", relay=via, playlist=True)
     must("both are in", until(lambda: booted("epF") and booted("epG") and ("epG has joined" in osd("epF") or "epF has joined" in osd("epG")), BOOT))
     for n in ("epF", "epG"):
         resolve(n)
+    # epF opened the room and has done nothing since, so its stamp is the lowest a party's can be
+    ipc(nodes["epG"]["sock"], "playlist-next")
+    ok("a joiner that moves before it is answered is brought back to the party's entry", until(lambda: "from video10.mkv to video3.mkv, by epF" in osd("epG")), str(osd("epG")))
+    ok("and the party never followed it", get("epF", "filename") == "video3.mkv" and not any(t.startswith("from ") for t in osd("epF")), str(osd("epF")))
+    hop["s"] = 0.5
     must("on the middle entry", until(lambda: get("epF", "filename") == get("epG", "filename") == "video3.mkv"))
     # epF opened the room. Until its answer reaches epG, a move by epG is older than epF's
     # and loses to it, whichever entry is higher: the relay keeps epF's order, so a seek
