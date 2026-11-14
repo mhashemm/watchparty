@@ -792,15 +792,15 @@ func TestJoinPausesThePartyAndSaysWhere(t *testing.T) {
 	send(propertyChangeLine(timePos, "33.500000", 0))
 
 	go c.apply(peer("j", `{"name":"joined"}`))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("sent %q, want the party paused", got)
+	// why first: the GUI's feed takes the pause that follows for this one
+	for _, want := range []string{"show-text paused for j: joining 5000", "set_property pause true"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
 	}
 	send(propertyChangeLine(pause, "yes", 0))
 	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" || e.At == nil || *e.At != 33.5 || e.Stamp != 1 {
 		t.Fatalf("broadcast %+v, want its own pause, where it stopped", e)
-	}
-	if got := next(t, requests); got != "show-text paused for j: joining 5000" {
-		t.Fatalf("sent %q, want the local notice", got)
 	}
 	select {
 	case e := <-outgoing:

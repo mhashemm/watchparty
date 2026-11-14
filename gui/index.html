@@ -998,7 +998,7 @@ async function startParty(extra) {
 
 let run = 0, from = 0, state = {};
 function reset() {
-  state = { ready: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, finding: false, leftPause: false, catching: null };
+  state = { ready: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, finding: false, leftPause: false, stopping: null };
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -1073,7 +1073,8 @@ function handle(line) {
       const li = addFeed(text, at);
       if (/^paused for .*: left$|^paused: lost the relay$/.test(text)) state.leftPause = true;
       // if this node was playing it stops next, and that is this line, not a pause of its own
-      state.catching = /^paused for .*: catching up$/.test(text) ? li : null;
+      const why = text.match(/^paused for .*: (joining|catching up|out of sync)$/);
+      state.stopping = why ? { li, why: why[1] } : null;
     } catch {}
   }
   if ((m = msg.match(/^now playing: (".*")$/))) {
@@ -1083,9 +1084,9 @@ function handle(line) {
     try {
       const e = JSON.parse(m[1]);
       if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
-      else if (e.name === "pause" && e.data === "yes" && state.catching) state.catching.lastChild.textContent = "paused by you: catching up";
+      else if (e.name === "pause" && e.data === "yes" && state.stopping) state.stopping.li.lastChild.textContent = "paused by you: " + state.stopping.why;
       else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you", at);
-      if (e.name === "pause") state.catching = null;
+      if (e.name === "pause") state.stopping = null;
       if (e.name === "pause-reason") [...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
   }

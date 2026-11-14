@@ -127,12 +127,12 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 1. Once its file has loaded, the joiner broadcasts `joined`, after what it heard while
    loading. So the party pauses only when the joiner can actually play, and a joiner whose
    mpv fails pauses nobody.
-2. Every member, in `answer`, shows "paused for X: joining" and says where the party is.
+2. Every member, in `answer`, shows "paused for X: joining", **then** stops (the GUI's feed
+   merges the two into "paused by you: joining", as for catching up) and says where it is.
    **One that was playing answers by stopping:** it pauses its own mpv (not marked
-   `applied`, so it goes out as its own pause, which says where). A `time-pos` sent beside
-   it could carry the stamp from before mpv reported the pause, older than everyone else's
-   by then, and read as that member falling behind. One already stopped sends a `time-pos`,
-   which carries its entry. A joiner only says where it is, quietly: only joiners take it.
+   `applied`, so it goes out as its own pause, which says where); a `time-pos` beside it
+   could carry the stamp from before that pause, and read as falling behind. One stopped
+   sends a `time-pos`. A joiner only says where it is, quietly: only joiners take it.
 3. The joiner takes whatever it hears first, as newer; members stop a moment apart with
    one stamp, so everyone, joiner included, settles on the earliest (`over`).
 4. **A dropped relay connection is a join again:** `Lost`, and the node pauses itself, notice

@@ -2385,6 +2385,9 @@ def gui_suite():
     ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
     js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
     ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
+    for why in ("joining", "out of sync"):
+        js(G, f'handle({json.dumps(notice("paused for Sam: " + why, "18:01:30"))}); handle({stops})')
+        ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and f"paused for Sam: {why}" not in feed(G), str(feed(G)[:3]))
     js(G, '$("playlist").checked = false')
 
     print("\n[G18] a guest who comes first waits for the host, then gets in by itself")
