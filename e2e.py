@@ -1296,7 +1296,7 @@ def relay_suite():
     stop("late")
 
     print("\n[R10] a different room is isolated")
-    launch("nodeOther", room="otherroom", tag="other", mpvflags="--msg-level=all=status")  # undo MPVFLAGS' mute
+    launch("nodeOther", room="otherroom", tag="other", mpvflags='--msg-level=all=status --title="two words"')  # undo MPVFLAGS' mute
     until(lambda: booted("other") and connected("other"), BOOT)
     resolve("other")
     setp("other", "time-pos", 5.0)
@@ -1305,6 +1305,8 @@ def relay_suite():
         v = get(n, "time-pos")
         ok(f"{n} ignored the other room's seek", near(v, 33.0), f"time-pos={v}")
     ok("nobody in the main room saw the other room's node", not any("nodeOther" in known(n) for n in NODES))
+    ok("a quoted mpv flag keeps its space", get("other", "title") == "two words" and get("other", "playlist-count") == 1,
+       f"title={get('other', 'title')!r}, {get('other', 'playlist-count')} files")
     setp("other", "pause", False)
     until(lambda: (get("other", "time-pos") or 0) > 6)
     status = re.findall(r"mpv: (?:\(Paused\) )?A?V: .*", log("other"))

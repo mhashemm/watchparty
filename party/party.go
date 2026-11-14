@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
@@ -159,7 +160,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {
@@ -242,6 +243,34 @@ func Run(parent context.Context, cfg Config) error {
 		return stopReason(parent)
 	}
 	return err
+}
+
+// mpvArgs splits the user's flags on spaces, except inside double quotes, which it
+// removes: --sub-file="C:\My Subs\a.srt" is one argument. No escapes: a backslash is a
+// path separator on Windows.
+func mpvArgs(flags string) []string {
+	var args []string
+	var arg strings.Builder
+	quoted, started := false, false
+	for _, r := range flags {
+		switch {
+		case r == '"':
+			quoted, started = !quoted, true
+		case unicode.IsSpace(r) && !quoted:
+			if started {
+				args = append(args, arg.String())
+				arg.Reset()
+				started = false
+			}
+		default:
+			arg.WriteRune(r)
+			started = true
+		}
+	}
+	if started {
+		args = append(args, arg.String())
+	}
+	return args
 }
 
 // lineLog logs mpv's output a line at a time, so the reason a file won't play

@@ -71,7 +71,7 @@ func main() {
 	flag.StringVar(&cfg.Addrs, "addrs", "", "comma separated list of addresses to connect to")
 	flag.DurationVar(&cfg.EvictAfter, "evictAfter", party.DefaultEvictAfter, "drop a peer after 3 failed sends in a row, once it has been failing this long")
 	flag.StringVar(&cfg.Mpv, "mpv", "mpv", "mpv path")
-	flag.StringVar(&cfg.MpvFlags, "mpvFlags", "", "any extra flags to pass to mpv")
+	flag.StringVar(&cfg.MpvFlags, "mpvFlags", "", "any extra flags to pass to mpv; put a value with a space in double quotes")
 	flag.BoolVar(&cfg.Local, "local", false, "run on local network")
 	flag.StringVar(&cfg.Hostname, "hostname", "", "set your hostname")
 	flag.StringVar(&cfg.Relay, "relay", "", "relay websocket url to use instead of a direct peer mesh")

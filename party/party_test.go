@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,5 +111,23 @@ func TestWaitExitDoesNotWaitForever(t *testing.T) {
 	exited <- nil
 	if err := waitExit(exited, time.Minute); err != nil {
 		t.Errorf("mpv closed by the user: got %v, want nil", err)
+	}
+}
+
+// Split on spaces alone, a path with a space became two arguments and mpv took the
+// second half for another file to play.
+func TestMpvArgsKeepQuotedSpaces(t *testing.T) {
+	t.Parallel()
+	for flags, want := range map[string][]string{
+		"":                                   nil,
+		"  --fullscreen\t--volume=70 ":       {"--fullscreen", "--volume=70"},
+		`--sub-file="C:\My Subs\a.srt" --fs`: {`--sub-file=C:\My Subs\a.srt`, "--fs"},
+		`"--title=two words"`:                {"--title=two words"},
+		`--title=""`:                         {"--title="},
+		`--title="never closed`:              {"--title=never closed"},
+	} {
+		if got := mpvArgs(flags); !slices.Equal(got, want) {
+			t.Errorf("mpvArgs(%q) = %q, want %q", flags, got, want)
+		}
 	}
 }
