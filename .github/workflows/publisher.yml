@@ -22,9 +22,7 @@ jobs:
   build:
     needs: release
     permissions:
-      id-token: write
       contents: write
-      actions: read
     runs-on: ubuntu-latest
     strategy:
       # one failed upload must not cancel the others mid-upload
