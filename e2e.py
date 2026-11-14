@@ -64,6 +64,9 @@ STUB_HOST = "slowpeer"
 
 def run_stub(addr, peer, register):
     port = int(addr.rsplit(":", 1)[1])
+    # SIGINT goes to any thread that doesn't block it: a handler thread's only sets a flag,
+    # and the main thread slept on, so blocked in every thread, the main one waits for it
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
@@ -94,11 +97,7 @@ def run_stub(addr, peer, register):
                                               "file": os.environ["E2E_FILE"], "secret": os.environ["E2E_SECRET"]})
         urllib.request.urlopen(req, timeout=10).read()
     print("ready", flush=True)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+    signal.sigwait({signal.SIGINT})
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "--stub":
