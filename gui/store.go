@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mhashemm/watchparty/mpv"
 )
 
 const (
@@ -259,9 +261,9 @@ func (s *store) observe(i int, line string) {
 		return
 	}
 	if text, ok := notice(line); ok {
-		if name, ok := strings.CutSuffix(text, " has joined"); ok {
+		if name, ok := strings.CutSuffix(text, mpv.HasJoined); ok {
 			person = name
-		} else if name, ok := strings.CutPrefix(text, "connected to "); ok {
+		} else if name, ok := strings.CutPrefix(text, mpv.ConnectedTo); ok {
 			person = name
 		}
 	}

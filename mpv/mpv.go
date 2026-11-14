@@ -41,6 +41,14 @@ const (
 	maxSeeks                = 16
 )
 
+// The notices both transports show, around a member's name. apply reads HasLeft to pause
+// the party, and gui/store.go reads the other two; e2e spells them again.
+const (
+	HasJoined   = " has joined"
+	HasLeft     = " has left"
+	ConnectedTo = "connected to "
+)
+
 var (
 	errNoChange  = errors.New("no change")
 	errDoNotSend = errors.New("do not send")
@@ -532,7 +540,7 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
-			if event.Data == e.HostName+" has left" {
+			if event.Data == e.HostName+HasLeft {
 				err = errors.Join(err, c.left(e.HostName))
 			}
 		case pauseReason:
