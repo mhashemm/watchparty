@@ -737,6 +737,11 @@ func (c *Client) pause(event Event, hostname string) error {
 
 	err := c.pauseReq(paused)
 	if err != nil {
+		// no echo is coming for a set mpv refused; if it only answered late, its report
+		// goes out as this node's own, which peers already in that state ignore
+		c.mu.Lock()
+		delete(c.applied, pause)
+		c.mu.Unlock()
 		return err
 	}
 	c.mu.Lock()

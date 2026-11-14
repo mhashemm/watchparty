@@ -653,6 +653,35 @@ func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
 	}
 }
 
+// mpv can refuse a set (the property is unavailable while it quits or between files).
+// The echo marker for a pause that never happened matched the user's own next pause,
+// which then never went out.
+func TestARefusedPauseLeavesNoMarker(t *testing.T) {
+	t.Parallel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	outgoing := make(chan []byte, 16)
+	c := newTestClient(outgoing, bufio.NewScanner(ours))
+	c.conn.conn = ours
+	c.seen[pause], c.seen[timePos] = true, true
+	go c.watch()
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		sc.Scan()
+		req := Request{}
+		json.Unmarshal(sc.Bytes(), &req)
+		fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
+	}()
+
+	if err := c.pause(Event{Name: pause, Data: "yes"}, "a"); err == nil {
+		t.Fatal("the refusal was not reported")
+	}
+	fmt.Fprint(theirs, propertyChangeLine(pause, "yes", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
+		t.Fatalf("broadcast %+v, want the user's own pause", e)
+	}
+}
+
 func peer(host, event string) IncomingMessage {
 	return IncomingMessage{HostName: host, Event: []byte(event)}
 }
