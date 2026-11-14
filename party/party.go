@@ -64,6 +64,7 @@ type Config struct {
 var (
 	errStopped = errors.New("the party stopped unexpectedly")
 	errHungUp  = errors.New("mpv stopped answering before the video was ready, though it was still running")
+	errNobody  = errors.New("nobody answered at the address you were given; check the invite, and that someone is still in the party")
 )
 
 const mpvExitGrace = 10 * time.Second
@@ -437,11 +438,13 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	}()
 	go ser.BroadcastEvents(outgoing)
 
+	asked, answered := false, false
 	for _, addr := range strings.Split(cfg.Addrs, ",") {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			continue
 		}
+		asked = true
 		err := ser.AddAddress(addr)
 		if errors.Is(err, server.ErrDifferentFile) || errors.Is(err, server.ErrWrongSecret) {
 			runCleanup()
@@ -449,7 +452,14 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 		if err != nil {
 			log.Printf("%s: %s\n", addr, err)
+			continue
 		}
+		answered = true
+	}
+	// a joiner nobody answered would play alone, told it is in the party
+	if asked && !answered {
+		runCleanup()
+		return nil, errNobody
 	}
 
 	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())

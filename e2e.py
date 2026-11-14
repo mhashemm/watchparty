@@ -1033,6 +1033,16 @@ def p2p_suite():
     ok("it was told why", "the party refused your secret" in log("bad"))
     ok("nobody saw it join", not any("nodeBad" in known(n) for n in NODES))
     stop("bad")
+    spare = socket.create_server((IP, 0))
+    dead = f"{IP}:{spare.getsockname()[1]}"
+    spare.close()
+    launch("nodeAlone", dead, tag="alone", port=PORTS["nodeDiff"])
+    until(lambda: nodes["alone"]["proc"].poll() is not None, BOOT)
+    nodes["alone"]["sock"] = child_mpv_socket(nodes["alone"]["proc"].pid)  # only if it wrongly started
+    ok("a joiner nobody answered exited with an error instead of playing alone", nodes["alone"]["proc"].poll() not in (None, 0) and "init done" not in log("alone"),
+       f"rc={nodes['alone']['proc'].returncode}")
+    ok("it was told why", "nobody answered at the address you were given" in log("alone"), log("alone")[-300:])
+    stop("alone")
     stop("nodeSame")
     until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
 

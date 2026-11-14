@@ -97,6 +97,7 @@ torrent of long videos. The check mark doesn't matter.
 | Something inside cancelled `c` (relay rejection, failed bind) | `errStopped` |
 | Setup failed (unreadable file, no mpv, UPNP, no LAN IP) | that error |
 | P2P bootstrap plays another file / refuses the secret | `server.ErrDifferentFile` / `ErrWrongSecret` |
+| P2P: none of `-addrs` answered | `errNobody` |
 | mpv exited before the video was ready | `mpv exited before the video was ready: exit status N`; the reason is in the `mpv:` lines just before |
 | mpv's own `Wait` error, nothing cancelled | that error |
 | mpv's socket dropped before the video was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
@@ -127,7 +128,7 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - Any `ListenAndServe` error cancels `c`: harmless at shutdown, ends the party on a
   failed bind.
 - A failed `-addrs` peer is logged, not fatal, except `ErrDifferentFile` and
-  `ErrWrongSecret`.
+  `ErrWrongSecret`, **unless every one failed** (`errNobody`): that joiner would play alone.
 - An `EvictAfter` of zero (the GUI) means `DefaultEvictAfter`.
 - **`upnpLogger` flattens control characters:** its values come from whatever answers
   SSDP on the LAN, and a newline in one would start a new line for the GUI to read.
