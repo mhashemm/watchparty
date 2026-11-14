@@ -39,6 +39,7 @@ func newRelay(t *testing.T, perHour, maxRooms int, maxConns int64) *relay {
 		ping:       pingInterval,
 		timeout:    writeTimeout,
 		waitFor:    waitForKeyHolder,
+		grace:      leaveGrace,
 	}
 }
 
@@ -244,6 +245,86 @@ func TestReconnectReplacesStaleMember(t *testing.T) {
 	}
 }
 
+// A member whose connection drops and comes back within the grace was never gone: the
+// room is told neither that it left nor that it joined, so nobody stops for it.
+func TestAMemberBackWithinTheGraceWasNeverGone(t *testing.T) {
+	t.Parallel()
+	r := newRelay(t, 10, 10, 10)
+	url := serve(t, r)
+	a, _ := join(t, url, "room", "s", "a", "k")
+	b, _ := join(t, url, "room", "s", "b&session=x")
+	b.CloseNow()
+	eventually(t, "the drop never reached the relay", func() bool { return r.conns.Load() == 1 })
+	back, _ := join(t, url, "room", "s", "b&session=x")
+	mark(t, back, "b")
+	if got := noticesBefore(t, a); !slices.Equal(got, []string{"b has joined"}) {
+		t.Fatalf("room was told %v, want only the first join", got)
+	}
+	mark(t, a, "a")
+	if got := noticesBefore(t, back); !slices.Equal(got, []string{"connected to a"}) {
+		t.Fatalf("the member back was told %v, want who is there", got)
+	}
+}
+
+// One not back within the grace left, and the room is told; one that says goodbye is
+// gone at once.
+func TestAMemberNotBackOrSayingGoodbyeLeft(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		grace time.Duration
+		end   func(*websocket.Conn)
+	}{
+		"not back": {50 * time.Millisecond, func(c *websocket.Conn) { c.CloseNow() }},
+		"goodbye":  {time.Hour, func(c *websocket.Conn) { c.Close(websocket.StatusNormalClosure, "bye") }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRelay(t, 10, 10, 10)
+			r.grace = tc.grace
+			url := serve(t, r)
+			a, _ := join(t, url, "room", "s", "a", "k")
+			b, _ := join(t, url, "room", "s", "b&session=x")
+			tc.end(b)
+			c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			got := []string{}
+			for !slices.Contains(got, "b has left") {
+				_, msg, err := a.Read(c)
+				if err != nil {
+					t.Fatalf("the room heard %v, and never that b left: %s", got, err)
+				}
+				m, e := wire.Message{}, struct{ Data string }{}
+				json.Unmarshal(msg, &m)
+				json.Unmarshal(m.Event, &e)
+				got = append(got, e.Data)
+			}
+		})
+	}
+}
+
+// The room closing while a member is away forgets it: nobody is left to tell.
+func TestARoomClosingForgetsWhoIsAway(t *testing.T) {
+	t.Parallel()
+	r := newRelay(t, 10, 10, 10)
+	url := serve(t, r)
+	a, _ := join(t, url, "room", "s", "a", "k")
+	b, _ := join(t, url, "room", "s", "b&session=x")
+	b.CloseNow()
+	eventually(t, "the drop never reached the relay", func() bool { return r.conns.Load() == 1 })
+	r.mu.Lock()
+	gone := r.rooms["room"].away["x"].gone
+	r.mu.Unlock()
+	a.Close(websocket.StatusNormalClosure, "bye")
+	eventually(t, "the room never closed", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.rooms) == 0
+	})
+	if gone.Stop() {
+		t.Fatal("the room closed, and its away member would still be told about")
+	}
+}
+
 func queued(m *member) []string {
 	got := []string{}
 	for {
@@ -268,7 +349,7 @@ func queued(m *member) []string {
 func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	r.rooms["room"] = &room{members: map[*member]struct{}{}}
+	r.rooms["room"] = &room{members: map[*member]struct{}{}, away: map[string]*member{}}
 	mk := func(hostname, session string) *member {
 		return &member{hostname: hostname, session: session, ch: make(chan []byte, sendBuffer)}
 	}
@@ -308,7 +389,7 @@ func TestAddToAReapedRoomFails(t *testing.T) {
 	if _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); err != nil {
 		t.Fatal(err)
 	}
-	r.leave("room", nil)
+	r.leave("room", nil, true)
 	if _, ok := r.add("room", &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
 		t.Fatal("add succeeded on a reaped room")
 	}

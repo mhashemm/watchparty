@@ -148,7 +148,6 @@ func Run(parent context.Context, cfg Config) error {
 			wait:      notOpenFor,
 			up:        make(chan struct{}, 1),
 		}
-		defer conn.Close()
 		go conn.Connect(c, cancel)
 		go conn.Broadcast(c, outgoing)
 		log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())

@@ -168,6 +168,9 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   redial opened the room: nobody is there to tell, and it answers the others.
 - **`session`** is one `rand.Text()` per `Run`: the relay swaps a reconnecting member in
   silently instead of announcing a second join. A new GUI party is a new member.
+- **The party's end says goodbye** (`StatusNormalClosure`, from `Connect`), or the relay holds
+  the member for its grace before telling the room. `read` reads with
+  `context.WithoutCancel(c)`: on `c`, the library closes the conn before the goodbye goes out.
 
 ## Goroutine lifetime
 

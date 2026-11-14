@@ -60,6 +60,11 @@ goes there too. Not in the release; deployed by hand or as the image.
   connection for 30 minutes.
 - Notices: "X has joined" and "X has left" to the room, and "connected to Y" to the
   joiner once per member already there, so the last joiner learns who is in the room.
+- **A member whose connection drops is away for `grace` (10s) before the room is told it
+  left** (`leave`, `notBack`): a leave stops the party, and most drops are back in a second.
+  Back with its session, it is swapped in like a reconnect, with no notice. A close with
+  `StatusNormalClosure` is a party's goodbye, and one without a session can't come back:
+  both are told at once. The room closing stops the timers.
 
 ## Request handling, cheapest rejection first
 
@@ -142,7 +147,8 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
 ## Logs
 
 - `log/slog` JSON on stderr: `msg` is `listening`, `refused` (with `status`, `reason`),
-  `joined`, `left`, `replaced by its reconnect`; `members: 0` on a `left` means the room closed.
+  `joined`, `left`, `away`, `not back`, `replaced by its reconnect`; `members: 0` on a `left`
+  means the room closed.
   e2e reads them in `[R19b]`.
 - **`conn` links one request's lines**, refusals too: `jq 'select(.conn=="…")'`. It is never
   sent to the client. A reconnect's `joined` has the old `conn` in `replaces`; the session

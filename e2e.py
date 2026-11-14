@@ -482,11 +482,14 @@ class Proxy:
         except OSError:
             pass
 
-    def cut(self):
+    def cut(self, relay=False):
+        """With relay, the relay's side ends too, so the relay sees the drop first."""
         for pair in self.pairs:
             if pair["live"]:
                 pair["live"] = False
                 pair["c"].shutdown(socket.SHUT_RDWR)
+                if relay:
+                    pair["u"].shutdown(socket.SHUT_RDWR)
 
 
 def relay_log():
@@ -1646,6 +1649,20 @@ def relay_suite():
     ok("the relay's log links the reconnect to the conn it replaced",
        len(joins) == 2 and len(gone) == 1 and joins[0]["replaces"] == "" and joins[1]["replaces"] == joins[0]["conn"] == gone[0]["conn"],
        f"{joins} {gone}")
+    print("\n[R12b] a drop the relay sees first, back within its grace: nobody is told it left or joined, nobody stops")
+    said = {n: len(osd(n)) for n in everyone}
+    proxy.shut = True  # or its redial can beat the relay to the drop, and be a swap
+    proxy.cut(relay=True)
+    must("the relay saw it go", until(lambda: flaky_lines("away")))
+    proxy.shut = False
+    must("nodeFlaky redialled", until(lambda: connected("flaky", 3)))
+    time.sleep(QUIET)
+    ok("nobody stopped, and nobody was told anything", all(get(n, "pause") is False for n in everyone)
+       and all(osd(n)[said[n]:] == [] for n in NODES), str([osd(n)[said[n]:] for n in everyone]))
+    away, joins = flaky_lines("away"), flaky_lines("joined")
+    ok("the relay's log says it was away, and links its return", len(away) == 1 and len(joins) == 3 and joins[2]["replaces"] == away[0]["conn"],
+       f"{away} {joins[2:]}")
+
     proxy.shut = True
     proxy.cut()
     must("nodeFlaky is out of the room", until(lambda: log("flaky").count("relay: dial:") >= 1))
