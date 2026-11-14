@@ -2061,3 +2061,40 @@ func TestANewerResumeDoesNotSeekANodeThatPlays(t *testing.T) {
 		t.Fatalf("sent %q, want nothing for a node already playing", got)
 	}
 }
+
+// mpv refuses a set while it quits or between files. commit marked every step before mpv
+// was told, so whatever mpv never did is let go of: a pause marker would swallow the
+// user's next pause, loading would hold every later seek, a seek marker would say this
+// node is on a second it never reached.
+func TestARefusedStepLeavesNoMarker(t *testing.T) {
+	t.Parallel()
+	refusing := func(paused bool) *Client {
+		ours, theirs := net.Pipe()
+		t.Cleanup(func() { ours.Close(); theirs.Close() })
+		c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
+		c.conn.conn = ours
+		c.names, c.pos, c.stamp, c.paused = []string{"e1", "e2", "e3"}, 5, 1, paused
+		go c.watch()
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			for sc.Scan() {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
+			}
+		}()
+		return c
+	}
+	for name, c := range map[string]*Client{
+		"the pause before a move": refusing(false),
+		"a seek":                  refusing(true),
+	} {
+		at := map[bool]string{false: `"entry":2`, true: `"entry":0`}[c.paused]
+		c.apply(peer("a", `{"stamp":2,"paused":true,"at":30,`+at+`,"name":"time-pos","data":"30.000000"}`))
+		c.mu.Lock()
+		if len(c.applied) > 0 || c.loading || c.heldSeek != "" || len(c.following) > 0 || c.landing || c.peerSeek || c.target() != 5 {
+			t.Errorf("%s refused left applied %v, loading %v, held %q, following %v, landing %v, peerSeek %v, at %v", name, c.applied, c.loading, c.heldSeek, c.following, c.landing, c.peerSeek, c.target())
+		}
+		c.mu.Unlock()
+	}
+}

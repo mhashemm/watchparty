@@ -110,11 +110,11 @@ change takes the next stamp, **written under the lock that decided the event goe
   relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
   it is answered wins, while joiners still order among themselves; `Opened` takes 1.
 - **A newer state is taken whole, under the lock that weighed it, before mpv is told**
-  (`commit`: stamp, entry, the stop and the seek marked; `adopt` then tells mpv). Taken
-  apart, this node holds the party's stamp on its own entry or second, a tie it can win.
+  (`commit`: stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv
+  refuses is unmarked by `release`, so a new step adds its undo there). Taken apart, this
+  node holds the party's stamp on its own entry or second, a tie it can win.
   So a node speaks for the entry it is **heading** to, never the file mpv is still on
-  (`held`): a resume pressed while a move loads dragged everyone back. A newer resume on
-  another entry stops the party instead: loading, it can't keep up.
+  (`held`). A newer resume on another entry stops the party: loading, it can't keep up.
 - **A stamp, not a vector clock:** the party picks one winner and never merges; changes at
   once whose stamps differ go by the stamp, still one state. Revisit only with a simulation
   or a party that ends split, and ask. Neither can tell a node that missed a resume and

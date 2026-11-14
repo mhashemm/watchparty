@@ -779,36 +779,36 @@ func (c *Client) commit(s state, hostname string) adoption {
 // adopt tells mpv to go where commit took this node: stopped, on the entry, on the second,
 // then playing if the state is. One that plays on another entry stops the party instead:
 // loading it, this node can't be in step.
-func (c *Client) adopt(a adoption, name, hostname string) error {
+func (c *Client) adopt(a adoption, name, hostname string) (err error) {
+	// what mpv never did, as it refused a step
+	left := a
+	defer func() {
+		if err != nil {
+			c.release(left)
+		}
+	}()
 	if a.stop {
-		if err := c.pauseReq(true); err != nil {
-			// mpv refuses only while it quits or between files
-			c.mu.Lock()
-			delete(c.applied, pause)
-			c.mu.Unlock()
+		if err = c.pauseReq(true); err != nil {
 			return err
 		}
+		left.stop = false
 		c.mu.Lock()
 		c.paused = true
 		c.mu.Unlock()
 		c.showText(fmt.Sprintf("paused by %s", hostname))
 	}
 	if a.moving {
-		if err := c.conn.do(setProperty, playlistPos, a.entry); err != nil {
-			c.mu.Lock()
-			c.loading = false
-			if n := slices.Index(c.following, strconv.Itoa(a.entry)); n >= 0 {
-				c.following = slices.Delete(c.following, n, n+1)
-			}
-			c.mu.Unlock()
+		if err = c.conn.do(setProperty, playlistPos, a.entry); err != nil {
 			return err
 		}
+		left.moving = false
 		c.showText(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname))
 	}
 	if a.now {
-		if err := c.seekReq(a.at); err != nil {
+		if err = c.seekReq(a.at); err != nil {
 			return err
 		}
+		left.now = false
 	}
 	if a.seek && name != pause {
 		c.showText(fmt.Sprintf("synced by %s", hostname))
@@ -820,6 +820,27 @@ func (c *Client) adopt(a adoption, name, hostname string) error {
 		return c.answer(hostname, "")
 	}
 	return c.resume(hostname)
+}
+
+// release lets go of what commit marked for the steps mpv refused, as it does while it
+// quits or between files: a pause marker would swallow the user's next pause, loading
+// would hold every later seek, and a seek marker would put this node on a second it never
+// reached.
+func (c *Client) release(a adoption) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if a.stop {
+		delete(c.applied, pause)
+	}
+	if a.moving {
+		c.loading, c.heldSeek = false, ""
+		if n := slices.Index(c.following, strconv.Itoa(a.entry)); n >= 0 {
+			c.following = slices.Delete(c.following, n, n+1)
+		}
+	}
+	if a.now {
+		c.peerSeek, c.landing = false, false
+	}
 }
 
 // answer tells a node that isn't where the party is where that is: a joiner, a node that
@@ -947,7 +968,11 @@ func (c *Client) seekTo(data string) error {
 	if !now {
 		return nil
 	}
-	return c.seekReq(pos)
+	if err := c.seekReq(pos); err != nil {
+		c.release(adoption{now: true})
+		return err
+	}
+	return nil
 }
 
 // mark makes a seek this node applies its own before mpv is told: where it is heading, and
@@ -965,13 +990,7 @@ func (c *Client) mark(pos float64) bool {
 }
 
 func (c *Client) seekReq(pos float64) error {
-	err := c.conn.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
-	if err != nil {
-		c.mu.Lock()
-		c.peerSeek, c.landing = false, false
-		c.mu.Unlock()
-	}
-	return err
+	return c.conn.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
 }
 
 // target is where this node is, or where a seek it applied will land: a member that
