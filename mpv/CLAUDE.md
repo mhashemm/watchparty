@@ -94,9 +94,8 @@ e2e `[R11d]`.
 ### One rule for who follows whom (`stamp`)
 
 Every message says the state it was sent from (`tag`, `held`): a `stamp` (a Lamport clock),
-`paused`, `at` (where it is stopped, or resumes from) and in a playlist its `entry`. A peer's
-pause, seek or move is one such state, refused if any part is missing (`stateOf`), and
-weighed in one place (`take`). A move while playing says stopped: it stops the party. A node's own
+`paused`, `at` (where it stopped, or resumes from), in a playlist `entry`; one missing any is
+refused (`stateOf`), and `take` weighs it. A move while playing says stopped. A node's own
 change takes the next stamp, **written under the lock that decided the event goes out**
 (`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
 
@@ -106,6 +105,9 @@ change takes the next stamp, **written under the lock that decided the event goe
 - **Older and saying another state means its sender missed something** (`answer`, "catching
   up"): the party stops as for a join and says where it is. Older and the same (`agrees`) was
   only sent beside something newer. The loser of a tie is told quietly: it may not have heard.
+- **A resume from over `outOfStepSeconds` away, to a member playing that entry, means one
+  missed a resume or a pause** ("out of sync"), which no stamp shows. It stops where it is,
+  newer than the resume, and stops settle on the earliest; the resume seeks nobody.
 - **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
   relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
   it is answered wins, while joiners still order among themselves; `Opened` takes 1.
@@ -115,10 +117,8 @@ change takes the next stamp, **written under the lock that decided the event goe
   unless mpv is gone). Taken apart, it holds the party's stamp on its own entry or second, a
   tie it can win; so it speaks for the entry it is **heading** to, never mpv's (`held`). A
   newer resume on another entry stops the party: loading, it can't keep up.
-- **A stamp, not a vector clock:** the party picks one winner and never merges; changes at
-  once whose stamps differ go by the stamp, still one state. Revisit only with a simulation
-  or a party that ends split, and ask. Neither can tell a node that missed a resume and
-  resumes later from two resuming at once.
+- **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
+  stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
 
 ### Joining mid-party (`joined` → `answer`)
 

@@ -42,11 +42,18 @@ const (
 	// catchingUp is why the party stops for a node whose pause or seek was older than
 	// what the party holds: it missed something, and is told where the party is.
 	catchingUp = "catching up"
+	// outOfSync is why the party stops for a resume from a second this node, playing, is
+	// more than outOfStepSeconds away from: one of them missed something.
+	outOfSync = "out of sync"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
 	endGraceSeconds         = 5
-	maxSeeks                = 16
+	// outOfStepSeconds is how far apart two nodes that resumed together can be, a message's
+	// trip included; any more is out of sync. ponytail: a guess with room for a slow relay,
+	// tune it from real parties.
+	outOfStepSeconds = 2
+	maxSeeks         = 16
 )
 
 // The notices both transports show, around a member's name. apply reads HasLeft to pause
@@ -727,12 +734,22 @@ func (c *Client) take(e Event, hostname string) error {
 	c.mu.Lock()
 	h := c.held()
 	over, told := s.over(h), c.by == hostname
+	// both playing, seconds apart: one missed a pause or a resume. Not a joiner: it syncs
+	// with the party when its join is answered.
+	apart := !s.paused && !h.paused && over >= 0 && h.stamp >= 0 && s.entry == h.entry && math.Abs(h.at-s.at) > outOfStepSeconds
 	var a adoption
-	if over > 0 {
+	switch {
+	case apart:
+		// the pause that answers it must be newer than the resume
+		c.stamp = max(c.stamp, s.stamp)
+	case over > 0:
 		a = c.commit(s, hostname)
 	}
 	c.mu.Unlock()
 	switch {
+	case apart:
+		// each stops where it is, and the party settles on the earliest
+		return c.answer(hostname, outOfSync)
 	case over > 0:
 		return c.adopt(a, e.Name, hostname)
 	case over == 0:

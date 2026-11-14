@@ -2094,11 +2094,56 @@ func TestANewerResumeDoesNotSeekANodeThatPlays(t *testing.T) {
 	c, _, _, requests := liveClient(t)
 	c.pos, c.stamp = 40, 1
 	go func() {
-		c.apply(peer("a", `{"stamp":2,"at":30,"name":"pause","data":"no"}`))
+		c.apply(peer("a", `{"stamp":2,"at":38.5,"name":"pause","data":"no"}`))
 		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 	}()
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want nothing for a node already playing", got)
+	}
+}
+
+// A joiner that pressed play before it was answered is not out of sync with the party: it
+// isn't in it yet, and stopping the party with its own second would drag the party there.
+func TestAJoinerPlayingIsNotOutOfSync(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.pos, c.stamp = 40, unheard
+	go func() {
+		c.apply(peer("a", `{"stamp":2,"at":30,"name":"pause","data":"no"}`))
+		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing until its join is answered", got)
+	}
+}
+
+// Two nodes playing seconds apart, as when one missed a resume or a pause: its resume ties
+// with the party's, or is newer than what a node that missed the pause holds. The party
+// stops, each where it is, and settles on the earliest; nobody is moved by the resume.
+func TestAResumeFromSecondsAwayStopsTheParty(t *testing.T) {
+	t.Parallel()
+	for name, resume := range map[string]string{
+		"a tie, from one that missed the first": `{"stamp":1,"at":30,"name":"pause","data":"no"}`,
+		"newer, to one that missed the pause":   `{"stamp":2,"at":30,"name":"pause","data":"no"}`,
+		"from ahead":                            `{"stamp":1,"at":50,"name":"pause","data":"no"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, send, outgoing, requests := liveClient(t)
+			c.pos, c.stamp = 40, 1
+			go c.apply(peer("a", resume))
+			for _, want := range []string{"show-text paused for a: out of sync 5000", "set_property pause true"} {
+				if got := next(t, requests); got != want {
+					t.Fatalf("sent %q, want %q", got, want)
+				}
+			}
+			send(propertyChangeLine(pause, "yes", 0))
+			var r Event
+			json.Unmarshal([]byte(resume), &r)
+			if e := nextEvent(t, outgoing); e.Name != pause || *e.At != 40 || e.Stamp != r.Stamp+1 {
+				t.Fatalf("broadcast %+v, want its own pause where it is, newer than the resume", e)
+			}
+		})
 	}
 }
 
