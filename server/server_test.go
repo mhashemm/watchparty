@@ -169,11 +169,11 @@ func TestAPeerThatMissedAnEventIsChased(t *testing.T) {
 			synctest.Wait()
 			for len(incoming) > 0 {
 				m := <-incoming
-				told = append(told, fmt.Sprintf("%s missed %v, resend %v at %v", m.HostName, m.Missed, m.Resend, time.Since(start)))
+				told = append(told, fmt.Sprintf("%s (%s) missed %v, resend %v at %v", m.HostName, m.From, m.Missed, m.Resend, time.Since(start)))
 			}
 			time.Sleep(time.Second)
 		}
-		want := []string{"p missed true, resend false at 0s", "p missed false, resend true at 1s", "p missed false, resend true at 3s", "p missed false, resend true at 7s"}
+		want := []string{"p (127.0.0.1:2) missed true, resend false at 0s", "p (127.0.0.1:2) missed false, resend true at 1s", "p (127.0.0.1:2) missed false, resend true at 3s", "p (127.0.0.1:2) missed false, resend true at 7s"}
 		if !slices.Equal(told, want) {
 			t.Fatalf("told mpv %q, want %q", told, want)
 		}
@@ -345,6 +345,24 @@ func TestPeerIsKnownAsSoonAsItAnswersHi(t *testing.T) {
 	}
 	if res.Code != http.StatusNoContent {
 		t.Fatalf("b's event while c was being greeted: %d, want 204", res.Code)
+	}
+}
+
+// Members are told apart by the address they advertise, not by name: two can share one.
+// mpv keys every per-member rule on From, and shows HostName.
+func TestAnEventSaysWhichMemberSentIt(t *testing.T) {
+	t.Parallel()
+	incoming := make(chan mpv.IncomingMessage, 8)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+	for _, addr := range []string{"127.0.0.1:2", "127.0.0.1:3"} {
+		s.addresses[addr] = &peer{address: addr, Hostname: "laptop"}
+		req := httptest.NewRequest(http.MethodPost, "/event", strings.NewReader(`{"name":"joined"}`))
+		req.Header.Set(addressHeaderKey, addr)
+		req.Header.Set(counterHeaderKey, "1")
+		s.Event(httptest.NewRecorder(), req)
+		if m := <-incoming; m.HostName != "laptop" || m.From != addr {
+			t.Fatalf("%s's event reached mpv from %q (%q), want laptop (%s)", addr, m.HostName, m.From, addr)
+		}
 	}
 }
 

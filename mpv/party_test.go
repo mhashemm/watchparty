@@ -220,10 +220,10 @@ func (s *sim) run() {
 						continue
 					}
 					if !s.loses(k, b) {
-						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, Event: b})
+						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, From: from.name, Event: b})
 					} else if !s.missed[k] {
 						s.missed[k] = true
-						s.tell(from, IncomingMessage{HostName: to.name, Missed: true})
+						s.tell(from, IncomingMessage{HostName: to.name, From: to.name, Missed: true})
 					}
 				}
 			}
@@ -302,7 +302,7 @@ func (s *sim) chase() {
 	for k := range s.missed {
 		for _, n := range s.nodes {
 			if n.name == k[0] {
-				s.tell(n, IncomingMessage{HostName: k[1], Resend: true})
+				s.tell(n, IncomingMessage{HostName: k[1], From: k[1], Resend: true})
 			}
 		}
 	}
@@ -910,7 +910,7 @@ func TestASendThatOnlyLookedLostStopsNobody(t *testing.T) {
 		s.run()
 		s.script = []func(){func() {
 			s.missed[[2]string{"a", "b"}] = true
-			s.tell(a, IncomingMessage{HostName: "b", Missed: true})
+			s.tell(a, IncomingMessage{HostName: "b", From: "b", Missed: true})
 		}, sets(b, false), s.chase}
 		s.run()
 		if got := s.outcome(0.5); got != "playing in step" {

@@ -70,7 +70,10 @@ var (
 )
 
 type IncomingMessage struct {
+	// HostName is who sent it, as people know them; From tells members apart, which their
+	// names may not: the mesh address, or the relay client's id. Notices have no From.
 	HostName string
+	From     string
 	Event    []byte
 	// Opened, Lost and Back are set only by this node's own transport, never from the wire.
 	// Opened: this node opened the room with the key, or started the mesh, so its position
@@ -79,7 +82,7 @@ type IncomingMessage struct {
 	// Lost: its connection to the relay dropped. Back: it is in the room again, and
 	// didn't open it.
 	Lost, Back bool
-	// Missed: something this node sent failed to reach HostName, maybe the latest state it
+	// Missed: something this node sent failed to reach From, maybe the latest state it
 	// heard. Resend: send it this node's state again.
 	Missed, Resend bool
 }
@@ -211,11 +214,11 @@ type Client struct {
 	// stamp orders what the party shares (a Lamport clock): the highest this node has
 	// made or followed. A joiner starts at unheard.
 	stamp int
-	// missed: members that something this node sent failed to reach
+	// missed: members (From) that something this node sent failed to reach
 	missed map[string]bool
 
 	resumeAt float64
-	// by: who sent the state this node last adopted
+	// by: the member (From) whose state this node last adopted
 	by string
 
 	// playlist
@@ -707,7 +710,7 @@ func (c *Client) apply(e IncomingMessage) {
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
 	if err == nil && shared(event) {
-		err = c.take(event, e.HostName)
+		err = c.take(event, e)
 	} else if err == nil {
 		switch event.Name {
 		case showText:
@@ -719,7 +722,7 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
 			c.mu.Lock()
-			delete(c.missed, e.HostName)
+			delete(c.missed, e.From)
 			c.mu.Unlock()
 			err = c.answer(e.HostName, "joining")
 		}
@@ -738,23 +741,24 @@ func shared(e Event) bool {
 // its sender missed something, and the party stops for it to catch up; one made at the
 // same moment as this node's, which wins, is told quietly, as it may never hear this one.
 // A joiner's is neither: its join is being answered.
-func (c *Client) take(e Event, hostname string) error {
+func (c *Client) take(e Event, m IncomingMessage) error {
 	s, err := c.stateOf(e)
 	if err != nil {
 		return err
 	}
+	hostname := m.HostName
 	c.mu.Lock()
 	h := c.held()
-	over, told := s.over(h), c.by == hostname
+	over, told := s.over(h), c.by == m.From
 	// a resume reaching a node that plays: newer, this node missed the pause in between; a
 	// tie from a member something this node sent never reached, that member resumed from
 	// what it last heard. Not a joiner: it syncs when its join is answered.
-	apart := !s.paused && !h.paused && h.stamp >= 0 && s.entry == h.entry && (over > 0 || over == 0 && c.missed[hostname])
+	apart := !s.paused && !h.paused && h.stamp >= 0 && s.entry == h.entry && (over > 0 || over == 0 && c.missed[m.From])
 	if over > 0 {
 		// it heard something since, or made it: whatever it missed, this node now holds its
 		// state, or stops the party for it. Not when a send reaches it: a tie it sent
 		// before can still be on its way.
-		delete(c.missed, hostname)
+		delete(c.missed, m.From)
 	}
 	var a adoption
 	switch {
@@ -762,7 +766,7 @@ func (c *Client) take(e Event, hostname string) error {
 		// the pause that answers it must be newer than the resume
 		c.stamp = max(c.stamp, s.stamp)
 	case over > 0:
-		a = c.commit(s, hostname)
+		a = c.commit(s, m.From)
 	}
 	c.mu.Unlock()
 	switch {
@@ -800,13 +804,13 @@ type adoption struct {
 // stop and the second it stands for, all marked before mpv is told. Taken apart, this node
 // would hold the party's stamp on its own entry or second, a tie it could win; and whatever
 // it says meanwhile already names where it is going.
-func (c *Client) commit(s state, hostname string) adoption {
+func (c *Client) commit(s state, from string) adoption {
 	a := adoption{state: s, moving: s.entry != c.heading(), from: c.entryName(c.heading())}
 	// a file opens stopped, and a seek is made stopped: one that plays on stays where it is
 	a.stop = (a.moving || s.paused) && !c.paused
 	there := a.moving && s.at <= timePosTolerance || !a.moving && c.on(s.at)
 	a.seek = !there && (a.stop || c.paused)
-	c.stamp, c.by = s.stamp, hostname
+	c.stamp, c.by = s.stamp, from
 	if a.stop {
 		c.applied[pause] = "yes"
 	}
@@ -945,7 +949,7 @@ func (c *Client) chase(e IncomingMessage) error {
 	c.mu.Lock()
 	switch {
 	case e.Missed:
-		c.missed[e.HostName] = true
+		c.missed[e.From] = true
 		c.mu.Unlock()
 		return nil
 	case c.stamp < 0:

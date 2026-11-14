@@ -140,6 +140,7 @@ func Run(parent context.Context, cfg Config) error {
 			createKey: cfg.CreateKey,
 			creating:  creating,
 			hostname:  cfg.Hostname,
+			id:        rand.Text(),
 			session:   rand.Text(),
 			file:      file,
 			incoming:  incoming,

@@ -682,7 +682,7 @@ func TestARefusedPauseLeavesNoMarker(t *testing.T) {
 		fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
 	}()
 
-	if err := c.take(Event{Name: pause, Data: "yes", Stamp: 1, Paused: new(true), At: new(0.0)}, "a"); err == nil {
+	if err := c.take(Event{Name: pause, Data: "yes", Stamp: 1, Paused: new(true), At: new(0.0)}, IncomingMessage{HostName: "a", From: "a"}); err == nil {
 		t.Fatal("the refusal was not reported")
 	}
 	if e := nextEvent(t, outgoing); e.Name != joined {
@@ -726,7 +726,7 @@ func peer(host, event string) IncomingMessage {
 		b, _ := json.Marshal(m)
 		event = string(b)
 	}
-	return IncomingMessage{HostName: host, Event: []byte(event)}
+	return IncomingMessage{HostName: host, From: host, Event: []byte(event)}
 }
 
 // Once its file has loaded, a node says so, and takes where the party says it is.
@@ -1712,7 +1712,7 @@ func TestJoinerKnowsItsStartingEntryBeforeMpvSaysSo(t *testing.T) {
 	}()
 	incoming := make(chan IncomingMessage, 2)
 	incoming <- peer("a", `{"event":"property-change","name":"playlist-pos","data":"1"}`)
-	incoming <- IncomingMessage{HostName: "a", Event: []byte(`{"name":"show-text","data":"mark"}`)}
+	incoming <- IncomingMessage{HostName: "a", From: "a", Event: []byte(`{"name":"show-text","data":"mark"}`)}
 	if _, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, []string{"e1", "e2", "e3"}, 1, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -2063,7 +2063,7 @@ func TestAMessageWithoutItsStateIsRefused(t *testing.T) {
 			`{"stamp":2,"paused":true,"at":0,"entry":3,"name":"playlist-pos","data":"3"}`,
 			`{"stamp":2,"paused":true,"at":1e999,"entry":0,"name":"time-pos","data":"10.000000"}`,
 		} {
-			c.apply(IncomingMessage{HostName: "a", Event: []byte(e)})
+			c.apply(IncomingMessage{HostName: "a", From: "a", Event: []byte(e)})
 		}
 		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 	}()
@@ -2124,7 +2124,7 @@ func TestAResumeToANodeThatPlaysStopsTheParty(t *testing.T) {
 			n.pos, n.stamp = 40, 1
 			go func() {
 				if c.missed {
-					n.apply(IncomingMessage{HostName: "a", Missed: true})
+					n.apply(IncomingMessage{HostName: "a", From: "a", Missed: true})
 				}
 				n.apply(peer("a", c.resume))
 			}()
@@ -2205,9 +2205,9 @@ func TestAMemberThatMissedSomethingIsSentTheStateAgain(t *testing.T) {
 			n, _, outgoing, requests := liveClient(t)
 			n.paused, n.pos, n.stamp = c.paused, 40, c.stamp
 			go func() {
-				n.apply(IncomingMessage{HostName: "a", Missed: true})
-				n.apply(IncomingMessage{HostName: "a", Resend: true})
-				n.apply(IncomingMessage{HostName: "a", Resend: true})
+				n.apply(IncomingMessage{HostName: "a", From: "a", Missed: true})
+				n.apply(IncomingMessage{HostName: "a", From: "a", Resend: true})
+				n.apply(IncomingMessage{HostName: "a", From: "a", Resend: true})
 				n.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 			}()
 			if got := next(t, requests); got != "show-text mark 5000" {
@@ -2226,6 +2226,54 @@ func TestAMemberThatMissedSomethingIsSentTheStateAgain(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Two members can share a name. Every rule about one member keys on From, so what one
+// missed, or the state taken from one, says nothing of the other; only what is shown
+// uses the name.
+func TestMembersWithOneNameAreToldApart(t *testing.T) {
+	t.Parallel()
+	laptop := func(id, event string) IncomingMessage {
+		m := peer(id, event)
+		m.HostName = "laptop"
+		return m
+	}
+	t.Run("missed", func(t *testing.T) {
+		t.Parallel()
+		n, _, _, requests := liveClient(t)
+		n.pos, n.stamp = 40, 1
+		go func() {
+			n.apply(IncomingMessage{HostName: "laptop", From: "l1", Missed: true})
+			n.apply(laptop("l2", `{"stamp":1,"at":30,"name":"pause","data":"no"}`))
+			n.apply(laptop("l1", `{"stamp":1,"at":30,"name":"pause","data":"no"}`))
+		}()
+		if got := next(t, requests); got != "show-text paused for laptop: out of sync 5000" {
+			t.Fatalf("sent %q, want the party stopped for l1, and only for it", got)
+		}
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if !n.missed["l1"] || n.missed["l2"] || len(n.missed) != 1 {
+			t.Fatalf("missed %v, want l1 alone", n.missed)
+		}
+	})
+	t.Run("synced by", func(t *testing.T) {
+		t.Parallel()
+		n, _, _, requests := liveClient(t)
+		n.paused, n.pos, n.stamp = true, 40, 1
+		go func() {
+			n.apply(laptop("l1", `{"stamp":2,"at":40,"name":"pause","data":"yes"}`))
+			n.apply(laptop("l2", `{"stamp":2,"at":40,"name":"time-pos","data":"40.000000"}`))
+			n.apply(laptop("l1", `{"stamp":2,"at":40,"name":"time-pos","data":"40.000000"}`))
+		}()
+		if got := next(t, requests); got != "show-text synced by laptop 5000" {
+			t.Fatalf("sent %q, want one synced by, for l1", got)
+		}
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if n.by != "l1" {
+			t.Fatalf("took the state from %q, want l1", n.by)
+		}
+	})
 }
 
 // A member that missed something stays missed until it sends something newer than this

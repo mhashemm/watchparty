@@ -155,7 +155,7 @@ func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
 	s.mu.RUnlock()
 
 	select {
-	case s.incoming <- mpv.IncomingMessage{HostName: hostname, Event: body}:
+	case s.incoming <- mpv.IncomingMessage{HostName: hostname, From: addr, Event: body}:
 		res.WriteHeader(http.StatusNoContent)
 	case <-req.Context().Done():
 		res.WriteHeader(http.StatusServiceUnavailable)
@@ -304,7 +304,7 @@ func (s *Server) track(p *peer, err error) error {
 // is a strike. Not from the send that failed: mpv's answer goes out through
 // BroadcastEvents, which waits for that send.
 func (s *Server) chase(p *peer, reached chan struct{}) {
-	if !s.tell(mpv.IncomingMessage{HostName: p.Hostname, Missed: true}) {
+	if !s.tell(mpv.IncomingMessage{HostName: p.Hostname, From: p.address, Missed: true}) {
 		return
 	}
 	for wait := s.chaseFrom; ; wait = min(wait*2, s.chaseTo) {
@@ -321,7 +321,7 @@ func (s *Server) chase(p *peer, reached chan struct{}) {
 		p.mu.Lock()
 		quiet := time.Since(p.tried) >= wait
 		p.mu.Unlock()
-		if gone || quiet && !s.tell(mpv.IncomingMessage{HostName: p.Hostname, Resend: true}) {
+		if gone || quiet && !s.tell(mpv.IncomingMessage{HostName: p.Hostname, From: p.address, Resend: true}) {
 			return
 		}
 	}

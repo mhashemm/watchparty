@@ -34,6 +34,7 @@ type relayConn struct {
 	createKey string
 	creating  bool
 	hostname  string
+	id        string
 	session   string
 	file      string
 	incoming  chan<- mpv.IncomingMessage
@@ -144,7 +145,7 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 			continue
 		}
 		select {
-		case r.incoming <- mpv.IncomingMessage{HostName: msg.Hostname, Event: msg.Event}:
+		case r.incoming <- mpv.IncomingMessage{HostName: msg.Hostname, From: msg.From, Event: msg.Event}:
 		case <-c.Done():
 			return c.Err()
 		}
@@ -215,7 +216,7 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 		case <-c.Done():
 			return
 		}
-		b, err := json.Marshal(wire.Message{Hostname: r.hostname, Event: event})
+		b, err := json.Marshal(wire.Message{Hostname: r.hostname, From: r.id, Event: event})
 		if err != nil {
 			log.Printf("relay: marshal: %s\n", err)
 			continue
