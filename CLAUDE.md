@@ -36,8 +36,7 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
   relay (`-relay`, client `party/ws.go`, server `relay/`) for people behind carrier
   NAT. Both require the party's secret on every request.
 - **`mpv/`:** the JSON IPC client over a unix socket or Windows named pipe.
-- **Two channels:** `outgoing` (mpv → transport) and `incoming` (transport → mpv).
-  Events travel as raw mpv JSON; no transport parses them.
+- **Two channels:** `outgoing` (mpv → transport), `incoming` (transport → mpv): raw mpv JSON, never parsed.
 
 **No master, no slave:** any peer can drive the player. Only the node that generates
 an event broadcasts it, with its `stamp`: of two changes the newer wins, and of two made at
@@ -64,6 +63,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp`, `paused`, `at` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |
   | mpv | `now playing: <file name as JSON>` | GUI feed, `gui/store.go`, e2e |
+  | mpv | `sent again, as <host> missed something: …` | e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both

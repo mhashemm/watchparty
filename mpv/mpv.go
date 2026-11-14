@@ -42,18 +42,14 @@ const (
 	// catchingUp is why the party stops for a node whose pause or seek was older than
 	// what the party holds: it missed something, and is told where the party is.
 	catchingUp = "catching up"
-	// outOfSync is why the party stops for a resume from a second this node, playing, is
-	// more than outOfStepSeconds away from: one of them missed something.
+	// outOfSync is why the party stops for a resume reaching a node that plays: one of the
+	// two missed a pause or a resume, and plays from another second.
 	outOfSync = "out of sync"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
 	endGraceSeconds         = 5
-	// outOfStepSeconds is how far apart two nodes that resumed together can be, a message's
-	// trip included; any more is out of sync. ponytail: a guess with room for a slow relay,
-	// tune it from real parties.
-	outOfStepSeconds = 2
-	maxSeeks         = 16
+	maxSeeks                = 16
 )
 
 // The notices both transports show, around a member's name. apply reads HasLeft to pause
@@ -83,6 +79,9 @@ type IncomingMessage struct {
 	// Lost: its connection to the relay dropped. Back: it is in the room again, and
 	// didn't open it.
 	Lost, Back bool
+	// Missed: something this node sent failed to reach HostName, maybe the latest state it
+	// heard. Resend: send it this node's state again.
+	Missed, Resend bool
 }
 
 type connection struct {
@@ -163,6 +162,8 @@ type Event struct {
 	Paused *bool    `json:"paused,omitempty"`
 	At     *float64 `json:"at,omitempty"`
 	Entry  *int     `json:"entry,omitempty"`
+	// Again: the state its sender holds, sent again to a member the mesh failed to reach
+	Again bool `json:"again,omitempty"`
 	Response
 }
 
@@ -210,6 +211,8 @@ type Client struct {
 	// stamp orders what the party shares (a Lamport clock): the highest this node has
 	// made or followed. A joiner starts at unheard.
 	stamp int
+	// missed: members that something this node sent failed to reach
+	missed map[string]bool
 
 	resumeAt float64
 	// by: who sent the state this node last adopted
@@ -695,6 +698,12 @@ func (c *Client) apply(e IncomingMessage) {
 		c.back()
 		return
 	}
+	if e.Missed || e.Resend {
+		if err := c.chase(e); err != nil {
+			log.Println("ProcessIncomingEvents: a member missed something:", err)
+		}
+		return
+	}
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
 	if err == nil && shared(event) {
@@ -709,6 +718,9 @@ func (c *Client) apply(e IncomingMessage) {
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
+			c.mu.Lock()
+			delete(c.missed, e.HostName)
+			c.mu.Unlock()
 			err = c.answer(e.HostName, "joining")
 		}
 	}
@@ -734,9 +746,16 @@ func (c *Client) take(e Event, hostname string) error {
 	c.mu.Lock()
 	h := c.held()
 	over, told := s.over(h), c.by == hostname
-	// both playing, seconds apart: one missed a pause or a resume. Not a joiner: it syncs
-	// with the party when its join is answered.
-	apart := !s.paused && !h.paused && over >= 0 && h.stamp >= 0 && s.entry == h.entry && math.Abs(h.at-s.at) > outOfStepSeconds
+	// a resume reaching a node that plays: newer, this node missed the pause in between; a
+	// tie from a member something this node sent never reached, that member resumed from
+	// what it last heard. Not a joiner: it syncs when its join is answered.
+	apart := !s.paused && !h.paused && h.stamp >= 0 && s.entry == h.entry && (over > 0 || over == 0 && c.missed[hostname])
+	if over > 0 {
+		// it heard something since, or made it: whatever it missed, this node now holds its
+		// state, or stops the party for it. Not when a send reaches it: a tie it sent
+		// before can still be on its way.
+		delete(c.missed, hostname)
+	}
 	var a adoption
 	switch {
 	case apart:
@@ -758,9 +777,10 @@ func (c *Client) take(e Event, hostname string) error {
 			c.showText(fmt.Sprintf("synced by %s", hostname))
 		}
 		return nil
-	case s.stamp < h.stamp && (s.stamp < 0 || s.agrees(h)):
+	case s.stamp < h.stamp && (s.stamp < 0 || s.agrees(h) || e.Again):
 		// a joiner is being answered; one saying what this node holds was only sent at the
-		// same moment as something newer, and missed nothing
+		// same moment as something newer, and missed nothing; one sent again crossed a newer
+		// change, which its sender will hear
 		return nil
 	case s.stamp < h.stamp:
 		return c.answer(hostname, catchingUp)
@@ -911,6 +931,38 @@ func (c *Client) answer(hostname, reason string) error {
 		case c.outgoing <- where:
 		case <-c.ctx.Done():
 		}
+	}
+	return nil
+}
+
+// chase follows a member that missed something this node sent, as its transport tells: a
+// tie from it comes from what it last heard (take), until it sends something newer; and it
+// is sent this node's state again, as a pause marked again: one of the same stamp moves
+// nobody and nobody says "synced", and an older one is let go, as it may cross a newer
+// change. If that member is out of step, the state sent again says so there. A joiner has
+// no state to send yet, and its join is answered by whoever heard it.
+func (c *Client) chase(e IncomingMessage) error {
+	c.mu.Lock()
+	switch {
+	case e.Missed:
+		c.missed[e.HostName] = true
+		c.mu.Unlock()
+		return nil
+	case c.stamp < 0:
+		c.mu.Unlock()
+		return nil
+	}
+	data := "no"
+	if c.held().paused {
+		data = "yes"
+	}
+	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Again: true})
+	again = c.tag(again)
+	c.mu.Unlock()
+	select {
+	case c.outgoing <- again:
+		log.Printf("sent again, as %s missed something: %s\n", e.HostName, again)
+	case <-c.ctx.Done():
 	}
 	return nil
 }
@@ -1080,6 +1132,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		paused:   true,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
+		missed:   map[string]bool{},
 		names:    names,
 		current:  start,
 		resumeAt: at,

@@ -42,6 +42,7 @@ func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 		paused:   false,
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
+		missed:   map[string]bool{},
 		conn:     &connection{scanner: sc, pending: map[int64]chan Response{}, closed: make(chan struct{})},
 	}
 }
@@ -2087,27 +2088,12 @@ func TestAMoveWhilePlayingSaysStopped(t *testing.T) {
 	}
 }
 
-// A newer resume reaching a node that is already playing moves nothing: playback is never
-// synced, and where it resumed from is a moment ago on another machine.
-func TestANewerResumeDoesNotSeekANodeThatPlays(t *testing.T) {
-	t.Parallel()
-	c, _, _, requests := liveClient(t)
-	c.pos, c.stamp = 40, 1
-	go func() {
-		c.apply(peer("a", `{"stamp":2,"at":38.5,"name":"pause","data":"no"}`))
-		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
-	}()
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("sent %q, want nothing for a node already playing", got)
-	}
-}
-
 // A joiner that pressed play before it was answered is not out of sync with the party: it
 // isn't in it yet, and stopping the party with its own second would drag the party there.
 func TestAJoinerPlayingIsNotOutOfSync(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := liveClient(t)
-	c.pos, c.stamp = 40, unheard
+	c.pos, c.stamp, c.missed["a"] = 40, unheard, true
 	go func() {
 		c.apply(peer("a", `{"stamp":2,"at":30,"name":"pause","data":"no"}`))
 		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
@@ -2117,21 +2103,31 @@ func TestAJoinerPlayingIsNotOutOfSync(t *testing.T) {
 	}
 }
 
-// Two nodes playing seconds apart, as when one missed a resume or a pause: its resume ties
-// with the party's, or is newer than what a node that missed the pause holds. The party
-// stops, each where it is, and settles on the earliest; nobody is moved by the resume.
-func TestAResumeFromSecondsAwayStopsTheParty(t *testing.T) {
+// A resume reaching a node that plays says it is out of step: newer, it missed the pause
+// in between, which no stamp shows; a tie from a member something this node sent never
+// reached, it resumed from what it last heard. The party stops, each where it is, and
+// settles on the earliest; nobody is moved by the resume.
+func TestAResumeToANodeThatPlaysStopsTheParty(t *testing.T) {
 	t.Parallel()
-	for name, resume := range map[string]string{
-		"a tie, from one that missed the first": `{"stamp":1,"at":30,"name":"pause","data":"no"}`,
-		"newer, to one that missed the pause":   `{"stamp":2,"at":30,"name":"pause","data":"no"}`,
-		"from ahead":                            `{"stamp":1,"at":50,"name":"pause","data":"no"}`,
+	for name, c := range map[string]struct {
+		resume string
+		missed bool
+	}{
+		"newer":                     {`{"stamp":2,"at":30,"name":"pause","data":"no"}`, false},
+		"newer, from where it is":   {`{"stamp":2,"at":40,"name":"pause","data":"no"}`, false},
+		"a tie, from one it missed": {`{"stamp":1,"at":30,"name":"pause","data":"no"}`, true},
+		"a tie, from ahead":         {`{"stamp":1,"at":50,"name":"pause","data":"no"}`, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			c, send, outgoing, requests := liveClient(t)
-			c.pos, c.stamp = 40, 1
-			go c.apply(peer("a", resume))
+			n, send, outgoing, requests := liveClient(t)
+			n.pos, n.stamp = 40, 1
+			go func() {
+				if c.missed {
+					n.apply(IncomingMessage{HostName: "a", Missed: true})
+				}
+				n.apply(peer("a", c.resume))
+			}()
 			for _, want := range []string{"show-text paused for a: out of sync 5000", "set_property pause true"} {
 				if got := next(t, requests); got != want {
 					t.Fatalf("sent %q, want %q", got, want)
@@ -2139,9 +2135,127 @@ func TestAResumeFromSecondsAwayStopsTheParty(t *testing.T) {
 			}
 			send(propertyChangeLine(pause, "yes", 0))
 			var r Event
-			json.Unmarshal([]byte(resume), &r)
+			json.Unmarshal([]byte(c.resume), &r)
 			if e := nextEvent(t, outgoing); e.Name != pause || *e.At != 40 || e.Stamp != r.Stamp+1 {
 				t.Fatalf("broadcast %+v, want its own pause where it is, newer than the resume", e)
+			}
+		})
+	}
+}
+
+// A tie with the resume this node plays, from a member that heard it, is the same resume
+// made at once: whatever second it names, that was a moment ago on another machine.
+func TestATieFromAMemberThatMissedNothingMovesNothing(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.pos, c.stamp = 40, 1
+	go func() {
+		c.apply(peer("a", `{"stamp":1,"at":30,"name":"pause","data":"no"}`))
+		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing for the same resume", got)
+	}
+}
+
+// The state sent again to a member the mesh missed goes to everyone, and can cross a newer
+// change on its way. Older, it is let go: its sender only hasn't heard that change yet. An
+// older message that isn't sent again still says its sender is behind.
+func TestAnOlderStateSentAgainIsLetGo(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		event string
+		want  string
+	}{
+		"sent again": {`{"stamp":2,"at":30,"again":true,"name":"pause","data":"yes"}`, "show-text mark 5000"},
+		"not":        {`{"stamp":2,"at":30,"name":"pause","data":"yes"}`, "show-text paused for a: catching up 5000"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, _, _, requests := liveClient(t)
+			n.paused, n.pos, n.stamp = true, 40, 3
+			go func() {
+				n.apply(peer("a", c.event))
+				n.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+			}()
+			if got := next(t, requests); got != c.want {
+				t.Fatalf("sent %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A member that something this node sent never reached is sent its state again, as a
+// pause, which moves nobody who holds it and shows nothing, each time the transport asks.
+// Being told it missed something sends nothing: that comes right after the send that
+// failed. A joiner has no state yet.
+func TestAMemberThatMissedSomethingIsSentTheStateAgain(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		paused bool
+		stamp  int
+		want   string
+	}{
+		"stopped": {true, 3, "yes"},
+		"playing": {false, 3, "no"},
+		"joining": {true, unheard, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, _, outgoing, requests := liveClient(t)
+			n.paused, n.pos, n.stamp = c.paused, 40, c.stamp
+			go func() {
+				n.apply(IncomingMessage{HostName: "a", Missed: true})
+				n.apply(IncomingMessage{HostName: "a", Resend: true})
+				n.apply(IncomingMessage{HostName: "a", Resend: true})
+				n.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+			}()
+			if got := next(t, requests); got != "show-text mark 5000" {
+				t.Fatalf("sent %q to mpv, want nothing", got)
+			}
+			for range 2 {
+				if c.want == "" {
+					break
+				}
+				if e := nextEvent(t, outgoing); e.Name != pause || !e.Again || e.Data != c.want || e.Stamp != c.stamp || *e.Paused != c.paused || *e.At != 40 {
+					t.Fatalf("broadcast %+v, want its state again", e)
+				}
+			}
+			if len(outgoing) > 0 {
+				t.Fatalf("broadcast %s, want nothing more", <-outgoing)
+			}
+		})
+	}
+}
+
+// A member that missed something stays missed until it sends something newer than this
+// node holds, which it heard since or made, or joins again. Not when a send reaches it: a
+// tie it sent before can still be on its way. Something older says nothing of it.
+func TestAMemberThatMissedSomethingIsForgottenOnceItSendsNews(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		via    IncomingMessage
+		missed bool
+	}{
+		"newer":    {peer("a", `{"stamp":2,"at":30,"name":"pause","data":"yes"}`), false},
+		"rejoined": {peer("a", `{"name":"joined"}`), false},
+		"a tie":    {peer("a", `{"stamp":1,"at":40,"name":"pause","data":"yes"}`), true},
+		"older":    {peer("a", `{"stamp":0,"at":40,"name":"pause","data":"yes"}`), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, _, _, requests := liveClient(t)
+			n.paused, n.pos, n.stamp, n.missed["a"] = true, 40, 1, true
+			go func() {
+				n.apply(c.via)
+				n.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+			}()
+			for next(t, requests) != "show-text mark 5000" {
+			}
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			if n.missed["a"] != c.missed {
+				t.Fatalf("a missed: %v, want %v", n.missed["a"], c.missed)
 			}
 		})
 	}

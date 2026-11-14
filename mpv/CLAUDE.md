@@ -105,9 +105,9 @@ change takes the next stamp, **written under the lock that decided the event goe
 - **Older and saying another state means its sender missed something** (`answer`, "catching
   up"): the party stops as for a join and says where it is. Older and the same (`agrees`) was
   only sent beside something newer. The loser of a tie is told quietly: it may not have heard.
-- **A resume from over `outOfStepSeconds` away, to a member playing that entry, means one
-  missed a resume or a pause** ("out of sync"), which no stamp shows. It stops where it is,
-  newer than the resume, and stops settle on the earliest; the resume seeks nobody.
+- **A resume reaching a node that plays stops the party** ("out of sync"): newer, it missed
+  the pause between; a tie, from a member the mesh failed to reach (`Missed`) that sent
+  nothing newer since. `Resend`: the state as a pause marked `again`, let go if older.
 - **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
   relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
   it is answered wins, while joiners still order among themselves; `Opened` takes 1.

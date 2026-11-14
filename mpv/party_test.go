@@ -37,12 +37,16 @@ type simNode struct {
 }
 
 type sim struct {
-	t      *testing.T
-	rng    *rand.Rand
-	nodes  []*simNode
-	links  map[[2]string][]IncomingMessage
-	down   map[string]bool
-	lost   map[[2]string]func(Event) bool
+	t     *testing.T
+	rng   *rand.Rand
+	nodes []*simNode
+	links map[[2]string][]IncomingMessage
+	down  map[string]bool
+	lost  map[[2]string]func(Event) bool
+	// missed: links a send failed on, until one gets through; told: what each node's
+	// transport tells it about them, in order
+	missed map[[2]string]bool
+	told   map[*simNode][]IncomingMessage
 	ticks  int
 	script []func()
 }
@@ -50,7 +54,7 @@ type sim struct {
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}}
+	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
@@ -212,8 +216,14 @@ func (s *sim) run() {
 				for _, to := range s.nodes {
 					// a node without its relay connection sends and hears nothing
 					k := [2]string{from.name, to.name}
-					if to != from && !s.down[from.name] && !s.down[to.name] && !s.loses(k, b) {
+					if to == from || s.down[from.name] || s.down[to.name] {
+						continue
+					}
+					if !s.loses(k, b) {
 						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, Event: b})
+					} else if !s.missed[k] {
+						s.missed[k] = true
+						s.tell(from, IncomingMessage{HostName: to.name, Missed: true})
 					}
 				}
 			}
@@ -225,8 +235,16 @@ func (s *sim) run() {
 					next = append(next, func() {
 						to.in <- s.links[k][0]
 						s.links[k] = s.links[k][1:]
+						// a send got through: the transport's chase ends
+						delete(s.missed, k)
 					})
 				}
+			}
+			if len(s.told[from]) > 0 {
+				next = append(next, func() {
+					from.in <- s.told[from][0]
+					s.told[from] = s.told[from][1:]
+				})
 			}
 			from.mu.Lock()
 			if len(from.seeks) > 0 {
@@ -272,6 +290,22 @@ func (s *sim) loses(k [2]string, b []byte) bool {
 	e := Event{}
 	json.Unmarshal(b, &e)
 	return s.lost[k] != nil && s.lost[k](e)
+}
+
+func (s *sim) tell(n *simNode, m IncomingMessage) {
+	s.told[n] = append(s.told[n], m)
+}
+
+// chase is the transport asking every node to send its state again to each member it
+// missed, as it does every few seconds until a send gets through.
+func (s *sim) chase() {
+	for k := range s.missed {
+		for _, n := range s.nodes {
+			if n.name == k[0] {
+				s.tell(n, IncomingMessage{HostName: k[1], Resend: true})
+			}
+		}
+	}
 }
 
 // drop loses every message named name from one node to another from now on.
@@ -762,6 +796,147 @@ func TestANodeThatFellBehindIsCaughtUp(t *testing.T) {
 	}
 }
 
+// A member misses a resume, or a pause, or both, and its transport sends the party's state
+// again once the link is back, before or after that member acts. Stopped, it takes the
+// resume it missed and plays in step, one trip late like anyone. Playing through a pause
+// and a resume, it is ahead, which no stamp shows but the newer resume reaching it while it
+// plays: it stops the party, saying so. A tie, its own resume from where it stopped, is
+// told by the member that missed it.
+func TestAMemberThatMissedAChangeIsChasedIntoStep(t *testing.T) {
+	resume := func(a *simNode) func() { return sets(a, false) }
+	pause := func(a *simNode) func() { return sets(a, true) }
+	for name, c := range map[string]struct {
+		playing bool
+		misses  []func(*simNode) func()
+		does    func(*simNode) func()
+		says    string
+	}{
+		"a resume, alone":                      {false, []func(*simNode) func(){resume}, nil, ""},
+		"a resume, then it resumes":            {false, []func(*simNode) func(){resume}, func(b *simNode) func() { return sets(b, false) }, ""},
+		"a resume, then it seeks":              {false, []func(*simNode) func(){resume}, func(b *simNode) func() { return seeks(b, 20) }, ""},
+		"a pause, alone":                       {true, []func(*simNode) func(){pause}, nil, ""},
+		"a pause, then it pauses":              {true, []func(*simNode) func(){pause}, func(b *simNode) func() { return sets(b, true) }, ""},
+		"a pause and a resume, alone":          {true, []func(*simNode) func(){pause, resume}, nil, "b said paused for a: out of sync"},
+		"a pause and a resume, then it pauses": {true, []func(*simNode) func(){pause, resume}, func(b *simNode) func() { return sets(b, true) }, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, 0, "a", "b", "c")
+				a, b := s.nodes[0], s.nodes[1]
+				stopped(30, s.nodes...)
+				if c.playing {
+					play(30, s.nodes...)
+				}
+				s.lost[[2]string{"a", "b"}] = func(Event) bool { return true }
+				// further apart than a message's trip, before the link is back
+				s.script = nil
+				for _, m := range c.misses {
+					s.script = append(s.script, m(a), func() { s.ticks = 40 })
+				}
+				s.run()
+				delete(s.lost, [2]string{"a", "b"})
+				s.script = []func(){s.chase}
+				if c.does != nil && seed%2 == 0 {
+					s.script = []func(){s.chase, c.does(b)}
+				} else if c.does != nil {
+					s.script = []func(){c.does(b), s.chase}
+				}
+				s.run()
+				s.inStep(seed, 2)
+				if c.says != "" && !strings.Contains(s.outcome(2), c.says) {
+					t.Errorf("seed %d: ended %s, want %s", seed, s.outcome(2), c.says)
+				}
+			})
+		})
+	}
+}
+
+// outcome is how a party ended: stopped or playing, in step or not, and every "catching
+// up" or "out of sync" said, by whom.
+func (s *sim) outcome(lag float64) string {
+	apart := 0.15
+	if !s.nodes[0].paused {
+		apart += lag
+	}
+	out := "in step"
+	for _, n := range s.nodes {
+		if d := n.pos - s.nodes[0].pos; n.paused != s.nodes[0].paused || d > apart || d < -apart {
+			out = "APART"
+		}
+	}
+	if s.nodes[0].paused {
+		out = "stopped " + out
+	} else {
+		out = "playing " + out
+	}
+	for _, n := range s.nodes {
+		for _, text := range n.notices {
+			if strings.Contains(text, "catching up") || strings.Contains(text, "out of sync") {
+				out += "; " + n.name + " said " + text
+			}
+		}
+	}
+	return out
+}
+
+// The state a node sends again can cross a newer change: here a resume, made after the
+// seek that state is about. It is older, and says another state, but its sender missed
+// nothing: answered as behind, it stopped the party in 9 seeds of 10.
+func TestAResendCrossingANewerChangeStopsNobody(t *testing.T) {
+	forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		a, c := s.nodes[0], s.nodes[2]
+		stopped(30, s.nodes...)
+		s.lost[[2]string{"a", "b"}] = func(Event) bool { return true }
+		s.script = []func(){seeks(a, 40)}
+		s.run()
+		delete(s.lost, [2]string{"a", "b"})
+		s.script = []func(){s.chase, sets(c, false)}
+		s.run()
+		if got := s.outcome(0.5); got != "playing in step" {
+			t.Errorf("seed %d: ended %s, want the party playing", seed, got)
+		}
+	})
+}
+
+// A send can reach a member and still look lost, when its answer times out. The member
+// missed nothing, so its resume, and the state sent to it again, stop nobody.
+func TestASendThatOnlyLookedLostStopsNobody(t *testing.T) {
+	forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		a, b := s.nodes[0], s.nodes[1]
+		stopped(30, s.nodes...)
+		s.script = []func(){seeks(a, 40)}
+		s.run()
+		s.script = []func(){func() {
+			s.missed[[2]string{"a", "b"}] = true
+			s.tell(a, IncomingMessage{HostName: "b", Missed: true})
+		}, sets(b, false), s.chase}
+		s.run()
+		if got := s.outcome(0.5); got != "playing in step" {
+			t.Errorf("seed %d: ended %s, want the party playing", seed, got)
+		}
+	})
+}
+
+// The relay never drops a frame for a member it keeps: a member it can't keep up with is
+// closed, and joins again. So one that lost it while the party was stopped, and missed a
+// resume, is answered as a joiner, and nothing tells it apart by seconds.
+func TestAMemberThatLostTheRelayWhileStoppedEndsInStep(t *testing.T) {
+	forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		a, c := s.nodes[0], s.nodes[2]
+		stopped(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){s.lose(c), sets(a, false)}
+		s.run()
+		s.ticks = 20
+		s.script = []func(){s.back(c)}
+		s.run()
+		s.together(seed)
+	})
+}
+
 // Someone joins and does something before the party has answered: seeks to an earlier
 // second, moves to a later entry, or resumes. The party never follows it, even one whose
 // opener has done nothing yet: the joiner ends where the party is.
@@ -801,9 +976,10 @@ func TestNothingAJoinerDoesBeforeItIsAnsweredMovesTheParty(t *testing.T) {
 }
 
 // A node misses a move, which a mesh allows, and then does something on the entry the
-// party has left. What it sends carries the same stamp as the move it never heard, so it
-// is no older: it was dropped as belonging to another entry, and that node stayed behind
-// until someone else did something. Now it is told where the party is.
+// party has left, before the transport sends it the party's state again. What it sends
+// carries the same stamp as the move it never heard, so it is no older: it was dropped as
+// belonging to another entry, and that node stayed behind until someone else did
+// something. Now it is told where the party is.
 func TestANodeThatMissedAMoveIsBroughtOver(t *testing.T) {
 	for name, does := range map[string]func(*simNode) func(){
 		"it seeks":   func(b *simNode) func() { return seeks(b, 40) },
@@ -814,7 +990,8 @@ func TestANodeThatMissedAMoveIsBroughtOver(t *testing.T) {
 				s := newSim(t, seed, simEntries, "a", "b", "c")
 				a, b := s.nodes[0], s.nodes[1]
 				stopped(30, s.nodes...)
-				s.drop(a, b, playlistPos)
+				// and what a sends again, while the link is down
+				s.lost[[2]string{"a", "b"}] = func(Event) bool { return true }
 				s.script = []func(){moves(a, 1)}
 				s.run()
 				delete(s.lost, [2]string{"a", "b"})

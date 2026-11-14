@@ -44,6 +44,10 @@ type peer struct {
 	address      string     `json:"-"`
 	fails        int        `json:"-"`
 	failingSince time.Time  `json:"-"`
+	// reached is open while an event this node sent failed to reach the peer, and is
+	// closed by the next that does
+	reached chan struct{} `json:"-"`
+	tried   time.Time     `json:"-"`
 }
 
 func (p *peer) String() string {
@@ -62,6 +66,8 @@ type Server struct {
 	file       string
 	secret     string
 	evictAfter time.Duration
+	// chaseFrom and chaseTo bound how often mpv is asked to send a peer its state again
+	chaseFrom, chaseTo time.Duration
 }
 
 func (s *Server) Guard(next http.Handler) http.Handler {
@@ -268,8 +274,65 @@ func (s *Server) BroadcastEvents(outgoing chan []byte) {
 			return
 		}
 		s.broadcast(s.c, true, func(c context.Context, p *peer, counter uint64) error {
-			return s.post(c, p.address, "/event", event, counter)
+			return s.track(p, s.post(c, p.address, "/event", event, counter))
 		})
+	}
+}
+
+// track follows whether a peer has every event this node sent. Each is the sender's whole
+// state, so the first that fails leaves the peer behind on what the party holds: mpv is
+// told, and asked to send its state again (chase) until one gets through.
+func (s *Server) track(p *peer, err error) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tried = time.Now()
+	switch {
+	case err != nil && p.reached == nil:
+		p.reached = make(chan struct{})
+		go s.chase(p, p.reached)
+	case err == nil && p.reached != nil:
+		close(p.reached)
+		p.reached = nil
+	}
+	return err
+}
+
+// chase tells mpv a peer missed something, then, each time it waited longer, to send its
+// state again, until a send reaches the peer, the peer is dropped, or the party ends. Not
+// at once: that would fail as the send did. A wait in which this node sent the peer
+// something anyway, which carried its state, asks nothing: each send to a peer that is down
+// is a strike. Not from the send that failed: mpv's answer goes out through
+// BroadcastEvents, which waits for that send.
+func (s *Server) chase(p *peer, reached chan struct{}) {
+	if !s.tell(mpv.IncomingMessage{HostName: p.Hostname, Missed: true}) {
+		return
+	}
+	for wait := s.chaseFrom; ; wait = min(wait*2, s.chaseTo) {
+		select {
+		case <-reached:
+			return
+		case <-time.After(wait):
+		case <-s.c.Done():
+			return
+		}
+		s.mu.RLock()
+		gone := s.addresses[p.address] != p
+		s.mu.RUnlock()
+		p.mu.Lock()
+		quiet := time.Since(p.tried) >= wait
+		p.mu.Unlock()
+		if gone || quiet && !s.tell(mpv.IncomingMessage{HostName: p.Hostname, Resend: true}) {
+			return
+		}
+	}
+}
+
+func (s *Server) tell(m mpv.IncomingMessage) bool {
+	select {
+	case s.incoming <- m:
+		return true
+	case <-s.c.Done():
+		return false
 	}
 }
 
@@ -380,5 +443,7 @@ func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string,
 		file:       file,
 		secret:     secret,
 		evictAfter: evictAfter,
+		chaseFrom:  time.Second,
+		chaseTo:    30 * time.Second,
 	}
 }

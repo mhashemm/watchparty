@@ -3,12 +3,15 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mhashemm/watchparty/mpv"
@@ -141,6 +144,116 @@ func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("BroadcastEvents outlived the party")
+	}
+}
+
+// An event that fails to reach a peer leaves it behind on the sender's state: mpv is told
+// at once, and asked to send it again after 1s, 2s, 4s… up to 30s, until a send gets
+// through. More failures meanwhile start no second chase, and a send to a peer that
+// missed nothing tells mpv nothing.
+func TestAPeerThatMissedAnEventIsChased(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		incoming := make(chan mpv.IncomingMessage, 64)
+		s := New(t.Context(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+		p := &peer{address: "127.0.0.1:2", Hostname: "p"}
+		s.addresses[p.address] = p
+		fail := errors.New("peer unreachable")
+
+		s.track(p, nil)
+		s.track(p, fail)
+		s.track(p, fail)
+		start := time.Now()
+		var told []string
+		for range 8 {
+			synctest.Wait()
+			for len(incoming) > 0 {
+				m := <-incoming
+				told = append(told, fmt.Sprintf("%s missed %v, resend %v at %v", m.HostName, m.Missed, m.Resend, time.Since(start)))
+			}
+			time.Sleep(time.Second)
+		}
+		want := []string{"p missed true, resend false at 0s", "p missed false, resend true at 1s", "p missed false, resend true at 3s", "p missed false, resend true at 7s"}
+		if !slices.Equal(told, want) {
+			t.Fatalf("told mpv %q, want %q", told, want)
+		}
+		time.Sleep(100 * time.Second)
+		synctest.Wait()
+		for len(incoming) > 0 {
+			<-incoming
+		}
+		s.track(p, nil)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if len(incoming) > 0 {
+			t.Fatalf("told mpv %+v after p was reached", <-incoming)
+		}
+	})
+}
+
+// A wait in which this node sent the peer something anyway asks mpv for nothing: that send
+// carried its state, and each send to a peer that is down is a strike.
+func TestAChaseSkipsAWaitWithASendInIt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		incoming := make(chan mpv.IncomingMessage, 64)
+		c, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		s := New(c, incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+		p := &peer{address: "127.0.0.1:2", Hostname: "p"}
+		s.addresses[p.address] = p
+		fail := errors.New("peer unreachable")
+		start := time.Now()
+		var at []time.Duration
+		for i := range 8 {
+			if i == 0 || i == 1 {
+				s.track(p, fail)
+			}
+			synctest.Wait()
+			for len(incoming) > 0 {
+				if (<-incoming).Resend {
+					at = append(at, time.Since(start))
+				}
+			}
+			time.Sleep(time.Second / 2)
+		}
+		// sends at 0s and 0.5s: the wait to 1s had one, the wait to 3s none
+		if want := []time.Duration{3 * time.Second}; !slices.Equal(at, want) {
+			t.Fatalf("asked mpv at %v, want %v", at, want)
+		}
+	})
+}
+
+// The chase ends with the peer, dropped or replaced by its own /hi, and with the party.
+func TestAChaseEndsWithThePeerAndTheParty(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]func(*Server, *peer, context.CancelFunc){
+		"dropped":  func(s *Server, p *peer, _ context.CancelFunc) { delete(s.addresses, p.address) },
+		"replaced": func(s *Server, p *peer, _ context.CancelFunc) { s.addresses[p.address] = &peer{address: p.address} },
+		"party":    func(_ *Server, _ *peer, cancel context.CancelFunc) { cancel() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				incoming := make(chan mpv.IncomingMessage, 64)
+				c, cancel := context.WithCancel(t.Context())
+				s := New(c, incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+				p := &peer{address: "127.0.0.1:2", Hostname: "p"}
+				s.addresses[p.address] = p
+				s.track(p, errors.New("peer unreachable"))
+				synctest.Wait()
+				<-incoming
+				s.mu.Lock()
+				end(s, p, cancel)
+				s.mu.Unlock()
+				// returns only once every goroutine in the bubble has
+				time.Sleep(time.Hour)
+				synctest.Wait()
+				if len(incoming) > 0 {
+					t.Fatalf("told mpv %+v once the chase should have ended", <-incoming)
+				}
+			})
+		})
 	}
 }
 

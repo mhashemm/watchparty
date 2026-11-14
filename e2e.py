@@ -67,7 +67,10 @@ def run_stub(addr, peer, register):
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = self.rfile.read(int(self.headers.get("content-length") or 0))
+            if self.path == "/event" and os.environ.get("E2E_STUB_EVENTS"):
+                with open(os.environ["E2E_STUB_EVENTS"], "ab") as f:
+                    f.write(body + b"\n")
             if self.path == "/hi":
                 body = b"{}"
                 self.send_response(200)
@@ -556,11 +559,12 @@ def raw(addr, endpoint, headers, body=b""):
         return e.code
 
 
-def stub(peer, register=True):
+def stub(peer, register=True, events=""):
     cmd = [sys.executable, __file__, "--stub", STUB_ADDR, peer]
     if not register:
         cmd.append("noregister")
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={**os.environ, "E2E_FILE": fingerprint(A), "E2E_SECRET": SECRET})
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True,
+                         env={**os.environ, "E2E_FILE": fingerprint(A), "E2E_SECRET": SECRET, "E2E_STUB_EVENTS": events})
     stubs.append(p)
     # blocks until the stub is listening and registered; a stale stub left on the
     # port would answer for it and the strike loops in [13] would never end
@@ -1120,6 +1124,41 @@ def p2p_suite():
         toggle()
     until(lambda: dropped(A, STUB_ADDR), 5)
     ok("3rd consecutive strike evicts", dropped(A, STUB_ADDR))
+
+    print("\n[13c] a peer that missed a pause and a resume is sent the state again once it is back; a newer resume reaching a node that plays stops the party")
+    s4 = stub(nodes[A]["addr"])
+    must("stub peer joined again", until(lambda: osd(A).count(f"{STUB_HOST} has joined") >= 2, 5))
+    setp(A, "pause", False)
+    must(f"{A} plays", until(lambda: get(A, "pause") is False))
+    stub_stop(s4)
+    base = strikes(A, STUB_ADDR, STUB_HOST)
+    toggle()
+    toggle()
+    ok("both were missed", strikes(A, STUB_ADDR, STUB_HOST) == base + 2 and get(A, "pause") is False,
+       f"{strikes(A, STUB_ADDR, STUB_HOST) - base} failures logged")
+    # back before the chase's next try, 2s after the last send
+    events = os.path.join(os.path.dirname(nodes[A]["log"]), "stub-events.log")
+    s5 = stub(nodes[A]["addr"], register=False, events=events)
+    got = lambda: [json.loads(l) for l in open(events).read().splitlines()] if os.path.exists(events) else []
+    ok("it was sent the state again, playing", until(lambda: any(e.get("again") and e.get("paused") is False for e in got()), 10),
+       f"{got()}")
+    ok(f"{A} stopped nobody for it: the state lands where it is behind", get(A, "pause") is False and
+       not any("out of sync" in t for t in osd(A)), osd(A)[-3:])
+    # the stub plays out of step now, and resumes: newer than anything A holds
+    resume = {"stamp": 1 << 20, "paused": False, "at": max(get(A, "time-pos") - 10, 0), "event": "property-change",
+              "name": "pause", "data": "no"}
+    code = raw(nodes[A]["addr"], "/event", {"hit-me-up": STUB_ADDR, "counter": "999999", "hostname": STUB_HOST, "secret": SECRET},
+               json.dumps(resume).encode())
+    ok(f"a newer resume reaching {A} while it plays stops the party",
+       code == 204 and until(lambda: f"paused for {STUB_HOST}: out of sync" in osd(A) and get(A, "pause") is True, 5),
+       f"HTTP {code}, {osd(A)[-3:]}")
+    stub_stop(s5)
+    drops = lambda: sum(s.startswith("dropped " + STUB_ADDR) for s in osd(A))
+    before, tries = drops(), 0
+    while drops() == before and tries < 8:
+        toggle()
+        tries += 1
+    must("and is dropped once gone", drops() > before)
 
     print("\n[13b] with the default -evictAfter, a burst of strikes does not evict a peer")
     launch("nodeKeep", evict=None)
