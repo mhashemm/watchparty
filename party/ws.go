@@ -104,6 +104,11 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 				return nil, false, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
 			}
 			return nil, false, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
+		// both clear by themselves, so the node keeps retrying; the status goes first for the GUI
+		case http.StatusTooManyRequests:
+			return nil, false, fmt.Errorf("%s: the relay has had too many attempts from your network, which clears within the hour", res.Status)
+		case http.StatusServiceUnavailable:
+			return nil, false, fmt.Errorf("%s: the relay is full", res.Status)
 		}
 	}
 	if err == nil && res.Header.Get(wire.WaitingHeader) == "yes" {

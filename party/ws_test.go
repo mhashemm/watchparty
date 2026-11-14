@@ -102,6 +102,35 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 	}
 }
 
+// A rate limit and a full relay both pass, so the node keeps trying, and its log says
+// which it is: the GUI showed either as a lost connection.
+func TestABusyRelayIsRetriedAndNamed(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[int]string{
+		http.StatusTooManyRequests:    "429 Too Many Requests: the relay has had too many attempts",
+		http.StatusServiceUnavailable: "503 Service Unavailable: the relay is full",
+	} {
+		joined := make(chan struct{})
+		addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+			if n == 1 {
+				w.WriteHeader(status)
+				return
+			}
+			conn := accept(t, w, r)
+			close(joined)
+			conn.Read(r.Context())
+		})
+		r := newRelayConn(addr, nil)
+		if _, _, err := r.dialOnce(context.Background()); err == nil || errors.Is(err, errRejected) || !strings.HasPrefix(err.Error(), want) {
+			t.Fatalf("%d: got %v, want a retryable error starting %q", status, err, want)
+		}
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go r.Connect(c, cancel)
+		waitDone(t, joined, "never redialled a busy relay")
+	}
+}
+
 // Nobody opening the room (a fake invite, a host who never comes) must not keep the
 // node waiting forever. The wait counts from the first 401, and a connection resets it.
 func TestNotOpenGivesUpAfterAWhile(t *testing.T) {

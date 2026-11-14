@@ -997,7 +997,7 @@ async function startParty(extra) {
 
 let run = 0, from = 0, state = {};
 function reset() {
-  state = { ready: false, connected: false, reconnecting: false, waiting: false, rejected: false, unreachable: false, finding: false, leftPause: false };
+  state = { ready: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, finding: false, leftPause: false };
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -1055,10 +1055,11 @@ function handle(line) {
   if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
   }
-  if (/^relay: connected/.test(msg)) Object.assign(state, { connected: true, reconnecting: false, waiting: false });
+  if (/^relay: connected/.test(msg)) Object.assign(state, { connected: true, reconnecting: false, waiting: false, busy: "" });
   if (/^relay: (dial|disconnected)/.test(msg)) {
     state.reconnecting = true;
     state.waiting = /is not open yet/.test(msg);
+    state.busy = /^relay: dial: 429 /.test(msg) ? "limited" : /^relay: dial: 503 /.test(msg) ? "full" : "";
   }
   if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
@@ -1100,6 +1101,10 @@ function render(exitErr) {
     text = "Diagnosis: the relay rejected this room or secret. Check the invite and start again."; bad = true;
   } else if (running && state.waiting) {
     text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;
+  } else if (running && state.busy === "limited") {
+    text = "This relay has had too many attempts from your network. Trying again; it clears within the hour."; walking = true;
+  } else if (running && state.busy === "full") {
+    text = "The relay is full right now. Trying again…"; walking = true;
   } else if (running && state.reconnecting) {
     text = "Lost the relay. Reconnecting…"; walking = true;
   } else if (running && state.finding) {

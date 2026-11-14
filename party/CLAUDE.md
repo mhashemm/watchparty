@@ -151,7 +151,8 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   | 401 | room not open or remembered, no create key sent | retries: "room X is not open yet, waiting for someone with -createKey". Gives up (`errRejected`) if `Run` generated the room, since no host is coming, and after 30 minutes of 401s since the last connection (`r.wait`, "did not open within"), since a fake invite would wait forever |
   | 403 | wrong secret or create key | gives up, logs `rejected by relay`. A wrong secret never becomes right, and retrying burns the relay's rate limit |
   | 409 | not the room creator's file | gives up, `errRejected` wrapping `server.ErrDifferentFile` |
-  | 429, 503, other | rate limit, caps | retries |
+  | 429, 503 | rate limit, caps | retries; the dial line starts with the status and says which, for the GUI |
+  | other | | retries |
 
 - **`Connect` is the supervisor**: dial, `set(conn)`, block in `read`, redial on error.
   Backoff doubles 1s → 30s and resets after a good dial; the 1s is `r.retry` so tests

@@ -1863,6 +1863,8 @@ def caps_suite():
     launch("nodeB", room="capB", tag="c2")
     until(lambda: "429" in log("c2"), BOOT)
     ok("the second NEW room was refused", "429" in log("c2"), "ROOMS_PER_HOUR=1 must bite")
+    ok("and its log says why, and that it keeps trying", "relay: dial: 429 Too Many Requests: the relay has had too many attempts from your network" in log("c2")
+       and nodes["c2"]["proc"].poll() is None, log("c2")[-300:])
     launch("nodeC", room="capA", tag="c3")
     until(lambda: connected("c3"), BOOT)
     ok("joining the EXISTING room still works", connected("c3"),
@@ -1880,6 +1882,7 @@ def caps_suite():
     until(lambda: "503" in log("m2"), BOOT)
     ok("the first room connected", connected("m1"))
     ok("the second room got 503", "503" in log("m2"), "MAX_ROOMS=1 must bite")
+    ok("and its log says the relay is full", "relay: dial: 503 Service Unavailable: the relay is full" in log("m2"), log("m2")[-300:])
     for t in ("m1", "m2"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
@@ -2222,6 +2225,29 @@ def gui_suite():
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
     ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    print("\n[G17c] a relay that is rate limiting, or full, says so instead of \"Lost the relay\"")
+    busy = {"status": 429}
+
+    class Busy(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(busy["status"])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    refusing = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Busy)
+    threading.Thread(target=refusing.serve_forever, daemon=True).start()
+    fill(G, file=MEDIA, relay=f"ws://127.0.0.1:{refusing.server_address[1]}", room="busy", secret="busy")
+    go(G)
+    ok("a rate limit is named", until(lambda: status(G) == "This relay has had too many attempts from your network. Trying again; it clears within the hour.", BOOT), status(G))
+    busy["status"] = 503
+    ok("so is a full relay", until(lambda: status(G) == "The relay is full right now. Trying again…", BOOT), status(G))
+    end(G)
+    ok(f"{G}'s party ended", until(lambda: status(G) == "The party has ended."), status(G))
+    refusing.shutdown()
+    fill(G, relay=RELAY_URL)
 
     print("\n[G17d] a magnet link nobody seeds says so, and Stop still works")
     fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
