@@ -191,6 +191,7 @@ type Client struct {
 	joining    bool
 	joinedWith []string
 	heardParty bool
+	passed     []int
 	resumeAt   float64
 
 	// settling: after a join or a leave, on the earliest stop
@@ -564,7 +565,7 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 // sent or was sent meanwhile is gone.
 func (c *Client) announce() {
 	c.mu.Lock()
-	c.joining, c.joinedWith, c.heardParty = true, nil, false
+	c.joining, c.joinedWith, c.heardParty, c.passed = true, nil, false, nil
 	c.mu.Unlock()
 	hello, _ := json.Marshal(Event{Name: joined})
 	select {
@@ -709,6 +710,10 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	heading := c.heading()
+	if c.joining && event.From != nil {
+		// the party left it, even if this node was never there or is already where it went
+		c.passed = append(c.passed, *event.From)
+	}
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
 	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Party)
 	c.mu.Unlock()
@@ -725,6 +730,9 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return nil
 	}
 	from := c.entryName(c.heading())
+	if c.joining {
+		c.passed = append(c.passed, c.heading())
+	}
 	c.loading = true
 	c.following = append(c.following, event.Data)
 	c.movedFrom = heading
@@ -749,9 +757,11 @@ func (c *Client) followEntry(event Event, hostname string) error {
 // Only a node still joining does. The party's answer, marked party or from anyone
 // whose join it didn't hear, always; a fellow joiner's only if higher (each
 // answers the other, and following both ways would swap them), and not once the party
-// has answered, since it only says where that joiner was.
+// has answered, since it only says where that joiner was. Never to an entry it or a move
+// it heard has left since it joined (passed): that answer was sent before its sender heard
+// of the move, and a move back there would come as a move.
 func (c *Client) takesAnswer(i, heading int, hostname string, party bool) bool {
-	if !c.joining {
+	if !c.joining || slices.Contains(c.passed, i) {
 		return false
 	}
 	if party || !slices.Contains(c.joinedWith, hostname) {

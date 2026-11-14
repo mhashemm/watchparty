@@ -189,11 +189,13 @@ func (n *simNode) foldMoves() {
 	n.move(i)
 }
 
+// move drops a seek that hasn't landed: mpv reports one sent just before a switch ahead
+// of it or not at all, never on the new file, which always opens at 0 (MPV.md).
 func (n *simNode) move(i int) {
 	if i == n.entry {
 		return
 	}
-	n.entry, n.pos = i, 0
+	n.entry, n.pos, n.seeks = i, 0, nil
 	n.emit(propertyChangeLine(playlistPos, strconv.Itoa(i), 0))
 	n.emit(`{"event":"file-loaded"}` + "\n")
 	n.emit(propertyChangeLine(timePos, "0.000000", 0))
@@ -447,6 +449,30 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 		if a.entry != b.entry {
 			t.Errorf("seed %d: on entries %d and %d", seed, a.entry, b.entry)
 		}
+	})
+}
+
+// A member moves to another entry just as someone joins. Members answer the joiner in any
+// order with the move, so the joiner can hear the move and then an answer sent before its
+// sender had: it must not go back to the entry the party just left.
+func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
+	forManySeeds(t, 1500, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, simEntries, "a", "b", "j")
+		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, a, b)
+		j.c.joining = true
+		s.ticks = 20
+		s.script = []func(){func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.request(1)
+		}, func() { j.out <- []byte(`{"name":"joined"}`) }}
+		s.rng.Shuffle(2, func(i, j int) { s.script[i], s.script[j] = s.script[j], s.script[i] })
+		s.run()
+		if a.entry != 1 || b.entry != 1 || j.entry != 1 {
+			t.Errorf("seed %d: on entries %d, %d and %d, want 1: j heard %q", seed, a.entry, b.entry, j.entry, j.notices)
+		}
+		s.together(seed)
 	})
 }
 

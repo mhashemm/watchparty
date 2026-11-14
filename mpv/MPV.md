@@ -160,6 +160,10 @@ Seen during a normal run:
 - **`pause` carries over**, so a playing node starts the next file playing. No `seek` is sent.
 - **Two sets in a row:** the reply beats the report, so the second can go first. Within about 5ms
   mpv may report only the last (0→1→0: `0` or nothing), from 10ms both. It always loads a file.
+- **A seek set just before a switch never lands on the new file** (0, 2 and 20ms apart, both
+  versions): it is reported before the switch, or not at all with no `seek` event either.
+  The new file opens at 0. **A seek set at `file-loaded` lands before the file's one
+  `playback-restart`:** `time-pos` 0, `seek`, the position, then `playback-restart`.
 - A seek past the end while paused stops on the last frame. Resuming there moves on at
   once. After the last file: `end-file` `eof`, then exit 0.
 
