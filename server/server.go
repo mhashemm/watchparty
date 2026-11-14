@@ -12,7 +12,6 @@ import (
 	"maps"
 	"math"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -371,9 +370,6 @@ func (s *Server) post(c context.Context, addr string, endpoint string, data []by
 }
 
 func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, secret string, evictAfter time.Duration) *Server {
-	if hostname == "" {
-		hostname, _ = os.Hostname()
-	}
 	return &Server{
 		c:          c,
 		incoming:   incoming,

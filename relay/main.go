@@ -539,7 +539,7 @@ func env[T any](key string, def T, parse func(string) (T, error)) T {
 }
 
 func main() {
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
 	// also routes the log package, so net/http's own errors land here too

@@ -74,8 +74,8 @@ torrent of long videos. The check mark doesn't matter.
 - The mpv socket name carries `rand.Text()`, so parties started in the same second
   (e2e nodes, two GUIs) never share one.
 - **An empty `Relay` means P2P, which means UPNP.** That is why the GUI refuses an
-  empty relay in relay mode instead of passing it through. A missing `Secret` (and in
-  relay mode a missing room or hostname) is generated.
+  empty relay in relay mode instead of passing it through. A missing `Secret` or hostname (and in
+  relay mode a missing room) is generated.
 - mpv's command line: the user's `MpvFlags` first, then the pins, so they beat both
   the flags and `mpv.conf` (`mpv/MPV.md` says why each is pinned).
 - **`defer cmd.Cancel()` only after `Start` succeeds:** the default `Cancel` is

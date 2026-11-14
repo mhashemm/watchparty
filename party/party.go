@@ -124,10 +124,11 @@ func Run(parent context.Context, cfg Config) error {
 		cfg.Secret = rand.Text()
 	}
 
+	if cfg.Hostname == "" {
+		cfg.Hostname, _ = os.Hostname()
+	}
+
 	if strings.TrimSpace(cfg.Relay) != "" {
-		if cfg.Hostname == "" {
-			cfg.Hostname, _ = os.Hostname()
-		}
 		creating := cfg.Room == ""
 		if creating {
 			cfg.Room = rand.Text()
@@ -161,7 +162,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket)
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {

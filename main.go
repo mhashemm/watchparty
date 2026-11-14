@@ -99,7 +99,7 @@ func main() {
 		return
 	}
 
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	err := party.Run(c, cfg)
 	cancel()
 	if err != nil {
@@ -116,7 +116,7 @@ func selfUpdate() error {
 	if err != nil {
 		return err
 	}
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	tag, err := update.Install(c, exe, version, "watchparty")
 	if errors.Is(err, update.ErrUpToDate) {
