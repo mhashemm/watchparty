@@ -708,6 +708,9 @@ def end(n):
     js(n, "window.asked = null")
     click(n, "#go")
     until(lambda: status(n) == "The party has ended.")
+    # seeing the party stop, the page reloads the saved settings without waiting; landing
+    # after the next case's fill, it put the saved mpv options back ([G19e] under --jitter)
+    until(lambda: js(n, "window.loading") == 0)
     return js(n, "window.asked")
 
 
