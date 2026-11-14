@@ -78,7 +78,7 @@ func main() {
 	flag.StringVar(&cfg.Room, "room", "", "relay room code (generated if empty)")
 	flag.StringVar(&cfg.Secret, "secret", "", "party secret, for the relay room or the direct mesh (generated if empty)")
 	flag.StringVar(&cfg.CacheDir, "cacheDir", "", "folder for torrent downloads, instead of your system's cache folder")
-	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
+	flag.StringVar(&cfg.CreateKey, "createKey", "", "the relay's key, needed to open a new room; joining needs none")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	doUpdate := flag.Bool("update", false, "update to the latest release and exit")
 	flag.Usage = func() {
