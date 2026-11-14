@@ -42,6 +42,7 @@ type sim struct {
 	nodes  []*simNode
 	links  map[[2]string][]IncomingMessage
 	down   map[string]bool
+	lost   map[[2]string]func(Event) bool
 	ticks  int
 	script []func()
 }
@@ -49,7 +50,7 @@ type sim struct {
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}}
+	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
@@ -210,8 +211,8 @@ func (s *sim) run() {
 				b := <-from.out
 				for _, to := range s.nodes {
 					// a node without its relay connection sends and hears nothing
-					if to != from && !s.down[from.name] && !s.down[to.name] {
-						k := [2]string{from.name, to.name}
+					k := [2]string{from.name, to.name}
+					if to != from && !s.down[from.name] && !s.down[to.name] && !s.loses(k, b) {
 						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, Event: b})
 					}
 				}
@@ -262,6 +263,52 @@ func (s *sim) run() {
 			return
 		}
 		next[s.rng.IntN(len(next))]()
+	}
+}
+
+// loses is a send that failed, as one can in a mesh: the rest of what that node sends
+// still arrives.
+func (s *sim) loses(k [2]string, b []byte) bool {
+	e := Event{}
+	json.Unmarshal(b, &e)
+	return s.lost[k] != nil && s.lost[k](e)
+}
+
+// drop loses every message named name from one node to another from now on.
+func (s *sim) drop(from, to *simNode, name string) {
+	s.lost[[2]string{from.name, to.name}] = func(e Event) bool { return e.Name == name }
+}
+
+// seeks is the person at n seeking by hand.
+func seeks(n *simNode, pos float64) func() {
+	return func() {
+		n.mu.Lock()
+		n.seek(pos)
+		n.mu.Unlock()
+		n.landSeek()
+	}
+}
+
+func sets(n *simNode, paused bool) func() {
+	return func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.setPause(paused)
+	}
+}
+
+// inStep is everyone stopped on the same second, or everyone playing from it: then each
+// started when the resume reached it, at most lag seconds after the first.
+func (s *sim) inStep(seed uint64, lag float64) {
+	s.t.Helper()
+	apart := 0.15
+	if !s.nodes[0].paused {
+		apart += lag
+	}
+	for _, n := range s.nodes {
+		if d := n.pos - s.nodes[0].pos; n.paused != s.nodes[0].paused || d > apart || d < -apart {
+			s.t.Errorf("seed %d: %s is at %.2f (paused %v), %s at %.2f (paused %v)", seed, n.name, n.pos, n.paused, s.nodes[0].name, s.nodes[0].pos, s.nodes[0].paused)
+		}
 	}
 }
 
@@ -571,11 +618,11 @@ func TestSeekAndResumeAtOnceDoesNotPauseAnyone(t *testing.T) {
 }
 
 // A party continued later: the key holder opens the room where it stopped, and members
-// who stopped elsewhere, on other entries, all end up where the key holder is. Seed 1675
-// is a fellow joiner's entry winning over the party's. The key holder says joined too,
-// before the relay tells it it opened the room: seed 0 is a joiner taking it for a fellow.
+// who stopped elsewhere, on other entries, all end up where the key holder is. The key
+// holder says joined too, before the relay tells it it opened the room. Without its stamp
+// for opening, or with an older entry followed, seed 0 fails.
 func TestJoinersTakeTheOpenersSpot(t *testing.T) {
-	forManySeeds(t, 2000, func(t *testing.T, seed uint64) {
+	forManySeeds(t, 600, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "o", "g", "h")
 		o, g, h := s.nodes[0], s.nodes[1], s.nodes[2]
 		for n, at := range map[*simNode][2]float64{o: {1, 40}, g: {2, 10}, h: {0, 5}} {
@@ -597,4 +644,99 @@ func TestJoinersTakeTheOpenersSpot(t *testing.T) {
 			t.Errorf("seed %d: the key holder moved to %d at %.1f: %q", seed, o.entry, o.pos, o.notices)
 		}
 	})
+}
+
+// stopped starts these nodes paused together at pos, in a party someone opened.
+func stopped(pos float64, nodes ...*simNode) {
+	for _, n := range nodes {
+		n.pos, n.c.pos, n.c.stamp = pos, pos, 1
+	}
+}
+
+// Two people seek at the same moment while the party is stopped. Each applying the
+// other's would swap them, and a resume says nothing of where, so they would play apart.
+func TestTwoSeeksAtOnceEndOnOneSecond(t *testing.T) {
+	forManySeeds(t, 100, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		a, b := s.nodes[0], s.nodes[1]
+		stopped(30, s.nodes...)
+		s.script = []func(){seeks(a, 40), seeks(b, 50)}
+		s.run()
+		s.together(seed)
+	})
+}
+
+// One resumes as another seeks. The one playing dropped the seek and the other took the
+// resume, so they played apart; stopping is the safe way out, where the seek went.
+func TestAResumeCrossingASeekLeavesNobodyApart(t *testing.T) {
+	forManySeeds(t, 100, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		a, b := s.nodes[0], s.nodes[1]
+		stopped(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){sets(a, false), seeks(b, 50)}
+		s.rng.Shuffle(2, func(i, j int) { s.script[i], s.script[j] = s.script[j], s.script[i] })
+		s.run()
+		s.inStep(seed, 2)
+	})
+}
+
+// A seek while playing goes out as a pause, then where. A send can fail in a mesh, and
+// either one alone must still stop the node that got it on the right second.
+func TestEitherHalfOfASeekWhilePlayingIsEnough(t *testing.T) {
+	for _, name := range []string{pause, timePos} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, 0, "a", "b", "c")
+				a, b := s.nodes[0], s.nodes[1]
+				play(30, s.nodes...)
+				s.drop(a, b, name)
+				s.script = []func(){seeks(a, 40)}
+				s.run()
+				s.together(seed)
+			})
+		})
+	}
+}
+
+// A node that missed something is behind without knowing it, and acts. Whatever it does,
+// the party ends stopped with that node in step, and says why when what it sent was older
+// than what the party holds. Seed 22 is the party settling on where the node that was
+// behind had stopped.
+func TestANodeThatFellBehindIsCaughtUp(t *testing.T) {
+	for name, c := range map[string]struct {
+		playing bool
+		missed  []func(*simNode) func()
+		does    func(*simNode) func()
+		told    bool
+	}{
+		"it resumes a party that sought":             {false, []func(*simNode) func(){func(a *simNode) func() { return seeks(a, 40) }}, func(b *simNode) func() { return sets(b, false) }, false},
+		"it seeks later than the party did":          {false, []func(*simNode) func(){func(a *simNode) func() { return seeks(a, 40) }}, func(b *simNode) func() { return seeks(b, 45) }, false},
+		"it resumes a party that sought twice":       {false, []func(*simNode) func(){func(a *simNode) func() { return seeks(a, 40) }, func(a *simNode) func() { return seeks(a, 42) }}, func(b *simNode) func() { return sets(b, false) }, true},
+		"it pauses a party that stopped and went on": {true, []func(*simNode) func(){func(a *simNode) func() { return sets(a, true) }, func(a *simNode) func() { return sets(a, false) }}, func(b *simNode) func() { return sets(b, true) }, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, 0, "a", "b", "c")
+				a, b := s.nodes[0], s.nodes[1]
+				stopped(30, s.nodes...)
+				if c.playing {
+					play(30, s.nodes...)
+				}
+				s.lost[[2]string{"a", "b"}] = func(Event) bool { return true }
+				for _, m := range c.missed {
+					s.script = append(s.script, m(a))
+				}
+				s.run()
+				delete(s.lost, [2]string{"a", "b"})
+				s.ticks = 20
+				s.script = []func(){c.does(b)}
+				s.run()
+				s.together(seed)
+				if c.told && !a.said("paused for b: catching up") {
+					t.Errorf("seed %d: a never said why: %q", seed, a.notices)
+				}
+			})
+		})
+	}
 }

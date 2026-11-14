@@ -40,14 +40,14 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
   Events travel as raw mpv JSON; no transport parses them.
 
 **No master, no slave:** any peer can drive the player. Only the node that generates
-an event broadcasts it. `applied`/`seeks` drop mpv's echo of a peer's change, `seen`
-its first reply to an observe, P2P counters stale requests. Don't bring back a `role`
-echo hack: it muted the peer, not the echo.
+an event broadcasts it, with its `stamp`: of two changes the newer wins, and of two made at
+once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply
+to an observe. Don't bring back a `role` echo hack: it muted the peer, not the echo.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
 playing, running out of cache, a mid-party join, a member leaving or losing the relay, a new
-playlist entry) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
+playlist entry, a node that missed something) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
 
 ## Contracts between packages
@@ -62,7 +62,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it, or `429 `/`503 ` at its start), `relay: disconnected` | GUI reconnecting, "waiting for the host" and a busy relay, e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
-  | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |
+  | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp`, `at` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |
   | mpv | `now playing: <file name as JSON>` | GUI feed, `gui/store.go`, e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 

@@ -1851,6 +1851,20 @@ def media_suite():
     ok("they settle on the higher one", until(lambda: get("epF", "filename") == get("epG", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epF", "epG")]))
     time.sleep(2)
     ok("and stay there", get("epF", "filename") == get("epG", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epF", "epG")]))
+
+    print("\n[R15g2] two people seeking at once end up on the earlier second, and a resume crossing a seek stops both there")
+    where = lambda: [get(n, "time-pos") for n in ("epF", "epG")]
+    setp("epF", "time-pos", 3)
+    setp("epG", "time-pos", 6)
+    ok("both seeks end on the earlier one", until(lambda: all(near(v, 3, 0.3) for v in where())), str(where()))
+    time.sleep(2)
+    ok("and stay there, not swapped", all(near(v, 3, 0.3) for v in where()), str(where()))
+    setp("epF", "pause", False)
+    setp("epG", "time-pos", 8)
+    stopped = lambda: all(near(v, 8, 0.3) for v in where()) and all(get(n, "pause") is True for n in ("epF", "epG"))
+    ok("a resume crossing a seek stops both where the seek went", until(stopped), f'{where()} {[get(n, "pause") for n in ("epF", "epG")]}')
+    time.sleep(2)
+    ok("and neither plays on alone", stopped(), f'{where()} {[get(n, "pause") for n in ("epF", "epG")]}')
     for n in ("epF", "epG"):
         stop(n)
 

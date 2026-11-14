@@ -36,6 +36,9 @@ const (
 	pausedAt        = "paused-at"
 
 	lostRelay = "paused: lost the relay"
+	// catchingUp is why the party stops for a node whose pause or seek was older than
+	// what the party holds: it missed something, and is told where the party is.
+	catchingUp = "catching up"
 
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
@@ -145,9 +148,10 @@ type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
-	// Stamp and Entry are the state its sender was in when it sent this (tag)
-	Stamp int  `json:"stamp,omitempty"`
-	Entry *int `json:"entry,omitempty"`
+	// Stamp, At and Entry are the state its sender was in when it sent this (tag)
+	Stamp int      `json:"stamp,omitempty"`
+	At    *float64 `json:"at,omitempty"`
+	Entry *int     `json:"entry,omitempty"`
 	Response
 }
 
@@ -256,6 +260,10 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	if err == nil {
 		out = append([][]byte{line}, out...)
 	}
+	if len(out) > 0 {
+		// this node's own change, or what it adds to a peer's: the next stamp
+		c.stamp++
+	}
 	for i, b := range out {
 		out[i] = c.tag(b)
 	}
@@ -324,7 +332,7 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 		}
 		return nil, errDoNotSend
 	case playlistPos:
-		return nil, c.entryChanged(moved && !first)
+		err = c.entryChanged(moved && !first)
 	default:
 		return nil, errDoNotSend
 	}
@@ -408,8 +416,8 @@ func (c *Client) positionChanged() error {
 	return errDoNotSend
 }
 
-// entryChanged is this node moving to another entry by itself: it goes out with a new
-// stamp, and pauses the party if it was playing.
+// entryChanged is this node moving to another entry by itself: it goes out, and pauses
+// the party if it was playing.
 func (c *Client) entryChanged(moved bool) error {
 	if !moved {
 		return errDoNotSend
@@ -417,25 +425,56 @@ func (c *Client) entryChanged(moved bool) error {
 	if !c.paused {
 		c.pauseParty("video changed")
 	}
-	c.stamp++
 	c.joining = false
 	return nil
 }
 
-// tag says what state a message was sent from: its stamp, and in a playlist the entry it
-// belongs to, so a peer that has moved on can drop it. Only this node knows, at the
-// moment it sends.
+// tag says what state a message was sent from: its stamp, where this node is stopped or
+// resumes from, and in a playlist the entry, so a peer that has moved on can drop it. Only
+// this node knows, at the moment it sends.
 func (c *Client) tag(b []byte) []byte {
-	if len(c.names) == 0 {
-		return append(fmt.Appendf(nil, `{"stamp":%d,`, c.stamp), b[1:]...)
+	at := c.pos
+	if c.paused {
+		at = c.target()
 	}
-	return append(fmt.Appendf(nil, `{"stamp":%d,"entry":%d,`, c.stamp, c.current), b[1:]...)
+	head := fmt.Appendf(nil, `{"stamp":%d,"at":%.6f,`, c.stamp, at)
+	if len(c.names) > 0 {
+		head = fmt.Appendf(head, `"entry":%d,`, c.current)
+	}
+	return append(head, b[1:]...)
 }
 
-func (c *Client) tagged(b []byte) []byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.tag(b)
+// How a peer's pause or seek stands against what this node holds.
+const (
+	older = iota // its sender is behind: catch it up
+	loses        // sent at the same moment as this node's, which wins: tell it
+	same         // nothing to do
+	newer        // take it
+)
+
+// weigh compares a peer's pause or seek with what this node holds. A higher stamp is
+// newer. With the same stamp the two were made at once and the safer wins, for everyone
+// alike: stopped over playing, then the earlier second.
+func (c *Client) weigh(stamp int, paused bool, at float64) int {
+	if stamp < c.stamp {
+		return older
+	}
+	if stamp > c.stamp {
+		return newer
+	}
+	if paused != c.paused {
+		if paused {
+			return newer
+		}
+		return loses
+	}
+	if !paused || c.at(at) {
+		return same
+	}
+	if at < c.target() {
+		return newer
+	}
+	return loses
 }
 
 // beats is whether an entry a peer named wins over the one this node is heading to: a
@@ -637,6 +676,12 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 	event := Event{}
 	err := json.Unmarshal(e.Event, &event)
+	if err == nil && c.behind(event) {
+		if err := c.answer(e.HostName, catchingUp, timePos); err != nil {
+			log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
+		}
+		return
+	}
 	if err == nil && c.fromAnotherEntry(event) {
 		log.Printf("ProcessIncomingEvents: from another entry [event=%s] [host=%s]\n", e.Event, e.HostName)
 		return
@@ -655,7 +700,7 @@ func (c *Client) apply(e IncomingMessage) {
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
-			err = c.welcome(e.HostName)
+			err = c.answer(e.HostName, "joining", startPos)
 		case startPos:
 			err = c.arrive(event, e.HostName)
 		case pausedAt:
@@ -669,12 +714,27 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 }
 
-func (c *Client) welcome(hostname string) error {
+// behind is a pause or a seek older than what this node holds: its sender missed
+// something, whatever entry it thinks it is on.
+func (c *Client) behind(event Event) bool {
+	if event.Name != pause && event.Name != timePos {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return event.Stamp < c.stamp
+}
+
+// answer tells a node that isn't where the party is where that is: its entry, then its
+// second, as name. For a reason, a joiner or a node that fell behind, the party stops
+// first and settles like after a leave. With none, the node's change was made at the same
+// moment as one that won, which stopped the party already.
+func (c *Client) answer(hostname, reason, name string) error {
 	c.mu.Lock()
 	joining, playing := c.joining, !c.paused
 	var at string
 	var earlier bool
-	if !joining {
+	if !joining && reason != "" {
 		at, earlier = c.settle()
 	}
 	var entry []byte
@@ -704,12 +764,14 @@ func (c *Client) welcome(hostname string) error {
 			return err
 		}
 	}
-	c.showText(fmt.Sprintf("paused for %s: joining", hostname))
+	if reason != "" {
+		c.showText(fmt.Sprintf("paused for %s: %s", hostname, reason))
+	}
 	c.mu.Lock()
-	b := position(startPos, c.target())
+	b := c.tag(position(name, c.target()))
 	c.mu.Unlock()
 	select {
-	case c.outgoing <- c.tagged(b):
+	case c.outgoing <- b:
 	case <-c.ctx.Done():
 	}
 	return nil
@@ -747,7 +809,7 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	if stays {
 		return nil
 	}
-	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
+	err = c.setPause(true, hostname)
 	if err != nil {
 		return err
 	}
@@ -801,6 +863,10 @@ func (c *Client) arrive(event Event, hostname string) error {
 	joining := c.joining
 	c.joining = false
 	c.settling = c.settling || joining
+	if joining {
+		// what it takes is the party's, as of this stamp
+		c.stamp = max(c.stamp, event.Stamp)
+	}
 	there := c.at(pos)
 	c.mu.Unlock()
 	if !joining {
@@ -809,19 +875,61 @@ func (c *Client) arrive(event Event, hostname string) error {
 	if there {
 		return nil
 	}
-	err = c.pause(Event{Name: pause, Data: "yes"}, hostname)
+	err = c.setPause(true, hostname)
 	if err != nil {
 		return err
 	}
-	return c.sync(Event{Name: timePos, Data: event.Data}, hostname)
+	return c.seekBy(event.Data, hostname)
 }
 
 func (c *Client) pauseReq(paused bool) error {
 	return c.conn.do(setProperty, pause, paused)
 }
 
+// pause is a peer's pause or resume, which says where it stopped or resumes from, so it
+// is enough by itself when the seek that came with it was lost.
 func (c *Client) pause(event Event, hostname string) error {
 	paused := event.paused()
+	c.mu.Lock()
+	at, there := c.target(), true
+	if event.At != nil {
+		at, there = *event.At, c.at(*event.At)
+	}
+	w := c.weigh(event.Stamp, paused, at)
+	if w == newer {
+		c.stamp = event.Stamp
+	}
+	stopped := c.paused
+	c.mu.Unlock()
+	switch w {
+	case older:
+		return c.answer(hostname, catchingUp, timePos)
+	case loses:
+		return c.answer(hostname, "", timePos)
+	case same:
+		return nil
+	}
+	data := strconv.FormatFloat(at, 'f', 6, 64)
+	if !paused && stopped && !there {
+		if err := c.seekTo(data); err != nil {
+			return err
+		}
+	}
+	if err := c.setPause(paused, hostname); err != nil {
+		return err
+	}
+	if paused && !there {
+		return c.seekTo(data)
+	}
+	return nil
+}
+
+// setPause applies a pause or a resume as hostname's.
+func (c *Client) setPause(paused bool, hostname string) error {
+	data, did := "no", "resumed"
+	if paused {
+		data, did = "yes", "paused"
+	}
 	c.mu.Lock()
 	if c.paused == paused {
 		c.mu.Unlock()
@@ -831,17 +939,22 @@ func (c *Client) pause(event Event, hostname string) error {
 		c.reason = "still buffering"
 		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
 		out := append([][]byte{again}, c.pauseExtras()...)
+		// this node's own pause, newer than the resume it refuses
+		c.stamp++
+		for i, b := range out {
+			out[i] = c.tag(b)
+		}
 		c.mu.Unlock()
 		for _, b := range out {
 			select {
-			case c.outgoing <- c.tagged(b):
+			case c.outgoing <- b:
 			case <-c.ctx.Done():
 				return nil
 			}
 		}
 		return c.showText("paused for everyone: still buffering")
 	}
-	c.applied[pause] = event.Data
+	c.applied[pause] = data
 	c.mu.Unlock()
 
 	err := c.pauseReq(paused)
@@ -862,26 +975,46 @@ func (c *Client) pause(event Event, hostname string) error {
 	}
 	c.mu.Unlock()
 
-	actionText := "resumed"
-	if paused {
-		actionText = "paused"
-	}
-	c.showText(fmt.Sprintf("%s by %s", actionText, hostname))
+	c.showText(fmt.Sprintf("%s by %s", did, hostname))
 	return nil
 }
 
+// sync is a peer's seek. It was made while stopped, so a node still playing stops first:
+// that seek and its own resume were made at the same moment, or the pause before it was lost.
 func (c *Client) sync(event Event, hostname string) error {
+	pos, err := strconv.ParseFloat(event.Data, 64)
+	if err != nil {
+		return nil
+	}
 	c.mu.Lock()
-	paused := c.paused
+	w := c.weigh(event.Stamp, true, pos)
+	if w == newer {
+		c.stamp = event.Stamp
+	}
+	playing, told := !c.paused, c.pausedBy == hostname
 	c.mu.Unlock()
-	if !paused {
+	switch w {
+	case older:
+		return c.answer(hostname, catchingUp, timePos)
+	case loses:
+		return c.answer(hostname, "", timePos)
+	case same:
+		// where the pause it came with already took this node
+		if told {
+			c.showText(fmt.Sprintf("synced by %s", hostname))
+		}
 		return nil
 	}
+	if playing {
+		if err := c.setPause(true, hostname); err != nil {
+			return err
+		}
+	}
+	return c.seekBy(event.Data, hostname)
+}
 
-	if event.Data == "" {
-		return nil
-	}
-	err := c.seekTo(event.Data)
+func (c *Client) seekBy(data, hostname string) error {
+	err := c.seekTo(data)
 	if err != nil {
 		return err
 	}
@@ -920,6 +1053,11 @@ func (c *Client) align(event Event, hostname string) error {
 		return err
 	}
 	c.mu.Lock()
+	if event.Stamp < c.stamp {
+		// where a node that is behind stopped: the party is not there
+		c.mu.Unlock()
+		return nil
+	}
 	if !c.heard || pos < c.earliest {
 		c.earliest, c.heard = pos, true
 	}
