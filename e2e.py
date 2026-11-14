@@ -1683,6 +1683,10 @@ def relay_suite():
     must("nodeFlaky's leave is over", quiet(NODES))
     setp(A, "pause", False)
     must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
+    # a resume reaches each node a little later than the last, so each plays this far from
+    # A, and losing the relay must change that by nothing
+    offset = lambda n: get(n, "time-pos") - get(A, "time-pos")
+    before = {n: offset(n) for n in NODES}
     relay.kill()
     relay.wait(timeout=10)
     ok("every node says it lost the relay", until(lambda: all("lost the relay, reconnecting" in osd(n) for n in NODES)),
@@ -1695,8 +1699,9 @@ def relay_suite():
         ok(f"{n} redialled", connected(n, 2), "reconnect never happened")
     must("the returns are over", quiet(NODES))
     ok("nobody stopped", all(get(n, "pause") is False for n in NODES), str([osd(n)[-2:] for n in NODES]))
-    ok(f"everyone plays with {A}, who reopened the room", all(near(get(n, "time-pos"), get(A, "time-pos"), 0.3) for n in NODES),
-       str([get(n, "time-pos") for n in NODES]))
+    after = {n: offset(n) for n in NODES}
+    ok(f"everyone plays where it did from {A}, who reopened the room", all(abs(after[n] - before[n]) <= 0.15 for n in NODES),
+       str([(round(before[n], 2), round(after[n], 2)) for n in NODES]))
     setp(A, "pause", True)
     until(lambda: all(get(n, "pause") is True for n in others(A)))
     for n in others(A):
