@@ -457,6 +457,12 @@ func (s state) over(h state) int {
 	return cmp.Compare(h.at, s.at)
 }
 
+// agrees is whether s is the same state as h, whatever their stamps.
+func (s state) agrees(h state) bool {
+	s.stamp = h.stamp
+	return s.over(h) == 0
+}
+
 // held is the state this node holds: the entry it is heading to and its second there,
 // which is the start of a file still loading unless a seek waits for it. Never the file
 // mpv happens to be on: a state with the party's stamp on the entry it left is a tie it
@@ -735,7 +741,9 @@ func (c *Client) take(e Event, hostname string) error {
 			c.showText(fmt.Sprintf("synced by %s", hostname))
 		}
 		return nil
-	case s.stamp < h.stamp && s.stamp < 0:
+	case s.stamp < h.stamp && (s.stamp < 0 || s.agrees(h)):
+		// a joiner is being answered; one saying what this node holds was only sent at the
+		// same moment as something newer, and missed nothing
 		return nil
 	case s.stamp < h.stamp:
 		return c.answer(hostname, catchingUp)

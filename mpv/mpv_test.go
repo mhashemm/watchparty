@@ -2135,3 +2135,21 @@ func TestARefusedStepLeavesNoMarker(t *testing.T) {
 		c.mu.Unlock()
 	}
 }
+
+// Two players reach the end of a file together, and each stops the party for it. One
+// adopts the other's pause, then sends its own reason with the next stamp; the other's
+// position, sent at the same moment, arrives after it. That message is older, but it
+// says the state this node holds: its sender missed nothing, so the party isn't stopped.
+func TestAnOlderMessageThatAgreesIsNotCaughtUp(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := playlistClient(t)
+	c.paused, c.current, c.pos, c.stamp = true, 2, 0, 11
+	go func() {
+		c.apply(peer("a", `{"stamp":10,"at":0,"entry":2,"name":"time-pos","data":"0.000000"}`))
+		c.apply(peer("a", `{"stamp":10,"at":0,"entry":2,"name":"pause","data":"yes"}`))
+		c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	}()
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing for an older message that says what this node holds", got)
+	}
+}

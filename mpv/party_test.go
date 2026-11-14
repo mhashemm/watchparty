@@ -752,8 +752,10 @@ func TestANodeThatFellBehindIsCaughtUp(t *testing.T) {
 				s.script = []func(){c.does(b)}
 				s.run()
 				s.together(seed)
-				if c.told && !a.said("paused for b: catching up") {
-					t.Errorf("seed %d: a never said why: %q", seed, a.notices)
+				// whoever stops the party for it says why; one that already holds that stop has
+				// nothing to fix
+				if c.told && !a.said("paused for b: catching up") && !s.nodes[2].said("paused for b: catching up") {
+					t.Errorf("seed %d: nobody said why: %q, %q", seed, a.notices, s.nodes[2].notices)
 				}
 			})
 		})

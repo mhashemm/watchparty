@@ -103,9 +103,9 @@ change takes the next stamp, **written under the lock that decided the event goe
 - **Newer is taken. The same stamp means made at once, and the safer wins for everyone**
   (`over`): the higher entry, stopped over playing, the earlier second. Each message is a
   whole state, so any one is enough when a mesh send fails.
-- **Older means its sender missed something (`answer`, "catching up"):** not applied; the
-  party stops as for a join and says where it is as a `time-pos`, newer to that node. The
-  loser of a tie is told too, quietly: it may never have heard the winner.
+- **Older and saying another state means its sender missed something** (`answer`, "catching
+  up"): the party stops as for a join and says where it is. Older and the same (`agrees`) was
+  only sent beside something newer. The loser of a tie is told quietly: it may not have heard.
 - **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
   relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
   it is answered wins, while joiners still order among themselves; `Opened` takes 1.
