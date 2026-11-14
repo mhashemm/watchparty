@@ -1104,6 +1104,30 @@ func TestLosingTheRelayPausesAndComingBackRejoins(t *testing.T) {
 	}
 }
 
+// The last seconds are played out, as when a member leaves: stopping there holds this
+// node just short of the end, and its return would hold everyone else there too.
+func TestLosingTheRelayNearTheEndDoesNotPauseOrRejoin(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.pos, c.duration = 117, 120
+	c.apply(IncomingMessage{Lost: true})
+	c.apply(IncomingMessage{Back: true})
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing before the marker", got)
+	}
+	if len(outgoing) != 0 {
+		t.Fatalf("broadcast %s, want no join this close to the end", <-outgoing)
+	}
+
+	// stopped by hand there, it is out of step like anywhere else, so it joins again
+	c.paused = true
+	c.apply(IncomingMessage{Back: true})
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want joined", e)
+	}
+}
+
 func TestLosingTheRelayWhilePausedChangesNothing(t *testing.T) {
 	t.Parallel()
 	c, _, _, requests := liveClient(t)

@@ -575,16 +575,28 @@ func (c *Client) announce() {
 }
 
 // lost stops this node the moment its relay connection drops: nothing it does can reach
-// the party until it is back, and playing on would only take it further out of step.
+// the party until it is back, and playing on would only take it further out of step. Not
+// within endGraceSeconds of the end, like a leave: it would stop just short of it.
 func (c *Client) lost() error {
 	c.mu.Lock()
-	playing := !c.paused
+	playing, ending := !c.paused, c.ending()
 	c.mu.Unlock()
-	if !playing {
+	if !playing || ending {
 		return nil
 	}
 	c.showText(lostRelay)
 	return c.pauseReq(true)
+}
+
+// back joins the party again, unless this node is playing out the end, which lost let it
+// do: a join would stop everyone else just short of it.
+func (c *Client) back() {
+	c.mu.Lock()
+	finishing := !c.paused && c.ending()
+	c.mu.Unlock()
+	if !finishing {
+		c.announce()
+	}
 }
 
 func (c *Client) apply(e IncomingMessage) {
@@ -601,7 +613,7 @@ func (c *Client) apply(e IncomingMessage) {
 		return
 	}
 	if e.Back {
-		c.announce()
+		c.back()
 		return
 	}
 	event := Event{}

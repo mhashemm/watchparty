@@ -1866,6 +1866,28 @@ def media_suite():
     ok("the other was told", "nodeEnd1 has left" in osd("nodeEnd2"))
     ok("and reached the end by itself", until(lambda: nodes["nodeEnd2"]["proc"].poll() == 0, 20), log("nodeEnd2")[-200:])
 
+    print("\n[R15i] nor does a node that loses the relay there: it plays on, and its return stops nobody")
+    proxy = Proxy(PORTS["jitter" if JITTERED else "relay"])
+    launch("nodeEnd3", room="endroom2")
+    must("the first is in", until(lambda: connected("nodeEnd3"), BOOT))
+    launch("nodeEnd4", room="endroom2", relay=proxy.url)
+    must("both are in", until(lambda: booted("nodeEnd3") and booted("nodeEnd4") and "paused for nodeEnd4: joining" in osd("nodeEnd3"), BOOT))
+    for n in ("nodeEnd3", "nodeEnd4"):
+        resolve(n)
+    must("the join is over", quiet(("nodeEnd3", "nodeEnd4")))
+    target = get("nodeEnd3", "duration") - 4
+    setp("nodeEnd3", "time-pos", target)
+    must("the seek reached the other", until(lambda: near(get("nodeEnd4", "time-pos"), target, 0.1)), log("nodeEnd3")[-300:])
+    setp("nodeEnd3", "pause", False)
+    must("they play", until(lambda: get("nodeEnd4", "pause") is False))
+    proxy.cut()
+    ok("it redialled before the end", until(lambda: connected("nodeEnd4", 2)), log("nodeEnd4")[-300:])
+    # a node that stopped never exits, so reaching the end is the proof for both
+    for n in ("nodeEnd4", "nodeEnd3"):
+        ok(f"{n} reached the end by itself", until(lambda: nodes[n]["proc"].poll() == 0, 20), log(n)[-200:])
+    ok("nobody was told to stop", "paused: lost the relay" not in osd("nodeEnd4") and osd("nodeEnd3").count("paused for nodeEnd4: joining") == 1,
+       f"{osd('nodeEnd4')[-3:]} {osd('nodeEnd3')[-3:]}")
+
     relay.kill()
     relay.wait(timeout=10)
 

@@ -115,8 +115,8 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
    node opened the room with the key, so a continued party resumes where the key holder stopped.
 5. **A dropped relay connection is a join again.** The relay client queues `Lost`, and the
    node pauses itself, notice first like a leave, as nothing it does reaches the party;
-   then `Back`, and it says `joined` again (`announce`): what was sent meanwhile is gone.
-   Accepted: if every member returns before the relay missed any, nobody answers.
+   then `Back`, and it says `joined` again (`announce`). Neither within `endGraceSeconds` of
+   the end. Accepted: if every member returns before the relay missed any, nobody answers.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
 
