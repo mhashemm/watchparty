@@ -35,7 +35,7 @@ const (
 	pauseReason     = "pause-reason"
 	joined          = "joined"
 
-	lostRelay = "paused: lost the relay"
+	lostRelay = "lost the relay, reconnecting"
 	// unheard is the stamp of a node that hasn't heard the party yet: so far below any the
 	// party can hold that nothing a joiner does before it is answered wins over the party,
 	// while joiners still order what they do among themselves.
@@ -81,7 +81,7 @@ type IncomingMessage struct {
 	// is the party's.
 	Opened bool
 	// Lost: its connection to the relay dropped. Back: it is in the room again, and
-	// didn't open it.
+	// didn't open it; whatever was sent meanwhile is gone.
 	Lost, Back bool
 	// Missed: something this node sent failed to reach From, maybe the latest state it
 	// heard. Resend: hand Reply this node's state, which the transport sends to From alone,
@@ -168,8 +168,10 @@ type Event struct {
 	Paused *bool    `json:"paused,omitempty"`
 	At     *float64 `json:"at,omitempty"`
 	Entry  *int     `json:"entry,omitempty"`
-	// Again: the state its sender holds, sent again to a member the mesh failed to reach
+	// Again: the state its sender holds, sent again to a member the mesh failed to reach.
+	// Check: the state its sender holds, back in the room after losing the relay.
 	Again bool `json:"again,omitempty"`
+	Check bool `json:"check,omitempty"`
 	// EntryID: the playlist entry a start-file opens, counted from 1
 	EntryID int `json:"playlist_entry_id,omitempty"`
 	Response
@@ -683,8 +685,7 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 }
 
 // announce joins the party: the members pause and answer with where they are, and this
-// node takes the first answer. Also after a dropped relay connection, since whatever it
-// sent or was sent meanwhile is gone.
+// node takes the first answer.
 func (c *Client) announce() {
 	c.mu.Lock()
 	c.stamp = unheard
@@ -696,28 +697,37 @@ func (c *Client) announce() {
 	}
 }
 
-// lost stops this node the moment its relay connection drops: nothing it does can reach
-// the party until it is back, and playing on would only take it further out of step. Not
-// within endGraceSeconds of the end, like a leave: it would stop just short of it.
+// lost says the relay connection dropped. This node plays on: the party most likely does
+// too, and back in the room it says where it is (back).
 func (c *Client) lost() error {
-	c.mu.Lock()
-	playing, ending := !c.paused, c.ending()
-	c.mu.Unlock()
-	if !playing || ending {
-		return nil
-	}
-	c.showText(lostRelay)
-	return c.pauseReq(true)
+	return c.showText(lostRelay)
 }
 
-// back joins the party again, unless this node is playing out the end, which lost let it
-// do: a join would stop everyone else just short of it.
+// back tells the party, quietly, the state this node holds after a dropped relay
+// connection, as it may have missed something or done something nobody heard: take stops
+// the party only for a state that isn't its own. A joiner that was never answered joins
+// again. Not while this node plays out the end: it would stop everyone just short of it.
 func (c *Client) back() {
 	c.mu.Lock()
-	finishing := !c.paused && c.ending()
+	joiner, finishing := c.stamp < 0, !c.paused && c.ending()
+	var check []byte
+	if !joiner && !finishing {
+		data := "no"
+		if c.held().paused {
+			data = "yes"
+		}
+		check, _ = json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Check: true})
+		check = c.tag(check)
+	}
 	c.mu.Unlock()
-	if !finishing {
+	switch {
+	case joiner:
 		c.announce()
+	case check != nil:
+		select {
+		case c.outgoing <- check:
+		case <-c.ctx.Done():
+		}
 	}
 }
 
@@ -790,9 +800,11 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	// a resume reaching a node that plays: newer, this node missed the pause in between; a
 	// tie from a member something this node sent never reached, that member resumed from
 	// what it last heard; the state this node took from a member, sent again by it, to this
-	// node alone, as what it sent looked lost: it arrived late. Not a joiner: it syncs when
-	// its join is answered.
-	apart := !s.paused && !h.paused && h.stamp >= 0 && s.entry == h.entry && (over > 0 || over == 0 && (c.missed[m.From] || e.Again && told))
+	// node alone, as what it sent looked lost: it arrived late; or a newer resume from a
+	// member back from losing the relay, made where nobody heard it. Not a joiner: it syncs
+	// when its join is answered.
+	apart := !s.paused && h.stamp >= 0 && s.entry == h.entry &&
+		(!h.paused && (over > 0 || over == 0 && (c.missed[m.From] || e.Again && told)) || e.Check && over > 0)
 	if over > 0 {
 		// it heard something since, or made it: whatever it missed, this node now holds its
 		// state, or stops the party for it. Not when a send reaches it: a tie it sent
@@ -820,10 +832,11 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 			c.showText(fmt.Sprintf("synced by %s", hostname))
 		}
 		return nil
-	case s.stamp < h.stamp && (s.stamp < 0 || s.agrees(h) || e.Again):
+	case s.stamp < h.stamp && (s.stamp < 0 || s.agrees(h) && !(e.Check && !s.paused) || e.Again):
 		// a joiner is being answered; one saying what this node holds was only sent at the
 		// same moment as something newer, and missed nothing; one sent again crossed a newer
-		// change, which its sender will hear
+		// change, which its sender will hear. Not an older resume a member back from losing
+		// the relay plays from: between two resumes the party stopped, and it played on.
 		return nil
 	case s.stamp < h.stamp:
 		return c.answer(hostname, catchingUp)

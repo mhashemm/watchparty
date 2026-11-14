@@ -134,7 +134,8 @@ func (r *relayConn) tell(c context.Context, m mpv.IncomingMessage) {
 
 func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 	for {
-		_, b, err := conn.Read(c)
+		// not c: its end would close the conn at once, before the goodbye is sent
+		_, b, err := conn.Read(context.WithoutCancel(c))
 		if err != nil {
 			return err
 		}
@@ -185,7 +186,11 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 			r.tell(c, mpv.IncomingMessage{Back: true})
 		}
 
+		// the party's end says goodbye, so the relay tells the room at once instead of
+		// waiting for this node to come back
+		bye := context.AfterFunc(c, func() { conn.Close(websocket.StatusNormalClosure, "bye") })
 		err = r.read(c, conn)
+		bye()
 		r.set(nil)
 		conn.CloseNow()
 		if c.Err() != nil {
@@ -237,14 +242,5 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 			// the supervisor is already redialling, and rejoins the party once it is back
 			log.Printf("relay: write: %s\n", err)
 		}
-	}
-}
-
-func (r *relayConn) Close() {
-	r.mu.Lock()
-	conn := r.conn
-	r.mu.Unlock()
-	if conn != nil {
-		conn.Close(websocket.StatusNormalClosure, "bye")
 	}
 }

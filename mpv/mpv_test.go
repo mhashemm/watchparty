@@ -1043,67 +1043,96 @@ func TestOwnPauseSaysWhereItStopped(t *testing.T) {
 	}
 }
 
-// A node that loses the relay stops itself, since nothing it does reaches the party,
-// saying why first so the GUI can tell this pause from a person's. Back in the room it
-// joins again and takes the party's position: what it sent or was sent meanwhile is gone.
-func TestLosingTheRelayPausesAndComingBackRejoins(t *testing.T) {
+// A node that loses the relay plays on, as the party most likely does, and says so. Back
+// in the room it says, quietly, the state it holds; the party stops only for a state that
+// isn't its own (take). A joiner that was never answered has none, and joins again.
+func TestLosingTheRelayPlaysOnAndComingBackSaysWhereItIs(t *testing.T) {
 	t.Parallel()
-	c, send, outgoing, requests := liveClient(t)
-	c.pos = 10
+	c, _, outgoing, requests := liveClient(t)
+	c.pos, c.stamp = 10, 4
 
 	c.apply(IncomingMessage{Lost: true})
-	for _, want := range []string{"show-text paused: lost the relay 5000", "set_property pause true"} {
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	for _, want := range []string{"show-text lost the relay, reconnecting 5000", "show-text mark 5000"} {
 		if got := next(t, requests); got != want {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
-	send(propertyChangeLine(pause, "yes", 0))
-	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
-		t.Fatalf("broadcast %+v, want its own pause", e)
-	}
 
 	c.apply(IncomingMessage{Back: true})
-	if e := nextEvent(t, outgoing); e.Name != joined {
-		t.Fatalf("broadcast %+v, want joined", e)
+	e := nextEvent(t, outgoing)
+	if !e.Check || e.Name != pause || e.Stamp != 4 || e.Paused == nil || *e.Paused || e.At == nil || *e.At != 10 {
+		t.Fatalf("broadcast %+v, want its state, playing from 10 at stamp 4, as a check", e)
 	}
-	c.apply(peer("a", `{"stamp":9,"event":"property-change","name":"time-pos","data":"42.000000"}`))
-	if got := next(t, requests); got != "set_property time-pos 42.000000" {
-		t.Fatalf("sent %q, want the party's position taken", got)
+
+	c.mu.Lock()
+	c.stamp = unheard
+	c.mu.Unlock()
+	c.apply(IncomingMessage{Back: true})
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want a joiner to join again", e)
 	}
 }
 
-// The last seconds are played out, as when a member leaves: stopping there holds this
-// node just short of the end, and its return would hold everyone else there too.
-func TestLosingTheRelayNearTheEndDoesNotPauseOrRejoin(t *testing.T) {
+// The last seconds are played out, as when a member leaves: a state that stops the party
+// would hold everyone else just short of the end.
+func TestComingBackNearTheEndSaysNothing(t *testing.T) {
 	t.Parallel()
 	c, _, outgoing, requests := liveClient(t)
-	c.pos, c.duration = 117, 120
+	c.pos, c.duration, c.stamp = 117, 120, 4
 	c.apply(IncomingMessage{Lost: true})
 	c.apply(IncomingMessage{Back: true})
 	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("sent %q, want nothing before the marker", got)
+	for got := next(t, requests); got != "show-text mark 5000"; got = next(t, requests) {
 	}
 	if len(outgoing) != 0 {
-		t.Fatalf("broadcast %s, want no join this close to the end", <-outgoing)
+		t.Fatalf("broadcast %s, want nothing this close to the end", <-outgoing)
 	}
 
-	// stopped by hand there, it is out of step like anywhere else, so it joins again
+	// stopped by hand there, it says where like anywhere else
+	c.mu.Lock()
 	c.paused = true
+	c.mu.Unlock()
 	c.apply(IncomingMessage{Back: true})
-	if e := nextEvent(t, outgoing); e.Name != joined {
-		t.Fatalf("broadcast %+v, want joined", e)
+	if e := nextEvent(t, outgoing); !e.Check {
+		t.Fatalf("broadcast %+v, want its state", e)
 	}
 }
 
-func TestLosingTheRelayWhilePausedChangesNothing(t *testing.T) {
+// What a member back from losing the relay says is weighed like any state, but a newer
+// resume: made where nobody heard it, nobody knows how far it has played since.
+func TestAStateSentBackAfterLosingTheRelay(t *testing.T) {
 	t.Parallel()
-	c, _, _, requests := liveClient(t)
-	c.paused = true
-	c.apply(IncomingMessage{Lost: true})
-	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
-	if got := next(t, requests); got != "show-text mark 5000" {
-		t.Fatalf("sent %q, want nothing before the marker", got)
+	check := func(stamp int, paused bool, at float64) string {
+		return fmt.Sprintf(`{"stamp":%d,"paused":%t,"at":%f,"check":true,"event":"property-change","name":"pause","data":"%s"}`, stamp, paused, at, map[bool]string{true: "yes", false: "no"}[paused])
+	}
+	for _, tc := range []struct {
+		name   string
+		paused bool
+		event  string
+		want   []string
+	}{
+		{"the party's own, playing", false, check(4, false, 10), nil},
+		{"the party's own, stopped", true, check(4, true, 30), nil},
+		{"older, while the party moved on", false, check(3, false, 10), []string{"show-text paused for c: catching up 5000", "set_property pause true"}},
+		{"a newer pause", false, check(5, true, 25), []string{"set_property pause true", "show-text paused by c 5000", "set_property time-pos 25.000000"}},
+		{"a newer resume, the party stopped", true, check(5, false, 30), []string{"show-text paused: out of sync with c 5000"}},
+		{"a newer resume, the party playing", false, check(5, false, 30), []string{"show-text paused: out of sync with c 5000", "set_property pause true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, _, _, requests := liveClient(t)
+			c.paused, c.pos, c.stamp = tc.paused, 30, 4
+			c.apply(peer("c", tc.event))
+			c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+			var got []string
+			for r := next(t, requests); r != "show-text mark 5000"; r = next(t, requests) {
+				got = append(got, r)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("sent %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

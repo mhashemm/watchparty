@@ -429,6 +429,30 @@ func (s *sim) inStep(seed uint64, lag float64) {
 	}
 }
 
+// playingOn is everyone still playing, on the same second, and told nothing that stops them.
+func (s *sim) playingOn(seed uint64) {
+	s.t.Helper()
+	for _, n := range s.nodes {
+		if n.paused {
+			s.t.Errorf("seed %d: %s stopped: %q", seed, n.name, n.notices)
+		}
+		s.toldNothing(seed, n)
+	}
+	s.inStep(seed, 0)
+}
+
+// toldNothing is a node that never said the party stopped for someone.
+func (s *sim) toldNothing(seed uint64, n *simNode) {
+	s.t.Helper()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, text := range n.notices {
+		if strings.HasPrefix(text, "paused") {
+			s.t.Errorf("seed %d: %s said %q", seed, n.name, text)
+		}
+	}
+}
+
 func (n *simNode) said(text string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -521,9 +545,10 @@ func (s *sim) back(n *simNode) func() {
 	}
 }
 
-// One member's connection drops while the party plays, and the rest play on without
-// knowing. Whatever it does meanwhile reaches nobody, so it stops at once, and its return
-// stops the party, on whichever entry and second the party is by then.
+// One member's connection drops while the party plays, and everyone plays on. The party
+// moves and resumes meanwhile, which the member never hears: back, the state it says is
+// older and not the party's, so the party stops, on whichever entry and second it is by
+// then.
 func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 	forSeeds(t, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b", "c")
@@ -551,7 +576,7 @@ func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 		s.run()
 		s.together(seed)
 		if !c.said(lostRelay) {
-			t.Errorf("seed %d: c never said why it stopped: %q", seed, c.notices)
+			t.Errorf("seed %d: c never said it lost the relay: %q", seed, c.notices)
 		}
 		if c.entry != a.entry || b.entry != a.entry {
 			t.Errorf("seed %d: on entries %d, %d and %d", seed, a.entry, b.entry, c.entry)
@@ -559,9 +584,9 @@ func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 	})
 }
 
-// The relay itself goes away: everyone stops where they are, the key holder opens the
-// room again, and the others rejoin it there.
-func TestPartySettlesAfterTheRelayRestarts(t *testing.T) {
+// The relay itself goes away: everyone plays on, the key holder opens the room again, and
+// the others come back to it. Nobody did anything meanwhile, so nobody stops.
+func TestNobodyStopsWhenTheRelayRestarts(t *testing.T) {
 	forSeeds(t, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, 0, "o", "b", "c")
 		o, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
@@ -572,13 +597,92 @@ func TestPartySettlesAfterTheRelayRestarts(t *testing.T) {
 			o.in <- IncomingMessage{Opened: true}
 		}, s.back(b), s.back(c)}
 		s.run()
-		s.together(seed)
+		s.playingOn(seed)
 		for _, n := range s.nodes {
 			if !n.said(lostRelay) {
-				t.Errorf("seed %d: %s never said why it stopped: %q", seed, n.name, n.notices)
+				t.Errorf("seed %d: %s never said it lost the relay: %q", seed, n.name, n.notices)
 			}
 		}
 	})
+}
+
+// A member loses the relay and comes back while nothing changed, playing or stopped: its
+// state is the party's, so nobody stops, and nobody is told anything.
+func TestAMemberBackFromLosingTheRelayStopsNobody(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		t.Run(fmt.Sprint("paused ", paused), func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, simEntries, "a", "b", "c")
+				if paused {
+					stopped(30, s.nodes...)
+				} else {
+					play(30, s.nodes...)
+				}
+				s.ticks = 20
+				s.script = []func(){s.lose(s.nodes[2]), s.back(s.nodes[2])}
+				s.run()
+				s.inStep(seed, 0)
+				for _, n := range s.nodes {
+					if n.paused != paused {
+						t.Errorf("seed %d: %s paused %v, want %v: %q", seed, n.name, n.paused, paused, n.notices)
+					}
+					s.toldNothing(seed, n)
+				}
+			})
+		})
+	}
+}
+
+// The party stops and plays again while a member, which lost the relay, plays on. Both
+// play, but that member is ahead by however long the party stood still: back, the party
+// stops for it.
+func TestAMemberThatMissedAStopWhileItLostTheRelayEndsInStep(t *testing.T) {
+	forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		a, c := s.nodes[0], s.nodes[2]
+		play(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){s.lose(c), sets(a, true), func() { s.ticks = 20 }, sets(a, false)}
+		s.run()
+		s.ticks = 20
+		s.script = []func(){s.back(c)}
+		s.run()
+		s.together(seed)
+	})
+}
+
+// A member does something while it has lost the relay, and nobody hears it. Back, the
+// party takes a pause or a seek, since a stopped state is where it says; a resume it
+// can't take, as nobody knows how far the member has played since: the party stops.
+func TestWhatAMemberDidWhileItLostTheRelayEndsInStep(t *testing.T) {
+	for name, tc := range map[string]struct {
+		playing bool
+		does    func(*simNode) func()
+		at      float64
+	}{
+		"pauses":  {true, func(n *simNode) func() { return sets(n, true) }, -1},
+		"seeks":   {false, func(n *simNode) func() { return seeks(n, 50) }, 50},
+		"resumes": {false, func(n *simNode) func() { return sets(n, false) }, -1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, 0, "a", "b", "c")
+				c := s.nodes[2]
+				if tc.playing {
+					play(30, s.nodes...)
+				} else {
+					stopped(30, s.nodes...)
+				}
+				s.ticks = 20
+				s.script = []func(){s.lose(c), tc.does(c), func() { s.ticks = 20 }, s.back(c)}
+				s.run()
+				s.together(seed)
+				if tc.at >= 0 && c.pos != tc.at {
+					t.Errorf("seed %d: the party stopped at %.2f, want where c went, %.2f", seed, c.pos, tc.at)
+				}
+			})
+		})
+	}
 }
 
 func TestTwoJoinersEndOnOneEntry(t *testing.T) {

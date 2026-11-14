@@ -32,9 +32,12 @@ import (
 const (
 	waitForKeyHolder = 30 * time.Minute
 
-	sendBuffer    = 64
-	pingInterval  = 30 * time.Second
-	writeTimeout  = 10 * time.Second
+	sendBuffer   = 64
+	pingInterval = 30 * time.Second
+	writeTimeout = 10 * time.Second
+	// leaveGrace is how long a member whose connection dropped has to come back before the
+	// room is told it left: a leave stops the party, and most drops are back in a second
+	leaveGrace    = 10 * time.Second
 	readLimit     = 4096
 	limiterWindow = time.Hour
 
@@ -85,12 +88,17 @@ type member struct {
 	ch       chan []byte
 	conn     *websocket.Conn
 	log      *slog.Logger
+	// gone tells the room it left, once it has been away for the grace
+	gone *time.Timer
 }
 
 type room struct {
 	secret  []byte
 	file    string
 	members map[*member]struct{}
+	// away: members whose connection dropped, by session, until they come back or the
+	// room is told they left
+	away map[string]*member
 }
 
 // opening is a remembered room that keyless members are waiting in; open closes when a
@@ -117,6 +125,7 @@ type relay struct {
 	ping       time.Duration
 	timeout    time.Duration
 	waitFor    time.Duration
+	grace      time.Duration
 }
 
 func (r *relay) ip(req *http.Request) string {
@@ -237,7 +246,7 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 	if len(r.rooms) >= r.maxRooms {
 		return false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
-	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}}
+	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}, away: map[string]*member{}}
 	return true, nil, 0, nil
 }
 
@@ -317,6 +326,11 @@ func (r *relay) add(name string, m *member) (*member, bool) {
 			stale = other
 		}
 	}
+	if away, ok := rm.away[m.session]; ok && m.session != "" && stale == nil {
+		away.gone.Stop()
+		delete(rm.away, m.session)
+		stale = away
+	}
 	// a reconnect is not news to the room, which never heard it leave
 	joined := notice(m.hostname, m.hostname+mpv.HasJoined)
 	for other := range rm.members {
@@ -338,20 +352,33 @@ func queue(m *member, b []byte) {
 }
 
 // leave removes m and reaps the room once it is empty. A nil m only reaps, and so
-// does an m that add already replaced: the room was never told it left. It reports
-// whether m was still a member.
-func (r *relay) leave(name string, m *member) bool {
+// does an m that add already replaced: the room was never told it left. A member that
+// dropped without saying goodbye is away: the room is told it left only if it isn't back
+// within the grace, as most drops are back in a second and a leave stops the party. It
+// says what became of m: "left", "away" or "replaced by its reconnect".
+func (r *relay) leave(name string, m *member, bye bool) string {
 	r.mu.Lock()
 	rm, ok := r.rooms[name]
 	if !ok {
 		r.mu.Unlock()
-		return false
+		return replaced
 	}
 	_, present := rm.members[m]
 	delete(rm.members, m)
 	reaped := len(rm.members) == 0
+	away := present && !reaped && !bye && m.session != ""
 	if reaped {
 		delete(r.rooms, name)
+		for _, a := range rm.away {
+			a.gone.Stop()
+		}
+	}
+	if away {
+		if old, ok := rm.away[m.session]; ok {
+			old.gone.Stop()
+		}
+		rm.away[m.session] = m
+		m.gone = time.AfterFunc(r.grace, func() { r.notBack(name, rm, m) })
 	}
 	r.mu.Unlock()
 	if reaped {
@@ -359,10 +386,30 @@ func (r *relay) leave(name string, m *member) bool {
 			slog.Error("remembering a room failed", "room", clean(name), "err", err)
 		}
 	}
-	if present {
+	switch {
+	case away:
+		return "away"
+	case present:
 		r.broadcast(name, m, notice(m.hostname, m.hostname+mpv.HasLeft))
+		return "left"
 	}
-	return present
+	return replaced
+}
+
+const replaced = "replaced by its reconnect"
+
+// notBack tells the room that m, away for the whole grace, left.
+func (r *relay) notBack(name string, rm *room, m *member) {
+	r.mu.Lock()
+	still := r.rooms[name] == rm && rm.away[m.session] == m
+	if still {
+		delete(rm.away, m.session)
+	}
+	r.mu.Unlock()
+	if still {
+		r.broadcast(name, m, notice(m.hostname, m.hostname+mpv.HasLeft))
+		m.log.Info("not back", "seconds", int(r.grace.Seconds()))
+	}
 }
 
 func (r *relay) counts(name string) (members, rooms int) {
@@ -473,7 +520,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
-		r.leave(name, nil)
+		r.leave(name, nil, true)
 		l.Info("upgrade failed", "err", err)
 		return
 	}
@@ -501,10 +548,8 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	defer func() {
 		cancel()
 		conn.CloseNow()
-		msg := "replaced by its reconnect"
-		if r.leave(name, m) {
-			msg = "left"
-		}
+		// a node that ends its party says goodbye; a connection that just died doesn't
+		msg := r.leave(name, m, websocket.CloseStatus(readErr) == websocket.StatusNormalClosure)
 		members, rooms := r.counts(name)
 		l.Info(msg, "seconds", int(time.Since(start).Seconds()), "frames", frames, "reason", readErr, "members", members, "rooms", rooms)
 	}()
@@ -558,6 +603,7 @@ func main() {
 		ping:       pingInterval,
 		timeout:    writeTimeout,
 		waitFor:    waitForKeyHolder,
+		grace:      leaveGrace,
 	}
 	if r.createKey = []byte(env("CREATE_KEY", "", str)); len(r.createKey) == 0 {
 		log.Fatal("CREATE_KEY is required: only someone with it can open a room")

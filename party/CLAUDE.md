@@ -163,12 +163,14 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   connection would leave two goroutines reading `outgoing` during a redial, stealing
   frames. It copies the conn pointer under `r.mu` and **writes without the lock**, or
   `set()` would wedge behind a stalled 10s write. With no conn it drops the event.
-- **A drop is told to mpv** (`tell`, like `Opened`): `Lost` when the read fails, so the node
-  pauses, and `Back` once it is in the room again, so it rejoins and takes the party's
-  position. Not `Back` when the redial opened the room: nobody is there to rejoin, and it
-  answers the others.
+- **A drop is told to mpv** (`tell`, like `Opened`): `Lost` when the read fails, and `Back`
+  once it is in the room again, so it tells the party where it is. Not `Back` when the
+  redial opened the room: nobody is there to tell, and it answers the others.
 - **`session`** is one `rand.Text()` per `Run`: the relay swaps a reconnecting member in
   silently instead of announcing a second join. A new GUI party is a new member.
+- **The party's end says goodbye** (`StatusNormalClosure`, from `Connect`), or the relay holds
+  the member for its grace before telling the room. `read` reads with
+  `context.WithoutCancel(c)`: on `c`, the library closes the conn before the goodbye goes out.
 
 ## Goroutine lifetime
 

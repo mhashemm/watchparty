@@ -281,6 +281,37 @@ func TestADropIsToldToMpvAndSoIsTheReturn(t *testing.T) {
 	}
 }
 
+// The party's end says goodbye, so the relay tells the room at once: a connection that
+// just dies is given time to come back.
+func TestThePartysEndSaysGoodbye(t *testing.T) {
+	t.Parallel()
+	closed := make(chan websocket.StatusCode, 1)
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		conn := accept(t, w, r)
+		_, _, err := conn.Read(context.Background())
+		closed <- websocket.CloseStatus(err)
+	})
+	r := newRelayConn(addr, nil)
+	c, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Connect(c, cancel); close(done) }()
+	select {
+	case <-r.up:
+	case <-time.After(5 * time.Second):
+		t.Fatal("never connected")
+	}
+	cancel()
+	select {
+	case got := <-closed:
+		if got != websocket.StatusNormalClosure {
+			t.Fatalf("the relay saw %v, want a goodbye", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the relay never saw the connection end")
+	}
+	waitDone(t, done, "Connect never returned")
+}
+
 // The node that opens the room again after the relay restarted has no party to rejoin:
 // it is the one the others' joins are answered by, so it hears Opened and no Back.
 func TestTheOneWhoReopensTheRoomDoesNotRejoin(t *testing.T) {

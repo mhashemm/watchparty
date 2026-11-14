@@ -108,9 +108,9 @@ change takes the next stamp, **written under the lock that decided the event goe
   the pause between; a tie from a member the mesh failed to reach (`Missed`) that sent
   nothing newer since; or the resume it took from a member, sent `again` by it: the first
   came late, as a stalled node's does (`[13d]`). `Resend` goes to that member alone.
-- **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
-  relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
-  it is answered wins, while joiners still order among themselves; `Opened` takes 1.
+- **A joiner syncs with the party, never the party with it.** `announce` sets the stamp to
+  `unheard`, far below any a party holds: nothing it does before it is answered wins, and
+  joiners still order among themselves. `Opened` takes 1.
 - **A newer state is taken whole, under the lock that weighed it, before mpv is told**
   (`commit`: stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv
   refuses is unmarked by `release`, where a new step adds its undo, and the node `announce`s
@@ -135,10 +135,10 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
    sends a `time-pos`. A joiner only says where it is, quietly: only joiners take it.
 3. The joiner takes whatever it hears first, as newer; members stop a moment apart with
    one stamp, so everyone, joiner included, settles on the earliest (`over`).
-4. **A dropped relay connection is a join again:** `Lost`, and the node pauses itself, notice
-   first like a leave, as nothing it does reaches the party; then `Back`, and `joined` again.
-   Neither within `endGraceSeconds` of the end. Accepted: if every member returns before
-   the relay missed any, nobody answers. e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]`.
+4. **A dropped relay connection stops nobody by itself:** on `Lost` the node says so and plays
+   on; on `Back` it sends its state marked `check`, weighed like any, but a resume in it stops
+   the party unless it has the party's stamp: older, it missed a stop; newer, nobody heard it.
+   A joiner never answered joins again; not near the end (`back`). `[R12]`, `[R13]`.
 
 ### A member leaving (`left`)
 
