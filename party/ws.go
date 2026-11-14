@@ -40,6 +40,7 @@ type relayConn struct {
 	retry     time.Duration
 	wait      time.Duration
 	waiting   time.Time
+	opened    bool
 	up        chan struct{}
 }
 
@@ -115,13 +116,19 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 		return conn, true, nil
 	}
 	// ahead of the first frame, so mpv knows it opened the room before anyone joins
-	if err == nil && res.Header.Get(wire.OpenedHeader) == "yes" {
-		select {
-		case r.incoming <- mpv.IncomingMessage{Opened: true}:
-		case <-c.Done():
-		}
+	r.opened = err == nil && res.Header.Get(wire.OpenedHeader) == "yes"
+	if r.opened {
+		r.tell(c, mpv.IncomingMessage{Opened: true})
 	}
 	return conn, false, err
+}
+
+// tell is for what only this node's relay client knows; it never comes from the wire.
+func (r *relayConn) tell(c context.Context, m mpv.IncomingMessage) {
+	select {
+	case r.incoming <- m:
+	case <-c.Done():
+	}
 }
 
 func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
@@ -146,8 +153,13 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 
 // Connect owns the reconnect loop for the lifetime of the process. A dropped
 // relay is not a reason to tear down the player, so only a rejection cancels.
+//
+// It is a reason to stop it: what this node sends while away is dropped and what the
+// party sends never arrives, so mpv is told when the connection is lost, and pauses, and
+// when it is back, and joins again. Not if it just opened the room: there is no party to
+// join yet, and it is the one who answers the others.
 func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
-	backoff := r.retry
+	backoff, dropped := r.retry, false
 	for c.Err() == nil {
 		conn, err := r.dial(c)
 		if errors.Is(err, errRejected) {
@@ -168,6 +180,9 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 		backoff, r.waiting = r.retry, time.Time{}
 		r.set(conn)
 		log.Printf("relay: connected to %s room %s\n", r.addr, r.room)
+		if dropped && !r.opened {
+			r.tell(c, mpv.IncomingMessage{Back: true})
+		}
 
 		err = r.read(c, conn)
 		r.set(nil)
@@ -176,6 +191,8 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 			return
 		}
 		log.Printf("relay: disconnected: %s\n", err)
+		dropped = true
+		r.tell(c, mpv.IncomingMessage{Lost: true})
 	}
 }
 
@@ -216,7 +233,7 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 		err = conn.Write(ctx, websocket.MessageText, b)
 		cancel()
 		if err != nil {
-			// the supervisor is already redialling; the party resyncs on the next event
+			// the supervisor is already redialling, and rejoins the party once it is back
 			log.Printf("relay: write: %s\n", err)
 		}
 	}

@@ -103,8 +103,7 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 
 1. Once its file has loaded, the joiner sets `joining` and broadcasts `joined`, after the
    held events so a held resume can't clear it. So the party pauses only when the
-   joiner can actually play, and a joiner whose mpv fails pauses nobody. Sent once; a
-   relay reconnect doesn't resend it.
+   joiner can actually play, and a joiner whose mpv fails pauses nobody.
 2. Every member, in `welcome`, pauses its own mpv if playing (not marked `applied`, so
    it goes out as its own pause), shows "paused for X: joining" either way (another
    member's pause often arrives first), and broadcasts `start-pos` = `target()`, which counts
@@ -116,6 +115,10 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 4. Any resume or seek clears `joining`, so the room's first node stops being a joiner.
    **So does `Opened`**, queued locally by the relay client before its first frame when this
    node opened the room with the key, so a continued party resumes where the key holder stopped.
+5. **A dropped relay connection is a join again.** The relay client queues `Lost`, and the
+   node pauses itself, notice first like a leave, as nothing it does reaches the party;
+   then `Back`, and it says `joined` again (`announce`): what was sent meanwhile is gone.
+   Accepted: if every member returns before the relay missed any, nobody answers.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
 

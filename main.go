@@ -39,6 +39,7 @@ Automatic pauses
     runs out of loaded video
     joins, and they start where the party is
     leaves, unless the video is in its last few seconds
+    loses the relay: they stop at once, and everyone stops when they are back
     moves to another video in a playlist
 
 Links

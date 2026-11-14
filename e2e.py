@@ -1551,8 +1551,19 @@ def relay_suite():
     # the relay announces a join before the node has read the handshake's reply, so a cut
     # that only waited for the announcement can land mid-handshake: a failed dial, not a drop
     until(lambda: connected("flaky") and all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
+    must("nodeFlaky's mpv is up", until(lambda: booted("flaky"), BOOT))
+    resolve("flaky")
+    everyone = NODES + ["flaky"]
+    must("its join is over", quiet(everyone))
+    setp(A, "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in everyone)))
     proxy.cut()
     until(lambda: connected("flaky", 2))  # a dropped conn is redialled at once
+    ok("nodeFlaky stopped itself when it lost the relay", until(lambda: "paused: lost the relay" in osd("flaky")), str(osd("flaky")[-3:]))
+    ok("its return paused the party", until(lambda: all(get(n, "pause") is True for n in everyone)
+       and all(osd(n).count("paused for nodeFlaky: joining") == 2 for n in NODES)), str([get(n, "pause") for n in everyone]))
+    ok("and it is where the party stopped", until(lambda: near(get("flaky", "time-pos"), get(A, "time-pos"), 0.3)),
+       f"{get('flaky', 'time-pos')} and {get(A, 'time-pos')}")
     time.sleep(QUIET)  # a second join or a false leave would follow the swap at once
     connects = log("flaky").count("relay: connected")
     ok("nodeFlaky redialled", connects == 2, f"connected {connects} times, want 2")
@@ -1573,15 +1584,23 @@ def relay_suite():
     for n in NODES:
         ok(f"{n} was told nodeFlaky left", "nodeFlaky has left" in osd(n))
 
-    print("\n[R13] the party survives the relay dying and reconnects on its own")
+    print("\n[R13] the relay dying pauses everyone, and they come back together on their own")
+    must("nodeFlaky's leave is over", quiet(NODES))
+    setp(A, "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
     relay.kill()
     relay.wait(timeout=10)
+    ok("every node stopped itself and says why", until(lambda: all(get(n, "pause") is True and "paused: lost the relay" in osd(n) for n in NODES)),
+       str([osd(n)[-1:] for n in NODES]))
     time.sleep(3)
     ok("no node died with the relay", len(live()) == len(NODES), f"{len(live())}/{len(NODES)} alive")
     relay = launch_relay()
     until(lambda: all(connected(n, 2) for n in NODES), 30)  # backoff is 1,2,4,8s
     for n in NODES:
         ok(f"{n} redialled", connected(n, 2), "reconnect never happened")
+    ok(f"everyone is where {A}, who reopened the room, stopped", until(lambda: all(near(get(n, "time-pos"), get(A, "time-pos"), 0.3) for n in NODES)),
+       str([get(n, "time-pos") for n in NODES]))
+    must("the rejoins are over", quiet(NODES))
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in others(A)))
     for n in others(A):
@@ -2324,11 +2343,16 @@ def gui_suite():
     must(f"{H} opened it", joined(H), status(H))
     must(f"{G} got in", joined(G), status(G))
 
-    print("\n[G19] losing the relay shows on both, and both come back")
+    print("\n[G19] losing the relay shows on both and pauses both, and both come back")
+    must(f"{G}'s join is over", until(lambda: f"paused for {G}: joining" in feed(H)) and quiet([H, G]))
+    setp(H, "pause", False)
+    must("the party is playing", until(lambda: get(H, "pause") is False and get(G, "pause") is False))
     relay.kill(); relay.wait(timeout=10)
     until(lambda: all(status(n).startswith("Lost the relay") for n in (H, G)))
     for n in (H, G):
         ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
+        ok(f"{n} paused, and its feed says why without blaming {n}", until(lambda: get(n, "pause") is True and "paused: lost the relay" in feed(n) and read_all(n))
+           and feed(n)[0] != "paused by you", str(feed(n)[:3]))
     relay = launch_relay({"CREATE_KEY": KEY})
     until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
     for n in (H, G):

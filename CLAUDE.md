@@ -46,8 +46,8 @@ echo hack: it muted the peer, not the echo.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
-playing, running out of cache, a mid-party join, a member leaving, a new playlist entry) pauses
-the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
+playing, running out of cache, a mid-party join, a member leaving or losing the relay, a new
+playlist entry) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
 
 ## Contracts between packages

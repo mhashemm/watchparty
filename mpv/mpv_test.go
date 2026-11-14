@@ -1073,6 +1073,48 @@ func TestPausedAtFollowsOnlyWhoPausedUs(t *testing.T) {
 	}
 }
 
+// A node that loses the relay stops itself, since nothing it does reaches the party,
+// saying why first so the GUI can tell this pause from a person's. Back in the room it
+// joins again and takes the party's position: what it sent or was sent meanwhile is gone.
+func TestLosingTheRelayPausesAndComingBackRejoins(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := liveClient(t)
+	c.pos = 10
+
+	c.apply(IncomingMessage{Lost: true})
+	for _, want := range []string{"show-text paused: lost the relay 5000", "set_property pause true"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	for _, want := range []string{pause + "=yes", pausedAt + "=10.000000"} {
+		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
+			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		}
+	}
+
+	c.apply(IncomingMessage{Back: true})
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want joined", e)
+	}
+	c.apply(peer("a", `{"event":"property-change","name":"start-pos","data":"42.000000"}`))
+	if got := next(t, requests); got != "set_property time-pos 42.000000" {
+		t.Fatalf("sent %q, want the party's position taken", got)
+	}
+}
+
+func TestLosingTheRelayWhilePausedChangesNothing(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused = true
+	c.apply(IncomingMessage{Lost: true})
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing before the marker", got)
+	}
+}
+
 func playlistClient(t *testing.T) (*Client, func(string), chan []byte, chan string) {
 	t.Helper()
 	c, send, outgoing, requests := liveClient(t)

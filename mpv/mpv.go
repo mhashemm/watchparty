@@ -35,6 +35,8 @@ const (
 	startPos        = "start-pos"
 	pausedAt        = "paused-at"
 
+	lostRelay = "paused: lost the relay"
+
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
 	endGraceSeconds         = 5
@@ -61,9 +63,12 @@ var (
 type IncomingMessage struct {
 	HostName string
 	Event    []byte
-	// Opened is set only by this node's relay client, never from the wire: this node
-	// opened the room with the key, so its position is the party's.
+	// Opened, Lost and Back are set only by this node's relay client, never from the wire.
+	// Opened: this node opened the room with the key, so its position is the party's.
 	Opened bool
+	// Lost: its connection to the relay dropped. Back: it is in the room again, and
+	// didn't open it.
+	Lost, Back bool
 }
 
 type connection struct {
@@ -497,15 +502,7 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			c.apply(e)
 		}
 	}
-	c.mu.Lock()
-	c.joining = true
-	c.mu.Unlock()
-	hello, _ := json.Marshal(Event{Name: joined})
-	select {
-	case c.outgoing <- hello:
-	case <-c.ctx.Done():
-		return
-	}
+	c.announce()
 	for _, e := range notices {
 		c.apply(e)
 	}
@@ -519,11 +516,48 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 	}
 }
 
+// announce joins the party: the members pause and answer with where they are, and this
+// node takes the first answer. Also after a dropped relay connection, since whatever it
+// sent or was sent meanwhile is gone.
+func (c *Client) announce() {
+	c.mu.Lock()
+	c.joining, c.joinedWith, c.heardParty = true, nil, false
+	c.mu.Unlock()
+	hello, _ := json.Marshal(Event{Name: joined})
+	select {
+	case c.outgoing <- hello:
+	case <-c.ctx.Done():
+	}
+}
+
+// lost stops this node the moment its relay connection drops: nothing it does can reach
+// the party until it is back, and playing on would only take it further out of step.
+func (c *Client) lost() error {
+	c.mu.Lock()
+	playing := !c.paused
+	c.mu.Unlock()
+	if !playing {
+		return nil
+	}
+	c.showText(lostRelay)
+	return c.pauseReq(true)
+}
+
 func (c *Client) apply(e IncomingMessage) {
 	if e.Opened {
 		c.mu.Lock()
 		c.joining = false
 		c.mu.Unlock()
+		return
+	}
+	if e.Lost {
+		if err := c.lost(); err != nil {
+			log.Println("ProcessIncomingEvents: lost the relay:", err)
+		}
+		return
+	}
+	if e.Back {
+		c.announce()
 		return
 	}
 	event := Event{}

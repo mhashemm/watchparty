@@ -426,6 +426,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <li>runs out of loaded video</li>
           <li>joins, and they start where the party is</li>
           <li>leaves, unless the video is in its last few seconds</li>
+          <li>loses the relay: they stop at once, and everyone stops when they are back</li>
           <li>moves to another video in a playlist</li>
         </ul>
         <h2>Links</h2>
@@ -1069,7 +1070,7 @@ function handle(line) {
     try {
       const text = JSON.parse(m[1]).command[1];
       addFeed(text, at);
-      if (/^paused for .*: left$/.test(text)) state.leftPause = true;
+      if (/^paused for .*: left$|^paused: lost the relay$/.test(text)) state.leftPause = true;
     } catch {}
   }
   if ((m = msg.match(/^now playing: (".*")$/))) {

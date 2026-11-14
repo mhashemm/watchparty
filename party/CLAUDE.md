@@ -160,8 +160,11 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - **`Broadcast` is the only writer for the whole party, across reconnects.** One per
   connection would leave two goroutines reading `outgoing` during a redial, stealing
   frames. It copies the conn pointer under `r.mu` and **writes without the lock**, or
-  `set()` would wedge behind a stalled 10s write. With no conn it drops the event; the
-  next pause resyncs.
+  `set()` would wedge behind a stalled 10s write. With no conn it drops the event.
+- **A drop is told to mpv** (`tell`, like `Opened`): `Lost` when the read fails, so the node
+  pauses, and `Back` once it is in the room again, so it rejoins and takes the party's
+  position. Not `Back` when the redial opened the room: nobody is there to rejoin, and it
+  answers the others.
 - **`session`** is one `rand.Text()` per `Run`: the relay swaps a reconnecting member in
   silently instead of announcing a second join. A new GUI party is a new member.
 

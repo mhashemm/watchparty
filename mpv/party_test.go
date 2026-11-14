@@ -41,6 +41,7 @@ type sim struct {
 	rng    *rand.Rand
 	nodes  []*simNode
 	links  map[[2]string][]IncomingMessage
+	down   map[string]bool
 	ticks  int
 	script []func()
 }
@@ -48,7 +49,7 @@ type sim struct {
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}}
+	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
@@ -206,7 +207,8 @@ func (s *sim) run() {
 			for len(from.out) > 0 {
 				b := <-from.out
 				for _, to := range s.nodes {
-					if to != from {
+					// a node without its relay connection sends and hears nothing
+					if to != from && !s.down[from.name] && !s.down[to.name] {
 						k := [2]string{from.name, to.name}
 						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, Event: b})
 					}
@@ -333,6 +335,78 @@ func TestPartySettlesAfterALeave(t *testing.T) {
 		s.together(seed)
 		if !slices.ContainsFunc(s.nodes, func(n *simNode) bool { return n.said("paused for x: left") }) {
 			t.Errorf("seed %d: nobody said why", seed)
+		}
+	})
+}
+
+// lose and back are a node's relay connection dropping and returning, as its relay
+// client tells it.
+func (s *sim) lose(n *simNode) func() {
+	return func() {
+		s.down[n.name] = true
+		n.in <- IncomingMessage{Lost: true}
+	}
+}
+
+func (s *sim) back(n *simNode) func() {
+	return func() {
+		s.down[n.name] = false
+		n.in <- IncomingMessage{Back: true}
+	}
+}
+
+// One member's connection drops while the party plays, and the rest play on without
+// knowing. Whatever it does meanwhile reaches nobody, so it stops at once, and its return
+// stops the party, on whichever entry and second the party is by then.
+func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
+	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, simEntries, "a", "b", "c")
+		a, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){s.lose(c), func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.request(1)
+		}, func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.setPause(false)
+		}}
+		s.run()
+		// only once the move has reached everyone still there: a join that crosses a move
+		// still in flight can strand the joiner, a first join as much as this one
+		s.ticks = 20
+		s.script = []func(){s.back(c)}
+		s.run()
+		s.together(seed)
+		if !c.said(lostRelay) {
+			t.Errorf("seed %d: c never said why it stopped: %q", seed, c.notices)
+		}
+		if c.entry != a.entry || b.entry != a.entry {
+			t.Errorf("seed %d: on entries %d, %d and %d", seed, a.entry, b.entry, c.entry)
+		}
+	})
+}
+
+// The relay itself goes away: everyone stops where they are, the key holder opens the
+// room again, and the others rejoin it there.
+func TestPartySettlesAfterTheRelayRestarts(t *testing.T) {
+	forManySeeds(t, 1000, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "o", "b", "c")
+		o, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){s.lose(o), s.lose(b), s.lose(c), func() {
+			s.down["o"] = false
+			o.in <- IncomingMessage{Opened: true}
+		}, s.back(b), s.back(c)}
+		s.run()
+		s.together(seed)
+		for _, n := range s.nodes {
+			if !n.said(lostRelay) {
+				t.Errorf("seed %d: %s never said why it stopped: %q", seed, n.name, n.notices)
+			}
 		}
 	})
 }
