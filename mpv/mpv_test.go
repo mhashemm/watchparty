@@ -653,6 +653,35 @@ func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
 	}
 }
 
+// mpv can refuse a set (the property is unavailable while it quits or between files).
+// The echo marker for a pause that never happened matched the user's own next pause,
+// which then never went out.
+func TestARefusedPauseLeavesNoMarker(t *testing.T) {
+	t.Parallel()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	outgoing := make(chan []byte, 16)
+	c := newTestClient(outgoing, bufio.NewScanner(ours))
+	c.conn.conn = ours
+	c.seen[pause], c.seen[timePos] = true, true
+	go c.watch()
+	go func() {
+		sc := bufio.NewScanner(theirs)
+		sc.Scan()
+		req := Request{}
+		json.Unmarshal(sc.Bytes(), &req)
+		fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
+	}()
+
+	if err := c.pause(Event{Name: pause, Data: "yes"}, "a"); err == nil {
+		t.Fatal("the refusal was not reported")
+	}
+	fmt.Fprint(theirs, propertyChangeLine(pause, "yes", 0))
+	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
+		t.Fatalf("broadcast %+v, want the user's own pause", e)
+	}
+}
+
 func peer(host, event string) IncomingMessage {
 	return IncomingMessage{HostName: host, Event: []byte(event)}
 }
@@ -1041,6 +1070,72 @@ func TestPausedAtFollowsOnlyWhoPausedUs(t *testing.T) {
 	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 	if got := next(t, requests); got != "show-text mark 5000" {
 		t.Fatalf("sent %q, want a position already within a frame skipped", got)
+	}
+}
+
+// A node that loses the relay stops itself, since nothing it does reaches the party,
+// saying why first so the GUI can tell this pause from a person's. Back in the room it
+// joins again and takes the party's position: what it sent or was sent meanwhile is gone.
+func TestLosingTheRelayPausesAndComingBackRejoins(t *testing.T) {
+	t.Parallel()
+	c, send, outgoing, requests := liveClient(t)
+	c.pos = 10
+
+	c.apply(IncomingMessage{Lost: true})
+	for _, want := range []string{"show-text paused: lost the relay 5000", "set_property pause true"} {
+		if got := next(t, requests); got != want {
+			t.Fatalf("sent %q, want %q", got, want)
+		}
+	}
+	send(propertyChangeLine(pause, "yes", 0))
+	for _, want := range []string{pause + "=yes", pausedAt + "=10.000000"} {
+		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
+			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		}
+	}
+
+	c.apply(IncomingMessage{Back: true})
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want joined", e)
+	}
+	c.apply(peer("a", `{"event":"property-change","name":"start-pos","data":"42.000000"}`))
+	if got := next(t, requests); got != "set_property time-pos 42.000000" {
+		t.Fatalf("sent %q, want the party's position taken", got)
+	}
+}
+
+// The last seconds are played out, as when a member leaves: stopping there holds this
+// node just short of the end, and its return would hold everyone else there too.
+func TestLosingTheRelayNearTheEndDoesNotPauseOrRejoin(t *testing.T) {
+	t.Parallel()
+	c, _, outgoing, requests := liveClient(t)
+	c.pos, c.duration = 117, 120
+	c.apply(IncomingMessage{Lost: true})
+	c.apply(IncomingMessage{Back: true})
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing before the marker", got)
+	}
+	if len(outgoing) != 0 {
+		t.Fatalf("broadcast %s, want no join this close to the end", <-outgoing)
+	}
+
+	// stopped by hand there, it is out of step like anywhere else, so it joins again
+	c.paused = true
+	c.apply(IncomingMessage{Back: true})
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want joined", e)
+	}
+}
+
+func TestLosingTheRelayWhilePausedChangesNothing(t *testing.T) {
+	t.Parallel()
+	c, _, _, requests := liveClient(t)
+	c.paused = true
+	c.apply(IncomingMessage{Lost: true})
+	c.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+	if got := next(t, requests); got != "show-text mark 5000" {
+		t.Fatalf("sent %q, want nothing before the marker", got)
 	}
 }
 

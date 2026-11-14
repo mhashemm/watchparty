@@ -31,9 +31,9 @@ A party's **secret is the only lock.** Model every actor against it:
 
 | Actor | Can | Cannot |
 |---|---|---|
-| Outsider (no secret) | reach `/ws`; create a room, unless the relay sets a create key they don't hold | join/read a party, drive playback |
+| Outsider (no secret) | reach `/ws` | create a room (that needs the relay's create key), join/read a party, drive playback |
 | Peer (holds the secret) | drive playback, claim any hostname, push frames to peers | — full trust, by design, as in the P2P mesh |
-| The relay | fan out opaque frames, synthesize notices | read playback, persist anything |
+| The relay | fan out opaque frames, synthesize notices, remember a closed room for 30 days (its name, the SHA-256 of its secret, its file fingerprint) | read playback, persist anything else |
 | A torrent's swarm (only if you open one) | see your IP, send pieces, name files | pass a bad piece (hashes), name anything on disk, reach the loopback stream |
 
 Design and test outsider-reachable paths to stand on their own; insider abuse is accepted to

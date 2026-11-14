@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -38,7 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	t.VerifyData()
+	t.VerifyDataContext(context.Background())
 	addr := client.ListenAddrs()[0].String()
 	m, err := mi.MagnetV2()
 	if err != nil {

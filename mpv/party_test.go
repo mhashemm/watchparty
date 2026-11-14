@@ -41,6 +41,7 @@ type sim struct {
 	rng    *rand.Rand
 	nodes  []*simNode
 	links  map[[2]string][]IncomingMessage
+	down   map[string]bool
 	ticks  int
 	script []func()
 }
@@ -48,7 +49,7 @@ type sim struct {
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}}
+	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
@@ -188,11 +189,13 @@ func (n *simNode) foldMoves() {
 	n.move(i)
 }
 
+// move drops a seek that hasn't landed: mpv reports one sent just before a switch ahead
+// of it or not at all, never on the new file, which always opens at 0 (MPV.md).
 func (n *simNode) move(i int) {
 	if i == n.entry {
 		return
 	}
-	n.entry, n.pos = i, 0
+	n.entry, n.pos, n.seeks = i, 0, nil
 	n.emit(propertyChangeLine(playlistPos, strconv.Itoa(i), 0))
 	n.emit(`{"event":"file-loaded"}` + "\n")
 	n.emit(propertyChangeLine(timePos, "0.000000", 0))
@@ -206,7 +209,8 @@ func (s *sim) run() {
 			for len(from.out) > 0 {
 				b := <-from.out
 				for _, to := range s.nodes {
-					if to != from {
+					// a node without its relay connection sends and hears nothing
+					if to != from && !s.down[from.name] && !s.down[to.name] {
 						k := [2]string{from.name, to.name}
 						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, Event: b})
 					}
@@ -337,6 +341,79 @@ func TestPartySettlesAfterALeave(t *testing.T) {
 	})
 }
 
+// lose and back are a node's relay connection dropping and returning, as its relay
+// client tells it.
+func (s *sim) lose(n *simNode) func() {
+	return func() {
+		s.down[n.name] = true
+		n.in <- IncomingMessage{Lost: true}
+	}
+}
+
+func (s *sim) back(n *simNode) func() {
+	return func() {
+		s.down[n.name] = false
+		n.in <- IncomingMessage{Back: true}
+	}
+}
+
+// One member's connection drops while the party plays, and the rest play on without
+// knowing. Whatever it does meanwhile reaches nobody, so it stops at once, and its return
+// stops the party, on whichever entry and second the party is by then.
+func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
+	forSeeds(t, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, simEntries, "a", "b", "c")
+		a, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){s.lose(c), func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.request(1)
+		}, func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.setPause(false)
+		}}
+		s.run()
+		// only once the move has reached everyone still there: c never hears it, and could
+		// take a stale position from a member who hasn't yet. The relay's order prevents
+		// that; this network, which delivers each pair's messages independently, doesn't.
+		s.ticks = 20
+		s.script = []func(){s.back(c)}
+		s.run()
+		s.together(seed)
+		if !c.said(lostRelay) {
+			t.Errorf("seed %d: c never said why it stopped: %q", seed, c.notices)
+		}
+		if c.entry != a.entry || b.entry != a.entry {
+			t.Errorf("seed %d: on entries %d, %d and %d", seed, a.entry, b.entry, c.entry)
+		}
+	})
+}
+
+// The relay itself goes away: everyone stops where they are, the key holder opens the
+// room again, and the others rejoin it there.
+func TestPartySettlesAfterTheRelayRestarts(t *testing.T) {
+	forSeeds(t, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "o", "b", "c")
+		o, b, c := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){s.lose(o), s.lose(b), s.lose(c), func() {
+			s.down["o"] = false
+			o.in <- IncomingMessage{Opened: true}
+		}, s.back(b), s.back(c)}
+		s.run()
+		s.together(seed)
+		for _, n := range s.nodes {
+			if !n.said(lostRelay) {
+				t.Errorf("seed %d: %s never said why it stopped: %q", seed, n.name, n.notices)
+			}
+		}
+	})
+}
+
 func TestTwoJoinersEndOnOneEntry(t *testing.T) {
 	forSeeds(t, func(t *testing.T, seed uint64) {
 		s := newSim(t, seed, simEntries, "a", "b")
@@ -373,6 +450,34 @@ func TestMovesCrossingAJoinEndOnOneEntry(t *testing.T) {
 		if a.entry != b.entry {
 			t.Errorf("seed %d: on entries %d and %d", seed, a.entry, b.entry)
 		}
+	})
+}
+
+// A member moves to another entry just as someone joins. Members answer the joiner in any
+// order with the move, so the joiner can hear the move and then an answer sent before its
+// sender had: it must not go to the entry the party just left, whichever entry it opened
+// on. Sent there and on again while the first file loads, it must not take the position
+// it was given for the first to the second. Each of those failed within the first 20
+// orderings, about one in twenty; 600 is 200 for each entry it can open on.
+func TestAJoinCrossingAMoveEndsOnThePartysEntry(t *testing.T) {
+	forManySeeds(t, 600, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, simEntries, "a", "b", "j")
+		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
+		play(30, a, b)
+		j.c.joining = true
+		j.entry, j.c.current = int(seed%simEntries), int(seed%simEntries)
+		s.ticks = 20
+		s.script = []func(){func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.request(1)
+		}, func() { j.out <- []byte(`{"name":"joined"}`) }}
+		s.rng.Shuffle(2, func(i, j int) { s.script[i], s.script[j] = s.script[j], s.script[i] })
+		s.run()
+		if a.entry != 1 || b.entry != 1 || j.entry != 1 {
+			t.Errorf("seed %d: on entries %d, %d and %d, want 1: j heard %q", seed, a.entry, b.entry, j.entry, j.notices)
+		}
+		s.together(seed)
 	})
 }
 

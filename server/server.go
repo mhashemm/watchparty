@@ -12,7 +12,6 @@ import (
 	"maps"
 	"math"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -112,7 +111,7 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 		log.Printf("%s %s: %s\n", addr, hostname, err)
 	}
 	log.Printf("connected to %s with ip %s", hostname, addr)
-	s.notify(hostname, fmt.Sprintf("%s has joined", hostname))
+	s.notify(hostname, hostname+mpv.HasJoined)
 }
 
 func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
@@ -180,7 +179,7 @@ func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	delete(s.addresses, addr)
 	s.mu.Unlock()
 	res.WriteHeader(http.StatusNoContent)
-	s.notify(peer.Hostname, fmt.Sprintf("%s has left", peer.Hostname))
+	s.notify(peer.Hostname, peer.Hostname+mpv.HasLeft)
 }
 
 func (s *Server) hi(addr string, counter uint64) (*peer, map[string]*peer, error) {
@@ -230,15 +229,20 @@ func (s *Server) AddAddress(addr string) error {
 	}
 	s.mu.RUnlock()
 
-	for a, p := range addresses {
-		_, _, err := s.hi(a, counter)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		p.address = a
-		s.add(p)
+	// together: one by one, each peer that vanished without a /bye held the join up
+	// for its own timeout
+	var wg sync.WaitGroup
+	for a := range addresses {
+		wg.Go(func() {
+			p, _, err := s.hi(a, counter)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			s.add(p)
+		})
 	}
+	wg.Wait()
 	return nil
 }
 
@@ -246,7 +250,7 @@ func (s *Server) add(p *peer) {
 	s.mu.Lock()
 	s.addresses[p.address] = p
 	s.mu.Unlock()
-	s.notify(p.Hostname, fmt.Sprintf("connected to %s", p.Hostname))
+	s.notify(p.Hostname, mpv.ConnectedTo+p.Hostname)
 }
 
 func (s *Server) Shutdown() {
@@ -366,9 +370,6 @@ func (s *Server) post(c context.Context, addr string, endpoint string, data []by
 }
 
 func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, secret string, evictAfter time.Duration) *Server {
-	if hostname == "" {
-		hostname, _ = os.Hostname()
-	}
 	return &Server{
 		c:          c,
 		incoming:   incoming,

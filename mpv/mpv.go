@@ -35,10 +35,20 @@ const (
 	startPos        = "start-pos"
 	pausedAt        = "paused-at"
 
+	lostRelay = "paused: lost the relay"
+
 	showTextDurationSeconds = 5
 	timePosTolerance        = 0.1
 	endGraceSeconds         = 5
 	maxSeeks                = 16
+)
+
+// The notices both transports show, around a member's name. apply reads HasLeft to pause
+// the party, and gui/store.go reads the other two; e2e spells them again.
+const (
+	HasJoined   = " has joined"
+	HasLeft     = " has left"
+	ConnectedTo = "connected to "
 )
 
 var (
@@ -53,9 +63,12 @@ var (
 type IncomingMessage struct {
 	HostName string
 	Event    []byte
-	// Opened is set only by this node's relay client, never from the wire: this node
-	// opened the room with the key, so its position is the party's.
+	// Opened, Lost and Back are set only by this node's relay client, never from the wire.
+	// Opened: this node opened the room with the key, so its position is the party's.
 	Opened bool
+	// Lost: its connection to the relay dropped. Back: it is in the room again, and
+	// didn't open it.
+	Lost, Back bool
 }
 
 type connection struct {
@@ -151,35 +164,49 @@ type Response struct {
 }
 
 type Client struct {
-	ctx        context.Context
-	ready      chan struct{}
-	outgoing   chan<- []byte
-	conn       *connection
-	mu         sync.Mutex
-	paused     bool
-	applied    map[string]string
-	seeks      []float64
-	seen       map[string]bool
-	pos        float64
-	duration   float64
-	seeking    bool
-	peerSeek   bool
-	stalled    bool
-	reason     string
+	ctx      context.Context
+	ready    chan struct{}
+	outgoing chan<- []byte
+	conn     *connection
+
+	// mu guards everything below, and is never held across conn.do
+	mu sync.Mutex
+
+	// what mpv last reported
+	paused   bool
+	pos      float64
+	duration float64
+	stalled  bool
+	seen     map[string]bool
+
+	// echo: what this node set itself, so mpv's report of it isn't broadcast, and what
+	// it is about to pause the party for
+	applied  map[string]string
+	seeks    []float64
+	peerSeek bool
+	seeking  bool
+	reason   string
+
+	// joining: taking the party's entry and position
 	joining    bool
-	pausedBy   string
-	names      []string
-	current    int
-	movedFrom  int
-	following  []string
 	joinedWith []string
 	heardParty bool
+	passed     []int
 	resumeAt   float64
-	loading    bool
-	heldSeek   string
-	settling   bool
-	earliest   float64
-	heard      bool
+
+	// settling: after a join or a leave, on the earliest stop
+	settling bool
+	earliest float64
+	heard    bool
+	pausedBy string
+
+	// playlist
+	names     []string
+	current   int
+	movedFrom int
+	following []string
+	loading   bool
+	heldSeek  string
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -226,129 +253,159 @@ func (c *Client) handleEvent(event Event) ([][]byte, error) {
 		if !c.paused && !c.peerSeek {
 			c.seeking = true
 		}
-		return nil, errDoNotSend
-
 	case playbackRestart:
 		c.peerSeek = false
-		return nil, errDoNotSend
-
 	case fileLoaded:
-		// a file on the way to where this node is headed: a seek let go here lands on it
-		if c.heading() != c.current {
-			return nil, errDoNotSend
-		}
-		c.loading, c.following = false, nil
-		if held := c.heldSeek; held != "" {
-			// still on its way until seekTo has marked the seek, or target sees neither
-			pos, _ := strconv.ParseFloat(held, 64)
-			c.heldSeek, c.peerSeek, c.seeks = "", true, append(c.seeks, pos)
-			go func() {
-				if err := c.seekTo(held); err != nil {
-					log.Println("seek after loading:", err)
-				}
-			}()
-		}
-		return nil, errDoNotSend
-
+		c.fileLoaded()
 	case propertyChange:
-		if event.Data == "" {
-			return nil, errDoNotSend
+		if event.Data != "" {
+			return c.propertyChanged(event)
 		}
-		var extra [][]byte
-		changed, previous := false, c.heading()
-		switch event.Name {
-		case timePos:
-			if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
-				c.pos = pos
-			}
-		case duration:
-			if d, err := strconv.ParseFloat(event.Data, 64); err == nil {
-				c.duration = d
-			}
-		case pause:
-			if event.paused() {
-				extra = c.pauseExtras()
-			}
-		case filename:
-			name, _ := json.Marshal(event.Data)
-			log.Printf("now playing: %s\n", name)
-		case playlistPos:
-			if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-				c.current, c.pos, c.seeking, c.heard = n, 0, false, false
-				changed = c.seen[timePos]
-				if changed {
-					c.seeks = []float64{0}
-				}
-			}
-		}
-		if c.isEcho(event) {
-			return extra, errEcho
-		}
-		first := !c.seen[event.Name]
-		c.seen[event.Name] = true
-		if first && event.Name == timePos {
-			close(c.ready)
-		}
-		switch event.Name {
-		case pause:
-			if c.paused == event.paused() {
-				return extra, errNoChange
-			}
-			if !event.paused() && c.stalled {
-				c.pauseParty("still buffering")
-				return nil, errDoNotSend
-			}
-			c.paused = event.paused()
-			if !c.paused {
-				c.seeks, c.seeking = nil, false
-				c.resumed()
-			} else {
-				c.pausedBy = ""
-				if len(extra) == 0 {
-					extra = [][]byte{position(pausedAt, c.pos)}
-				}
-				if at, ok := c.earlierStop(); ok {
-					go func() {
-						if err := c.seekTo(at); err != nil {
-							log.Println("settling:", err)
-						}
-					}()
-				}
-			}
-		case timePos:
-			if !c.paused {
-				if c.seeking {
-					c.seeking = false
-					c.pauseParty("seek")
-				}
-				return nil, errDoNotSend
-			}
-			c.joining = false
-		case pausedForCache:
-			c.stalled = event.paused()
-			if c.stalled && !c.paused {
-				c.pauseParty("buffering")
-			}
-			return nil, errDoNotSend
-		case playlistPos:
-			if !changed || first {
-				return nil, errDoNotSend
-			}
-			if !c.paused {
-				c.pauseParty("video changed")
-			}
-			c.movedFrom, c.joining = previous, false
-			b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: event.Data, From: &previous})
-			return [][]byte{b}, errDoNotSend
-		default:
-			return nil, errDoNotSend
-		}
-		if first {
-			return nil, errDoNotSend
-		}
-		return extra, nil
 	}
 	return nil, errDoNotSend
+}
+
+// fileLoaded lets go of the seek held for the entry this node was heading to.
+func (c *Client) fileLoaded() {
+	// a file on the way to where this node is headed: a seek let go here lands on it
+	if c.heading() != c.current {
+		return
+	}
+	c.loading, c.following = false, nil
+	if held := c.heldSeek; held != "" {
+		// still on its way until seekTo has marked the seek, or target sees neither
+		pos, _ := strconv.ParseFloat(held, 64)
+		c.heldSeek, c.peerSeek, c.seeks = "", true, append(c.seeks, pos)
+		go func() {
+			if err := c.seekTo(held); err != nil {
+				log.Println("seek after loading:", err)
+			}
+		}()
+	}
+}
+
+// propertyChanged is what a property-change with data means for the party: what to
+// broadcast after it, or instead of it, and nil only if the event itself goes out.
+func (c *Client) propertyChanged(event Event) ([][]byte, error) {
+	previous := c.heading()
+	extra, moved := c.record(event)
+	if c.isEcho(event) {
+		return extra, errEcho
+	}
+	first := !c.seen[event.Name]
+	c.seen[event.Name] = true
+	if first && event.Name == timePos {
+		close(c.ready)
+	}
+	var err error
+	switch event.Name {
+	case pause:
+		extra, err = c.pauseChanged(event.paused(), extra)
+	case timePos:
+		err = c.positionChanged()
+	case pausedForCache:
+		c.stalled = event.paused()
+		if c.stalled && !c.paused {
+			c.pauseParty("buffering")
+		}
+		return nil, errDoNotSend
+	case playlistPos:
+		return c.entryChanged(event.Data, previous, moved && !first)
+	default:
+		return nil, errDoNotSend
+	}
+	if err == nil && first {
+		return nil, errDoNotSend
+	}
+	return extra, err
+}
+
+// record keeps what mpv reported, echo or not. It returns what a pause carries, and
+// whether the playlist moved to another entry after the first file was open.
+func (c *Client) record(event Event) (extra [][]byte, moved bool) {
+	switch event.Name {
+	case timePos:
+		if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
+			c.pos = pos
+		}
+	case duration:
+		if d, err := strconv.ParseFloat(event.Data, 64); err == nil {
+			c.duration = d
+		}
+	case pause:
+		if event.paused() {
+			extra = c.pauseExtras()
+		}
+	case filename:
+		name, _ := json.Marshal(event.Data)
+		log.Printf("now playing: %s\n", name)
+	case playlistPos:
+		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
+			c.current, c.pos, c.seeking, c.heard = n, 0, false, false
+			moved = c.seen[timePos]
+			if moved {
+				c.seeks = []float64{0}
+			}
+		}
+	}
+	return extra, moved
+}
+
+// pauseChanged is the user's own pause or resume.
+func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
+	if c.paused == paused {
+		return extra, errNoChange
+	}
+	if !paused && c.stalled {
+		c.pauseParty("still buffering")
+		return nil, errDoNotSend
+	}
+	c.paused = paused
+	if !paused {
+		c.seeks, c.seeking = nil, false
+		c.resumed()
+		return extra, nil
+	}
+	c.pausedBy = ""
+	if len(extra) == 0 {
+		extra = [][]byte{position(pausedAt, c.pos)}
+	}
+	if at, ok := c.earlierStop(); ok {
+		go func() {
+			if err := c.seekTo(at); err != nil {
+				log.Println("settling:", err)
+			}
+		}()
+	}
+	return extra, nil
+}
+
+// positionChanged is a seek while paused, which goes out, or playback moving on, which
+// doesn't, unless it is where a seek while playing landed: that pauses the party.
+func (c *Client) positionChanged() error {
+	if c.paused {
+		c.joining = false
+		return nil
+	}
+	if c.seeking {
+		c.seeking = false
+		c.pauseParty("seek")
+	}
+	return errDoNotSend
+}
+
+// entryChanged is this node moving to another entry by itself: it goes out saying where
+// from, in place of mpv's report, and pauses the party if it was playing.
+func (c *Client) entryChanged(entry string, previous int, moved bool) ([][]byte, error) {
+	if !moved {
+		return nil, errDoNotSend
+	}
+	if !c.paused {
+		c.pauseParty("video changed")
+	}
+	c.movedFrom, c.joining = previous, false
+	b, _ := json.Marshal(Event{EventType: propertyChange, Name: playlistPos, Data: entry, From: &previous})
+	return [][]byte{b}, errDoNotSend
 }
 
 // tagged says which entry a message belongs to, so a peer that has moved on can drop
@@ -489,15 +546,7 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 			c.apply(e)
 		}
 	}
-	c.mu.Lock()
-	c.joining = true
-	c.mu.Unlock()
-	hello, _ := json.Marshal(Event{Name: joined})
-	select {
-	case c.outgoing <- hello:
-	case <-c.ctx.Done():
-		return
-	}
+	c.announce()
 	for _, e := range notices {
 		c.apply(e)
 	}
@@ -511,11 +560,60 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 	}
 }
 
+// announce joins the party: the members pause and answer with where they are, and this
+// node takes the first answer. Also after a dropped relay connection, since whatever it
+// sent or was sent meanwhile is gone.
+func (c *Client) announce() {
+	c.mu.Lock()
+	c.joining, c.joinedWith, c.heardParty, c.passed = true, nil, false, nil
+	c.mu.Unlock()
+	hello, _ := json.Marshal(Event{Name: joined})
+	select {
+	case c.outgoing <- hello:
+	case <-c.ctx.Done():
+	}
+}
+
+// lost stops this node the moment its relay connection drops: nothing it does can reach
+// the party until it is back, and playing on would only take it further out of step. Not
+// within endGraceSeconds of the end, like a leave: it would stop just short of it.
+func (c *Client) lost() error {
+	c.mu.Lock()
+	playing, ending := !c.paused, c.ending()
+	c.mu.Unlock()
+	if !playing || ending {
+		return nil
+	}
+	c.showText(lostRelay)
+	return c.pauseReq(true)
+}
+
+// back joins the party again, unless this node is playing out the end, which lost let it
+// do: a join would stop everyone else just short of it.
+func (c *Client) back() {
+	c.mu.Lock()
+	finishing := !c.paused && c.ending()
+	c.mu.Unlock()
+	if !finishing {
+		c.announce()
+	}
+}
+
 func (c *Client) apply(e IncomingMessage) {
 	if e.Opened {
 		c.mu.Lock()
 		c.joining = false
 		c.mu.Unlock()
+		return
+	}
+	if e.Lost {
+		if err := c.lost(); err != nil {
+			log.Println("ProcessIncomingEvents: lost the relay:", err)
+		}
+		return
+	}
+	if e.Back {
+		c.back()
 		return
 	}
 	event := Event{}
@@ -532,7 +630,7 @@ func (c *Client) apply(e IncomingMessage) {
 			err = c.sync(event, e.HostName)
 		case showText:
 			err = c.showText(event.Data)
-			if event.Data == e.HostName+" has left" {
+			if event.Data == e.HostName+HasLeft {
 				err = errors.Join(err, c.left(e.HostName))
 			}
 		case pauseReason:
@@ -624,6 +722,10 @@ func (c *Client) followEntry(event Event, hostname string) error {
 	}
 	c.mu.Lock()
 	heading := c.heading()
+	if c.joining && event.From != nil {
+		// the party left it, even if this node was never there or is already where it went
+		c.passed = append(c.passed, *event.From)
+	}
 	lost := event.From != nil && *event.From == c.movedFrom && i < heading
 	takes := event.From != nil || c.takesAnswer(i, heading, hostname, event.Party)
 	c.mu.Unlock()
@@ -640,7 +742,11 @@ func (c *Client) followEntry(event Event, hostname string) error {
 		return nil
 	}
 	from := c.entryName(c.heading())
-	c.loading = true
+	if c.joining {
+		c.passed = append(c.passed, c.heading())
+	}
+	// a seek held for the entry it was heading to is not for this one
+	c.loading, c.heldSeek = true, ""
 	c.following = append(c.following, event.Data)
 	c.movedFrom = heading
 	if event.From != nil {
@@ -664,9 +770,11 @@ func (c *Client) followEntry(event Event, hostname string) error {
 // Only a node still joining does. The party's answer, marked party or from anyone
 // whose join it didn't hear, always; a fellow joiner's only if higher (each
 // answers the other, and following both ways would swap them), and not once the party
-// has answered, since it only says where that joiner was.
+// has answered, since it only says where that joiner was. Never to an entry it or a move
+// it heard has left since it joined (passed): that answer was sent before its sender heard
+// of the move, and a move back there would come as a move.
 func (c *Client) takesAnswer(i, heading int, hostname string, party bool) bool {
-	if !c.joining {
+	if !c.joining || slices.Contains(c.passed, i) {
 		return false
 	}
 	if party || !slices.Contains(c.joinedWith, hostname) {
@@ -737,6 +845,11 @@ func (c *Client) pause(event Event, hostname string) error {
 
 	err := c.pauseReq(paused)
 	if err != nil {
+		// no echo is coming for a set mpv refused; if it only answered late, its report
+		// goes out as this node's own, which peers already in that state ignore
+		c.mu.Lock()
+		delete(c.applied, pause)
+		c.mu.Unlock()
 		return err
 	}
 	c.mu.Lock()

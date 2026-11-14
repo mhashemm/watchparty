@@ -39,6 +39,8 @@ Automatic pauses
     runs out of loaded video
     joins, and they start where the party is
     leaves, unless the video is in its last few seconds
+    loses the relay, unless the video is in its last few seconds: they stop at once, and
+      everyone stops when they are back
     moves to another video in a playlist
 
 Links
@@ -71,14 +73,14 @@ func main() {
 	flag.StringVar(&cfg.Addrs, "addrs", "", "comma separated list of addresses to connect to")
 	flag.DurationVar(&cfg.EvictAfter, "evictAfter", party.DefaultEvictAfter, "drop a peer after 3 failed sends in a row, once it has been failing this long")
 	flag.StringVar(&cfg.Mpv, "mpv", "mpv", "mpv path")
-	flag.StringVar(&cfg.MpvFlags, "mpvFlags", "", "any extra flags to pass to mpv")
+	flag.StringVar(&cfg.MpvFlags, "mpvFlags", "", "any extra flags to pass to mpv; put a value with a space in double quotes")
 	flag.BoolVar(&cfg.Local, "local", false, "run on local network")
 	flag.StringVar(&cfg.Hostname, "hostname", "", "set your hostname")
 	flag.StringVar(&cfg.Relay, "relay", "", "relay websocket url to use instead of a direct peer mesh")
 	flag.StringVar(&cfg.Room, "room", "", "relay room code (generated if empty)")
 	flag.StringVar(&cfg.Secret, "secret", "", "party secret, for the relay room or the direct mesh (generated if empty)")
 	flag.StringVar(&cfg.CacheDir, "cacheDir", "", "folder for torrent downloads, instead of your system's cache folder")
-	flag.StringVar(&cfg.CreateKey, "createKey", "", "relay key needed to create a room, if the relay requires one")
+	flag.StringVar(&cfg.CreateKey, "createKey", "", "the relay's key, needed to open a new room; joining needs none")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	doUpdate := flag.Bool("update", false, "update to the latest release and exit")
 	flag.Usage = func() {
@@ -99,7 +101,7 @@ func main() {
 		return
 	}
 
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	err := party.Run(c, cfg)
 	cancel()
 	if err != nil {
@@ -116,7 +118,7 @@ func selfUpdate() error {
 	if err != nil {
 		return err
 	}
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	tag, err := update.Install(c, exe, version, "watchparty")
 	if errors.Is(err, update.ErrUpToDate) {

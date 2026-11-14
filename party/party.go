@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
@@ -63,6 +64,7 @@ type Config struct {
 var (
 	errStopped = errors.New("the party stopped unexpectedly")
 	errHungUp  = errors.New("mpv stopped answering before the video was ready, though it was still running")
+	errNobody  = errors.New("nobody answered at the address you were given; check the invite, and that someone is still in the party")
 )
 
 const mpvExitGrace = 10 * time.Second
@@ -122,10 +124,11 @@ func Run(parent context.Context, cfg Config) error {
 		cfg.Secret = rand.Text()
 	}
 
+	if cfg.Hostname == "" {
+		cfg.Hostname, _ = os.Hostname()
+	}
+
 	if strings.TrimSpace(cfg.Relay) != "" {
-		if cfg.Hostname == "" {
-			cfg.Hostname, _ = os.Hostname()
-		}
 		creating := cfg.Room == ""
 		if creating {
 			cfg.Room = rand.Text()
@@ -159,7 +162,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket)
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {
@@ -242,6 +245,34 @@ func Run(parent context.Context, cfg Config) error {
 		return stopReason(parent)
 	}
 	return err
+}
+
+// mpvArgs splits the user's flags on spaces, except inside double quotes, which it
+// removes: --sub-file="C:\My Subs\a.srt" is one argument. No escapes: a backslash is a
+// path separator on Windows.
+func mpvArgs(flags string) []string {
+	var args []string
+	var arg strings.Builder
+	quoted, started := false, false
+	for _, r := range flags {
+		switch {
+		case r == '"':
+			quoted, started = !quoted, true
+		case unicode.IsSpace(r) && !quoted:
+			if started {
+				args = append(args, arg.String())
+				arg.Reset()
+				started = false
+			}
+		default:
+			arg.WriteRune(r)
+			started = true
+		}
+	}
+	if started {
+		args = append(args, arg.String())
+	}
+	return args
 }
 
 // lineLog logs mpv's output a line at a time, so the reason a file won't play
@@ -408,11 +439,13 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	}()
 	go ser.BroadcastEvents(outgoing)
 
+	asked, answered := false, false
 	for _, addr := range strings.Split(cfg.Addrs, ",") {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			continue
 		}
+		asked = true
 		err := ser.AddAddress(addr)
 		if errors.Is(err, server.ErrDifferentFile) || errors.Is(err, server.ErrWrongSecret) {
 			runCleanup()
@@ -420,7 +453,14 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 		if err != nil {
 			log.Printf("%s: %s\n", addr, err)
+			continue
 		}
+		answered = true
+	}
+	// a joiner nobody answered would play alone, told it is in the party
+	if asked && !answered {
+		runCleanup()
+		return nil, errNobody
 	}
 
 	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())

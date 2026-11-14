@@ -12,7 +12,7 @@ keyframe every 10s. `ipc.rst` is unchanged through v0.41.0 apart from `--input-i
 ## How `party.Run` starts mpv
 
 ```
-mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --input-ipc-server=<sock> <file>
+mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --quiet --input-ipc-server=<sock> <file>
 ```
 
 | Flag | Why |
@@ -22,6 +22,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--hr-seek=yes` | **Pinned.** Every seek is exact, arrow keys included. Without it, relative seeks snap to a keyframe (see "Seeking"). |
 | `--cache-pause=yes` | **Pinned.** When the cache runs dry, mpv waits and reports `paused-for-cache`, which pauses the party. With `no` it plays through stalls with no signal, and the node falls behind: `[R11f]` measured 16.9s without the pin. |
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
+| `--quiet` | **Pinned.** No status line. Into a pipe mpv prints it as a new line several times a second (`AV: 00:00:04 / 00:00:30 …`), which buried every other line of the log. Errors still print. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
 | `--no-shuffle --playlist-start=<n>` | **Pinned, playlists only.** An index only means the same file to everyone in our order, and it starts on the file that was picked. |
 | *(no `--start`)* | **Continuing a party seeks over IPC** once the first file is open. `--start` applies to every later entry, and a file-local `--{ --start=… file --}` (even undone with `file-local-options/start`) comes back on every return to it (probed on 0.37.0). |
@@ -159,6 +160,10 @@ Seen during a normal run:
 - **`pause` carries over**, so a playing node starts the next file playing. No `seek` is sent.
 - **Two sets in a row:** the reply beats the report, so the second can go first. Within about 5ms
   mpv may report only the last (0→1→0: `0` or nothing), from 10ms both. It always loads a file.
+- **A seek set just before a switch never lands on the new file** (0, 2 and 20ms apart, both
+  versions): it is reported before the switch, or not at all with no `seek` event either.
+  The new file opens at 0. **A seek set at `file-loaded` lands before the file's one
+  `playback-restart`:** `time-pos` 0, `seek`, the position, then `playback-restart`.
 - A seek past the end while paused stops on the last frame. Resuming there moves on at
   once. After the last file: `end-file` `eof`, then exit 0.
 

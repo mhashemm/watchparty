@@ -1033,6 +1033,16 @@ def p2p_suite():
     ok("it was told why", "the party refused your secret" in log("bad"))
     ok("nobody saw it join", not any("nodeBad" in known(n) for n in NODES))
     stop("bad")
+    spare = socket.create_server((IP, 0))
+    dead = f"{IP}:{spare.getsockname()[1]}"
+    spare.close()
+    launch("nodeAlone", dead, tag="alone", port=PORTS["nodeDiff"])
+    until(lambda: nodes["alone"]["proc"].poll() is not None, BOOT)
+    nodes["alone"]["sock"] = child_mpv_socket(nodes["alone"]["proc"].pid)  # only if it wrongly started
+    ok("a joiner nobody answered exited with an error instead of playing alone", nodes["alone"]["proc"].poll() not in (None, 0) and "init done" not in log("alone"),
+       f"rc={nodes['alone']['proc'].returncode}")
+    ok("it was told why", "nobody answered at the address you were given" in log("alone"), log("alone")[-300:])
+    stop("alone")
     stop("nodeSame")
     until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
 
@@ -1296,7 +1306,7 @@ def relay_suite():
     stop("late")
 
     print("\n[R10] a different room is isolated")
-    launch("nodeOther", room="otherroom", tag="other")
+    launch("nodeOther", room="otherroom", tag="other", mpvflags='--msg-level=all=status --title="two words"')  # undo MPVFLAGS' mute
     until(lambda: booted("other") and connected("other"), BOOT)
     resolve("other")
     setp("other", "time-pos", 5.0)
@@ -1305,6 +1315,12 @@ def relay_suite():
         v = get(n, "time-pos")
         ok(f"{n} ignored the other room's seek", near(v, 33.0), f"time-pos={v}")
     ok("nobody in the main room saw the other room's node", not any("nodeOther" in known(n) for n in NODES))
+    ok("a quoted mpv flag keeps its space", get("other", "title") == "two words" and get("other", "playlist-count") == 1,
+       f"title={get('other', 'title')!r}, {get('other', 'playlist-count')} files")
+    setp("other", "pause", False)
+    until(lambda: (get("other", "time-pos") or 0) > 6)
+    status = re.findall(r"mpv: (?:\(Paused\) )?A?V: .*", log("other"))
+    ok("mpv's status line stays out of the log while it plays", (get("other", "time-pos") or 0) > 6 and not status, f"{len(status)} lines, first {status[:1]}")
     stop("other")
 
     print("\n[R10b] a mid-party joiner pauses the party once loaded, and starts where it stopped")
@@ -1535,8 +1551,19 @@ def relay_suite():
     # the relay announces a join before the node has read the handshake's reply, so a cut
     # that only waited for the announcement can land mid-handshake: a failed dial, not a drop
     until(lambda: connected("flaky") and all("nodeFlaky has joined" in osd(n) for n in NODES), BOOT)
+    must("nodeFlaky's mpv is up", until(lambda: booted("flaky"), BOOT))
+    resolve("flaky")
+    everyone = NODES + ["flaky"]
+    must("its join is over", quiet(everyone))
+    setp(A, "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in everyone)))
     proxy.cut()
     until(lambda: connected("flaky", 2))  # a dropped conn is redialled at once
+    ok("nodeFlaky stopped itself when it lost the relay", until(lambda: "paused: lost the relay" in osd("flaky")), str(osd("flaky")[-3:]))
+    ok("its return paused the party", until(lambda: all(get(n, "pause") is True for n in everyone)
+       and all(osd(n).count("paused for nodeFlaky: joining") == 2 for n in NODES)), str([get(n, "pause") for n in everyone]))
+    ok("and it is where the party stopped", until(lambda: near(get("flaky", "time-pos"), get(A, "time-pos"), 0.3)),
+       f"{get('flaky', 'time-pos')} and {get(A, 'time-pos')}")
     time.sleep(QUIET)  # a second join or a false leave would follow the swap at once
     connects = log("flaky").count("relay: connected")
     ok("nodeFlaky redialled", connects == 2, f"connected {connects} times, want 2")
@@ -1557,15 +1584,23 @@ def relay_suite():
     for n in NODES:
         ok(f"{n} was told nodeFlaky left", "nodeFlaky has left" in osd(n))
 
-    print("\n[R13] the party survives the relay dying and reconnects on its own")
+    print("\n[R13] the relay dying pauses everyone, and they come back together on their own")
+    must("nodeFlaky's leave is over", quiet(NODES))
+    setp(A, "pause", False)
+    must("the party is playing", until(lambda: all(get(n, "pause") is False for n in NODES)))
     relay.kill()
     relay.wait(timeout=10)
+    ok("every node stopped itself and says why", until(lambda: all(get(n, "pause") is True and "paused: lost the relay" in osd(n) for n in NODES)),
+       str([osd(n)[-1:] for n in NODES]))
     time.sleep(3)
     ok("no node died with the relay", len(live()) == len(NODES), f"{len(live())}/{len(NODES)} alive")
     relay = launch_relay()
     until(lambda: all(connected(n, 2) for n in NODES), 30)  # backoff is 1,2,4,8s
     for n in NODES:
         ok(f"{n} redialled", connected(n, 2), "reconnect never happened")
+    ok(f"everyone is where {A}, who reopened the room, stopped", until(lambda: all(near(get(n, "time-pos"), get(A, "time-pos"), 0.3) for n in NODES)),
+       str([get(n, "time-pos") for n in NODES]))
+    must("the rejoins are over", quiet(NODES))
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in others(A)))
     for n in others(A):
@@ -1831,6 +1866,28 @@ def media_suite():
     ok("the other was told", "nodeEnd1 has left" in osd("nodeEnd2"))
     ok("and reached the end by itself", until(lambda: nodes["nodeEnd2"]["proc"].poll() == 0, 20), log("nodeEnd2")[-200:])
 
+    print("\n[R15i] nor does a node that loses the relay there: it plays on, and its return stops nobody")
+    proxy = Proxy(PORTS["jitter" if JITTERED else "relay"])
+    launch("nodeEnd3", room="endroom2")
+    must("the first is in", until(lambda: connected("nodeEnd3"), BOOT))
+    launch("nodeEnd4", room="endroom2", relay=proxy.url)
+    must("both are in", until(lambda: booted("nodeEnd3") and booted("nodeEnd4") and "paused for nodeEnd4: joining" in osd("nodeEnd3"), BOOT))
+    for n in ("nodeEnd3", "nodeEnd4"):
+        resolve(n)
+    must("the join is over", quiet(("nodeEnd3", "nodeEnd4")))
+    target = get("nodeEnd3", "duration") - 4
+    setp("nodeEnd3", "time-pos", target)
+    must("the seek reached the other", until(lambda: near(get("nodeEnd4", "time-pos"), target, 0.1)), log("nodeEnd3")[-300:])
+    setp("nodeEnd3", "pause", False)
+    must("they play", until(lambda: get("nodeEnd4", "pause") is False))
+    proxy.cut()
+    ok("it redialled before the end", until(lambda: connected("nodeEnd4", 2)), log("nodeEnd4")[-300:])
+    # a node that stopped never exits, so reaching the end is the proof for both
+    for n in ("nodeEnd4", "nodeEnd3"):
+        ok(f"{n} reached the end by itself", until(lambda: nodes[n]["proc"].poll() == 0, 20), log(n)[-200:])
+    ok("nobody was told to stop", "paused: lost the relay" not in osd("nodeEnd4") and osd("nodeEnd3").count("paused for nodeEnd4: joining") == 1,
+       f"{osd('nodeEnd4')[-3:]} {osd('nodeEnd3')[-3:]}")
+
     relay.kill()
     relay.wait(timeout=10)
 
@@ -1847,6 +1904,8 @@ def caps_suite():
     launch("nodeB", room="capB", tag="c2")
     until(lambda: "429" in log("c2"), BOOT)
     ok("the second NEW room was refused", "429" in log("c2"), "ROOMS_PER_HOUR=1 must bite")
+    ok("and its log says why, and that it keeps trying", "relay: dial: 429 Too Many Requests: the relay has had too many attempts from your network" in log("c2")
+       and nodes["c2"]["proc"].poll() is None, log("c2")[-300:])
     launch("nodeC", room="capA", tag="c3")
     until(lambda: connected("c3"), BOOT)
     ok("joining the EXISTING room still works", connected("c3"),
@@ -1864,6 +1923,7 @@ def caps_suite():
     until(lambda: "503" in log("m2"), BOOT)
     ok("the first room connected", connected("m1"))
     ok("the second room got 503", "503" in log("m2"), "MAX_ROOMS=1 must bite")
+    ok("and its log says the relay is full", "relay: dial: 503 Service Unavailable: the relay is full" in log("m2"), log("m2")[-300:])
     for t in ("m1", "m2"):
         stop(t)
     relay.kill(); relay.wait(timeout=10)
@@ -2207,6 +2267,29 @@ def gui_suite():
     ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
+    print("\n[G17c] a relay that is rate limiting, or full, says so instead of \"Lost the relay\"")
+    busy = {"status": 429}
+
+    class Busy(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(busy["status"])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    refusing = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Busy)
+    threading.Thread(target=refusing.serve_forever, daemon=True).start()
+    fill(G, file=MEDIA, relay=f"ws://127.0.0.1:{refusing.server_address[1]}", room="busy", secret="busy")
+    go(G)
+    ok("a rate limit is named", until(lambda: status(G) == "This relay has had too many attempts from your network. Trying again; it clears within the hour.", BOOT), status(G))
+    busy["status"] = 503
+    ok("so is a full relay", until(lambda: status(G) == "The relay is full right now. Trying again…", BOOT), status(G))
+    end(G)
+    ok(f"{G}'s party ended", until(lambda: status(G) == "The party has ended."), status(G))
+    refusing.shutdown()
+    fill(G, relay=RELAY_URL)
+
     print("\n[G17d] a magnet link nobody seeds says so, and Stop still works")
     fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
     go(G)
@@ -2282,11 +2365,16 @@ def gui_suite():
     must(f"{H} opened it", joined(H), status(H))
     must(f"{G} got in", joined(G), status(G))
 
-    print("\n[G19] losing the relay shows on both, and both come back")
+    print("\n[G19] losing the relay shows on both and pauses both, and both come back")
+    must(f"{G}'s join is over", until(lambda: f"paused for {G}: joining" in feed(H)) and quiet([H, G]))
+    setp(H, "pause", False)
+    must("the party is playing", until(lambda: get(H, "pause") is False and get(G, "pause") is False))
     relay.kill(); relay.wait(timeout=10)
     until(lambda: all(status(n).startswith("Lost the relay") for n in (H, G)))
     for n in (H, G):
         ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
+        ok(f"{n} paused, and its feed says why without blaming {n}", until(lambda: get(n, "pause") is True and "paused: lost the relay" in feed(n) and read_all(n))
+           and feed(n)[0] != "paused by you", str(feed(n)[:3]))
     relay = launch_relay({"CREATE_KEY": KEY})
     until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
     for n in (H, G):

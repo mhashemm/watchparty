@@ -235,6 +235,43 @@ func TestPeerIsKnownAsSoonAsItAnswersHi(t *testing.T) {
 	}
 }
 
+// Greeted one by one, every peer that had vanished without a goodbye cost the joiner
+// its own 30s timeout before mpv opened. Each also answers for itself: the bootstrap's
+// copy of its counter and name is older.
+func TestGossipedPeersAreGreetedTogether(t *testing.T) {
+	t.Parallel()
+	s := New(context.Background(), make(chan mpv.IncomingMessage, 8), "127.0.0.1:1", "me", "abc", "", time.Nanosecond)
+	greeting, release := make(chan struct{}, 2), make(chan struct{})
+	s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, header := "{}", http.Header{"Hostname": {"own-name"}, "Counter": {"7"}}
+		if r.URL.Host == "127.0.0.1:2" {
+			body = `{"127.0.0.1:3":{"counter":"0","hostname":"stale"},"127.0.0.1:4":{"counter":"0","hostname":"stale"}}`
+		} else {
+			greeting <- struct{}{}
+			<-release
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	done := make(chan error, 1)
+	go func() { done <- s.AddAddress("127.0.0.1:2") }()
+	for range 2 {
+		select {
+		case <-greeting:
+		case <-time.After(time.Second):
+			t.Fatal("the second peer was not greeted while the first had not answered")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range []string{"127.0.0.1:3", "127.0.0.1:4"} {
+		if p := s.addresses[addr]; p == nil || p.Hostname != "own-name" || p.Counter != 7 {
+			t.Fatalf("%s is %+v, want what it answered itself", addr, p)
+		}
+	}
+}
+
 func TestGuardNeedsTheSecretAndCapsTheBody(t *testing.T) {
 	t.Parallel()
 	incoming := make(chan mpv.IncomingMessage, 8)

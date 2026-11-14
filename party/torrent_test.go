@@ -71,7 +71,7 @@ func seed(t *testing.T, contents map[string][]byte) (magnet, file string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seeded.VerifyData()
+	seeded.VerifyDataContext(context.Background())
 	m, err := mi.MagnetV2()
 	if err != nil {
 		t.Fatal(err)

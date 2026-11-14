@@ -29,8 +29,7 @@ A new message or rule that nodes must agree on gets a check there.
 
 ## What gets broadcast (`handleEvent`)
 
-Only `property-change` of `pause`, and of `time-pos` **while paused** (that is a seek),
-go out. The non-obvious rules:
+Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), go out:
 
 - **A change with no `data`** (property unavailable: before load, while quitting) is
   ignored entirely and doesn't count as the first change. Otherwise `seen` would
@@ -94,8 +93,7 @@ then the notices. e2e `[R11d]`.
 
 - `time-pos` is applied only while paused.
 - **`paused-at` is followed only from the peer whose pause we applied** (`pausedBy`), so
-  two nodes pausing at once don't swap positions, and only if not already within 0.1s
-  (`at`). e2e `[R11g]`.
+  two nodes pausing at once don't swap positions, and not if within 0.1s (`at`). `[R11g]`.
 
 ### Joining mid-party (`joined` → `welcome` → `start-pos` → `arrive`)
 
@@ -103,8 +101,7 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 
 1. Once its file has loaded, the joiner sets `joining` and broadcasts `joined`, after the
    held events so a held resume can't clear it. So the party pauses only when the
-   joiner can actually play, and a joiner whose mpv fails pauses nobody. Sent once; a
-   relay reconnect doesn't resend it.
+   joiner can actually play, and a joiner whose mpv fails pauses nobody.
 2. Every member, in `welcome`, pauses its own mpv if playing (not marked `applied`, so
    it goes out as its own pause), shows "paused for X: joining" either way (another
    member's pause often arrives first), and broadcasts `start-pos` = `target()`, which counts
@@ -116,6 +113,10 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 4. Any resume or seek clears `joining`, so the room's first node stops being a joiner.
    **So does `Opened`**, queued locally by the relay client before its first frame when this
    node opened the room with the key, so a continued party resumes where the key holder stopped.
+5. **A dropped relay connection is a join again.** The relay client queues `Lost`, and the
+   node pauses itself, notice first like a leave, as nothing it does reaches the party;
+   then `Back`, and it says `joined` again (`announce`). Neither within `endGraceSeconds` of
+   the end. Accepted: if every member returns before the relay missed any, nobody answers.
 
 e2e `[11c]`, `[R9]`, `[R10b]`, `[R11d2]` (a joiner whose stream takes 3s to load).
 
@@ -131,8 +132,7 @@ P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's 
   earliest stop. One heard before settling began is kept (`earliest`) and followed then.
 - **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
   and a pause would hold everyone else just short of it. So `duration` is observed.
-- A notice shows first, so the GUI can tell this pause from a person's in its feed.
-  e2e `[14]`, `[R14]`, `[R15h]`.
+- A notice shows first, so the GUI's feed can tell this pause from a person's. `[14]`, `[R14]`, `[R15h]`.
 
 ### Playlists (`entries`, `followEntry`)
 
@@ -152,6 +152,8 @@ reason: nobody starts the next one until someone resumes.
 - **Only a node still `joining` follows an answer to a joiner** (a `playlist-pos` with no
   `From`), and moving by hand ends `joining`. Everyone hears every answer, and one sent just
   before two people crossed would otherwise send each to the other's entry, for good.
+  **Never to an entry it, or a move it heard, left since it joined (`passed`):** a member
+  answers before it hears of a move, and that answer took the joiner back for good.
 - **Two joiners who heard each other settle on the higher entry (`joinedWith`).** Each
   answers the other, and following both ways would swap them. An answer **marked `party`**
   (sent by a member no longer `joining`), or from anyone whose join it didn't hear, is
@@ -168,7 +170,7 @@ reason: nobody starts the next one until someone resumes.
   pause, and the new file's `time-pos` 0 would go out as a seek.
 - **`loading` holds a seek until the `file-loaded` of the entry it is heading to**
   (`heldSeek`): sent earlier it lands on another file, which loses it. A joiner hits this
-  every time: `welcome` sends the entry, then `start-pos`.
+  every time: `welcome` sends the entry, then `start-pos`. Another move drops the held seek.
 - **Every message says its entry (`tagged`).** A position or a resume for another
   entry is dropped, against where this node is `heading`, since it was sent before someone
   moved. A pause still counts. A table of who is on what can't do this: a follower doesn't
@@ -179,7 +181,8 @@ reason: nobody starts the next one until someone resumes.
 - Accepted: a seek reaching someone just before the move it depends on is lost. A node
   that really is on another entry stays paused until the next move, since its resumes
   and everyone else's are dropped. A seek right after a move can lose to a stop on its way.
-  e2e `[16]`, `[R15c]`.
+  A joiner that missed a move can take a stale position, which ends `joining` before the
+  true entry arrives: P2P only, the relay keeps each member's order. e2e `[16]`, `[R15c]`.
 
 ## Windows
 

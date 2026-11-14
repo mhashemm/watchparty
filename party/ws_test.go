@@ -38,6 +38,10 @@ func accept(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Con
 }
 
 func newRelayConn(addr string, incoming chan mpv.IncomingMessage) *relayConn {
+	if incoming == nil {
+		// a test that doesn't read it still drops connections, and Connect tells mpv
+		incoming = make(chan mpv.IncomingMessage, 16)
+	}
 	return &relayConn{addr: addr, room: "room", secret: "secret", hostname: "me", session: "s1", incoming: incoming, retry: time.Millisecond, wait: time.Hour, up: make(chan struct{}, 1)}
 }
 
@@ -99,6 +103,35 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 	waitDone(t, joined, "never redialled after 401")
 	if c.Err() != nil {
 		t.Fatal("401 ended the party")
+	}
+}
+
+// A rate limit and a full relay both pass, so the node keeps trying, and its log says
+// which it is: the GUI showed either as a lost connection.
+func TestABusyRelayIsRetriedAndNamed(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[int]string{
+		http.StatusTooManyRequests:    "429 Too Many Requests: the relay has had too many attempts",
+		http.StatusServiceUnavailable: "503 Service Unavailable: the relay is full",
+	} {
+		joined := make(chan struct{})
+		addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+			if n == 1 {
+				w.WriteHeader(status)
+				return
+			}
+			conn := accept(t, w, r)
+			close(joined)
+			conn.Read(r.Context())
+		})
+		r := newRelayConn(addr, nil)
+		if _, _, err := r.dialOnce(context.Background()); err == nil || errors.Is(err, errRejected) || !strings.HasPrefix(err.Error(), want) {
+			t.Fatalf("%d: got %v, want a retryable error starting %q", status, err, want)
+		}
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go r.Connect(c, cancel)
+		waitDone(t, joined, "never redialled a busy relay")
 	}
 }
 
@@ -193,9 +226,13 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 	defer cancel()
 	go r.Connect(c, cancel)
 
-	for i := range 2 {
+	for i := 0; i < 2; {
 		select {
 		case m := <-incoming:
+			if m.Lost || m.Back {
+				continue
+			}
+			i++
 			e := mpv.Event{}
 			if err := json.Unmarshal(m.Event, &e); err != nil || m.HostName != "peer" || e.Name != "pause" {
 				t.Fatalf("frame %d arrived as %+v (%v)", i, m, err)
@@ -209,6 +246,70 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 	}
 	if c.Err() != nil {
 		t.Fatal("a dropped connection ended the party")
+	}
+}
+
+// While the connection is down this node's events are dropped and the party's never
+// arrive, so mpv hears that it is lost, to stop, and that it is back, to join again:
+// in that order, around nothing else, and with the frames of the new connection after.
+func TestADropIsToldToMpvAndSoIsTheReturn(t *testing.T) {
+	t.Parallel()
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		conn := accept(t, w, r)
+		if n == 1 {
+			conn.CloseNow()
+			return
+		}
+		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"peer","event":{"name":"joined"}}`))
+		conn.Read(r.Context())
+	})
+	incoming := make(chan mpv.IncomingMessage, 4)
+	r := newRelayConn(addr, incoming)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Connect(c, cancel)
+
+	for i, want := range []mpv.IncomingMessage{{Lost: true}, {Back: true}, {HostName: "peer"}} {
+		select {
+		case m := <-incoming:
+			if m.Lost != want.Lost || m.Back != want.Back || m.Opened || m.HostName != want.HostName {
+				t.Fatalf("message %d was %+v, want %+v", i, m, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("message %d never reached mpv", i)
+		}
+	}
+}
+
+// The node that opens the room again after the relay restarted has no party to rejoin:
+// it is the one the others' joins are answered by, so it hears Opened and no Back.
+func TestTheOneWhoReopensTheRoomDoesNotRejoin(t *testing.T) {
+	t.Parallel()
+	addr := stub(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(wire.OpenedHeader, "yes")
+		conn := accept(t, w, r)
+		if n == 1 {
+			conn.CloseNow()
+			return
+		}
+		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"peer","event":{"name":"joined"}}`))
+		conn.Read(r.Context())
+	})
+	incoming := make(chan mpv.IncomingMessage, 4)
+	r := newRelayConn(addr, incoming)
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Connect(c, cancel)
+
+	for i, want := range []mpv.IncomingMessage{{Opened: true}, {Lost: true}, {Opened: true}, {HostName: "peer"}} {
+		select {
+		case m := <-incoming:
+			if m.Lost != want.Lost || m.Back || m.Opened != want.Opened || m.HostName != want.HostName {
+				t.Fatalf("message %d was %+v, want %+v", i, m, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("message %d never reached mpv", i)
+		}
 	}
 }
 
@@ -335,9 +436,10 @@ func TestOpenedReachesMpvFirst(t *testing.T) {
 	for len(got) < 3 {
 		select {
 		case m := <-incoming:
-			if m.Opened {
+			switch {
+			case m.Opened:
 				got = append(got, "opened")
-			} else {
+			case !m.Lost && !m.Back:
 				got = append(got, m.HostName)
 			}
 		case <-time.After(5 * time.Second):

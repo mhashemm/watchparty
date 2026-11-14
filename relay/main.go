@@ -318,12 +318,12 @@ func (r *relay) add(name string, m *member) (*member, bool) {
 		}
 	}
 	// a reconnect is not news to the room, which never heard it leave
-	joined := notice(m.hostname, fmt.Sprintf("%s has joined", m.hostname))
+	joined := notice(m.hostname, m.hostname+mpv.HasJoined)
 	for other := range rm.members {
 		if stale == nil {
 			queue(other, joined)
 		}
-		queue(m, notice(other.hostname, fmt.Sprintf("connected to %s", other.hostname)))
+		queue(m, notice(other.hostname, mpv.ConnectedTo+other.hostname))
 	}
 	rm.members[m] = struct{}{}
 	return stale, true
@@ -360,7 +360,7 @@ func (r *relay) leave(name string, m *member) bool {
 		}
 	}
 	if present {
-		r.broadcast(name, m, notice(m.hostname, fmt.Sprintf("%s has left", m.hostname)))
+		r.broadcast(name, m, notice(m.hostname, m.hostname+mpv.HasLeft))
 	}
 	return present
 }
@@ -539,7 +539,7 @@ func env[T any](key string, def T, parse func(string) (T, error)) T {
 }
 
 func main() {
-	c, cancel := signal.NotifyContext(context.TODO(), syscall.SIGTERM, syscall.SIGINT)
+	c, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
 	// also routes the log package, so net/http's own errors land here too

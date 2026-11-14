@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mhashemm/watchparty/mpv"
 )
 
 const (
@@ -216,10 +218,19 @@ func (s *store) stoppedAt(i int) (string, float64) {
 	return s.History[i].Stopped.Entry, s.History[i].Stopped.At
 }
 
+// observe records what a log line says about the party at i, and saves it.
 func (s *store) observe(i int, line string) {
+	if s.note(i, line) {
+		s.save()
+	}
+}
+
+// note is observe without the save: it reports whether there is something to save, so
+// gui.Write can do that after letting go of g.mu.
+func (s *store) note(i int, line string) bool {
 	person := ""
 	if after, ok := strings.CutPrefix(message(line), "your address to share is "); ok {
-		s.update(i, func(sess *session) {
+		return s.change(i, func(sess *session) {
 			sess.Invite = strings.TrimSpace(after)
 			fields := strings.Fields(sess.Invite)
 			for j := 0; j+1 < len(fields); j++ {
@@ -231,44 +242,40 @@ func (s *store) observe(i int, line string) {
 				}
 			}
 		})
-		return
 	}
 	if strings.HasPrefix(message(line), "finished: ") {
-		s.update(i, func(sess *session) { sess.Finished = true })
-		return
+		return s.change(i, func(sess *session) { sess.Finished = true })
 	}
 	if after, ok := strings.CutPrefix(message(line), "stopped at: "); ok {
 		secs, name, playlist := strings.Cut(after, " in ")
 		var to stop
 		var err error
 		if to.At, err = strconv.ParseFloat(strings.TrimSpace(secs), 64); err != nil {
-			return
+			return false
 		}
 		if playlist && json.Unmarshal([]byte(name), &to.Entry) != nil {
-			return
+			return false
 		}
-		s.update(i, func(sess *session) { sess.Stopped = to })
-		return
+		return s.change(i, func(sess *session) { sess.Stopped = to })
 	}
 	if after, ok := strings.CutPrefix(message(line), "now playing: "); ok {
 		var name string
 		if json.Unmarshal([]byte(after), &name) != nil {
-			return
+			return false
 		}
-		s.update(i, func(sess *session) { sess.openVideo(name, time.Now()) })
-		return
+		return s.change(i, func(sess *session) { sess.openVideo(name, time.Now()) })
 	}
 	if text, ok := notice(line); ok {
-		if name, ok := strings.CutSuffix(text, " has joined"); ok {
+		if name, ok := strings.CutSuffix(text, mpv.HasJoined); ok {
 			person = name
-		} else if name, ok := strings.CutPrefix(text, "connected to "); ok {
+		} else if name, ok := strings.CutPrefix(text, mpv.ConnectedTo); ok {
 			person = name
 		}
 	}
 	if person == "" {
-		return
+		return false
 	}
-	s.update(i, func(sess *session) {
+	return s.change(i, func(sess *session) {
 		if !slices.Contains(sess.People, person) {
 			sess.People = append(sess.People, person)
 		}
@@ -283,12 +290,25 @@ func (s *store) end(i int) {
 }
 
 func (s *store) update(i int, f func(*session)) {
+	if s.change(i, f) {
+		s.save()
+	}
+}
+
+// change applies f to the party at i in memory only, and reports whether there was one.
+func (s *store) change(i int, f func(*session)) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if i < 0 || i >= len(s.History) {
-		return
+		return false
 	}
 	f(&s.History[i])
+	return true
+}
+
+func (s *store) save() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.saveHistory()
 }
 

@@ -46,8 +46,8 @@ echo hack: it muted the peer, not the echo.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
-playing, running out of cache, a mid-party join, a member leaving, a new playlist entry) pauses
-the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
+playing, running out of cache, a mid-party join, a member leaving or losing the relay, a new
+playlist entry) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
 
 ## Contracts between packages
@@ -59,7 +59,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party | `your address to share is <invite>` | GUI invite box, `gui/store.go` (real room and secret), e2e |
   | party | `init done`, `unreachable address: …`, `torrent: finding peers`, `torrent: found …` | GUI status, e2e |
   | party | `file fingerprint: <hex>`; `stopped at: <seconds>[ in <file name as JSON>]` or `finished: …` once mpv exits | e2e; `gui/store.go` (where Continue starts) |
-  | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it), `relay: disconnected` | GUI reconnecting and "waiting for the host", e2e |
+  | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it, or `429 `/`503 ` at its start), `relay: disconnected` | GUI reconnecting, "waiting for the host" and a busy relay, e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, in a playlist with `entry`>` | GUI feed (your own pause/resume), e2e |
@@ -67,7 +67,8 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
 - **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
-  `server/` and `relay/`, parsed by `mpv` (a leave pauses), `gui/store.go` and e2e's `known()`. Change all or none.
+  `server/` and `relay/`, parsed by `mpv` (a leave pauses) and `gui/store.go`, all from the
+  constants in `mpv`; e2e's `known()` spells them again. Change all or none.
 - **The relay protocol is `relay/wire`**, imported by both `relay/main.go` and `party/ws.go`:
   the envelope `{"hostname", "event": <raw mpv JSON>}`, path, query, headers, close codes.
   It imports nothing that would grow the relay image; importing `party` would pull upnp and server.

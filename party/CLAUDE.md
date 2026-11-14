@@ -74,8 +74,8 @@ torrent of long videos. The check mark doesn't matter.
 - The mpv socket name carries `rand.Text()`, so parties started in the same second
   (e2e nodes, two GUIs) never share one.
 - **An empty `Relay` means P2P, which means UPNP.** That is why the GUI refuses an
-  empty relay in relay mode instead of passing it through. A missing `Secret` (and in
-  relay mode a missing room or hostname) is generated.
+  empty relay in relay mode instead of passing it through. A missing `Secret` or hostname (and in
+  relay mode a missing room) is generated.
 - mpv's command line: the user's `MpvFlags` first, then the pins, so they beat both
   the flags and `mpv.conf` (`mpv/MPV.md` says why each is pinned).
 - **`defer cmd.Cancel()` only after `Start` succeeds:** the default `Cancel` is
@@ -97,6 +97,7 @@ torrent of long videos. The check mark doesn't matter.
 | Something inside cancelled `c` (relay rejection, failed bind) | `errStopped` |
 | Setup failed (unreadable file, no mpv, UPNP, no LAN IP) | that error |
 | P2P bootstrap plays another file / refuses the secret | `server.ErrDifferentFile` / `ErrWrongSecret` |
+| P2P: none of `-addrs` answered | `errNobody` |
 | mpv exited before the video was ready | `mpv exited before the video was ready: exit status N`; the reason is in the `mpv:` lines just before |
 | mpv's own `Wait` error, nothing cancelled | that error |
 | mpv's socket dropped before the video was ready, and mpv didn't exit within `mpvExitGrace` | `errHungUp` |
@@ -127,7 +128,7 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - Any `ListenAndServe` error cancels `c`: harmless at shutdown, ends the party on a
   failed bind.
 - A failed `-addrs` peer is logged, not fatal, except `ErrDifferentFile` and
-  `ErrWrongSecret`.
+  `ErrWrongSecret`, **unless every one failed** (`errNobody`): that joiner would play alone.
 - An `EvictAfter` of zero (the GUI) means `DefaultEvictAfter`.
 - **`upnpLogger` flattens control characters:** its values come from whatever answers
   SSDP on the LAN, and a newline in one would start a new line for the GUI to read.
@@ -150,7 +151,8 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   | 401 | room not open or remembered, no create key sent | retries: "room X is not open yet, waiting for someone with -createKey". Gives up (`errRejected`) if `Run` generated the room, since no host is coming, and after 30 minutes of 401s since the last connection (`r.wait`, "did not open within"), since a fake invite would wait forever |
   | 403 | wrong secret or create key | gives up, logs `rejected by relay`. A wrong secret never becomes right, and retrying burns the relay's rate limit |
   | 409 | not the room creator's file | gives up, `errRejected` wrapping `server.ErrDifferentFile` |
-  | 429, 503, other | rate limit, caps | retries |
+  | 429, 503 | rate limit, caps | retries; the dial line starts with the status and says which, for the GUI |
+  | other | | retries |
 
 - **`Connect` is the supervisor**: dial, `set(conn)`, block in `read`, redial on error.
   Backoff doubles 1s → 30s and resets after a good dial; the 1s is `r.retry` so tests
@@ -158,8 +160,11 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - **`Broadcast` is the only writer for the whole party, across reconnects.** One per
   connection would leave two goroutines reading `outgoing` during a redial, stealing
   frames. It copies the conn pointer under `r.mu` and **writes without the lock**, or
-  `set()` would wedge behind a stalled 10s write. With no conn it drops the event; the
-  next pause resyncs.
+  `set()` would wedge behind a stalled 10s write. With no conn it drops the event.
+- **A drop is told to mpv** (`tell`, like `Opened`): `Lost` when the read fails, so the node
+  pauses, and `Back` once it is in the room again, so it rejoins and takes the party's
+  position. Not `Back` when the redial opened the room: nobody is there to rejoin, and it
+  answers the others.
 - **`session`** is one `rand.Text()` per `Run`: the relay swaps a reconnecting member in
   silently instead of announcing a second join. A new GUI party is a new member.
 

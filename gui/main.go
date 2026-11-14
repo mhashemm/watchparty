@@ -206,12 +206,18 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 
 func (g *gui) Write(p []byte) (int, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	dirty := false
 	for line := range strings.SplitSeq(strings.TrimRight(string(p), "\n"), "\n") {
 		g.lines = append(g.lines, line)
-		if g.session >= 0 {
-			g.store.observe(g.session, line)
+		if g.session >= 0 && g.store.note(g.session, line) {
+			dirty = true
 		}
+	}
+	g.mu.Unlock()
+	// the disk write waits until g.mu is free, which every page request needs. What it
+	// writes is the store as it is by then, so a party ending in between loses nothing.
+	if dirty {
+		g.store.save()
 	}
 	return len(p), nil
 }
