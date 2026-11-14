@@ -684,6 +684,9 @@ func TestARefusedPauseLeavesNoMarker(t *testing.T) {
 	if err := c.take(Event{Name: pause, Data: "yes", Stamp: 1, Paused: new(true), At: new(0.0)}, "a"); err == nil {
 		t.Fatal("the refusal was not reported")
 	}
+	if e := nextEvent(t, outgoing); e.Name != joined {
+		t.Fatalf("broadcast %+v, want it to ask the party where it is", e)
+	}
 	fmt.Fprint(theirs, propertyChangeLine(pause, "yes", 0))
 	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
 		t.Fatalf("broadcast %+v, want the user's own pause", e)
@@ -2105,34 +2108,56 @@ func TestANewerResumeDoesNotSeekANodeThatPlays(t *testing.T) {
 // node is on a second it never reached.
 func TestARefusedStepLeavesNoMarker(t *testing.T) {
 	t.Parallel()
-	refusing := func(paused bool) *Client {
+	refusing := func(paused, gone bool) (*Client, chan []byte) {
 		ours, theirs := net.Pipe()
 		t.Cleanup(func() { ours.Close(); theirs.Close() })
-		c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
+		outgoing := make(chan []byte, 16)
+		c := newTestClient(outgoing, bufio.NewScanner(ours))
 		c.conn.conn = ours
 		c.names, c.pos, c.stamp, c.paused = []string{"e1", "e2", "e3"}, 5, 1, paused
-		go c.watch()
+		// as New does: a closed socket ends watch, and that is how do learns mpv is gone
+		go func() { c.watch(); close(c.conn.closed) }()
 		go func() {
 			sc := bufio.NewScanner(theirs)
 			for sc.Scan() {
+				if gone {
+					theirs.Close()
+					return
+				}
 				req := Request{}
 				json.Unmarshal(sc.Bytes(), &req)
 				fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
 			}
 		}()
-		return c
+		return c, outgoing
 	}
-	for name, c := range map[string]*Client{
-		"the pause before a move": refusing(false),
-		"a seek":                  refusing(true),
+	for _, tc := range []struct {
+		name         string
+		paused, gone bool
+	}{
+		{"the pause before a move", false, false},
+		{"a seek", true, false},
+		{"anything, with mpv gone", false, true},
 	} {
-		at := map[bool]string{false: `"entry":2`, true: `"entry":0`}[c.paused]
+		c, outgoing := refusing(tc.paused, tc.gone)
+		at := map[bool]string{false: `"entry":2`, true: `"entry":0`}[tc.paused]
 		c.apply(peer("a", `{"stamp":2,"paused":true,"at":30,`+at+`,"name":"time-pos","data":"30.000000"}`))
 		c.mu.Lock()
 		if len(c.applied) > 0 || c.loading || c.heldSeek != "" || len(c.following) > 0 || c.landing || c.peerSeek || c.target() != 5 {
-			t.Errorf("%s refused left applied %v, loading %v, held %q, following %v, landing %v, peerSeek %v, at %v", name, c.applied, c.loading, c.heldSeek, c.following, c.landing, c.peerSeek, c.target())
+			t.Errorf("%s refused left applied %v, loading %v, held %q, following %v, landing %v, peerSeek %v, at %v", tc.name, c.applied, c.loading, c.heldSeek, c.following, c.landing, c.peerSeek, c.target())
 		}
+		stamp := c.stamp
 		c.mu.Unlock()
+		// it holds the party's stamp where mpv isn't, so it asks the party where it is
+		var asked bool
+		select {
+		case b := <-outgoing:
+			asked = strings.Contains(string(b), `"name":"joined"`)
+		default:
+		}
+		if want := !tc.gone; asked != want || want && stamp != unheard {
+			t.Errorf("%s refused: asked the party %v with stamp %d, want %v", tc.name, asked, stamp, want)
+		}
 	}
 }
 

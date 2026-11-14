@@ -791,8 +791,14 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	// what mpv never did, as it refused a step
 	left := a
 	defer func() {
-		if err != nil {
-			c.release(left)
+		if err == nil {
+			return
+		}
+		c.release(left)
+		// it holds the party's stamp where mpv isn't: asked again, the party says where.
+		// Not once mpv is gone: this node is leaving.
+		if !errors.Is(err, ErrClosed) {
+			c.announce()
 		}
 	}()
 	if a.stop {
