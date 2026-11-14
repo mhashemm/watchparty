@@ -114,9 +114,10 @@ The download, SHA-256 check and binary swap live in the `update` package
   timer, because a hidden window's timers run once a minute; so a browser cutting a long
   request costs nothing. It stops when the request itself fails, the GUI being gone.
 - **The browser runs as its own instance** with a fresh temporary profile per launch; a
-  shared profile would hand a second GUI's window to the first. On exit the GUI kills it
-  and deletes the profile until it stays deleted: Chrome's network service still writes
-  into it just after the main process is gone.
+  shared profile would hand a second GUI's window to the first. On exit the GUI kills it,
+  on Unix with its whole process group (`ownGroup`), and again after it exits on its own:
+  Chrome's network service outlives the main process and writes into the profile after it
+  was deleted (3 of 20 under load). Then it deletes the profile until it stays deleted.
 - **Idle exit**, for a page that never connects: no party and no `/log` poll for 2
   minutes. Don't shorten it: Chrome throttles hidden windows' timers to about one per
   minute. The first poll gets a minute's grace.

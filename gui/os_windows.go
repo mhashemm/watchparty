@@ -63,6 +63,12 @@ func hide(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 }
 
+// ownGroup and killGroup: Windows has no process group to kill, so only the browser
+// itself is killed, and removeProfile waits out a helper still holding a file.
+func ownGroup(*exec.Cmd) {}
+
+func killGroup(cmd *exec.Cmd) { cmd.Process.Kill() }
+
 const (
 	appID        = "mhashemm.watchparty"
 	uninstallKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\watchparty`
