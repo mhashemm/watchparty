@@ -159,7 +159,7 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
+	args := append(strings.Fields(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+strings.TrimSpace(mpvSocket))
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {
