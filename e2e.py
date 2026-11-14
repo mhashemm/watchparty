@@ -1167,6 +1167,7 @@ def p2p_suite():
     launch("epGuest", nodes["epHost"]["addr"], media=f"{folder}/e1.mkv", port=PORTS["lagB"], playlist=True)
     must("the second node is up", until(lambda: booted("epGuest") and "epGuest has joined" in osd("epHost"), BOOT))
     resolve("epGuest")
+    ok("whoever started the party answers a joiner before anyone has played", until(lambda: "paused for epGuest: joining" in osd("epHost")), osd("epHost"))
     ipc(nodes["epHost"]["sock"], "playlist-next")
     ok("the other node follows", until(lambda: get("epGuest", "filename") == "e2.mkv"), get("epGuest", "filename"))
     ok("the invite asks for the playlist", re.search(r"share is -addrs \S+ -secret \S+ -playlist\n", log("epHost")), log("epHost")[:300])

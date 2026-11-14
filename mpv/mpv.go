@@ -63,8 +63,9 @@ var (
 type IncomingMessage struct {
 	HostName string
 	Event    []byte
-	// Opened, Lost and Back are set only by this node's relay client, never from the wire.
-	// Opened: this node opened the room with the key, so its position is the party's.
+	// Opened, Lost and Back are set only by this node's own transport, never from the wire.
+	// Opened: this node opened the room with the key, or started the mesh, so its position
+	// is the party's.
 	Opened bool
 	// Lost: its connection to the relay dropped. Back: it is in the room again, and
 	// didn't open it.

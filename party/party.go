@@ -462,6 +462,13 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		runCleanup()
 		return nil, errNobody
 	}
+	// given no address, this node started the party: where it is is where the party is
+	if !asked {
+		select {
+		case incoming <- mpv.IncomingMessage{Opened: true}:
+		case <-c.Done():
+		}
+	}
 
 	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())
 
