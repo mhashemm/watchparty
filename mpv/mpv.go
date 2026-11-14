@@ -83,8 +83,10 @@ type IncomingMessage struct {
 	// didn't open it.
 	Lost, Back bool
 	// Missed: something this node sent failed to reach From, maybe the latest state it
-	// heard. Resend: send it this node's state again.
+	// heard. Resend: hand Reply this node's state, which the transport sends to From alone,
+	// or nil for none.
 	Missed, Resend bool
+	Reply          chan<- []byte
 }
 
 type connection struct {
@@ -752,8 +754,10 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	over, told := s.over(h), c.by == m.From
 	// a resume reaching a node that plays: newer, this node missed the pause in between; a
 	// tie from a member something this node sent never reached, that member resumed from
-	// what it last heard. Not a joiner: it syncs when its join is answered.
-	apart := !s.paused && !h.paused && h.stamp >= 0 && s.entry == h.entry && (over > 0 || over == 0 && c.missed[m.From])
+	// what it last heard; the state this node took from a member, sent again by it, to this
+	// node alone, as what it sent looked lost: it arrived late. Not a joiner: it syncs when
+	// its join is answered.
+	apart := !s.paused && !h.paused && h.stamp >= 0 && s.entry == h.entry && (over > 0 || over == 0 && (c.missed[m.From] || e.Again && told))
 	if over > 0 {
 		// it heard something since, or made it: whatever it missed, this node now holds its
 		// state, or stops the party for it. Not when a send reaches it: a tie it sent
@@ -943,11 +947,11 @@ func (c *Client) answer(hostname, reason string) error {
 }
 
 // chase follows a member that missed something this node sent, as its transport tells: a
-// tie from it comes from what it last heard (take), until it sends something newer; and it
-// is sent this node's state again, as a pause marked again: one of the same stamp moves
-// nobody and nobody says "synced", and an older one is let go, as it may cross a newer
-// change. If that member is out of step, the state sent again says so there. A joiner has
-// no state to send yet, and its join is answered by whoever heard it.
+// tie from it comes from what it last heard (take), until it sends something newer; and
+// the transport sends it this node's state again, to it alone, as a pause marked again:
+// one of the same stamp shows nothing, an older one is let go, as it may cross a newer
+// change, and the resume that member already took from this node says it came late. A
+// joiner has no state to send yet, and a state taken from that member, it has.
 func (c *Client) chase(e IncomingMessage) error {
 	c.mu.Lock()
 	switch {
@@ -955,8 +959,10 @@ func (c *Client) chase(e IncomingMessage) error {
 		c.missed[e.From] = true
 		c.mu.Unlock()
 		return nil
-	case c.stamp < 0:
+	case c.stamp < 0 || c.by == e.From:
+		// a joiner has no state yet; one taken from that member, it has
 		c.mu.Unlock()
+		c.reply(e.Reply, nil)
 		return nil
 	}
 	data := "no"
@@ -966,12 +972,19 @@ func (c *Client) chase(e IncomingMessage) error {
 	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Again: true})
 	again = c.tag(again)
 	c.mu.Unlock()
-	select {
-	case c.outgoing <- again:
+	if c.reply(e.Reply, again) {
 		log.Printf("sent again, as %s missed something: %s\n", e.HostName, again)
-	case <-c.ctx.Done():
 	}
 	return nil
+}
+
+func (c *Client) reply(to chan<- []byte, b []byte) bool {
+	select {
+	case to <- b:
+		return true
+	case <-c.ctx.Done():
+		return false
+	}
 }
 
 func (c *Client) left(hostname string) error {

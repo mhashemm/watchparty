@@ -1176,6 +1176,25 @@ def p2p_suite():
        f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
     stop("nodeKeep")
 
+    print("\n[13d] a member whose process stalls past the send timeout misses a resume; once it runs, the party ends in step")
+    X, Y = survivors[-1], survivors[1]
+    setp(Y, "pause", True)
+    must("the party is stopped", until(lambda: all(get(n, "pause") is True for n in survivors)) and quiet(survivors))
+    base = strikes(Y, nodes[X]["addr"], X)
+    os.kill(nodes[X]["proc"].pid, signal.SIGSTOP)
+    try:
+        setp(Y, "pause", False)
+        stalled = until(lambda: strikes(Y, nodes[X]["addr"], X) > base, 15)
+    finally:
+        os.kill(nodes[X]["proc"].pid, signal.SIGCONT)
+    ok(f"{Y}'s resume timed out on {X}", stalled, log(Y)[-300:])
+    quiet(survivors, 30)
+    end = {n: (get(n, "pause"), get(n, "time-pos")) for n in survivors}
+    spread = max(t for _, t in end.values()) - min(t for _, t in end.values())
+    stopped = {p for p, _ in end.values()}
+    ok("the party ends in step", len(stopped) == 1 and spread < (0.5 if True in stopped else 1.5),
+       f"{end}; {X} saw {osd(X)[-3:]}, {Y} saw {osd(Y)[-3:]}")
+
     print(f"\n[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor, which pauses the party")
     setp(survivors[1], "pause", False)
     must("the party is playing", until(lambda: all(get(n, "pause") is False for n in survivors)))

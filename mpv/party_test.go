@@ -47,6 +47,13 @@ type sim struct {
 	// transport tells it about them, in order
 	missed map[[2]string]bool
 	told   map[*simNode][]IncomingMessage
+	// held: links whose messages wait, as for a process that stopped; replies: states a
+	// node handed its transport to send again, to one member
+	held    map[[2]string]bool
+	replies []reply
+	// late: how many of a link's messages were sent while it was held, whose sender gave up
+	// on them: delivered, they end no chase
+	late map[[2]string]int
 	ticks  int
 	script []func()
 }
@@ -54,7 +61,7 @@ type sim struct {
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}}
+	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}, held: map[[2]string]bool{}, late: map[[2]string]int{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
@@ -210,6 +217,18 @@ func (n *simNode) move(i int) {
 func (s *sim) run() {
 	for {
 		synctest.Wait()
+		for i := 0; i < len(s.replies); i++ {
+			r := s.replies[i]
+			select {
+			case b := <-r.ch:
+				if b != nil && !s.down[r.k[0]] && !s.down[r.k[1]] && !s.loses(r.k, b) {
+					s.links[r.k] = append(s.links[r.k], IncomingMessage{HostName: r.k[0], From: r.k[0], Event: b})
+				}
+				s.replies = slices.Delete(s.replies, i, i+1)
+				i--
+			default:
+			}
+		}
 		for _, from := range s.nodes {
 			for len(from.out) > 0 {
 				b := <-from.out
@@ -221,6 +240,9 @@ func (s *sim) run() {
 					}
 					if !s.loses(k, b) {
 						s.links[k] = append(s.links[k], IncomingMessage{HostName: from.name, From: from.name, Event: b})
+						if s.held[k] {
+							s.late[k]++
+						}
 					} else if !s.missed[k] {
 						s.missed[k] = true
 						s.tell(from, IncomingMessage{HostName: to.name, From: to.name, Missed: true})
@@ -231,12 +253,16 @@ func (s *sim) run() {
 		var next []func()
 		for _, from := range s.nodes {
 			for _, to := range s.nodes {
-				if k := [2]string{from.name, to.name}; len(s.links[k]) > 0 {
+				if k := [2]string{from.name, to.name}; len(s.links[k]) > 0 && !s.held[k] {
 					next = append(next, func() {
 						to.in <- s.links[k][0]
 						s.links[k] = s.links[k][1:]
 						// a send got through: the transport's chase ends
-						delete(s.missed, k)
+						if s.late[k] > 0 {
+							s.late[k]--
+						} else {
+							delete(s.missed, k)
+						}
 					})
 				}
 			}
@@ -296,13 +322,21 @@ func (s *sim) tell(n *simNode, m IncomingMessage) {
 	s.told[n] = append(s.told[n], m)
 }
 
-// chase is the transport asking every node to send its state again to each member it
-// missed, as it does every few seconds until a send gets through.
+type reply struct {
+	k  [2]string
+	ch chan []byte
+}
+
+// chase is the transport asking every node for its state again, for each member it
+// missed, as it does every few seconds until a send gets through, and sending it to that
+// member alone.
 func (s *sim) chase() {
 	for k := range s.missed {
 		for _, n := range s.nodes {
 			if n.name == k[0] {
-				s.tell(n, IncomingMessage{HostName: k[1], From: k[1], Resend: true})
+				ch := make(chan []byte, 1)
+				s.replies = append(s.replies, reply{k, ch})
+				s.tell(n, IncomingMessage{HostName: k[1], From: k[1], Resend: true, Reply: ch})
 			}
 		}
 	}
@@ -897,6 +931,40 @@ func TestAResendCrossingANewerChangeStopsNobody(t *testing.T) {
 			t.Errorf("seed %d: ended %s, want the party playing", seed, got)
 		}
 	})
+}
+
+// A member's process stops past the send timeout, so the resume sent to it looks lost and
+// arrives once it runs again, late: it plays from where the party resumed, seconds behind.
+// Found on real nodes (e2e [13d]). The state sent to it again is the same resume, which it
+// already plays: that is how it knows, and it stops the party. Or it resumes on its own
+// first, a tie with the party's, which the member it missed knows.
+func TestAResumeThatArrivesLateEndsInStep(t *testing.T) {
+	for name, own := range map[string]bool{"it takes the late one": false, "it resumes on its own": true} {
+		t.Run(name, func(t *testing.T) {
+			forManySeeds(t, 50, func(t *testing.T, seed uint64) {
+				s := newSim(t, seed, 0, "a", "b", "c")
+				a, b := s.nodes[0], s.nodes[1]
+				stopped(30, s.nodes...)
+				k := [2]string{"a", "b"}
+				s.held[k] = true
+				s.script = []func(){sets(a, false), func() {
+					s.missed[k] = true
+					s.tell(a, IncomingMessage{HostName: "b", From: "b", Missed: true})
+				}, func() { s.ticks = 40 }}
+				s.run()
+				if own {
+					s.script = []func(){sets(b, false)}
+					s.run()
+				}
+				delete(s.held, k)
+				s.script = []func(){s.chase}
+				s.run()
+				if got := s.outcome(2); !strings.HasPrefix(got, "stopped in step") {
+					t.Errorf("seed %d: ended %s, want the party stopped in step", seed, got)
+				}
+			})
+		})
+	}
 }
 
 // A send can reach a member and still look lost, when its answer times out. The member

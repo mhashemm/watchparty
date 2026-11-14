@@ -100,14 +100,14 @@ change takes the next stamp, **written under the lock that decided the event goe
 (`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
 
 - **Newer is taken. The same stamp means made at once, and the safer wins for everyone**
-  (`over`): the higher entry, stopped over playing, the earlier second. Each message is a
-  whole state, so any one is enough when a mesh send fails.
+  (`over`): the higher entry, stopped over playing, the earlier second.
 - **Older and saying another state means its sender missed something** (`answer`, "catching
-  up"): the party stops as for a join and says where it is. Older and the same (`agrees`) was
-  only sent beside something newer. The loser of a tie is told quietly: it may not have heard.
+  up"): the party stops as for a join and says where it is. Older and the same (`agrees`), or
+  sent `again`, only crossed something newer. A tie's loser is told quietly: it may not have heard.
 - **A resume reaching a node that plays stops the party** ("out of sync"): newer, it missed
-  the pause between; a tie, from a member the mesh failed to reach (`Missed`) that sent
-  nothing newer since. `Resend`: the state as a pause marked `again`, let go if older.
+  the pause between; a tie from a member the mesh failed to reach (`Missed`) that sent
+  nothing newer since; or the resume it took from a member, sent `again` by it: the first
+  came late, as a stalled node's does (`[13d]`). `Resend` goes to that member alone.
 - **A joiner syncs with the party, never the party with it.** `announce` (also after a lost
   relay) sets the stamp to `unheard`, far below any a party holds, so nothing it does before
   it is answered wins, while joiners still order among themselves; `Opened` takes 1.

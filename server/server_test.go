@@ -147,6 +147,14 @@ func TestBroadcastEventsStopsWithTheParty(t *testing.T) {
 	}
 }
 
+// answer is mpv handing back nothing to send again.
+func answer(m mpv.IncomingMessage) mpv.IncomingMessage {
+	if m.Reply != nil {
+		m.Reply <- nil
+	}
+	return m
+}
+
 // An event that fails to reach a peer leaves it behind on the sender's state: mpv is told
 // at once, and asked to send it again after 1s, 2s, 4s… up to 30s, until a send gets
 // through. More failures meanwhile start no second chase, and a send to a peer that
@@ -168,7 +176,7 @@ func TestAPeerThatMissedAnEventIsChased(t *testing.T) {
 		for range 8 {
 			synctest.Wait()
 			for len(incoming) > 0 {
-				m := <-incoming
+				m := answer(<-incoming)
 				told = append(told, fmt.Sprintf("%s (%s) missed %v, resend %v at %v", m.HostName, m.From, m.Missed, m.Resend, time.Since(start)))
 			}
 			time.Sleep(time.Second)
@@ -180,7 +188,7 @@ func TestAPeerThatMissedAnEventIsChased(t *testing.T) {
 		time.Sleep(100 * time.Second)
 		synctest.Wait()
 		for len(incoming) > 0 {
-			<-incoming
+			answer(<-incoming)
 		}
 		s.track(p, nil)
 		time.Sleep(time.Minute)
@@ -211,7 +219,7 @@ func TestAChaseSkipsAWaitWithASendInIt(t *testing.T) {
 			}
 			synctest.Wait()
 			for len(incoming) > 0 {
-				if (<-incoming).Resend {
+				if answer(<-incoming).Resend {
 					at = append(at, time.Since(start))
 				}
 			}
@@ -220,6 +228,44 @@ func TestAChaseSkipsAWaitWithASendInIt(t *testing.T) {
 		// sends at 0s and 0.5s: the wait to 1s had one, the wait to 3s none
 		if want := []time.Duration{3 * time.Second}; !slices.Equal(at, want) {
 			t.Fatalf("asked mpv at %v, want %v", at, want)
+		}
+	})
+}
+
+// The state mpv hands back goes to the peer that missed something, and to it alone: to a
+// member that holds it, a resume sent again says it got the first one late. Once it gets
+// through, the chase ends.
+func TestAResendGoesToThatPeerAlone(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		incoming := make(chan mpv.IncomingMessage, 64)
+		s := New(t.Context(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+		sent := make(chan string, 8)
+		s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			b, _ := io.ReadAll(r.Body)
+			sent <- r.URL.Host + r.URL.Path + " " + string(b)
+			return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})}
+		p, q := &peer{address: "127.0.0.1:2", Hostname: "p"}, &peer{address: "127.0.0.1:3", Hostname: "q"}
+		s.addresses[p.address], s.addresses[q.address] = p, q
+		s.track(p, errors.New("peer unreachable"))
+		synctest.Wait()
+		<-incoming
+		time.Sleep(time.Second)
+		synctest.Wait()
+		m := <-incoming
+		if !m.Resend || m.From != p.address {
+			t.Fatalf("told mpv %+v, want to hand back its state for p", m)
+		}
+		m.Reply <- []byte(`{"name":"pause","data":"no","again":true}`)
+		synctest.Wait()
+		if got := <-sent; got != `127.0.0.1:2/event {"name":"pause","data":"no","again":true}` {
+			t.Fatalf("sent %s, want the state to p alone", got)
+		}
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if len(sent) > 0 || len(incoming) > 0 {
+			t.Fatalf("sent %d and told mpv %d more after it got through", len(sent), len(incoming))
 		}
 	})
 }

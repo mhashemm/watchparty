@@ -2186,43 +2186,83 @@ func TestAnOlderStateSentAgainIsLetGo(t *testing.T) {
 }
 
 // A member that something this node sent never reached is sent its state again, as a
-// pause, which moves nobody who holds it and shows nothing, each time the transport asks.
-// Being told it missed something sends nothing: that comes right after the send that
-// failed. A joiner has no state yet.
+// pause marked again, each time the transport asks, and to that member alone: it goes
+// back to the transport, not out to the party. Being told it missed something sends
+// nothing: that comes right after the send that failed. A joiner has no state yet, and a
+// state taken from that very member it has.
 func TestAMemberThatMissedSomethingIsSentTheStateAgain(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		paused bool
 		stamp  int
+		by     string
 		want   string
 	}{
-		"stopped": {true, 3, "yes"},
-		"playing": {false, 3, "no"},
-		"joining": {true, unheard, ""},
+		"stopped":       {true, 3, "", "yes"},
+		"playing":       {false, 3, "", "no"},
+		"taken from b":  {false, 3, "b", "no"},
+		"joining":       {true, unheard, "", ""},
+		"taken from it": {false, 3, "a", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			n, _, outgoing, requests := liveClient(t)
-			n.paused, n.pos, n.stamp = c.paused, 40, c.stamp
+			n.paused, n.pos, n.stamp, n.by = c.paused, 40, c.stamp, c.by
+			replies := make(chan []byte, 2)
 			go func() {
 				n.apply(IncomingMessage{HostName: "a", From: "a", Missed: true})
-				n.apply(IncomingMessage{HostName: "a", From: "a", Resend: true})
-				n.apply(IncomingMessage{HostName: "a", From: "a", Resend: true})
+				n.apply(IncomingMessage{HostName: "a", From: "a", Resend: true, Reply: replies})
+				n.apply(IncomingMessage{HostName: "a", From: "a", Resend: true, Reply: replies})
 				n.apply(peer("a", `{"name":"show-text","data":"mark"}`))
 			}()
 			if got := next(t, requests); got != "show-text mark 5000" {
 				t.Fatalf("sent %q to mpv, want nothing", got)
 			}
 			for range 2 {
+				b := next(t, replies)
 				if c.want == "" {
-					break
+					if b != nil {
+						t.Fatalf("handed back %s, want nothing to send", b)
+					}
+					continue
 				}
-				if e := nextEvent(t, outgoing); e.Name != pause || !e.Again || e.Data != c.want || e.Stamp != c.stamp || *e.Paused != c.paused || *e.At != 40 {
-					t.Fatalf("broadcast %+v, want its state again", e)
+				e := Event{}
+				json.Unmarshal(b, &e)
+				if e.Name != pause || !e.Again || e.Data != c.want || e.Stamp != c.stamp || *e.Paused != c.paused || *e.At != 40 {
+					t.Fatalf("handed back %+v, want its state again", e)
 				}
 			}
 			if len(outgoing) > 0 {
-				t.Fatalf("broadcast %s, want nothing more", <-outgoing)
+				t.Fatalf("broadcast %s, want it sent to a alone", <-outgoing)
+			}
+		})
+	}
+}
+
+// What was sent to this node looked lost to its sender, which sends it again: the same
+// resume, reaching a node that already plays the one it took from that sender. So the
+// first one got here late, and this node plays behind: the party stops. One that plays a
+// resume taken from someone else got it on time.
+func TestAResumeSentAgainThatThisNodeTookFromItsSenderStopsTheParty(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		by    string
+		stops bool
+	}{"taken from a": {"a", true}, "taken from c": {"c", false}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, _, _, requests := liveClient(t)
+			n.pos, n.stamp, n.by = 30, 2, c.by
+			go func() {
+				n.apply(peer("a", `{"stamp":2,"at":40,"again":true,"name":"pause","data":"no"}`))
+				n.apply(peer("a", `{"name":"show-text","data":"mark"}`))
+			}()
+			want := "show-text mark 5000"
+			if c.stops {
+				want = "show-text paused: out of sync with a 5000"
+			}
+			if got := next(t, requests); got != want {
+				t.Fatalf("sent %q, want %q", got, want)
 			}
 		})
 	}
