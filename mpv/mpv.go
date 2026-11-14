@@ -24,6 +24,7 @@ const (
 	pausedForCache  = "paused-for-cache"
 	playlistPos     = "playlist-pos"
 	filename        = "filename"
+	startFile       = "start-file"
 	fileLoaded      = "file-loaded"
 	duration        = "duration"
 	propertyChange  = "property-change"
@@ -169,6 +170,8 @@ type Event struct {
 	Entry  *int     `json:"entry,omitempty"`
 	// Again: the state its sender holds, sent again to a member the mesh failed to reach
 	Again bool `json:"again,omitempty"`
+	// EntryID: the playlist entry a start-file opens, counted from 1
+	EntryID int `json:"playlist_entry_id,omitempty"`
 	Response
 }
 
@@ -229,6 +232,11 @@ type Client struct {
 	following []string
 	loading   bool
 	heldSeek  string
+	// started, loaded: the entry mpv opens and the one it has loaded, by start-file and
+	// file-loaded, counted from 1 as mpv does; 0 for none. cleared: what this node had
+	// marked for the last file is gone, for the one started
+	started, loaded int
+	cleared         bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -297,23 +305,40 @@ func (c *Client) react(event Event) ([][]byte, error) {
 		}
 	case playbackRestart:
 		c.peerSeek = false
+	case startFile:
+		c.started, c.loaded, c.cleared = event.EntryID, 0, false
 	case fileLoaded:
+		c.loaded = c.started
 		c.fileLoaded()
 	case propertyChange:
 		if event.Data != "" {
-			return c.propertyChanged(event)
+			out, err := c.propertyChanged(event)
+			if event.Name == playlistPos {
+				c.fileLoaded()
+			}
+			return out, err
 		}
 	}
 	return nil, errDoNotSend
 }
 
-// fileLoaded lets go of the seek held for the entry this node was heading to.
+// fileLoaded lets go of the seek held for the entry this node was heading to, once mpv has
+// loaded it and said so. mpv reports a property only once its event queue is empty
+// (client.h), so its report of the entry can come before file-loaded or after it; events
+// keep their order, and start-file names the entry.
 func (c *Client) fileLoaded() {
 	// a file on the way to where this node is headed: a seek let go here lands on it
-	if c.heading() != c.current {
+	if c.loaded == 0 || c.loaded != c.heading()+1 {
 		return
 	}
-	c.loading, c.following = false, nil
+	c.loading = false
+	if c.current+1 == c.loaded {
+		// whatever else it was heading to, mpv never reported (MPV.md)
+		c.following = nil
+	} else {
+		// the report is still to come: a seek let go now must survive it
+		c.clear()
+	}
 	if held := c.heldSeek; held != "" {
 		// still on its way until seekTo has marked the seek, or target sees neither
 		pos, _ := strconv.ParseFloat(held, 64)
@@ -387,14 +412,23 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 		log.Printf("now playing: %s\n", name)
 	case playlistPos:
 		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-			c.current, c.pos, c.seeking, c.landing = n, 0, false, false
+			c.current = n
 			moved = c.seen[timePos]
-			if moved {
-				c.seeks = []float64{0}
+			if !c.cleared || c.started != n+1 {
+				c.clear()
 			}
 		}
 	}
 	return extra, moved
+}
+
+// clear forgets the second this node was on and the seeks it marked, as mpv opens another
+// file: the old second would go out with a pause, and the new file's 0 as a seek.
+func (c *Client) clear() {
+	c.pos, c.seeking, c.landing, c.cleared = 0, false, false, true
+	if c.seen[timePos] {
+		c.seeks = []float64{0}
+	}
 }
 
 // pauseChanged is the user's own pause or resume.
@@ -479,13 +513,14 @@ func (s state) agrees(h state) bool {
 }
 
 // held is the state this node holds: the entry it is heading to and its second there,
-// which is the start of a file still loading unless a seek waits for it. Never the file
+// which is the start of a file still loading unless a seek waits for it; one loaded before
+// mpv reported it is not, as a seek let go there marked its second. Never the file
 // mpv happens to be on: a state with the party's stamp on the entry it left is a tie it
 // could win, and would drag the party back. Stopped once it is stopping the party
 // (pauseParty): its own move says so, before mpv has stopped.
 func (c *Client) held() state {
 	s := state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
-	if s.entry != c.current && c.heldSeek == "" {
+	if c.loading && c.heldSeek == "" {
 		s.at = 0
 	}
 	return s

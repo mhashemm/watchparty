@@ -173,11 +173,11 @@ reason: nobody starts the next one until someone resumes.
   nothing: it can land after a peer sent this node elsewhere.
 - **Any other report is a key press and clears the queue,** so the party hears every report
   from there on.
-- **A switch resets `c.pos` and `seeks` to 0.** The old position would go out with the
-  pause, and the new file's `time-pos` 0 would go out as a seek.
-- **`loading` holds a seek until the `file-loaded` of the entry it is heading to**
-  (`heldSeek`): sent earlier it lands on another file, which loses it. A joiner hits this
-  every time. Another move drops the held seek.
+- **A switch resets `c.pos` and `seeks` to 0** (`clear`). The old position would go out with
+  the pause, and the new file's `time-pos` 0 would go out as a seek.
+- **`loading` holds a seek until the entry it is heading to has loaded** (`heldSeek`), or it
+  lands on another file and is lost; another move drops it. **The loaded entry is `start-file`'s
+  id, never `current`:** mpv can report the entry after `file-loaded` (`MPV.md`).
 - **A pause, seek or resume from another entry that doesn't win** was sent before someone
   moved: it loses on the entry, and its sender is told where the party is (`answer`, which
   stops a playing node): the move may never have reached it.

@@ -34,6 +34,9 @@ type simNode struct {
 	notices []string
 	seeks   []string
 	moves   []int
+	// reports: what mpv holds back until its event queue is empty (client.h), so a move's
+	// report can come after its file-loaded
+	reports []string
 }
 
 type sim struct {
@@ -53,7 +56,7 @@ type sim struct {
 	replies []reply
 	// late: how many of a link's messages were sent while it was held, whose sender gave up
 	// on them: delivered, they end no chase
-	late map[[2]string]int
+	late   map[[2]string]int
 	ticks  int
 	script []func()
 }
@@ -135,7 +138,23 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	}
 }
 
-func (n *simNode) emit(line string) { n.writes <- line }
+func (n *simNode) emit(line string) {
+	n.landReportsLocked()
+	n.writes <- line
+}
+
+func (n *simNode) landReports() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.landReportsLocked()
+}
+
+func (n *simNode) landReportsLocked() {
+	for _, r := range n.reports {
+		n.writes <- r
+	}
+	n.reports = nil
+}
 
 func (n *simNode) setPause(paused bool) {
 	if n.paused == paused {
@@ -179,12 +198,17 @@ func (n *simNode) request(i int) {
 	}
 }
 
-func (n *simNode) landMove() {
+func (n *simNode) landMove() { n.landMoveReporting(false) }
+
+// landMoveLate is mpv's queue still holding file-loaded when it would report the entry.
+func (n *simNode) landMoveLate() { n.landMoveReporting(true) }
+
+func (n *simNode) landMoveReporting(late bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	i := n.moves[0]
 	n.moves = n.moves[1:]
-	n.move(i)
+	n.move(i, late)
 }
 
 // foldMoves is mpv handling them too close together to report any but the last. Back
@@ -195,22 +219,34 @@ func (n *simNode) foldMoves() {
 	i := n.moves[len(n.moves)-1]
 	n.moves = nil
 	if i == n.entry {
+		n.emit(started(i))
 		n.emit(`{"event":"file-loaded"}` + "\n")
 		return
 	}
-	n.move(i)
+	n.move(i, false)
+}
+
+func started(i int) string {
+	return fmt.Sprintf(`{"event":"start-file","playlist_entry_id":%d}`+"\n", i+1)
 }
 
 // move drops a seek that hasn't landed: mpv reports one sent just before a switch ahead
 // of it or not at all, never on the new file, which always opens at 0 (MPV.md).
-func (n *simNode) move(i int) {
+func (n *simNode) move(i int, late bool) {
 	if i == n.entry {
 		return
 	}
 	n.entry, n.pos, n.seeks = i, 0, nil
-	n.emit(propertyChangeLine(playlistPos, strconv.Itoa(i), 0))
+	n.emit(started(i))
+	reports := []string{propertyChangeLine(playlistPos, strconv.Itoa(i), 0), propertyChangeLine(timePos, "0.000000", 0)}
+	if late {
+		n.emit(`{"event":"file-loaded"}` + "\n")
+		n.reports = reports
+		return
+	}
+	n.emit(reports[0])
 	n.emit(`{"event":"file-loaded"}` + "\n")
-	n.emit(propertyChangeLine(timePos, "0.000000", 0))
+	n.emit(reports[1])
 }
 
 // run goes until nothing is left to happen, picking at random among what could happen next.
@@ -277,7 +313,10 @@ func (s *sim) run() {
 				next = append(next, from.landSeek)
 			}
 			if len(from.moves) > 0 {
-				next = append(next, from.landMove)
+				next = append(next, from.landMove, from.landMoveLate)
+			}
+			if len(from.reports) > 0 {
+				next = append(next, from.landReports)
 			}
 			if len(from.moves) > 1 {
 				next = append(next, from.foldMoves)

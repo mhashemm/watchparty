@@ -1255,6 +1255,7 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"start-file","playlist_entry_id":2}` + "\n")
 	send(`{"event":"property-change","name":"playlist-pos","data":"1"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
@@ -1443,6 +1444,7 @@ func TestANewerSeekFromAnotherEntryBringsThisNodeThere(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"start-file","playlist_entry_id":3}` + "\n")
 	send(`{"event":"property-change","name":"playlist-pos","data":"2"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 40.000000" {
@@ -1483,6 +1485,7 @@ func TestMessagesAreCheckedAgainstWhereWeAreHeading(t *testing.T) {
 			t.Fatalf("sent %q, want %q", got, want)
 		}
 	}
+	send(`{"event":"start-file","playlist_entry_id":2}` + "\n")
 	send(`{"event":"property-change","name":"playlist-pos","data":"1"}` + "\n")
 	send(`{"event":"file-loaded"}` + "\n")
 	if got := next(t, requests); got != "set_property time-pos 41.000000" {
@@ -1589,37 +1592,67 @@ func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
 // Two players reach the end of an entry together. One decides to follow the other, and
 // its own move arrives while it is pausing. The set that follows would change nothing, so
 // mpv would never answer it with an event, and it would wait for a load that has passed,
-// holding every later seek forever.
+// holding every later seek forever. mpv reports a property only once its event queue is
+// empty (client.h), so its report of the entry can come before file-loaded or after it,
+// and the load can be over before the move arrives. A seek held for the file and let go at
+// its file-loaded must still be marked when the report comes: its echo is no one's seek.
 func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Parallel()
-	ours, theirs := net.Pipe()
-	t.Cleanup(func() { ours.Close(); theirs.Close() })
-	c := newTestClient(make(chan []byte, 16), bufio.NewScanner(ours))
-	c.conn.conn = ours
-	c.names = []string{"e1", "e2", "e3"}
-	c.current = 1
-	c.seen[pause], c.seen[timePos], c.seen[playlistPos] = true, true, true
-	sent := make(chan string, 16)
-	go func() {
-		sc := bufio.NewScanner(theirs)
-		for sc.Scan() {
-			req := Request{}
-			json.Unmarshal(sc.Bytes(), &req)
-			command := strings.TrimSpace(fmt.Sprintln(req.Command...))
-			sent <- command
-			if command == "set_property pause true" {
-				fmt.Fprint(theirs, propertyChangeLine(playlistPos, "2", 0), `{"event":"file-loaded"}`+"\n")
-			}
-			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
-		}
-	}()
-	go c.watch()
+	started := `{"event":"start-file","playlist_entry_id":3}` + "\n"
+	loaded := `{"event":"file-loaded"}` + "\n"
+	reported := propertyChangeLine(playlistPos, "2", 0)
+	for _, tc := range []struct{ name, before, pausing, after, seeking string }{
+		{"reported, then loaded", "", started + reported + loaded, "", ""},
+		{"loaded, then reported", "", started + loaded + reported, "", ""},
+		{"loaded before the move came", started + loaded, reported, "", ""},
+		{"loaded with a seek held, then reported", "", "", started + loaded, reported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ours, theirs := net.Pipe()
+			t.Cleanup(func() { ours.Close(); theirs.Close() })
+			outgoing := make(chan []byte, 16)
+			c := newTestClient(outgoing, bufio.NewScanner(ours))
+			c.conn.conn = ours
+			c.names = []string{"e1", "e2", "e3"}
+			c.current = 1
+			c.seen[pause], c.seen[timePos], c.seen[playlistPos] = true, true, true
+			sent := make(chan string, 16)
+			go func() {
+				sc := bufio.NewScanner(theirs)
+				for sc.Scan() {
+					req := Request{}
+					json.Unmarshal(sc.Bytes(), &req)
+					command := strings.TrimSpace(fmt.Sprintln(req.Command...))
+					sent <- command
+					switch command {
+					case "show-text before 5000":
+						fmt.Fprint(theirs, tc.before)
+					case "set_property pause true":
+						fmt.Fprint(theirs, tc.pausing)
+					case "set_property time-pos 5.000000":
+						// the person resumes once the seek has landed: what goes out first
+						fmt.Fprint(theirs, tc.seeking, `{"event":"seek"}`+"\n", propertyChangeLine(timePos, "5.000000", 0),
+							`{"event":"playback-restart"}`+"\n", propertyChangeLine(pause, "no", 0))
+					}
+					fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+				}
+			}()
+			go c.watch()
+			// what mpv sends before replying is handled before the reply
+			c.showText("before")
 
-	c.apply(peer("a", move(1, 2)))
-	c.apply(peer("a", stamped(2, tagged(2, `{"event":"property-change","name":"time-pos","data":"5.000000"}`))))
-	// setting the entry mpv reached by itself is a no-op (MPV.md), and loading, set before
-	// mpv was told, was cleared by that file's file-loaded
-	for got := next(t, sent); got != "set_property time-pos 5.000000"; got = next(t, sent) {
+			c.apply(peer("a", move(1, 2)))
+			c.apply(peer("a", stamped(2, tagged(2, `{"event":"property-change","name":"time-pos","data":"5.000000"}`))))
+			fmt.Fprint(theirs, tc.after)
+			// setting the entry mpv reached by itself is a no-op (MPV.md), and loading, set
+			// before mpv was told, was cleared by that file's file-loaded
+			for got := next(t, sent); got != "set_property time-pos 5.000000"; got = next(t, sent) {
+			}
+			if got := next(t, outgoing); !strings.Contains(string(got), `"name":"pause","data":"no"`) {
+				t.Fatalf("went out before the person's resume: %s", got)
+			}
+		})
 	}
 }
 
