@@ -1,7 +1,7 @@
 # What ./e2e.py needs, so `make e2e` never reaches the host's desktop, bus or display.
 # It runs as a user with the host's uid and gid, so the logs it leaves are the host
 # user's; dbus-daemon refuses a uid that isn't in /etc/passwd.
-FROM golang:1.27.3-trixie
+FROM golang:1.27.4-trixie
 RUN apt-get update && apt-get install -y --no-install-recommends \
         mpv ffmpeg chromium dbus-daemon xvfb xauth python3 \
     && rm -rf /var/lib/apt/lists/*
