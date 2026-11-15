@@ -40,7 +40,7 @@ All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.
 """
-import argparse, contextlib, functools, glob, http.client, http.server, itertools, json, os, re, shutil, signal, socket, subprocess
+import argparse, ast, contextlib, functools, glob, http.client, http.server, itertools, json, os, re, shutil, signal, socket, subprocess
 import plistlib, queue, random, sys, tempfile, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import e2e_lib
@@ -280,11 +280,19 @@ def connected(n, times=1):
     return log(n).count("relay: connected") >= times
 
 
+def hold(secs, why):
+    """The one sleep a case takes: a window in which something must NOT happen (an echo,
+    a bounce, a second notice), or time let pass on purpose (the video plays, the relay
+    stays down). why says which. Anything that does happen is waited for with until();
+    the run refuses a bare time.sleep outside the harness's own helpers."""
+    time.sleep(secs)
+
+
 def toggle(n=None, settle=0.9):
     """Flip pause to the opposite of its current value; mpv emits no event for a no-op set."""
     n = n or A
     setp(n, "pause", not get(n, "pause"))
-    time.sleep(settle)
+    hold(settle, "mpv's change and its broadcast land")
 
 
 def log(n):
@@ -1020,6 +1028,23 @@ def slowest(n=5):
     return ", ".join(f"{c} {t:.0f}s" for t, c in sorted(took, reverse=True)[:n])
 
 
+def bare_sleeps(allowed=("hold", "pipe", "do_GET")):
+    """Lines of this file with a time.sleep outside the helpers allowed to sleep."""
+    found = []
+
+    def walk(node, owner):
+        for child in ast.iter_child_nodes(node):
+            name = child.name if isinstance(child, (ast.FunctionDef, ast.ClassDef)) else owner
+            if isinstance(child, ast.Call) and ast.unparse(child.func) == "time.sleep" and name not in allowed:
+                found.append(child.lineno)
+            walk(child, name)
+    walk(ast.parse(open(__file__).read()), None)
+    return found
+
+
+if bare_sleeps():
+    sys.exit(f"e2e.py lines {bare_sleeps()}: a bare time.sleep. Wait for what happens with until(), "
+             "and for what must not with hold(secs, why)")
 need("go")
 need("mpv")
 print(f"run directory: {RUN}")
@@ -1176,7 +1201,7 @@ def p2p_suite():
             before = sent()
             ipc(nodes[b]["sock"], "seek", 7, "relative")
             ok("everyone is at exactly 19s, not a keyframe", until(lambda: in_step(P) and near(get(b, "time-pos"), 19.0, 0.15)), where(P))
-            time.sleep(QUIET)  # a second broadcast would come right behind the first
+            hold(QUIET, "a second broadcast would come right behind the first")
             ok(f"{b} broadcast one position for one seek", sent() - before == 1, f"{sent() - before} sent")
 
     @case("[5c] an applied event is not echoed back (the a->b->a rebound)")
@@ -1188,7 +1213,7 @@ def p2p_suite():
             before = {n: pauses(n) for n in P}
             setp(a, "pause", True)
             until(lambda: stopped(P) and all(pauses(n) > before[n] for n in P[1:]))
-            time.sleep(QUIET)  # an echo would be right behind the pause
+            hold(QUIET, "an echo would be right behind the pause")
             ok("everyone stopped", stopped(P), where(P))
             # if any peer rebroadcast the echo, the originator would be told it was paused
             # by someone else and the rest would see the notice twice
@@ -1205,7 +1230,7 @@ def p2p_suite():
             setp(a, "pause", False)
             must("everyone plays", until(lambda: playing(P)), where(P))
             before = {n: osd(n).count(f"synced by {a}") for n in P[1:]}
-            time.sleep(4)  # mpv reports time-pos ~10 times a second while playing
+            hold(4, "mpv reports time-pos ~10 times a second while playing")
             for n in P[1:]:
                 after = osd(n).count(f"synced by {a}")
                 ok(f"no time-pos storm reached {n}", after == before[n], f"{after - before[n]} sync notices in 4s")
@@ -1551,7 +1576,7 @@ def relay_suite():
             setp(a, "pause", False)
             must("everyone plays", until(lambda: playing(P)), where(P))
             before = {n: osd(n).count(f"synced by {a}") for n in P[1:]}
-            time.sleep(4)  # mpv reports time-pos ~10 times a second while playing
+            hold(4, "mpv reports time-pos ~10 times a second while playing")
             for n in P[1:]:
                 after = osd(n).count(f"synced by {a}")
                 ok(f"no time-pos storm reached {n}", after == before[n], f"{after - before[n]} sync notices in 4s")
@@ -1577,7 +1602,7 @@ def relay_suite():
                 setp(a, "time-pos", 5.0 + i * 2)
                 setp(a, "pause", False)
                 must(f"round {i + 1} plays", until(lambda: playing(P)), where(P))
-                time.sleep(0.15)
+                hold(0.15, "long enough to play a few frames")
                 setp(a, "pause", True)
                 must(f"round {i + 1} stops", until(lambda: stopped(P)), where(P))
             must("the rounds are over", quiet(P))
@@ -1593,7 +1618,7 @@ def relay_suite():
             before = {n: pauses(n) for n in P}
             setp(a, "pause", True)
             until(lambda: stopped(P) and all(pauses(n) > before[n] for n in P[1:]))
-            time.sleep(QUIET)  # an echo would be right behind the pause
+            hold(QUIET, "an echo would be right behind the pause")
             ok("everyone stopped", stopped(P), where(P))
             # if any peer rebroadcast the echo, the originator would be told it was paused
             # by someone else and the rest would see the notice twice
@@ -1621,7 +1646,7 @@ def relay_suite():
             resolve(late)
             for n in P:
                 ok(f"{n} told why, though the party was already stopped", until(lambda: f"paused for {late}: joining" in osd(n)), str(osd(n)))
-            time.sleep(QUIET)  # a rewind would go out as soon as its file loaded
+            hold(QUIET, "a rewind would go out as soon as its file loaded")
             ok("nobody moved, and the joiner is at 33s too", in_step(P + [late], 33.0), where(P + [late]))
 
     @case("[R10] a different room is isolated")
@@ -1636,7 +1661,7 @@ def relay_suite():
             resolve(other)
             try:
                 setp(other, "time-pos", 5.0)
-                time.sleep(QUIET)  # what we wait for is something NOT arriving
+                hold(QUIET, "the other room's seek would arrive at once")
                 ok("nobody here took the other room's seek", in_step(P, 33.0), where(P))
                 ok("nobody here saw the other room's node", not any(other in known(n) for n in P))
                 ok("a quoted mpv flag keeps its space", get(other, "title") == "two words" and get(other, "playlist-count") == 1,
@@ -1778,7 +1803,7 @@ def relay_suite():
                     until(lambda: near(get(a, "time-pos"), pos))
                 ok("the seeks landed while it was loading", not booted(slow))
                 until(lambda: in_step(P, 50))
-                time.sleep(QUIET)  # a late echo would go out right behind the last seek
+                hold(QUIET, "a late echo would go out right behind the last seek")
                 ok("quick seeks don't bounce back", in_step(P, 50), where(P))
                 must("then it loads", until(lambda: booted(slow), BOOT), log(slow)[-300:])
             finally:
@@ -1855,7 +1880,7 @@ def relay_suite():
         for i, (resumer, pauser) in enumerate([("nodeLagA", "nodeLagB"), ("nodeLagB", "nodeLagA")] * 2):
             setp(resumer, "pause", False)
             until(lambda: all(get(n, "pause") is False for n in lagged))
-            time.sleep(1)
+            hold(1, "it plays a while before the other pauses")
             setp(pauser, "pause", True)
             until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 3)
             ok(f"round {i + 1}: {resumer} resumed, {pauser} paused, both stopped together", gap() < 0.05,
@@ -1903,7 +1928,7 @@ def relay_suite():
             proxy.cut()
             until(lambda: connected(flaky, 2))  # a dropped conn is redialled at once
             ok(f"{flaky} says it lost the relay", until(lambda: "lost the relay, reconnecting" in osd(flaky)), str(osd(flaky)[-3:]))
-            time.sleep(QUIET)  # what it says back, a second join or a false leave would follow the swap at once
+            hold(QUIET, "what it says back, a second join or a false leave would follow the swap at once")
             ok("nobody stopped", playing(everyone)
                and not any(s.startswith("paused") for n in everyone for s in osd(n)[said[n]:]), str([osd(n)[said[n]:] for n in everyone]))
             after = offsets(everyone)
@@ -1931,7 +1956,7 @@ def relay_suite():
             must("the relay saw it go", until(lambda: flaky_lines("away")))
             proxy.shut = False
             must(f"{flaky} redialled", until(lambda: connected(flaky, 3)))
-            time.sleep(QUIET)
+            hold(QUIET, "a stop or a notice would follow the redial at once")
             ok("nobody stopped, and nobody was told anything", playing(everyone)
                and all(osd(n)[said[n]:] == [] for n in P), str([osd(n)[said[n]:] for n in everyone]))
             away, joins = flaky_lines("away"), flaky_lines("joined")
@@ -1964,7 +1989,7 @@ def relay_suite():
             relays_now[0].wait(timeout=10)
             ok("every node says it lost the relay", until(lambda: all("lost the relay, reconnecting" in osd(n) for n in P)),
                str([osd(n)[-1:] for n in P]))
-            time.sleep(3)  # the relay stays down a while: what a node does without it shows
+            hold(3, "the relay stays down a while: what a node does without it shows")
             ok("no node died with the relay", all(nodes[n]["proc"].poll() is None for n in P))
             relays_now[0] = launch_relay()
             until(lambda: all(connected(n, 2) for n in P), 30)  # backoff is 1,2,4,8s
@@ -2126,7 +2151,7 @@ def media_suite():
         ipc(nodes[host]["sock"], "playlist-next")
         ok("moving while paused moves the other", until(on("video3.mkv", "a2.mkv")), get(guest, "filename"))
         ok("and says who", until(lambda: f"from a1.mkv to a2.mkv, by {host}" in osd(guest)), str(osd(guest)[-3:]))
-        time.sleep(QUIET)
+        hold(QUIET, "a bounce would go out as soon as the move landed")
         ok("nobody bounced back", on("video3.mkv", "a2.mkv")(), str([get(n, "filename") for n in (host, guest)]))
 
         setp(host, "pause", False)
@@ -2203,7 +2228,7 @@ def media_suite():
             resolve(n)
         together = lambda: get("epH", "filename") == get("epI", "filename") in ("video2.mkv", "video10.mkv")
         ok("they settle on one", until(together), str([get(n, "filename") for n in ("epH", "epI")]))
-        time.sleep(2)
+        hold(2, "a second switch would follow the first at once")
         ok("and stay there", together(), str([get(n, "filename") for n in ("epH", "epI")]))
         for n in ("epH", "epI"):
             stop(n)
@@ -2234,7 +2259,7 @@ def media_suite():
         ipc(nodes["epF"]["sock"], "playlist-prev")
         ipc(nodes["epG"]["sock"], "playlist-next")
         ok("they settle on the higher one", until(lambda: get("epF", "filename") == get("epG", "filename") == "video10.mkv"), str([get(n, "filename") for n in ("epF", "epG")]))
-        time.sleep(2)
+        hold(2, "a second switch would follow the first at once")
         ok("and stay there", get("epF", "filename") == get("epG", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epF", "epG")]))
 
         part("[R15g2] two people seeking at once end up on the earlier second, and a resume crossing a seek stops both there")
@@ -2242,13 +2267,13 @@ def media_suite():
         setp("epF", "time-pos", 3)
         setp("epG", "time-pos", 6)
         ok("both seeks end on the earlier one", until(lambda: all(near(v, 3, 0.3) for v in where())), str(where()))
-        time.sleep(2)
+        hold(2, "a swap would follow the seeks at once")
         ok("and stay there, not swapped", all(near(v, 3, 0.3) for v in where()), str(where()))
         setp("epF", "pause", False)
         setp("epG", "time-pos", 8)
         stopped = lambda: all(near(v, 8, 0.3) for v in where()) and all(get(n, "pause") is True for n in ("epF", "epG"))
         ok("a resume crossing a seek stops both where the seek went", until(stopped), f'{where()} {[get(n, "pause") for n in ("epF", "epG")]}')
-        time.sleep(2)
+        hold(2, "a node playing on would be seen at once")
         ok("and neither plays on alone", stopped(), f'{where()} {[get(n, "pause") for n in ("epF", "epG")]}')
         for n in ("epF", "epG"):
             stop(n)
@@ -2532,7 +2557,7 @@ def gui_suite():
         for key, code, vk, mods in (("F5", "F5", 116, 0), ("r", "KeyR", 82, 2), ("r", "KeyR", 82, 4), ("R", "KeyR", 82, 10)):
             for kind in ("rawKeyDown", "keyUp"):
                 nodes[H]["page"].call("Input.dispatchKeyEvent", type=kind, key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk, modifiers=mods)
-        time.sleep(QUIET)  # a reload would land right behind the keys
+        hold(QUIET, "a reload would land right behind the keys")
         ok("F5, Ctrl+R, Cmd+R and Ctrl+Shift+R, pressed for real, don't reload it", js(H, "window.notReloaded") is True)
 
     @case("[G2] the tabs switch views and the address remembers which")
@@ -3093,7 +3118,7 @@ def gui_suite():
 
         part(f"[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
         nodes[G2]["page"].call("Page.reload")
-        time.sleep(3 + QUIET)  # the GUI's closeGrace
+        hold(3 + QUIET, "the GUI's closeGrace: a reload that ended it would show")
         ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
         try:
             nodes[G2]["page"].call("Page.close")
@@ -3178,7 +3203,7 @@ def gui_suite():
         O = launch_gui("guiHandoff", browser="handoff")
         on_end(lambda: kill_gui(O))
         until(lambda: launches(O))
-        time.sleep(QUIET)
+        hold(QUIET, "the GUI would end closeGrace after its window went")
         ok("the GUI is still up", nodes[O]["proc"].poll() is None and listening(int(nodes[O]["url"].rsplit(":", 1)[1].strip("/"))))
         ok("and didn't log a closed window", "gui: window closed" not in log(O))
 

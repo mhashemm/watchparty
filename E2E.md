@@ -57,8 +57,9 @@ real 30s ping and 10s pong timeout.
   are apart by however long that took. For "nothing moved" while playing, compare
   `offsets(P)` before and after with `unmoved()`.
 - **No fixed sleeps for things that happen.** Every wait is `until(cond, ceiling)`;
-  `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen sleeps
-  (`QUIET`, after its positive half holds).
+  `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen, or
+  time let pass on purpose, sleeps: `hold(secs, why)`, after the positive half holds.
+  The run refuses a bare `time.sleep` outside the harness's own helpers.
 - **A step the rest of a case needs is `must()`, not `ok()`**: a failure ends that case
   with `STOP` instead of one cause showing up as ten FAILs.
   A crash in an `@case` fails that case alone.
