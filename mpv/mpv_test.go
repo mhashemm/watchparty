@@ -383,6 +383,57 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 	})
 }
 
+// Once the file has loaded, mpv hanging up is how the party learns mpv quit: the cancel
+// New was given is called (party.Run tells a quit from other stops through it).
+func TestMpvHangingUpAfterLoadingEndsTheParty(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		go fakeMpv(theirs, 0, propertyChangeLine(pause, "yes", 0), mpvAt(0))
+		cancelled := atomic.Bool{}
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if _, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if cancelled.Load() {
+			t.Fatal("cancelled the party while mpv was still there")
+		}
+		theirs.Close()
+		synctest.Wait()
+		if !cancelled.Load() {
+			t.Fatal("mpv hung up and the party never heard")
+		}
+	})
+}
+
+// A reply that never comes is given up on after 5s, like a refusal: the node lets go of
+// what it marked, asks the party again, and goes on with what comes next.
+func TestAReplyThatNeverComesIsGivenUpOn(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvAnswersLate()
+		n.peerSays("a", stamped(5, seekEvent(20)))
+		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 20.000000]" {
+			t.Fatalf("seeks %q, want the seek sent", got)
+		}
+		time.Sleep(4 * time.Second)
+		if got := said(n.broadcasts()); len(got) != 0 {
+			t.Fatalf("broadcast %q before 5s, want nothing yet", got)
+		}
+		time.Sleep(2 * time.Second)
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
+			t.Fatalf("broadcast %q after 5s, want it to ask the party again", got)
+		}
+		n.peerSays("a", stamped(6, seekEvent(30)))
+		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 30.000000]" {
+			t.Fatalf("seeks %q, want the next message handled", got)
+		}
+	})
+}
+
 // A peer must never wait on a file that is slow to load (a stream): every send lands
 // while mpv is still loading, and only the newest of what the party said is applied once
 // it has. Each says the whole of it: a resume says where from.
