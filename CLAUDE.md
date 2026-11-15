@@ -55,10 +55,10 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 
   | Printed by | Line | Read by |
   |---|---|---|
-  | party | `your address to share is <invite>` | GUI invite box, `gui/store.go` (real room and secret), e2e |
+  | party | `your address to share is <invite>` | GUI invite box and status (a relay party is in once connected), `gui/store.go` (real room and secret), e2e |
   | party | `init done`, `unreachable address: …`, `torrent: finding peers`, `torrent: found …` | GUI status, e2e |
   | party | `file fingerprint: <hex>`; `stopped at: <seconds>[ in <file name as JSON>]` or `finished: …` once mpv exits | e2e; `gui/store.go` (where Continue starts) |
-  | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it, or `429 `/`503 ` at its start), `relay: disconnected` | GUI reconnecting, "waiting for the host" and a busy relay, e2e |
+  | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it, or `429 `/`503 ` at its start), `relay: disconnected` | GUI "You're in", reconnecting, "waiting for the host" and a busy relay, e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp`, `paused`, `at` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |

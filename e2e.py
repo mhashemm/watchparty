@@ -2644,6 +2644,14 @@ def gui_suite():
         end(G)
         ok(f"{G}'s party ended", until(lambda: status(G) == "The party has ended."), status(G))
 
+        part("[G17f] a relay that takes the connection and never answers: mpv is ready, and it is not in yet")
+        silent = socket.create_server(("127.0.0.1", 0))  # never accepts: the handshake waits
+        on_end(silent.close)
+        start(G, hostname=G, file=MEDIA, relay=f"ws://127.0.0.1:{silent.getsockname()[1]}", room="silent", secret="silent")
+        must("its mpv is ready", until(lambda: booted(G), BOOT), log(G)[-300:])
+        ok("it says it is connecting", until(lambda: status(G) == "Connecting to the relay…"), status(G))
+        end(G)
+
     @case("[G17d] a magnet link nobody seeds says so, and Stop still works")
     def _():
         G = gui("g17d")
