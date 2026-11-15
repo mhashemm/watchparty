@@ -112,6 +112,10 @@ Seen during a normal run:
   `playback-restart`: `123.456` → `123.456000`, then `123.458000`. So **an echo can
   come twice and be up to one frame off**. That's why an applied seek in
   `seeks` matches within ±0.1s and is kept, not deleted, on the first match.
+- **Nothing of a seek comes after the next seek's report.** A seek between frames, then a
+  second one sent at once, after the first's report or after its `playback-restart`: in 590
+  rounds (0.37.0 and 0.40.0, 2026-11-15) no report of the first ever came after the second's.
+  So the person's own seek ends every marker before it (`positionChanged`).
 - **`time-pos` reports the target at once, before the data is there.** Probed
   paused on a local file: right after `set_property time-pos 50`, `get_property
   time-pos` read `50.0` while `seeking` still read `true` (it was `false` 2s later). On a slow

@@ -238,6 +238,39 @@ func TestSmallSeekIsNotAnEcho(t *testing.T) {
 	})
 }
 
+// A peer sends this node to 30, and the person seeks to 39 and back to 30. Their seek to 39
+// means mpv is done with 30 (MPV.md), so the way back is theirs, not an echo of the peer's.
+func TestASeekBackToWhereAPeerSentItIsThePersonsOwn(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("a", stamped(5, seekEvent(30)))
+		n.mpvSays(mpvAt(30), mpvAt(39))
+		n.broadcasts()
+		n.mpvSays(mpvAt(30))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=30.000000]" {
+			t.Fatalf("broadcast %q, want the seek back to where the peer had sent it", got)
+		}
+	})
+}
+
+// A peer sends this node to 20 and resumes the party; later the person stops and seeks back
+// to 20. A resume taken from a peer ends the seeks this node applied, as its own does.
+func TestASeekBackAfterAPeersResumeIsThePersonsOwn(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("a", stamped(5, seekEvent(20)))
+		n.mpvObeys()
+		n.peerSays("a", stamped(6, `{"event":"property-change","name":"pause","data":"no","at":20}`))
+		n.mpvObeys()
+		n.mpvSays(mpvAt(25), propertyChangeLine(pause, "yes", 0))
+		n.broadcasts()
+		n.mpvSays(`{"event":"seek"}`, mpvAt(20), `{"event":"playback-restart"}`)
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=20.000000]" {
+			t.Fatalf("broadcast %q, want the seek back to where the peer had sent it", got)
+		}
+	})
+}
+
 // b applies a's pause, and mpv reports it before it answers the set: that report is the
 // echo, and it is also when b stopped, so a position mpv reports before its answer is a
 // seek while paused, not playback.

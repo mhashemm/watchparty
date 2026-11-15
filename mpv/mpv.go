@@ -464,6 +464,10 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 			// from here mpv plays, or doesn't: its next time-pos can come before the reply
 			// that tells the one applying it, and while stopped that would read as a seek
 			c.paused = event.paused()
+			if !c.paused {
+				// a resume taken from a peer ends the seeks applied before it, as one's own does
+				c.seeks, c.landing = nil, false
+			}
 		}
 		return extra, errEcho
 	}
@@ -559,8 +563,10 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 // doesn't, unless it is where a seek while playing landed: that pauses the party.
 func (c *Client) positionChanged() error {
 	if c.paused {
-		// its own seek: wherever it was being sent, this is where it is now
-		c.landing = false
+		// its own seek: wherever it was being sent, this is where it is now, and mpv reports
+		// nothing of a seek applied before it (MPV.md), so their markers would only swallow
+		// the person's way back to one of them
+		c.seeks, c.landing = nil, false
 		return nil
 	}
 	if c.seeking {
