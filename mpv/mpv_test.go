@@ -2308,8 +2308,8 @@ func TestAResumeToANodeThatPlaysStopsTheParty(t *testing.T) {
 	}{
 		"newer":                     {`{"stamp":4,"at":30,"name":"pause","data":"no"}`, false},
 		"newer, from where it is":   {`{"stamp":4,"at":40,"name":"pause","data":"no"}`, false},
-		"a tie, from one it missed": {`{"stamp":3,"at":30,"name":"pause","data":"no"}`, true},
-		"a tie, from ahead":         {`{"stamp":3,"at":50,"name":"pause","data":"no"}`, true},
+		"a tie, from one it missed": {`{"stamp":3,"at":40,"name":"pause","data":"no"}`, true},
+		"a tie, from just ahead":    {`{"stamp":3,"at":40.15,"name":"pause","data":"no"}`, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			nodeTest(t, func(t *testing.T) {
@@ -2333,17 +2333,60 @@ func TestAResumeToANodeThatPlaysStopsTheParty(t *testing.T) {
 	}
 }
 
-// A tie with the resume this node plays, from a member that heard it, is the same resume
-// made at once: whatever second it names, that was a moment ago on another machine.
+// A tie with the resume this node plays, from a member that heard it and resumed from the
+// same stop, is the same resume made at once. Each stopped within timePosTolerance of the
+// party's second, so the two can name seconds twice that apart.
 func TestATieFromAMemberThatMissedNothingMovesNothing(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
 		n.takes(3, false, 40)
-		n.peerSays("a", `{"stamp":3,"at":30,"name":"pause","data":"no"}`)
+		n.peerSays("a", `{"stamp":3,"at":39.82,"name":"pause","data":"no"}`)
 		if got := n.mpvWasTold(); len(got) != 0 {
 			t.Fatalf("told mpv %q, want nothing for the same resume", got)
 		}
 	})
+}
+
+// Two resumes with one stamp from different seconds were made from different stops: the
+// person at one node resumed while it was still being moved to where the other stopped
+// (SIM_SEED=10223). Neither is newer, so each would play on, that far apart for good. The
+// party stops, each where it is, and settles on the earliest. The resume this node plays
+// is its own or one it took. Sent again or back from losing the relay, a resume says where
+// its sender is now, not where it resumed from, so it is weighed by the rules for those.
+func TestATieFromAnotherSecondStopsTheParty(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		own    bool
+		resume string
+		want   string
+	}{
+		"taken":                  {false, `{"stamp":3,"at":30,"name":"pause","data":"no"}`, "[show-text paused: out of sync with a 5000 set_property pause true]"},
+		"its own":                {true, `{"stamp":4,"at":40,"name":"pause","data":"no"}`, "[show-text paused: out of sync with a 5000 set_property pause true]"},
+		"from ahead":             {false, `{"stamp":3,"at":50,"name":"pause","data":"no"}`, "[show-text paused: out of sync with a 5000 set_property pause true]"},
+		"back from losing relay": {false, `{"stamp":3,"at":30,"check":true,"name":"pause","data":"no"}`, "[]"},
+		"sent again":             {false, `{"stamp":3,"at":30,"again":true,"name":"pause","data":"no"}`, "[]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nodeTest(t, func(t *testing.T) {
+				n := ready(t, setup{})
+				if c.own {
+					// the person moves on from the stop it took, then resumes
+					n.takes(2, true, 40)
+					n.mpvSays(mpvAt(45))
+					n.mpvSays(propertyChangeLine(pause, "no", 0))
+					if got := n.broadcasts(); len(got) != 2 || got[1].Stamp != 4 || *got[1].At != 45 {
+						t.Fatalf("broadcast %+v, want its seek, then its resume from 45 with stamp 4", got)
+					}
+				} else {
+					n.takes(3, false, 40)
+				}
+				n.peerSays("a", c.resume)
+				if got := n.mpvWasTold(); fmt.Sprint(got) != c.want {
+					t.Fatalf("told mpv %q, want %s", got, c.want)
+				}
+			})
+		})
+	}
 }
 
 // The state sent again to a member the mesh missed goes to everyone, and can cross a newer
@@ -2466,11 +2509,11 @@ func TestMembersWithOneNameAreToldApart(t *testing.T) {
 			n := ready(t, setup{})
 			n.takes(3, false, 40)
 			n.transportSays(IncomingMessage{HostName: "laptop", From: "l1", Missed: true})
-			n.transportSays(laptop("l2", `{"stamp":3,"at":30,"name":"pause","data":"no"}`))
+			n.transportSays(laptop("l2", `{"stamp":3,"at":40,"name":"pause","data":"no"}`))
 			if got := n.mpvWasTold(); len(got) != 0 {
 				t.Fatalf("told mpv %q for l2, which missed nothing", got)
 			}
-			n.transportSays(laptop("l1", `{"stamp":3,"at":30,"name":"pause","data":"no"}`))
+			n.transportSays(laptop("l1", `{"stamp":3,"at":40,"name":"pause","data":"no"}`))
 			if got := n.mpvWasTold(); len(got) == 0 || got[0] != "show-text paused: out of sync with laptop 5000" {
 				t.Fatalf("told mpv %q, want the party stopped for l1", got)
 			}

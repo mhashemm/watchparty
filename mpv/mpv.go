@@ -317,6 +317,8 @@ type Client struct {
 	// stamp orders what the party shares (a Lamport clock): the highest this node has
 	// made or followed. A joiner starts at unheard.
 	stamp int
+	// since: the second the resume this node plays went from, its own or one it took
+	since float64
 	// missed: members (From) that something this node sent failed to reach
 	missed map[string]bool
 
@@ -552,6 +554,7 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 	c.paused = paused
 	if !paused {
 		c.seeks, c.seeking, c.landing = nil, false, false
+		c.since = c.target()
 		return extra, nil
 	}
 	// stopped from playing: where it is now, whatever seek was on its way
@@ -1022,10 +1025,12 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	// tie from a member something this node sent never reached, that member resumed from
 	// what it last heard; the state this node took from a member, sent again by it, to this
 	// node alone, as what it sent looked lost: it arrived late; or a newer resume from a
-	// member back from losing the relay, made where nobody heard it. Not a joiner: it syncs
+	// member back from losing the relay, made where nobody heard it; or a tie from another
+	// stop, more than the two seconds each could stop at from one. Not a joiner: it syncs
 	// when its join is answered.
+	elsewhere := !e.Again && !e.Check && math.Abs(s.at-c.since) > 2*timePosTolerance
 	apart := !s.paused && h.stamp >= 0 && s.entry == h.entry &&
-		(!h.paused && (over > 0 || over == 0 && (c.missed[m.From] || e.Again && told)) || e.Check && over > 0)
+		(!h.paused && (over > 0 || over == 0 && (c.missed[m.From] || e.Again && told || elsewhere)) || e.Check && over > 0)
 	if over > 0 {
 		// it heard something since, or made it: whatever it missed, this node now holds its
 		// state, or stops the party for it. Not when a send reaches it: a tie it sent
@@ -1085,7 +1090,7 @@ func (c *Client) commit(s state, from string) adoption {
 	// once mpv reports it; that move goes out newer than s, from the file's start
 	away := !a.moving && c.stray && c.started != c.heading()+1
 	a.seek = !there && !away && (a.stop || c.paused)
-	c.stamp, c.by = s.stamp, from
+	c.stamp, c.by, c.since = s.stamp, from, s.at
 	if a.stop {
 		c.applied[pause] = "yes"
 	}

@@ -101,9 +101,9 @@ change takes the next stamp, **written in the step that decided the event goes o
   up"): the party stops as for a join and says where it is. Older and the same (`agrees`), or
   sent `again`, only crossed something newer. A tie's loser is told quietly: it may not have heard.
 - **A resume reaching a node that plays stops the party** ("out of sync"): newer, it missed
-  the pause between; a tie from a member the mesh failed to reach (`Missed`) that sent
-  nothing newer since; or the resume it took from a member, sent `again` by it: the first
-  came late, as a stalled node's does (`[13d]`). `Resend` goes to that member alone.
+  the pause between; a tie from another stop (`since`, beyond twice the tolerance), or from a
+  member the mesh failed to reach (`Missed`) that sent nothing newer since; or the resume it
+  took from a member, sent `again` by it: the first came late (`[13d]`). `Resend`: to it alone.
 - **A joiner syncs with the party, never the party with it.** `announce` sets the stamp to
   `unheard`, far below any a party holds: nothing it does before it is answered wins, and
   joiners still order among themselves. `Opened` takes 1.
