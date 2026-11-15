@@ -84,11 +84,34 @@ jobs:
       - name: Download
         run: go mod download
 
+      # the image runs as the runner's user, as make e2e builds it
+      - name: Runner user
+        id: user
+        run: echo "uid=$(id -u)" "gid=$(id -g)" | tr ' ' '\n' >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # its 1.9GB took 80s to build in every job; the layers now come from the Actions
+      # cache, saved again only when e2e.Dockerfile changes
+      - name: Build the e2e image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: e2e.Dockerfile
+          tags: watchparty-e2e
+          load: true
+          build-args: |
+            UID=${{ steps.user.outputs.uid }}
+            GID=${{ steps.user.outputs.gid }}
+          cache-from: type=gha,scope=e2e
+          cache-to: type=gha,mode=max,scope=e2e
+
       # each phase on a runner of its own, so no phase is slowed by another's mpv's and
       # browsers; --jitter delays the phases that support it and is ignored by the rest
       - name: E2E
         timeout-minutes: 15
-        run: make e2e E2E="--mode ${{ matrix.phase }} --jitter ${{ github.run_id }}-${{ github.run_attempt }}"
+        run: make e2e E2E_IMAGE_BUILT=1 E2E="--mode ${{ matrix.phase }} --jitter ${{ github.run_id }}-${{ github.run_attempt }}"
 
       - name: Keep the e2e logs
         if: failure()
