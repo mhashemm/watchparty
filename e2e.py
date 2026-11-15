@@ -2074,6 +2074,8 @@ def media_suite():
 
         ipc(nodes[host]["sock"], "playlist-prev")
         must("back on the middle one", until(on("video3.mkv", "a2.mkv")))
+        # the filename is mpv's from start-file, the duration only once the file has loaded
+        must("its length is known", until(lambda: get(host, "duration") is not None))
         must("near its end", seek(get(host, "duration") - 1))
         setp(host, "pause", False)
         ok("reaching the end moves everyone on", until(on("video10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
