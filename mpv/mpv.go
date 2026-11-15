@@ -936,7 +936,8 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 // release lets go of what commit marked for the steps mpv refused, as it does while it
 // quits or between files: a pause marker would swallow the user's next pause, loading
 // would hold every later seek, and a seek marker would put this node on a second it never
-// reached.
+// reached, and take the user's own seek there for mpv's echo. One held for a file mpv never
+// opens is refused with the move.
 func (c *Client) release(a adoption) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -948,6 +949,9 @@ func (c *Client) release(a adoption) {
 		if n := slices.Index(c.following, strconv.Itoa(a.entry)); n >= 0 {
 			c.following = slices.Delete(c.following, n, n+1)
 		}
+	}
+	if a.now || a.moving && a.seek {
+		c.seeks = slices.DeleteFunc(c.seeks, func(pos float64) bool { return pos == a.at })
 	}
 	if a.now {
 		c.peerSeek, c.landing = false, false
@@ -1120,7 +1124,7 @@ func (c *Client) seekTo(data string) error {
 		return nil
 	}
 	if err := c.seekReq(pos); err != nil {
-		c.release(adoption{now: true})
+		c.release(adoption{state: state{at: pos}, now: true})
 		return err
 	}
 	return nil

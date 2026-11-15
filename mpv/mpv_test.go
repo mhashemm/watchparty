@@ -1258,6 +1258,53 @@ func TestAJoinForgetsTheStampAndOpeningTakesOne(t *testing.T) {
 	})
 }
 
+// A seek mpv refused never happened: the user's own seek to that second, once mpv takes
+// seeks again, is no echo and goes out. So does one held for a file whose move mpv refused.
+func TestARefusedSeekLeavesNoMarker(t *testing.T) {
+	t.Parallel()
+	userSeeks := func(n *node, pos float64) {
+		n.mpvTakesAgain()
+		n.mpvSays(`{"event":"seek"}`, mpvAt(pos), `{"event":"playback-restart"}`)
+		if got := said(n.broadcasts()); fmt.Sprint(got) != fmt.Sprintf("[time-pos=%f]", pos) {
+			t.Fatalf("broadcast %q, want the user's seek", got)
+		}
+	}
+	t.Run("a seek", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.takes(7, true, 0)
+			n.mpvRefuses("set_property time-pos", "property unavailable")
+			n.peerSays("a", stamped(8, seekEvent(20)))
+			n.broadcasts()
+			userSeeks(n, 20)
+		})
+	})
+	t.Run("a seek held for a move", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{names: threeVideos})
+			n.takes(7, true, 0)
+			n.mpvRefuses("set_property playlist-pos", "property unavailable")
+			n.peerSays("a", `{"stamp":8,"at":20,"entry":1,"event":"property-change","name":"time-pos","data":"20.000000"}`)
+			n.broadcasts()
+			userSeeks(n, 20)
+		})
+	})
+	t.Run("a seek let go once the file loaded", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{names: threeVideos})
+			n.takes(7, true, 0)
+			n.mpvRefuses("set_property time-pos", "property unavailable")
+			n.peerSays("a", `{"stamp":8,"at":20,"entry":1,"event":"property-change","name":"time-pos","data":"20.000000"}`)
+			n.mpvObeys()
+			if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 20.000000]" {
+				t.Fatalf("seeks %q, want the held seek let go", got)
+			}
+			n.broadcasts()
+			userSeeks(n, 20)
+		})
+	})
+}
+
 func tagged(entry int, event string) string {
 	return fmt.Sprintf(`{"entry":%d,%s`, entry, event[1:])
 }
