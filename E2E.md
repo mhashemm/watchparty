@@ -28,19 +28,41 @@ real 30s ping and 10s pong timeout.
   - Drive a page with `js(n, expr)` and `click()`, read it with `feed()`/`status()`.
     `go()` waits for the new run, or a check reads the last party's status.
     `confirm()` is replaced on attach; `window.asked` holds the question.
+  - A case's GUIs come from `gui(name, key=)`: a folder of its own, relay, mpv flags
+    and the create key saved, killed when the case ends. Name them after the case.
   - Cleanup kills each GUI's process group: its browser, its mpv, a restarted GUI.
-- URL cases share one HTTP server (`Quiet`). To slow one client only, use `late` and
-  `--user-agent=late`; `delay` holds every client, which made `[R11d2]` flaky.
+- URL cases share one HTTP server (`Quiet`). Slow only your own client, by its user
+  agent: `Quiet.held[agent]` seconds per request or `Quiet.rate[agent]` bytes/s, and
+  launch it with `--user-agent=<agent>`. A delay for every client made `[R11d2]` flaky,
+  and now it would slow the cases running beside it.
 - Slow networks come from `lag(port, target, delay)`, a TCP proxy. P2P can't use it,
   since peers dial the address each node advertises.
 
 ## Writing a case
 
+- **A case starts from a party of its own, never from what the last case left.**
+  `@case("[R3] ...")` adds the function under it as a case; `with party("r3") as P:`
+  gives it nodes in a fresh room, booted, connected, paused and quiet, and stops every
+  `r3-*` node at the end. A case sets up what it checks itself (seek to 30s, then play).
+- **Cases run side by side**, `CASES_AT_ONCE` at a time, when the phase calls
+  `run_cases()`; each one's output comes out whole when it ends. So a case touches
+  nothing another uses: its own room, node names, user agent and ports. One that must
+  touch what all share, like killing the relay (`[R13]`), is `@case(..., serial=True)`
+  and runs alone after the rest. Cases that share a thing only one can use at a time,
+  like the LAN's one router in `upnp`, are one `group=`: they take turns, in order, beside
+  the rest, and each still sets up what it needs. A labelled step inside a case is
+  `part("[R12b] ...")`. `mesh()` is `party()` for `p2p`, on free ports.
+- **Positions are compared only stopped: `in_step(P, at)`**, everyone paused on one file
+  and one second. Each node starts playing when the resume reaches it, so playing nodes
+  are apart by however long that took. For "nothing moved" while playing, compare
+  `offsets(P)` before and after with `unmoved()`.
 - **No fixed sleeps for things that happen.** Every wait is `until(cond, ceiling)`;
-  `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen sleeps
-  (`QUIET`, after its positive half holds).
-- **A step every later case needs is `must()`, not `ok()`**: a failure ends the phase
-  with `STOP` instead of one cause showing up as ten FAILs. Logs are still kept.
+  `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen, or
+  time let pass on purpose, sleeps: `hold(secs, why)`, after the positive half holds.
+  The run refuses a bare `time.sleep` outside the harness's own helpers.
+- **A step the rest of a case needs is `must()`, not `ok()`**: a failure ends that case
+  with `STOP` instead of one cause showing up as ten FAILs.
+  A crash in an `@case` fails that case alone.
 - **`osd()` returns a list**, so `.count(x)` is an exact match, never a substring. Use
   the full string (`f"paused by {A}"`) or `pauses()`.
 - The suite reads nodes through their log lines (root `CLAUDE.md` has the table).
@@ -62,7 +84,7 @@ injected delay before fixing it. No retries in CI, and raising a ceiling is not 
 `--jitter SEED` holds each direction of each relay connection, and each page's `/state`
 and `/log` answers, for a random time. CI runs every phase with it, and a new seed, on every PR. A seed fixes
 the delays, not the run: threads still race, so a failure may not repeat on replay.
-A case with its own proxy, like `[R11g]` or `[R12]`, skips it unless pointed at it. It
+A case with its own proxy, like `[R12]`, skips it unless pointed at it. It
 can't reorder what stays in order on one connection or happens inside one process, so
 those orders need a Go test (`mpv/party_test.go`). It covers `relay`, `media` and `gui`; `p2p` peers dial each other directly.
 A case that can't work under it says why and is left out by name; none needs to today.
