@@ -239,6 +239,9 @@ type Client struct {
 	// marked for the last file is gone, for the one started
 	started, loaded int
 	cleared         bool
+	// stray: mpv opened a file this node isn't on or heading to, and hasn't reported its
+	// entry: a key press, which goes out once it does
+	stray bool
 }
 
 func (c *Client) isEcho(event Event) bool {
@@ -309,6 +312,7 @@ func (c *Client) react(event Event) ([][]byte, error) {
 		c.peerSeek = false
 	case startFile:
 		c.started, c.loaded, c.cleared = event.EntryID, 0, false
+		c.stray = event.EntryID != c.heading()+1
 	case fileLoaded:
 		c.loaded = c.started
 		c.fileLoaded()
@@ -413,6 +417,7 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 		name, _ := json.Marshal(event.Data)
 		log.Printf("now playing: %s\n", name)
 	case playlistPos:
+		c.stray = false
 		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
 			c.current = n
 			moved = c.seen[timePos]
@@ -521,11 +526,7 @@ func (s state) agrees(h state) bool {
 // could win, and would drag the party back. Stopped once it is stopping the party
 // (pauseParty): its own move says so, before mpv has stopped.
 func (c *Client) held() state {
-	s := state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
-	if c.loading && c.heldSeek == "" {
-		s.at = 0
-	}
-	return s
+	return state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
 }
 
 // tag says what state a message was sent from, so whoever gets it knows whether it is
@@ -861,7 +862,10 @@ func (c *Client) commit(s state, from string) adoption {
 	// a file opens stopped, and a seek is made stopped: one that plays on stays where it is
 	a.stop = (a.moving || s.paused) && !c.paused
 	there := a.moving && s.at <= timePosTolerance || !a.moving && c.on(s.at)
-	a.seek = !there && (a.stop || c.paused)
+	// a seek now would land on a file mpv opened by itself, and go out as this node's own
+	// once mpv reports it; that move goes out newer than s, from the file's start
+	away := !a.moving && c.stray && c.started != c.heading()+1
+	a.seek = !there && !away && (a.stop || c.paused)
 	c.stamp, c.by = s.stamp, from
 	if a.stop {
 		c.applied[pause] = "yes"
@@ -1142,9 +1146,13 @@ func (c *Client) seekReq(pos float64) error {
 
 // target is where this node is, or where a seek it applied will land: a member that
 // just arrived is still on its way, and answering another joiner with the old spot
-// would drag the party back to it.
+// would drag the party back to it. A file still loading opens at its start, unless a seek
+// waits for it: the second it left, read as where it is, makes a seek there look done.
 func (c *Client) target() float64 {
 	held := c.heldSeek
+	if held == "" && c.loading {
+		return 0
+	}
 	if held == "" && c.landing && len(c.seeks) > 0 {
 		return c.seeks[len(c.seeks)-1]
 	}
