@@ -16,7 +16,8 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
   a transport message queued while a peer's change is in flight (`busy`). A command an mpv
   line starts (`pauseParty`, a held seek) waits in `later` until that line's broadcast is out.
 - **So an action that waits more than once stops once this node has `moved`** (`adopt`,
-  `answer`, `resume`): the person's change went out newer meanwhile. A mark that steers how
+  `answer`, `resume`): the person's change went out newer. A play already sent is undone
+  (`playLate`, `converge`); why no other late step is, `playLate` says. A mark that steers how
   mpv's lines are read is set at the step, never ahead (`peerSeek`, in `seekReq`).
 - **`New` waits for `opened`**: the first `time-pos` with data and every observe taken, or the close.
   - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's

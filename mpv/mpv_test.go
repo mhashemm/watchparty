@@ -2821,6 +2821,66 @@ func TestAStopThatLandsOffItsSecondIsSeekedBack(t *testing.T) {
 	}
 }
 
+// The person seeks to 60 while mpv still holds the play of a peer's resume, so mpv plays
+// after the person's seek, which went out newer: the party holds it, by its stamp, stopped
+// at 60, so the play is undone on this node alone, quietly (SIM_SEED=467222401814).
+func TestAPlayMpvRunsAfterThePersonsChangeIsUndone(t *testing.T) {
+	t.Parallel()
+	for name, reportFirst := range map[string]bool{"a play reported before its answer": true, "a play reported after its answer": false} {
+		t.Run(name, func(t *testing.T) {
+			nodeTest(t, func(t *testing.T) {
+				n := ready(t, setup{})
+				n.takes(2, true, 30)
+				n.mpvAnswersLate()
+				n.peerSays("a", `{"stamp":3,"at":30,"name":"pause","data":"no"}`)
+				if told := n.mpvWasTold(); fmt.Sprint(told) != "[set_property pause false]" {
+					t.Fatalf("told mpv %q, want the play", told)
+				}
+				n.mpvSays(`{"event":"seek"}`, mpvAt(60), `{"event":"playback-restart"}`)
+				if got := n.broadcasts(); fmt.Sprint(said(got)) != "[time-pos=60.000000]" || got[0].Stamp != 4 || !*got[0].Paused {
+					t.Fatalf("broadcast %+v, want the person's seek, stopped, newer", got)
+				}
+				if reportFirst {
+					n.mpvObeys()
+				} else {
+					n.mpvAnswers()
+					n.mpvSays(propertyChangeLine(pause, "no", 0))
+				}
+				n.mpvObeys()
+				if told := n.mpvWasTold(); fmt.Sprint(told) != "[set_property pause true]" {
+					t.Fatalf("told mpv %q, want it stopped again, quietly", told)
+				}
+				if got := n.broadcasts(); len(got) != 0 {
+					t.Fatalf("broadcast %q, want nothing: the party holds the person's seek", said(got))
+				}
+			})
+		})
+	}
+	// a peer's newer resume is taken before mpv reports the late play: that is where this
+	// node is now, playing, and nothing is undone
+	t.Run("a newer state taken since", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.takes(2, true, 30)
+			n.mpvAnswersLate()
+			n.peerSays("a", `{"stamp":3,"at":30,"name":"pause","data":"no"}`)
+			n.mpvSays(`{"event":"seek"}`, mpvAt(60), `{"event":"playback-restart"}`)
+			n.broadcasts()
+			n.mpvWasTold()
+			n.peerSays("b", `{"stamp":5,"at":60,"name":"pause","data":"no"}`)
+			n.mpvAnswers()
+			n.mpvSays(propertyChangeLine(pause, "no", 0))
+			n.mpvAnswers()
+			if told := n.mpvWasTold(); slices.Contains(told, "set_property pause true") {
+				t.Fatalf("told mpv %q, want it left playing", told)
+			}
+			if got := n.broadcasts(); len(got) != 0 {
+				t.Fatalf("broadcast %q, want nothing", said(got))
+			}
+		})
+	})
+}
+
 // The person resumes while mpv still holds a peer's seek to 60, which runs after the
 // resume: mpv plays from 60, so the resume says so, as this node was heading there. Said
 // from 30, the others played from 30 and this node from 60.

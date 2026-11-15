@@ -321,6 +321,10 @@ type Client struct {
 	// the stop (stopping)
 	stopAt   float64
 	stopping bool
+	// playedLate: mpv will report a play it ran after this node's own newer change, which is
+	// undone (converge), not taken. mine: the state that change said.
+	playedLate bool
+	mine       state
 	// landing: mpv hasn't reported the last seek this node applied, so it is not yet on
 	// the second it is heading to. Not peerSeek: a playback-restart ends that, and one from
 	// a slow load can arrive after the first seek was sent.
@@ -386,6 +390,13 @@ func (c *Client) isEcho(event Event) bool {
 		c.following = c.following[i+1:]
 		return true
 	}
+	if event.Name == pause && c.playedLate {
+		c.playedLate = false
+		if event.Data == "no" {
+			c.later = append(c.later, c.converge)
+			return true
+		}
+	}
 	applied, ok := c.applied[event.Name]
 	if !ok {
 		return false
@@ -412,6 +423,9 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	}
 	for i, b := range out {
 		out[i] = c.tag(b)
+	}
+	if len(out) > 0 {
+		c.mine = c.held()
 	}
 	return out
 }
@@ -844,6 +858,8 @@ func (c *Client) handle(in input) {
 		c.busy++
 		c.apply(m)
 		c.busy--
+		// what applying it started (converge)
+		c.runLater()
 	}
 	c.snapshot()
 }
@@ -1104,8 +1120,9 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 type adoption struct {
 	state
 	from string
-	// seek: not on its second yet; now: mpv is told at once, or it waits for the file
-	stop, moving, seek, now bool
+	// seek: not on its second yet; now: mpv is told at once, or it waits for the file;
+	// quiet: mpv is brought back to this node's own state, which shows nothing
+	stop, moving, seek, now, quiet bool
 }
 
 // commit takes a newer state in the step that weighed it: the stamp with the entry, the
@@ -1162,6 +1179,11 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 			c.announce()
 		}
 	}()
+	show := func(text string) {
+		if !a.quiet {
+			c.showText(text)
+		}
+	}
 	if a.stop {
 		if err = c.pauseReq(true); err != nil {
 			return err
@@ -1171,7 +1193,7 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 			return nil
 		}
 		c.paused = true
-		if c.showText(fmt.Sprintf("paused by %s", hostname)); overtaken() {
+		if show(fmt.Sprintf("paused by %s", hostname)); overtaken() {
 			return nil
 		}
 	}
@@ -1180,7 +1202,7 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 			return err
 		}
 		left.moving = false
-		if c.showText(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname)); overtaken() {
+		if show(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname)); overtaken() {
 			return nil
 		}
 	}
@@ -1194,14 +1216,14 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 		}
 	}
 	if a.seek && name != pause {
-		if c.showText(fmt.Sprintf("synced by %s", hostname)); overtaken() {
+		if show(fmt.Sprintf("synced by %s", hostname)); overtaken() {
 			return nil
 		}
 	}
 	if a.paused {
 		return nil
 	}
-	if a.moving {
+	if a.moving && !a.quiet {
 		return c.answer(hostname, "")
 	}
 	return c.resume(hostname)
@@ -1227,6 +1249,39 @@ func (c *Client) release(a adoption) {
 	}
 	if a.now {
 		c.peerSeek, c.landing = false, false
+	}
+}
+
+// playLate is a play mpv answered after this node's own newer change was reported, so
+// mpv ran it after that change: replies keep the order of requests, and a set's reply comes
+// before its report (MPV.md). The party holds that change, by its stamp, so the play is
+// undone (converge) once mpv reports it, or now if it has. The other late steps are not
+// undone, as none leaves this node apart: a stop's echo carries the person's seek
+// (pauseExtras), the person's resume speaks for the seek still landing (pauseChanged), a
+// seek or move of the person's own clears the markers, so a late one goes out as newer, and
+// a move speaks for the entry it heads to.
+func (c *Client) playLate(from int) {
+	if !c.moved(from) {
+		return
+	}
+	if c.applied[pause] == "no" {
+		delete(c.applied, pause)
+		c.playedLate = true
+		return
+	}
+	c.later = append(c.later, c.converge)
+}
+
+// converge brings mpv back to the state this node last said as its own, quietly: the party
+// holds it already. Not once it has taken a newer one, whose steps put mpv there.
+func (c *Client) converge() {
+	if c.by != "" || c.mine.stamp != c.stamp {
+		return
+	}
+	a := c.commit(c.mine, "")
+	a.quiet = true
+	if err := c.adopt(a, "", ""); err != nil {
+		log.Println("back to what this node said:", err)
 	}
 }
 
@@ -1370,11 +1425,15 @@ func (c *Client) resume(hostname string) error {
 		return err
 	}
 	if c.moved(from) {
+		c.playLate(from)
 		return nil
 	}
 	c.paused, c.landing = false, false
 
-	c.showText(fmt.Sprintf("resumed by %s", hostname))
+	// none: mpv is brought back to this node's own state (converge)
+	if hostname != "" {
+		c.showText(fmt.Sprintf("resumed by %s", hostname))
+	}
 	return nil
 }
 
