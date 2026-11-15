@@ -774,12 +774,28 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
     return key
 
 
-def kill_gui(n):
-    """A GUI's whole process group: its browser, its mpv, a GUI it restarted into."""
+def pgid(p):
     try:
-        os.killpg(nodes[n]["proc"].pid, signal.SIGKILL)
+        return os.getpgid(p)
     except OSError:
-        pass
+        return None
+
+
+def kill_gui(n):
+    """A GUI and everything under it: its mpv and a GUI it restarted into share its process
+    group, but each browser has a group of its own (ownGroup), which only the GUI kills, on
+    a clean exit. Left running, the browsers of finished cases starved later ones' pages."""
+    pid, groups = nodes[n]["proc"].pid, set()
+    todo = [pid] + [int(d.rsplit("/", 1)[1]) for d in glob.glob("/proc/[0-9]*") if pgid(int(d.rsplit("/", 1)[1])) == pid]  # a restarted GUI too
+    while todo:
+        p = todo.pop()
+        groups.add(pgid(p))
+        todo += children(p)
+    for g in (groups - {None}) | {pid}:
+        try:
+            os.killpg(g, signal.SIGKILL)
+        except OSError:
+            pass
     nodes[n]["proc"].wait(timeout=5)
 
 
@@ -3400,11 +3416,7 @@ except Stop as e:
 finally:
     for name in list(nodes):
         if nodes[name].get("gui"):
-            try:
-                os.killpg(nodes[name]["proc"].pid, signal.SIGKILL)
-            except OSError:
-                pass
-            nodes[name]["proc"].wait(timeout=5)
+            kill_gui(name)
             continue
         stop(name, signal.SIGKILL, timeout=5)
     for p in stubs + relays:
