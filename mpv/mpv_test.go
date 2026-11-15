@@ -133,33 +133,29 @@ func TestAnEntryWeDidNotNameDoesNotPanic(t *testing.T) {
 }
 
 func TestFileNameIsNeverBroadcast(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	got := feed(t, c, outgoing, propertyChangeLine(filename, "a.mkv", 0)+propertyChangeLine(filename, "b.mkv", 1))
-	if len(got) != 0 {
-		t.Fatalf("a file name went over the wire: %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvSays(propertyChangeLine(filename, "a.mkv", 0), propertyChangeLine(filename, "b.mkv", 0))
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("a file name went over the wire: %+v", got)
+		}
+	})
 }
 
 // mpv fires one property-change per observed property the moment it is
 // registered. A fresh node is paused, so an unswallowed initial time-pos would be
 // broadcast as time-pos=0 and rewind the whole party.
 func TestInitialPropertyChangeIsNotBroadcast(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	c.paused = true
-
-	got := feed(t, c, outgoing, propertyChangeLine(timePos, "0.000000", 0))
-	if len(got) != 0 {
-		t.Fatalf("broadcast the observe_property echo: %+v", got)
-	}
-
-	got = feed(t, c, outgoing, propertyChangeLine(timePos, "77.000000", 1))
-	if len(got) != 1 {
-		t.Fatalf("swallowed a real seek after the initial one: %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := newNode(t, setup{})
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
+			t.Fatalf("broadcast %q, want only joined: mpv's answer to the observe went out", got)
+		}
+		n.mpvSays(mpvAt(77))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=77.000000]" {
+			t.Fatalf("broadcast %q, want the real seek after the initial one", got)
+		}
+	})
 }
 
 // Observed before the file loads, time-pos first comes with no data, then the real
@@ -167,113 +163,95 @@ func TestInitialPropertyChangeIsNotBroadcast(t *testing.T) {
 // or the real 0 is broadcast and rewinds the party. Quitting while paused also
 // sends an empty one, which must not go out either.
 func TestDatalessPropertyChangeIsIgnored(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	c.paused = true
-
-	empty := `{"event":"property-change","id":2,"name":"time-pos"}` + "\n"
-	got := feed(t, c, outgoing, empty+propertyChangeLine(timePos, "0.000000", 0))
-	if len(got) != 0 {
-		t.Fatalf("broadcast the position the file loaded at: %+v", got)
-	}
-
-	got = feed(t, c, outgoing, propertyChangeLine(timePos, "42.000000", 1)+empty)
-	if len(got) != 1 || got[0].Data != "42.000000" {
-		t.Fatalf("want only the real seek broadcast, got %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		empty := `{"event":"property-change","id":2,"name":"time-pos"}`
+		n := newNode(t, setup{first: []string{empty + "\n"}})
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
+			t.Fatalf("broadcast %q, want only joined: the position the file loaded at went out", got)
+		}
+		n.mpvSays(mpvAt(42), empty)
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=42.000000]" {
+			t.Fatalf("broadcast %q, want only the real seek", got)
+		}
+	})
 }
 
 // b applies a's seek, mpv echoes the change back, and b must not rebroadcast it
 // to a. Without this the event ping-pongs; relay mode has no counters to stop it.
 func TestAppliedValueIsNotRebroadcast(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	c.paused = true
-	c.seen[timePos] = true
-
-	// sync() marks the value before the IPC call; this is the echo coming back
-	c.seeks = []float64{77}
-	got := feed(t, c, outgoing, propertyChangeLine(timePos, "77.000000", 0))
-	if len(got) != 0 {
-		t.Fatalf("rebroadcast the event it had just applied: %+v", got)
-	}
-
-	// a seek's echo can land a frame off the applied value
-	c.seeks = []float64{12}
-	got = feed(t, c, outgoing, propertyChangeLine(timePos, "12.041000", 1))
-	if len(got) != 0 {
-		t.Fatalf("a frame-off echo escaped the tolerance: %+v", got)
-	}
-
-	// but this peer's own seek is not an echo and must reach everyone else
-	got = feed(t, c, outgoing, propertyChangeLine(timePos, "42.000000", 2))
-	if len(got) != 1 {
-		t.Fatalf("swallowed a genuine seek, want 1 broadcast: %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("a", stamped(5, seekEvent(77)))
+		n.mpvSays(mpvAt(77))
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("rebroadcast the seek it had just applied: %q", said(got))
+		}
+		// a seek's echo can land a frame off the applied value
+		n.peerSays("a", stamped(6, seekEvent(12)))
+		n.mpvSays(mpvAt(12.041))
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("a frame-off echo escaped the tolerance: %q", said(got))
+		}
+		// but this node's own seek is not an echo and must reach everyone else
+		n.mpvSays(mpvAt(42))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=42.000000]" {
+			t.Fatalf("broadcast %q, want the genuine seek", got)
+		}
+	})
 }
 
 // b applies 30 and then 40 before mpv's echo of 30 is back. That late echo must
 // not go out as b's own seek, or the whole party jumps back to 30.
 func TestLateEchoOfAnEarlierSeekIsNotRebroadcast(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	c.paused = true
-	c.seen[timePos] = true
-
-	c.seeks = []float64{30, 40}
-	got := feed(t, c, outgoing, propertyChangeLine(timePos, "30.000000", 0)+propertyChangeLine(timePos, "40.000000", 1))
-	if len(got) != 0 {
-		t.Fatalf("rebroadcast an echo: %+v", got)
-	}
-
-	// 40's echo means mpv is done with 30, so seeking back there is the user's own
-	got = feed(t, c, outgoing, propertyChangeLine(timePos, "30.000000", 2))
-	if len(got) != 1 {
-		t.Fatalf("swallowed a genuine seek back to an old position: %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("a", stamped(5, seekEvent(30)))
+		n.peerSays("a", stamped(6, seekEvent(40)))
+		n.mpvSays(mpvAt(30), mpvAt(40))
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("rebroadcast an echo: %q", said(got))
+		}
+		// 40's echo means mpv is done with 30, so seeking back there is the user's own
+		n.mpvSays(mpvAt(30))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=30.000000]" {
+			t.Fatalf("broadcast %q, want the genuine seek back to an old position", got)
+		}
+	})
 }
 
 // --hr-seek=yes is pinned, so an echo is at most a frame off. A deliberate seek
 // a fraction of a second away is still the user's own.
 func TestSmallSeekIsNotAnEcho(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	c.paused = true
-	c.seen[timePos] = true
-
-	c.seeks = []float64{12}
-	got := feed(t, c, outgoing, propertyChangeLine(timePos, "12.300000", 0))
-	if len(got) != 1 {
-		t.Fatalf("swallowed a 0.3s seek as an echo: %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("a", stamped(5, seekEvent(12)))
+		n.mpvSays(mpvAt(12.3))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=12.300000]" {
+			t.Fatalf("broadcast %q, want the 0.3s seek", got)
+		}
+	})
 }
 
+// b applies a's pause, and mpv reports it before it answers the set: that report is the
+// echo, and it is also when b stopped, so a position mpv reports before its answer is a
+// seek while paused, not playback.
 func TestAppliedPauseIsNotRebroadcast(t *testing.T) {
-	t.Parallel()
-	outgoing := make(chan []byte, 4)
-	c := newTestClient(outgoing, nil)
-	c.paused = false
-	c.seen[pause] = true
-
-	c.applied[pause] = "yes"
-	got := feed(t, c, outgoing, propertyChangeLine(pause, "yes", 0))
-	if len(got) != 0 {
-		t.Fatalf("rebroadcast the pause it had just applied: %+v", got)
-	}
-	if !c.paused {
-		t.Fatal("mpv's report is when it stopped: its next time-pos must not read as playing")
-	}
-
-	// the echo consumed the marker, so pausing again later is a real event
-	c.paused = false
-	got = feed(t, c, outgoing, propertyChangeLine(pause, "yes", 1))
-	if len(got) != 1 || got[0].Name != pause {
-		t.Fatalf("stale marker swallowed a genuine pause: %+v", got)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvAnswersLate()
+		n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"yes","at":0}`))
+		n.mpvObeys(mpvAt(55))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=55.000000]" {
+			t.Fatalf("broadcast %q, want only the seek made once stopped: not the echo, and not the seek lost as playback", got)
+		}
+		// the echo used up the marker, so pausing again later is a real event
+		n.plays()
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes]" {
+			t.Fatalf("broadcast %q, want the genuine pause", got)
+		}
+	})
 }
 
 // Two do() calls in flight must each get their own reply, even when mpv answers
@@ -529,169 +507,128 @@ func nextEvent(t *testing.T, outgoing chan []byte) Event {
 // sync while paused. The node pauses the party first, and peers get the pause, then
 // where it landed, then why.
 func TestSeekWhilePlayingPausesTheParty(t *testing.T) {
-	t.Parallel()
-	_, send, outgoing, requests := liveClient(t)
-
-	send(propertyChangeLine(timePos, "10.000000", 0))
-	send(propertyChangeLine(timePos, "10.041000", 0))
-	send(`{"event":"seek"}` + "\n")
-	send(propertyChangeLine(timePos, "40.000000", 0))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("sent %q, want the node to pause itself", got)
-	}
-	send(propertyChangeLine(timePos, "40.041000", 0))
-	send(propertyChangeLine(pause, "yes", 0))
-
-	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
-		t.Fatalf("first broadcast %+v, want the pause", e)
-	}
-	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "40.041000" {
-		t.Fatalf("second broadcast %+v, want where it paused", e)
-	}
-	if e := nextEvent(t, outgoing); e.Name != pauseReason || e.Data != "seek" {
-		t.Fatalf("third broadcast %+v, want the reason", e)
-	}
-	if got := next(t, requests); got != "show-text paused for everyone: seek 5000" {
-		t.Fatalf("sent %q, want the local notice", got)
-	}
-
-	// mpv's frame-landing second value is the position just sent, not a new seek
-	send(propertyChangeLine(timePos, "40.042000", 0))
-	send(propertyChangeLine(timePos, "50.000000", 0))
-	if e := nextEvent(t, outgoing); e.Name != timePos || e.Data != "50.000000" {
-		t.Fatalf("broadcast %+v, want only the next real seek", e)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvSays(mpvAt(10), mpvAt(10.041), `{"event":"seek"}`, mpvAt(40))
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property pause true show-text paused for everyone: seek 5000]" {
+			t.Fatalf("told mpv %q, want the node to pause itself and say why", got)
+		}
+		n.mpvSays(mpvAt(40.041), propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes time-pos=40.041000 pause-reason=seek]" {
+			t.Fatalf("broadcast %q, want the pause, where it paused, then why", got)
+		}
+		// mpv's frame-landing second value is the position just sent, not a new seek
+		n.mpvSays(mpvAt(40.042), mpvAt(50))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=50.000000]" {
+			t.Fatalf("broadcast %q, want only the next real seek", got)
+		}
+	})
 }
 
 // Someone seeks and resumes at once, and both reach this node together. mpv reports the
 // seek after the resume, which must not look like someone seeking while playing.
 func TestPeerSeekReportedAfterAResumeIsNotASeek(t *testing.T) {
-	t.Parallel()
-	c, send, _, requests := liveClient(t)
-	c.paused = true
-	send(propertyChangeLine(pause, "yes", 0))
-	go c.apply(peer("a", stamped(1, `{"event":"property-change","name":"time-pos","data":"40.000000"}`)))
-	if got := next(t, requests); got != "set_property time-pos 40.000000" {
-		t.Fatalf("sent %q, want the seek", got)
-	}
-	next(t, requests)
-	send(propertyChangeLine(pause, "no", 0))
-	send(`{"event":"seek"}` + "\n")
-	send(propertyChangeLine(timePos, "40.000000", 0))
-	send(`{"event":"playback-restart"}` + "\n")
-	send(propertyChangeLine(timePos, "40.041000", 0))
-	send(`{"event":"seek"}` + "\n")
-	send(propertyChangeLine(timePos, "50.000000", 0))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("sent %q, want a real seek to pause", got)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.pos != 50 {
-		t.Fatalf("paused at %v, want only the seek to 50 to pause", c.pos)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("a", stamped(5, seekEvent(40)))
+		n.peerSays("a", stamped(6, `{"event":"property-change","name":"pause","data":"no","at":40}`))
+		n.mpvWasTold()
+		n.mpvSays(propertyChangeLine(pause, "no", 0), `{"event":"seek"}`, mpvAt(40), `{"event":"playback-restart"}`, mpvAt(40.041), mpvAt(40.2), mpvAt(40.5))
+		if got, told := said(n.broadcasts()), n.mpvWasTold(); len(got) != 0 || len(told) != 0 {
+			t.Fatalf("broadcast %q and told mpv %q for the peer's own seek", got, told)
+		}
+		n.mpvSays(`{"event":"seek"}`, mpvAt(50))
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property pause true show-text paused for everyone: seek 5000]" {
+			t.Fatalf("told mpv %q, want a real seek to pause the party", got)
+		}
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes time-pos=50.000000 pause-reason=seek]" {
+			t.Fatalf("broadcast %q, want the party paused at 50 only", got)
+		}
+	})
 }
 
 // Playback moves time-pos on every frame, and none of it may go out or pause anyone.
 func TestPlaybackIsNotASeek(t *testing.T) {
-	t.Parallel()
-	_, send, outgoing, requests := liveClient(t)
-
-	for i := range 48 {
-		send(propertyChangeLine(timePos, fmt.Sprintf("%f", 10+float64(i)/24), 0))
-	}
-	send(propertyChangeLine(pause, "yes", 0))
-	if e := nextEvent(t, outgoing); e.Name != pause {
-		t.Fatalf("broadcast %+v during playback, want only the later pause", e)
-	}
-	select {
-	case r := <-requests:
-		t.Fatalf("sent %q during playback", r)
-	default:
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		for i := range 48 {
+			n.mpvSays(mpvAt(10 + float64(i)/24))
+		}
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes]" {
+			t.Fatalf("broadcast %q, want only the later pause", got)
+		}
+		if got := n.mpvWasTold(); len(got) != 0 {
+			t.Fatalf("told mpv %q during playback", got)
+		}
+	})
 }
 
 // A node waiting on its cache falls behind everyone still playing. It pauses the
 // party instead, and stays paused for a manual resume once the cache refills.
 func TestBufferingPausesTheParty(t *testing.T) {
-	t.Parallel()
-	_, send, outgoing, requests := liveClient(t)
-
-	send(propertyChangeLine(timePos, "20.000000", 0))
-	send(propertyChangeLine(pausedForCache, "yes", 0))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("sent %q, want the node to pause itself", got)
-	}
-	send(propertyChangeLine(pause, "yes", 0))
-	for _, want := range []string{pause + "=yes", timePos + "=20.000000", pauseReason + "=buffering"} {
-		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
-			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvSays(mpvAt(20), propertyChangeLine(pausedForCache, "yes", 0))
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property pause true show-text paused for everyone: buffering 5000]" {
+			t.Fatalf("told mpv %q, want the node to pause itself", got)
 		}
-	}
-	next(t, requests)
-
-	// a resume while still stalled is not passed on, and pauses again
-	send(propertyChangeLine(pause, "no", 0))
-	if got := next(t, requests); got != "set_property pause true" {
-		t.Fatalf("sent %q, want the node to pause itself again", got)
-	}
-	send(propertyChangeLine(pause, "yes", 0))
-	for _, want := range []string{timePos + "=20.000000", pauseReason + "=still buffering"} {
-		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
-			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes time-pos=20.000000 pause-reason=buffering]" {
+			t.Fatalf("broadcast %q", got)
 		}
-	}
+		n.mpvWasTold()
+		// a resume while still stalled is not passed on, and pauses again
+		n.mpvSays(propertyChangeLine(pause, "no", 0))
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property pause true show-text paused for everyone: still buffering 5000]" {
+			t.Fatalf("told mpv %q, want the node to pause itself again", got)
+		}
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=20.000000 pause-reason=still buffering]" {
+			t.Fatalf("broadcast %q", got)
+		}
+	})
 }
 
 // A peer's resume reaching a node that is still stalled is refused: the node never
 // plays, and tells the party it is paused again and where. Applying the resume and
 // pausing at once doesn't work, because mpv folds the two into no event at all.
 func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
-	t.Parallel()
-	c, _, outgoing, requests := liveClient(t)
-	c.paused, c.stalled, c.pos = true, true, 20
-
-	c.apply(peer("a", `{"stamp":1,"at":20,"name":"pause","data":"no"}`))
-	for _, want := range []string{pause + "=yes", timePos + "=20.000000", pauseReason + "=still buffering"} {
-		if e := nextEvent(t, outgoing); e.Name+"="+e.Data != want {
-			t.Fatalf("broadcast %s=%s, want %s", e.Name, e.Data, want)
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvSays(mpvAt(20), propertyChangeLine(pausedForCache, "yes", 0))
+		n.broadcasts()
+		n.peerSays("a", stamped(9, `{"event":"property-change","name":"pause","data":"no","at":20}`))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes time-pos=20.000000 pause-reason=still buffering]" {
+			t.Fatalf("broadcast %q", got)
 		}
-	}
-	if got := next(t, requests); got != "show-text paused for everyone: still buffering 5000" {
-		t.Fatalf("sent %q, want the resume refused", got)
-	}
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[show-text paused for everyone: still buffering 5000]" {
+			t.Fatalf("told mpv %q, want the resume refused", got)
+		}
+	})
 }
 
 // mpv can refuse a set (the property is unavailable while it quits or between files).
 // The echo marker for a pause that never happened matched the user's own next pause,
 // which then never went out.
 func TestARefusedPauseLeavesNoMarker(t *testing.T) {
-	t.Parallel()
-	ours, theirs := net.Pipe()
-	t.Cleanup(func() { ours.Close(); theirs.Close() })
-	outgoing := make(chan []byte, 16)
-	c := newTestClient(outgoing, bufio.NewScanner(ours))
-	c.conn.conn = ours
-	c.seen[pause], c.seen[timePos] = true, true
-	go c.watch()
-	go func() {
-		sc := bufio.NewScanner(theirs)
-		sc.Scan()
-		req := Request{}
-		json.Unmarshal(sc.Bytes(), &req)
-		fmt.Fprintf(theirs, `{"request_id":%d,"error":"property unavailable"}`+"\n", req.RequestId)
-	}()
-
-	if err := c.take(Event{Name: pause, Data: "yes", Stamp: 1, Paused: new(true), At: new(0.0)}, IncomingMessage{HostName: "a", From: "a"}); err == nil {
-		t.Fatal("the refusal was not reported")
-	}
-	if e := nextEvent(t, outgoing); e.Name != joined {
-		t.Fatalf("broadcast %+v, want it to ask the party where it is", e)
-	}
-	fmt.Fprint(theirs, propertyChangeLine(pause, "yes", 0))
-	if e := nextEvent(t, outgoing); e.Name != pause || e.Data != "yes" {
-		t.Fatalf("broadcast %+v, want the user's own pause", e)
-	}
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvRefuses("set_property pause", "property unavailable")
+		n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"yes","at":0}`))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
+			t.Fatalf("broadcast %q, want it to ask the party where it is", got)
+		}
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[pause=yes]" {
+			t.Fatalf("broadcast %q, want the user's own pause", got)
+		}
+	})
 }
 
 // peer is a message from host as a node sends it, whole state included, so a test writes
