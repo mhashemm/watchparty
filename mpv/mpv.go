@@ -317,6 +317,10 @@ type Client struct {
 	// sent: the last seek this node sent mpv; began: mpv started a seek since
 	sent  float64
 	began bool
+	// stopAt: the second of a stop this node took while playing on it, until mpv reports
+	// the stop (stopping)
+	stopAt   float64
+	stopping bool
 	// landing: mpv hasn't reported the last seek this node applied, so it is not yet on
 	// the second it is heading to. Not peerSeek: a playback-restart ends that, and one from
 	// a slow load can arrive after the first seek was sent.
@@ -484,6 +488,9 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 			if !c.paused {
 				// a resume taken from a peer ends the seeks applied before it, as one's own does
 				c.seeks, c.landing = nil, false
+			}
+			if c.paused && c.stopping {
+				c.stoppedOff()
 			}
 		}
 		return extra, errEcho
@@ -1109,6 +1116,8 @@ func (c *Client) commit(s state, from string) adoption {
 	// once mpv reports it; that move goes out newer than s, from the file's start
 	away := !a.moving && c.stray && c.started != c.heading()+1
 	a.seek = !there && !away && (a.stop || c.paused)
+	// on its second as far as this node has read, but mpv plays on until the stop lands
+	c.stopAt, c.stopping = s.at, a.stop && there && !a.moving
 	c.stamp, c.by, c.since = s.stamp, from, s.at
 	if a.stop {
 		c.applied[pause] = "yes"
@@ -1400,6 +1409,23 @@ func (c *Client) mark(pos float64) bool {
 func (c *Client) seekReq(pos float64) error {
 	c.peerSeek, c.sent, c.began = true, pos, false
 	return c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
+}
+
+// stoppedOff seeks back to the second of a stop this node took while playing, if mpv
+// stopped elsewhere: every position mpv reported before its stop has been read, and the
+// last is where it stopped (MPV.md), but the stop was weighed on what had been read then.
+func (c *Client) stoppedOff() {
+	c.stopping = false
+	if math.Abs(c.pos-c.stopAt) <= timePosTolerance {
+		return
+	}
+	// run right after this line, before anything else comes in
+	at := strconv.FormatFloat(c.stopAt, 'f', 6, 64)
+	c.later = append(c.later, func() {
+		if err := c.seekTo(at); err != nil {
+			log.Println("seek back to the stop:", err)
+		}
+	})
 }
 
 // landed asks mpv where it is, as mpv began a seek after this node sent its own, played

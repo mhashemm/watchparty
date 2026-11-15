@@ -2784,3 +2784,39 @@ func TestAFoldedSeekBackIsThePersonsOwn(t *testing.T) {
 		})
 	})
 }
+
+// A peer's stop at 60 reaches this node while it plays on 60, so it only pauses; but mpv
+// plays on before the pause lands, and stops at 60.3. Once mpv reports the stop, every
+// position before it has been read: off the stop's second, the node seeks there, as its
+// own step, and says nothing (SIM_SEED=514736544449). Within a frame, it stays.
+func TestAStopThatLandsOffItsSecondIsSeekedBack(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		played []string
+		seeks  []string
+	}{
+		"0.3s on":    {[]string{mpvAt(60.1), mpvAt(60.2), mpvAt(60.3)}, []string{"set_property time-pos 60.000000"}},
+		"a frame on": {[]string{mpvAt(60.04)}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nodeTest(t, func(t *testing.T) {
+				n := ready(t, setup{})
+				n.mpvSays(mpvAt(60))
+				n.plays()
+				n.mpvAnswersLate()
+				n.peerSays("a", `{"stamp":9,"at":60,"name":"pause","data":"yes"}`)
+				if told := n.mpvWasTold(); len(told) == 0 || told[0] != "set_property pause true" {
+					t.Fatalf("told mpv %q, want the stop", told)
+				}
+				n.mpvSays(c.played...)
+				n.mpvObeys()
+				if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != fmt.Sprint(c.seeks) {
+					t.Fatalf("seeks %q, want %q", got, c.seeks)
+				}
+				if got := n.broadcasts(); len(got) != 0 {
+					t.Fatalf("broadcast %q, want nothing", said(got))
+				}
+			})
+		})
+	}
+}
