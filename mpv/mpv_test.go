@@ -615,6 +615,43 @@ func TestAReplyThatNeverComesIsGivenUpOn(t *testing.T) {
 	})
 }
 
+// The person seeks while mpv still answers a step of taking a member's state: that seek is
+// newer than the state, and goes out stopped; the steps left would leave this node alone
+// where the member was, playing or on its second, as the party takes the seek
+// (SIM_SEED=10 found the first).
+func TestAChangeMadeWhileTakingAStateIsNotUndone(t *testing.T) {
+	t.Run("the resume after a seek", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.mpvAnswersLate()
+			n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"no","at":34}`))
+			n.mpvObeys(`{"event":"seek"}`, mpvAt(20), `{"event":"playback-restart"}`)
+			if got := n.mpvWasTold(); slices.Contains(got, "set_property pause false") {
+				t.Fatalf("told mpv %q, want it never told to play", got)
+			}
+			if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=20.000000]" {
+				t.Fatalf("broadcast %q, want its own seek", got)
+			}
+		})
+	})
+	t.Run("the seek after a stop", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.plays()
+			n.mpvWasTold()
+			n.mpvAnswersLate()
+			n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"yes","at":40}`))
+			n.mpvObeys(`{"event":"seek"}`, mpvAt(50), `{"event":"playback-restart"}`)
+			if got := seeksIn(n.mpvWasTold()); len(got) != 0 {
+				t.Fatalf("told mpv %q, want it left where the person sought", got)
+			}
+			if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=50.000000]" {
+				t.Fatalf("broadcast %q, want its own seek", got)
+			}
+		})
+	})
+}
+
 // A peer must never wait on a file that is slow to load (a stream): every send lands
 // while mpv is still loading, and only the newest of what the party said is applied once
 // it has. Each says the whole of it: a resume says where from.

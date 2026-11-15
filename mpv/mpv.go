@@ -1096,10 +1096,18 @@ func (c *Client) commit(s state, from string) adoption {
 
 // adopt tells mpv to go where commit took this node: stopped, on the entry, on the second,
 // then playing if the state is. One that plays on another entry stops the party instead:
-// loading it, this node can't be in step.
+// loading it, this node can't be in step. A change this node makes while mpv answers a step
+// is newer than the state, and goes out: the steps left would undo it here alone.
 func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	// what mpv never did, as it refused a step
 	left := a
+	overtaken := func() bool {
+		if c.stamp == a.stamp {
+			return false
+		}
+		c.release(left)
+		return true
+	}
 	defer func() {
 		if err == nil {
 			return
@@ -1119,6 +1127,9 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 		c.paused = true
 		c.showText(fmt.Sprintf("paused by %s", hostname))
 	}
+	if overtaken() {
+		return nil
+	}
 	if a.moving {
 		if err = c.do(setProperty, playlistPos, a.entry); err != nil {
 			return err
@@ -1135,7 +1146,7 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	if a.seek && name != pause {
 		c.showText(fmt.Sprintf("synced by %s", hostname))
 	}
-	if a.paused {
+	if a.paused || overtaken() {
 		return nil
 	}
 	if a.moving {

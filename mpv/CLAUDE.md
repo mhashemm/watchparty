@@ -36,8 +36,7 @@ Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), 
   rewind everyone. The state is still recorded.
 - **Every `time-pos` updates `c.pos`, echo or not.** It is what every pause carries (`at`).
 - **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
-  (`pauseExtras`), even when the pause itself was an echo, so a seek that raced a peer's
-  pause isn't lost.
+  (`pauseExtras`), even when the pause was an echo, so a seek that raced a peer's pause isn't lost.
 - **mpv's report of a pause this node applied is when it stops or starts** (`c.paused`),
   not the reply to the set: the next `time-pos` can come first, and while stopped it reads
   as a seek, which stops the party it was resuming with.
@@ -106,12 +105,13 @@ change takes the next stamp, **written in the step that decided the event goes o
 - **A joiner syncs with the party, never the party with it.** `announce` sets the stamp to
   `unheard`, far below any a party holds: nothing it does before it is answered wins, and
   joiners still order among themselves. `Opened` takes 1.
-- **A newer state is taken whole, in the step that weighed it, before mpv is told**
-  (`commit`: stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv
-  refuses is unmarked by `release`, where a new step adds its undo, and the node `announce`s
-  unless mpv is gone). Taken apart, it holds the party's stamp on its own entry or second, a
-  tie it can win; so it speaks for the entry it is **heading** to, never mpv's (`held`). A
-  newer resume on another entry stops the party: loading, it can't keep up.
+- **A newer state is taken whole, in the step that weighed it, before mpv is told** (`commit`:
+  stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv refuses is
+  unmarked by `release`, where a new step adds its undo, and the node `announce`s unless mpv is
+  gone). Taken apart, it holds the party's stamp on its own entry or second, a tie it can win;
+  so it speaks for the entry it is **heading** to, never mpv's (`held`). A change of its own
+  while mpv answers a step is newer: `adopt` stops there. A newer resume on another entry stops
+  the party: loading, it can't keep up.
 - **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
   stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
 
