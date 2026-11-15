@@ -49,6 +49,9 @@ type setup struct {
 	first  []string          // what mpv says before the file's values, as while it still loads
 	heard  []IncomingMessage // what the party says while mpv loads
 	late   bool              // mpv answers sets late from the start (mpvAnswersLate)
+	// opening: what mpv says once observed, instead of the file's values; it must report a
+	// time-pos with data, which is how the node knows the file loaded
+	opening []string
 }
 
 // newNode starts a node and returns once its file has loaded: what joining said, it still
@@ -144,6 +147,12 @@ func (n *node) opens(s setup) {
 	for _, line := range s.first {
 		n.writes <- line
 	}
+	if s.opening != nil {
+		for _, line := range s.opening {
+			n.writes <- line + "\n"
+		}
+		return
+	}
 	if s.names != nil {
 		n.writes <- started(s.start)
 		n.writes <- `{"event":"file-loaded"}` + "\n"
@@ -227,6 +236,24 @@ func (n *node) reports(set []any) []string {
 		}
 	}
 	return nil
+}
+
+// mpvAnswers is mpv answering every set it holds, reporting nothing, until none is left.
+func (n *node) mpvAnswers() {
+	n.t.Helper()
+	for {
+		synctest.Wait()
+		n.mu.Lock()
+		held := n.held
+		n.held, n.sets = nil, nil
+		n.mu.Unlock()
+		if len(held) == 0 {
+			return
+		}
+		for _, reply := range held {
+			n.writes <- reply
+		}
+	}
 }
 
 // mpvAnswersLate makes mpv answer each set only after reporting it, in mpvObeys: what the
@@ -316,7 +343,10 @@ func (n *node) plays() {
 // and mpv doing it. Nothing it said or told mpv is left to read.
 func (n *node) takes(stamp int, paused bool, at float64) {
 	n.t.Helper()
-	n.peerSays("z", fmt.Sprintf(`{"stamp":%d,"at":%f,"event":"property-change","name":"pause","data":"%s"}`, stamp, at, map[bool]string{true: "yes", false: "no"}[paused]))
+	n.mu.Lock()
+	entry := n.entry
+	n.mu.Unlock()
+	n.peerSays("z", fmt.Sprintf(`{"stamp":%d,"at":%f,"entry":%d,"event":"property-change","name":"pause","data":"%s"}`, stamp, at, entry, map[bool]string{true: "yes", false: "no"}[paused]))
 	n.mpvObeys()
 	n.broadcasts()
 	n.mpvWasTold()
@@ -337,3 +367,6 @@ func seekEvent(pos float64) string {
 func mpvAt(pos float64) string {
 	return propertyChangeLine(timePos, fmt.Sprintf("%f", pos), 0)
 }
+
+// threeVideos is a playlist's names, as everyone's list is the same.
+var threeVideos = []string{"e1", "e2", "e3"}
