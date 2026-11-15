@@ -89,11 +89,16 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 
 ## Conventions
 
-- Every Go test calls `t.Parallel()` and finishes in milliseconds. A delay the code
-  owns is a struct field the test shortens, never a package `var`. Prove an absence
-  with an ordering (a marker sent after), not a timeout. The only serial test is
-  `TestLimiterDoesNotAllocatePerIP` (`AllocsPerRun` panics in parallel).
-- A behaviour change lands with its tests and its `e2e.py` case in the same commit.
+- **Test a rule at the lowest layer that proves it, and only there:** one node's decisions
+  through `mpv`'s driver, what nodes must agree on in the simulator (every order a seed
+  picks), each seam with real mpv, a transport or Chromium once in `e2e.py`. A test drives
+  edges, never private fields; e2e checks only end states the protocol guarantees.
+- Every Go test calls `t.Parallel()` (but `TestLimiterDoesNotAllocatePerIP`: `AllocsPerRun`)
+  and finishes in milliseconds. A delay the code owns is a struct field the test shortens,
+  never a package `var`. Prove an absence with an ordering (a marker sent after), not a timeout.
+- A behaviour change lands with its tests in the same commit. Prove a test catches the bug:
+  reintroduce it, watch it fail, restore, watch it pass. When a check fails, suspect the
+  check first. A flake's fix names the seed that found it (`SIM_SEED`, `--jitter`).
 
 ### Docs
 
@@ -115,23 +120,18 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   per commit. Subject: `area: what changed and why it matters`. Body: the reasoning,
   the alternatives rejected, what was tested and what wasn't. Push, open PRs and tag
   only when asked; a PR says what was tested and what wasn't.
-- **Merge normally** (`gh pr merge N --merge`); `master` no longer requires linear history
-  and rebase is not a convention. Delete merged branches with `git branch -D`.
-  Never force-push.
-- **Release:** `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` on the last merged
-  commit. Verify by its files, not the Actions status: all 11 assets uploaded, the Linux
-  GUI's `GET /update` reports the tag, its page loads in headless Chromium and a tab
-  click works.
+- **Merge normally** (`gh pr merge N --merge`; rebase is not a convention), never force-push;
+  delete merged branches with `git branch -D`.
+- **Release:** `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` on the last merged commit.
+  Verify by its files, not the Actions status: all 11 assets uploaded, the Linux GUI's
+  `GET /update` reports the tag, its page loads in headless Chromium and a tab click works.
 
 ### Approach
 
-- Find the root cause before fixing, and look at the actual environment
-  (`XDG_CURRENT_DESKTOP`, how a browser is installed, `busctl introspect`) before
-  guessing.
+- Find the root cause before fixing; look at the actual environment (`XDG_CURRENT_DESKTOP`,
+  how a browser is installed, `busctl introspect`) before guessing.
 - Prefer a standard API over hard-coding tools (the XDG portal, not zenity). Add a
   dependency only when the alternative isn't a few lines; keep direct ones on their latest.
-- Prove a test catches the bug: reintroduce it, watch it fail, restore, watch it pass.
-  When a check fails, suspect the check first.
 - **Visual taste is the user's call.** Render options side by side and apply only the
   pick (`gui/DESIGN.md`). Screenshots at the real 560×940 window size.
 - **Change only what was asked.** A reverted change stays reverted.

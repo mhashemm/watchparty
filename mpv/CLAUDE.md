@@ -3,12 +3,8 @@
 The bridge between one mpv process and the party, over JSON IPC. What mpv actually sends,
 and why each flag is pinned, is in **`MPV.md`**: read it before changing anything here.
 
-Security: the wire carries raw mpv JSON, but `apply` must dispatch only the fixed allow-list
-below, never write a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why
-that line is load-bearing and holds the cross-cutting mindset and trust model.
-
-**`party_test.go` runs whole parties in a `synctest` bubble,** through every order a seed picks.
-A new message or rule that nodes must agree on gets a check there.
+Security: the wire carries raw mpv JSON, but `apply` dispatches only the allow-list below,
+never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and holds the trust model.
 
 ## The connection
 
@@ -23,9 +19,8 @@ A new message or rule that nodes must agree on gets a check there.
     socket has dropped with mpv alive and well, so that wait has to be bounded.
   - After `ready`, `watch` ending (EOF on quit) calls `cancel`: that is how the party
     learns mpv is gone. `party.Run` wraps that cancel to tell a quit from other stops.
-- `watch` sends **`bytes.Clone(scanner.Bytes())`**: `Scan()` reuses the buffer.
-  `TestWatchDoesNotAliasScannerBuffer` catches it only because `dripReader` returns
-  ~7 bytes per `Read`; with the whole input in one fill the bug hides.
+- `TestWatchDoesNotAliasScannerBuffer` catches a missing `bytes.Clone` only because
+  `dripReader` returns ~7 bytes per `Read`; with the whole input in one fill the bug hides.
 
 ## What gets broadcast (`handleEvent`)
 
@@ -196,5 +191,10 @@ reason: nobody starts the next one until someone resumes.
 
 ## Tests
 
-Never a real socket in a unit test. mpv emits nothing for a no-op set, so tests that count
-events must alternate values.
+- **One node: `driver_test.go`'s `node`**, a real `New` over a pipe to a fake mpv in a `synctest`
+  bubble: `mpvSays`/`peerSays` in, `broadcasts()`/`mpvWasTold()` out; a state is reached as in
+  production (`setup`, `takes`), never through a field. **`mpvAnswersLate`** has mpv report before
+  answering, the order the echo guards exist for: without it, breaking one passed every test.
+- **What nodes must agree on: `party_test.go`**, whole parties through every order a seed
+  picks. A new message or rule gets a check there.
+- Never a real socket. mpv emits nothing for a no-op set, so a test counting events alternates values.
