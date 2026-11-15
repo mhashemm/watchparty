@@ -613,7 +613,8 @@ class Proxy:
 
     def cut(self, relay=False):
         """With relay, the relay's side ends too, so the relay sees the drop first."""
-        for pair in self.pairs:
+        # a copy: a redial accepted while this runs is a new connection, not one to cut
+        for pair in list(self.pairs):
             if pair["live"]:
                 pair["live"] = False
                 pair["c"].shutdown(socket.SHUT_RDWR)
