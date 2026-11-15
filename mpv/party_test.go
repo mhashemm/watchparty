@@ -477,10 +477,11 @@ func sets(n *simNode, paused bool) func() {
 }
 
 // inStep is everyone stopped on the same second, or everyone playing from it: then each
-// started when the resume reached it, at most lag seconds after the first.
+// started when the resume reached it, at most lag seconds after the first. Each stops within
+// timePosTolerance of the party's second, so two can be twice that apart (SIM_SEED=210240).
 func (s *sim) inStep(seed uint64, lag float64) {
 	s.t.Helper()
-	apart := 0.15
+	apart := 2*timePosTolerance + 0.05
 	if !s.nodes[0].paused {
 		apart += lag
 	}
@@ -1322,5 +1323,32 @@ func TestASeekWhileAnsweringAJoinIsWhereTheMemberSaysItIs(t *testing.T) {
 		s.script = []func(){seeks(b, 50)}
 		s.run()
 		s.together(seed)
+	})
+}
+
+// Anyone acts at any moment: the people pause, resume and seek while the others' changes
+// are on their way, and in the late pass while mpv still answers this node's own steps. The
+// party may end anywhere, but in one state, and no node says a state older than one it said
+// (newest): what the protocol promises, whatever anyone did.
+func TestAnyoneActingAtAnyMomentEndsInStep(t *testing.T) {
+	forManySeeds(t, 500, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		stopped(30, s.nodes...)
+		rng := rand.New(rand.NewPCG(seed, 1))
+		for range 6 {
+			n := s.nodes[rng.IntN(len(s.nodes))]
+			switch rng.IntN(3) {
+			case 0:
+				s.script = append(s.script, sets(n, true))
+			case 1:
+				s.script = append(s.script, sets(n, false))
+			default:
+				s.script = append(s.script, seeks(n, float64(rng.IntN(100))))
+			}
+		}
+		s.ticks = 30
+		s.run()
+		// each plays from when the resume reached it, at worst after every tick
+		s.inStep(seed, 3)
 	})
 }
