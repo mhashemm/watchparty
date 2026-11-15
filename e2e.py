@@ -2884,6 +2884,8 @@ def gui_suite():
         must(f"{H} is in over the relay", joined(H), status(H))
         start(G, hostname=G, file=MEDIA, room="g20", secret="g20secret")
         must(f"{G} is in over the relay", joined(G), status(G))
+        # "You're in" is mpv being ready, which can come before the relay's handshake
+        must(f"{G} met {H}", until(lambda: f"connected to {H}" in feed(G)), str(feed(G)))
         end(G)
         end(H)
         js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
