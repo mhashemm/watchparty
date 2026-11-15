@@ -563,11 +563,20 @@ def relay_files(port):
     return f"{RUN}/relay" if port in (None, PORTS["relay"]) else f"{RUN}/relay-{port}"
 
 
+# below 32768, where the kernel never picks a port for bind(0) or an outgoing connection, and a
+# range of this phase's own: picked by bind(0), two phases side by side got the same port
+FIRST_PORT = 16000 + 2000 * (PHASES + ("all",)).index(args.mode)
+PORT_POOL = iter(range(FIRST_PORT, FIRST_PORT + 2000))
+
+
 def free_port():
-    s = socket.create_server(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    for port in PORT_POOL:
+        try:
+            socket.create_server(("", port)).close()
+            return port
+        except OSError:
+            pass
+    raise RuntimeError("this phase used up its ports")
 
 
 def launch_relay(extra=None, port=None):
