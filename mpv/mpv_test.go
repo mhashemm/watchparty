@@ -2738,7 +2738,9 @@ func TestAFoldedSeekBackIsThePersonsOwn(t *testing.T) {
 			n := ready(t, setup{})
 			n.peerSays("a", stamped(5, seekEvent(70)))
 			n.mpvIsAt(3)
+			n.mpvHoldsWhere()
 			n.mpvSays(`{"event":"seek"}`, `{"event":"playback-restart"}`, `{"event":"seek"}`, mpvAt(5))
+			n.mpvSaysWhere()
 			if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=5.000000]" {
 				t.Fatalf("broadcast %q, want only the person's seek to 5", got)
 			}

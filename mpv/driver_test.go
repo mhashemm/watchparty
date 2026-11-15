@@ -37,8 +37,11 @@ type node struct {
 	held []string
 	// quitOn: mpv hangs up on a command starting with this (mpvQuitsOn)
 	quitOn string
-	// where: what mpv answers when asked where it is (mpvIsAt)
-	where string
+	// where: what mpv answers when asked where it is (mpvIsAt); held: that answer, until
+	// mpvSaysWhere, when holdsWhere
+	where      string
+	holdsWhere bool
+	whereHeld  string
 	// what mpv holds, from what it reported
 	paused bool
 	entry  int
@@ -142,6 +145,9 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		late := n.late && name == setProperty && taken
 		if late {
 			n.held = append(n.held, reply)
+		}
+		if said == "get_property_string time-pos" && n.holdsWhere {
+			n.whereHeld, late = reply, true
 		}
 		n.mu.Unlock()
 		if !late {
@@ -291,6 +297,28 @@ func (n *node) mpvIsAt(pos float64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.where = fmt.Sprintf("%f", pos)
+}
+
+// mpvHoldsWhere makes mpv hold its answer to where it is until mpvSaysWhere, so what the
+// test says first comes before it.
+func (n *node) mpvHoldsWhere() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.holdsWhere = true
+}
+
+// mpvSaysWhere sends the answer mpv held.
+func (n *node) mpvSaysWhere() {
+	n.t.Helper()
+	synctest.Wait()
+	n.mu.Lock()
+	reply := n.whereHeld
+	n.whereHeld = ""
+	n.mu.Unlock()
+	if reply == "" {
+		n.t.Fatal("mpv was not asked where it is")
+	}
+	n.mpvSays(reply)
 }
 
 // mpvTakesAgain lifts every refusal.
