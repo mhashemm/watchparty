@@ -115,6 +115,7 @@ ap.add_argument("--nodes", type=int, default=5, choices=range(3, 9))
 ap.add_argument("--mode", choices=PHASES + ("all",), default="all")
 ap.add_argument("--audio", action="store_true", help="real audio output, muted, instead of --ao=null")
 ap.add_argument("--jitter", metavar="SEED", help="random delays on the relay and gui phases' connections, replayable by seed")
+ap.add_argument("--bin", help="a folder of binaries built by build(), so the phases don't build them each")
 args = ap.parse_args()
 if args.audio:
     MPVFLAGS = MPVFLAGS.replace("--ao=null", "--mute=yes")
@@ -122,12 +123,29 @@ if args.audio:
 # SIGKILLed one never restores it, leaving the user's terminal unusable
 os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 
+REPO = os.path.dirname(os.path.abspath(__file__))
+
+
+def build(dest, gui):
+    """What every phase runs, and with gui what the gui and upnp phases add, in one go
+    build so its packages compile in parallel and once."""
+    pkgs = [".", "./relay", "./party/fakeseed"] + (["./gui", "./gui/fakeportal"] if gui else [])
+    subprocess.run(["go", "build", "-o", dest + "/"] + pkgs, cwd=REPO, check=True)
+    if gui:
+        os.rename(dest + "/gui", dest + "/watchparty-gui")
+
+
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
     flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else []) + (["--jitter", args.jitter] if args.jitter else [])
+    if not args.bin:
+        bins = tempfile.mkdtemp(prefix="watchparty-e2e-bin-")
+        print("building every phase's binaries once")
+        build(bins, True)
+        flags += ["--bin", bins]
     procs = [(m, subprocess.Popen([sys.executable, __file__, "--mode", m, "--port-base", str(args.port_base + 20 * i)] + flags,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
-             for i, m in enumerate(PHASES) if not args.jitter or m in JITTER_PHASES]
+             for i, m in enumerate(PHASES)]
     took = []
     for m, p in procs:
         out = p.communicate()[0]
@@ -135,6 +153,8 @@ if args.mode == "all":
         took += [f"{m:6} {line}" for line in out.splitlines() if line.startswith("took:")]
     print("\n" + "\n".join(took))
     bad = [m for m, p in procs if p.returncode]
+    if not args.bin:
+        shutil.rmtree(bins)
     print("\n" + ("ALL PASS" if not bad else "FAILED: " + ", ".join(bad)))
     sys.exit(1 if bad else 0)
 
@@ -167,7 +187,6 @@ hosted = set()
 ROOM, SECRET = "e2eroom", "e2esecret"
 A, LAST = NODES[0], NODES[-1]
 
-REPO = os.path.dirname(os.path.abspath(__file__))
 RUN = tempfile.mkdtemp(prefix="watchparty-e2e-")
 
 fails = []
@@ -762,29 +781,32 @@ def mark(name):
 need("go")
 need("mpv")
 print(f"run directory: {RUN}")
-print("building watchparty and relay")
-subprocess.run(["go", "build", "-o", RUN + "/watchparty", "."], cwd=REPO, check=True)
-subprocess.run(["go", "build", "-o", RUN + "/relay", "./relay"], cwd=REPO, check=True)
-subprocess.run(["go", "build", "-o", RUN + "/fakeseed", "./party/fakeseed"], cwd=REPO, check=True)
+GUI = args.mode in ("gui", "upnp")
+BINS = args.bin or RUN
+if not args.bin:
+    print("building")
+    build(RUN, GUI)
 mark("build")
-BIN = RUN + "/watchparty"
-RELAY_BIN = RUN + "/relay"
-GUI_BIN = RUN + "/watchparty-gui"
-PORTAL_BIN = RUN + "/fakeportal"
-if args.mode in ("gui", "upnp"):
+BIN = BINS + "/watchparty"
+RELAY_BIN = BINS + "/relay"
+FAKESEED_BIN = BINS + "/fakeseed"
+GUI_BIN = BINS + "/watchparty-gui"
+PORTAL_BIN = BINS + "/fakeportal"
+if GUI:
     BROWSER = next(filter(None, map(shutil.which, ("google-chrome", "chromium", "google-chrome-stable"))), None)
     if not BROWSER:
         sys.exit("the gui phase needs Chrome or Chromium on PATH")
     need("dbus-daemon")
     need("xvfb-run")
-    print("building the gui, two stamped versions of it, and the fake portal")
-    release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['release']}/latest"
-    for out, flags in ((GUI_BIN, ""), (RUN + "/gui-v0.0.1", f"-X main.version=v0.0.1 {release}"), (RUN + "/gui-v0.0.2", f"-X main.version=v0.0.2 {release}")):
-        subprocess.run(["go", "build", "-ldflags", flags, "-o", out, "./gui"], cwd=REPO, check=True)
-    release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['cliRelease']}/latest"
-    for v in ("v0.0.1", "v0.0.2"):
-        subprocess.run(["go", "build", "-ldflags", f"-X main.version={v} {release}", "-o", f"{RUN}/cli-{v}", "."], cwd=REPO, check=True)
-    subprocess.run(["go", "build", "-o", PORTAL_BIN, "./gui/fakeportal"], cwd=REPO, check=True)
+if args.mode == "gui":
+    # the update cases' releases are on this phase's ports, so only it can build these
+    print("building two stamped versions of the gui and the cli")
+    release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{{}}/latest"
+    builds = [(RUN + f"/gui-{v}", f"-X main.version={v} {release.format(PORTS['release'])}", "./gui") for v in ("v0.0.1", "v0.0.2")]
+    builds += [(RUN + f"/cli-{v}", f"-X main.version={v} {release.format(PORTS['cliRelease'])}", ".") for v in ("v0.0.1", "v0.0.2")]
+    for p in [subprocess.Popen(["go", "build", "-ldflags", flags, "-o", out, pkg], cwd=REPO) for out, flags, pkg in builds]:
+        if p.wait():
+            sys.exit("a stamped build failed")
     mark("gui build")
 
 if args.file:
@@ -800,7 +822,7 @@ else:
 
 def seeder(path):
     """Seeds path until the phase ends, and returns its magnet link."""
-    p = subprocess.Popen([RUN + "/fakeseed", path], stdout=subprocess.PIPE, text=True)
+    p = subprocess.Popen([FAKESEED_BIN, path], stdout=subprocess.PIPE, text=True)
     nodes[f"seed{len(nodes)}"] = {"proc": p, "log": os.devnull, "sock": None, "addr": None}
     return p.stdout.readline().strip()
 
