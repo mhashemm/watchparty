@@ -766,6 +766,7 @@ func TestOnlyALeaveNoticePauses(t *testing.T) {
 // settle on the earliest stop, or they would resume that far apart and stay so. A joiner
 // takes the first it hears, then the earliest too.
 func TestStopsAMomentApartSettleOnTheEarliest(t *testing.T) {
+	t.Parallel()
 	stop := func(at float64) string {
 		return fmt.Sprintf(`{"stamp":2,"at":%f,"name":"pause","data":"yes"}`, at)
 	}
@@ -797,6 +798,7 @@ func TestStopsAMomentApartSettleOnTheEarliest(t *testing.T) {
 // moves: each following the other would swap them, for good. A party's answer has a
 // stamp, and that is followed, lower or not.
 func TestTwoJoinersSettleOnTheHigherEntry(t *testing.T) {
+	t.Parallel()
 	names := []string{"e1", "e2", "e3"}
 	answer := func(i int) string { return move(unheard, i) }
 	for _, tc := range []struct {
@@ -880,6 +882,7 @@ func TestOwnPauseSaysWhereItStopped(t *testing.T) {
 // in the room it says, quietly, the state it holds; the party stops only for a state that
 // isn't its own (take). A joiner that was never answered has none, and joins again.
 func TestLosingTheRelayPlaysOnAndComingBackSaysWhereItIs(t *testing.T) {
+	t.Parallel()
 	t.Run("a member", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{})
@@ -931,6 +934,7 @@ func TestComingBackNearTheEndSaysNothing(t *testing.T) {
 // What a member back from losing the relay says is weighed like any state, but a newer
 // resume: made where nobody heard it, nobody knows how far it has played since.
 func TestAStateSentBackAfterLosingTheRelay(t *testing.T) {
+	t.Parallel()
 	check := func(stamp int, paused bool, at float64) string {
 		return fmt.Sprintf(`{"stamp":%d,"paused":%t,"at":%f,"check":true,"event":"property-change","name":"pause","data":"%s"}`, stamp, paused, at, map[bool]string{true: "yes", false: "no"}[paused])
 	}
@@ -1108,6 +1112,7 @@ func TestJoinAnswerSaysTheEntryAndWhereOnIt(t *testing.T) {
 // than both moves and sends nobody to the other's entry. One from someone who knows of a
 // later move is followed by anyone, joiner or not.
 func TestAnAnswerIsFollowedOnlyIfItIsNewer(t *testing.T) {
+	t.Parallel()
 	t.Run("an older answer reaching a member", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{names: threeVideos, start: 1})
@@ -1165,6 +1170,7 @@ func TestANewerStampForTheSameEntryIsTaken(t *testing.T) {
 // A joiner knows nothing, whatever it knew before, and whoever opened the party is the
 // party from the start. Its own first change shows the stamp it holds.
 func TestAJoinForgetsTheStampAndOpeningTakesOne(t *testing.T) {
+	t.Parallel()
 	stampOfASeek := func(n *node) int {
 		n.t.Helper()
 		n.mpvSays(mpvAt(9))
@@ -1228,6 +1234,7 @@ func stamped(stamp int, event string) string {
 // Everything a node sends says its stamp, which each change of its own raises, where it
 // is, and in a playlist which entry it belongs to.
 func TestMessagesSayWhichEntryTheyBelongTo(t *testing.T) {
+	t.Parallel()
 	t.Run("a playlist", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{names: threeVideos})
@@ -1323,6 +1330,7 @@ func move(stamp, to int) string {
 // stamp. Without a rule each follows the other and they swap. Everyone applies the same
 // rule, so they end up together on the higher one.
 func TestTwoMovesFromTheSameEntrySettleOnTheHigher(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct{ mine, theirs int }{
 		"we went higher": {2, 0},
 		"we went lower":  {0, 2},
@@ -1349,6 +1357,7 @@ func TestTwoMovesFromTheSameEntrySettleOnTheHigher(t *testing.T) {
 
 // A third member hears both moves, in either order, and must land in the same place.
 func TestAThirdMemberSettlesOnTheHigherInEitherOrder(t *testing.T) {
+	t.Parallel()
 	for name, moves := range map[string][2]int{"higher first": {2, 0}, "lower first": {0, 2}} {
 		t.Run(name, func(t *testing.T) {
 			nodeTest(t, func(t *testing.T) {
@@ -1402,6 +1411,7 @@ func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
 // and the load can be over before the move arrives. A seek held for the file and let go at
 // its file-loaded must still be marked when the report comes: its echo is no one's seek.
 func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
+	t.Parallel()
 	started := strings.TrimSpace(started(2))
 	loaded := `{"event":"file-loaded"}`
 	reported := strings.TrimSpace(propertyChangeLine(playlistPos, "2", 0))
@@ -1462,6 +1472,7 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 // Where a node stopped is where a continued party starts, except right at an entry's
 // end (mpv's keep-open=always stays there): then it is the next entry, from its start.
 func TestPositionToContinueFrom(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		names    []string
 		current  int
@@ -1491,6 +1502,7 @@ func TestPositionToContinueFrom(t *testing.T) {
 // Only the end of the last entry, or of the only file, finishes the party: any other
 // entry has a next one to continue from.
 func TestFinishedOnlyAtTheEndOfTheLastEntry(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		names    []string
 		current  int
@@ -1543,6 +1555,7 @@ func TestContinuingSeeksBeforeThePartyIsHeard(t *testing.T) {
 // A pause says where its sender stopped, and a seek that it was stopped: in a mesh a send
 // can fail, and either one alone must leave the node that got it stopped on that second.
 func TestAPauseSaysWhereAndASeekSaysStopped(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct{ event, want string }{
 		"a pause alone": {`{"stamp":5,"at":40,"name":"pause","data":"yes"}`, "[set_property pause true show-text paused by a 5000 set_property time-pos 40.000000]"},
 		"a seek alone":  {`{"stamp":5,"name":"time-pos","data":"40.000000"}`, "[set_property pause true show-text paused by a 5000 set_property time-pos 40.000000 show-text synced by a 5000]"},
@@ -1577,6 +1590,7 @@ func TestAResumeSaysWhereFrom(t *testing.T) {
 // missed something. It isn't applied: the party stops if it was playing, says why, and
 // tells that node where it is, as a seek, which that node takes as newer than its own.
 func TestAnOlderChangeIsAnsweredNotApplied(t *testing.T) {
+	t.Parallel()
 	for name, old := range map[string]string{
 		"a resume": `{"stamp":2,"at":10,"name":"pause","data":"no"}`,
 		"a seek":   `{"stamp":2,"name":"time-pos","data":"10.000000"}`,
@@ -1617,6 +1631,7 @@ func TestAnOlderChangeIsAnsweredNotApplied(t *testing.T) {
 // the same one: stopped over playing, then the earlier second. The one that loses is
 // told, quietly, since its sender may never have heard the winner.
 func TestChangesMadeAtOnceGoToTheSaferOne(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		event, does string
 		answers     bool
@@ -1859,6 +1874,7 @@ func TestAJoinerPlayingIsNotOutOfSync(t *testing.T) {
 // reached, it resumed from what it last heard. The party stops, each where it is, and
 // settles on the earliest; nobody is moved by the resume.
 func TestAResumeToANodeThatPlaysStopsTheParty(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		resume string
 		missed bool
@@ -1907,6 +1923,7 @@ func TestATieFromAMemberThatMissedNothingMovesNothing(t *testing.T) {
 // change on its way. Older, it is let go: its sender only hasn't heard that change yet. An
 // older message that isn't sent again still says its sender is behind.
 func TestAnOlderStateSentAgainIsLetGo(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		event string
 		want  string
@@ -1933,6 +1950,7 @@ func TestAnOlderStateSentAgainIsLetGo(t *testing.T) {
 // nothing: that comes right after the send that failed. A joiner has no state yet, and a
 // state taken from that very member it has.
 func TestAMemberThatMissedSomethingIsSentTheStateAgain(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		paused bool
 		joiner bool
@@ -1988,6 +2006,7 @@ func TestAMemberThatMissedSomethingIsSentTheStateAgain(t *testing.T) {
 // first one got here late, and this node plays behind: the party stops. One that plays a
 // resume taken from someone else got it on time.
 func TestAResumeSentAgainThatThisNodeTookFromItsSenderStopsTheParty(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		by   string
 		want string
@@ -2009,6 +2028,7 @@ func TestAResumeSentAgainThatThisNodeTookFromItsSenderStopsTheParty(t *testing.T
 // missed, or the state taken from one, says nothing of the other; only what is shown
 // uses the name.
 func TestMembersWithOneNameAreToldApart(t *testing.T) {
+	t.Parallel()
 	laptop := func(id, event string) IncomingMessage {
 		m := peer(id, event)
 		m.HostName = "laptop"
@@ -2048,6 +2068,7 @@ func TestMembersWithOneNameAreToldApart(t *testing.T) {
 // tie it sent before can still be on its way. Something older says nothing of it. Missed
 // shows in what a tie from it does to a node that plays: it stops the party.
 func TestAMemberThatMissedSomethingIsForgottenOnceItSendsNews(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		via    IncomingMessage
 		missed bool
@@ -2084,6 +2105,7 @@ func TestAMemberThatMissedSomethingIsForgottenOnceItSendsNews(t *testing.T) {
 // node is on a second it never reached. It holds the party's stamp where mpv isn't, so it
 // asks the party where it is; not once mpv is gone.
 func TestARefusedStepLeavesNoMarker(t *testing.T) {
+	t.Parallel()
 	t.Run("the pause before a move", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{names: threeVideos})
