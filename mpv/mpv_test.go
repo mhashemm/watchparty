@@ -634,6 +634,34 @@ func TestAChangeMadeWhileTakingAStateIsNotUndone(t *testing.T) {
 			}
 		})
 	})
+	t.Run("the stop over a resume", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.plays()
+			n.mpvWasTold()
+			n.mpvAnswersLate()
+			n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"yes","at":0}`))
+			n.mpvObeys(propertyChangeLine(pause, "no", 0))
+			n.broadcasts()
+			n.mpvSays(mpvAt(1))
+			if got := said(n.broadcasts()); len(got) != 0 {
+				t.Fatalf("a frame while playing broadcast %q: the node took itself for stopped", got)
+			}
+		})
+	})
+	t.Run("the resume over a pause", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.mpvAnswersLate()
+			n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"no","at":0}`))
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+			n.broadcasts()
+			n.mpvSays(`{"event":"seek"}`, mpvAt(30), `{"event":"playback-restart"}`)
+			if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=30.000000]" {
+				t.Fatalf("a seek while stopped broadcast %q, want it to go out: the node took itself for playing", got)
+			}
+		})
+	})
 	t.Run("the seek after a stop", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{})

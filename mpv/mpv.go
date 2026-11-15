@@ -1096,13 +1096,12 @@ func (c *Client) commit(s state, from string) adoption {
 
 // adopt tells mpv to go where commit took this node: stopped, on the entry, on the second,
 // then playing if the state is. One that plays on another entry stops the party instead:
-// loading it, this node can't be in step. A change this node makes while mpv answers a step
-// is newer than the state, and goes out: the steps left would undo it here alone.
+// loading it, this node can't be in step. It stops once this node has moved (moved).
 func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	// what mpv never did, as it refused a step
 	left := a
 	overtaken := func() bool {
-		if c.stamp == a.stamp {
+		if !c.moved(a.stamp) {
 			return false
 		}
 		c.release(left)
@@ -1124,29 +1123,38 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 			return err
 		}
 		left.stop = false
+		if overtaken() {
+			return nil
+		}
 		c.paused = true
-		c.showText(fmt.Sprintf("paused by %s", hostname))
-	}
-	if overtaken() {
-		return nil
+		if c.showText(fmt.Sprintf("paused by %s", hostname)); overtaken() {
+			return nil
+		}
 	}
 	if a.moving {
 		if err = c.do(setProperty, playlistPos, a.entry); err != nil {
 			return err
 		}
 		left.moving = false
-		c.showText(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname))
+		if c.showText(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname)); overtaken() {
+			return nil
+		}
 	}
 	if a.now {
 		if err = c.seekReq(a.at); err != nil {
 			return err
 		}
 		left.now = false
+		if overtaken() {
+			return nil
+		}
 	}
 	if a.seek && name != pause {
-		c.showText(fmt.Sprintf("synced by %s", hostname))
+		if c.showText(fmt.Sprintf("synced by %s", hostname)); overtaken() {
+			return nil
+		}
 	}
-	if a.paused || overtaken() {
+	if a.paused {
 		return nil
 	}
 	if a.moving {
@@ -1186,16 +1194,9 @@ func (c *Client) release(a adoption) {
 // where it is. A joiner only says where it is: it stops nobody, and only another joiner
 // can take it.
 func (c *Client) answer(hostname, reason string) error {
-	joiner, playing := c.stamp < 0, !c.paused
-	var where []byte
-	if joiner || !playing {
-		where = c.tag(position(timePos, c.held().at))
-	}
+	from, joiner, playing := c.stamp, c.stamp < 0, !c.paused
 	if joiner {
-		select {
-		case c.outgoing <- where:
-		case <-c.ctx.Done():
-		}
+		c.say(c.tag(position(timePos, c.held().at)))
 		return nil
 	}
 	// why first, like a leave: the GUI's feed takes the pause that follows for this one, not
@@ -1206,18 +1207,31 @@ func (c *Client) answer(hostname, reason string) error {
 	} else if reason != "" {
 		c.showText(fmt.Sprintf("paused for %s: %s", hostname, reason))
 	}
+	if c.moved(from) {
+		return nil
+	}
 	if playing {
-		if err := c.pauseReq(true); err != nil {
-			return err
-		}
+		return c.pauseReq(true)
 	}
-	if where != nil {
-		select {
-		case c.outgoing <- where:
-		case <-c.ctx.Done():
-		}
-	}
+	// tagged now, not before the notice: what it says is where this node is when it goes out
+	c.say(c.tag(position(timePos, c.held().at)))
 	return nil
+}
+
+// say sends the party one message of this node's own.
+func (c *Client) say(b []byte) {
+	select {
+	case c.outgoing <- b:
+	case <-c.ctx.Done():
+	}
+}
+
+// moved is whether this node has a newer stamp than from: the rule for an action that
+// waits on mpv more than once (adopt, answer, resume). While mpv answers one step, the
+// person can pause, resume or seek, and that goes out as this node's own change, newer than
+// what the action was doing; the steps left would undo it here alone, so the action stops.
+func (c *Client) moved(from int) bool {
+	return c.stamp != from
 }
 
 // chase follows a member that missed something this node sent, as its transport tells: a
@@ -1303,12 +1317,16 @@ func (c *Client) resume(hostname string) error {
 	}
 	c.applied[pause] = "no"
 
+	from := c.stamp
 	err := c.pauseReq(false)
 	if err != nil {
 		// no echo is coming for a set mpv refused; if it only answered late, its report
 		// goes out as this node's own, which peers already in that state ignore
 		delete(c.applied, pause)
 		return err
+	}
+	if c.moved(from) {
+		return nil
 	}
 	c.paused, c.landing = false, false
 

@@ -67,12 +67,14 @@ type sim struct {
 	late   map[[2]string]int
 	ticks  int
 	script []func()
+	// newest: the highest stamp each node has sent
+	newest map[string]int
 }
 
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}, held: map[[2]string]bool{}, late: map[[2]string]int{}}
+	s := &sim{newest: map[string]int{}, t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}, held: map[[2]string]bool{}, late: map[[2]string]int{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
@@ -297,6 +299,23 @@ func (s *sim) run() {
 		for _, from := range s.nodes {
 			for len(from.out) > 0 {
 				b := <-from.out
+				// a node never says a state older than one it said: what it sends after a change
+				// of its own says that change. A join starts it over from unheard.
+				e := struct {
+					Stamp *int
+					Name  string
+				}{}
+				json.Unmarshal(b, &e)
+				if e.Name == joined {
+					delete(s.newest, from.name)
+				}
+				newest, ok := s.newest[from.name]
+				if e.Stamp != nil && ok && *e.Stamp < newest {
+					s.t.Errorf("%s sent stamp %d after %d: %s", from.name, *e.Stamp, newest, b)
+				}
+				if e.Stamp != nil && (!ok || *e.Stamp > newest) {
+					s.newest[from.name] = *e.Stamp
+				}
 				for _, to := range s.nodes {
 					// a node without its relay connection sends and hears nothing
 					k := [2]string{from.name, to.name}
@@ -1278,4 +1297,19 @@ func TestANodeThatMissedAMoveIsBroughtOver(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A member seeks while it shows why it stops for a joiner: the seek goes out first, so where
+// the member says it is, after it, is the second it sought (newest).
+func TestASeekWhileAnsweringAJoinIsWhereTheMemberSaysItIs(t *testing.T) {
+	forManySeeds(t, 300, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "j")
+		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
+		stopped(30, a, b)
+		joins(j)
+		j.out <- []byte(`{"name":"joined"}`)
+		s.script = []func(){seeks(b, 50)}
+		s.run()
+		s.together(seed)
+	})
 }

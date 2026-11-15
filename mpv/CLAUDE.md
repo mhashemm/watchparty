@@ -15,11 +15,13 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
 - **`do()` takes inputs while it waits**: mpv's lines are handled, other replies kept by id,
   a transport message queued while a peer's change is in flight (`busy`). A command an mpv
   line starts (`pauseParty`, a held seek) waits in `later` until that line's broadcast is out.
+- **So an action that waits more than once stops once this node has `moved`** (`adopt`,
+  `answer`, `resume`): the person's change went out newer meanwhile.
 - **`New` waits for `opened`**: the first `time-pos` with data and every observe taken, or the close.
-  - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run`
-    reads mpv's real exit status. Cancelling would kill the exiting mpv and turn
-    "exit status 2" into "signal: killed". **A hang-up doesn't prove mpv is exiting:** the
-    socket has dropped with mpv alive and well, so that wait has to be bounded.
+  - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's
+    real exit status. Cancelling would kill the exiting mpv and turn "exit status 2" into
+    "signal: killed". **A hang-up doesn't prove mpv is exiting:** the socket has dropped with
+    mpv alive and well, so that wait has to be bounded.
   - After, the close calls `cancel`, which `party.Run` wraps to tell a quit from other stops.
 - `TestWatchDoesNotAliasScannerBuffer` catches a missing `bytes.Clone` only because
   `dripReader` returns ~7 bytes per `Read`; with the whole input in one fill the bug hides.
@@ -57,8 +59,7 @@ a's pause to a, and the relay, which has no counters, loops forever.
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 
-A seek while playing, or a node waiting on its cache, would leave the others out of
-step, so that node pauses everyone with a reason:
+A seek while playing, or a node waiting on its cache, leaves the others out of step, so it pauses everyone with a reason:
 
 - **`seek`**: a `seek` event while playing sets `seeking`; the next `time-pos` is where
   it landed. A peer's seek right before its resume reports after mpv replies to the resume, when
@@ -109,9 +110,8 @@ change takes the next stamp, **written in the step that decided the event goes o
   stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv refuses is
   unmarked by `release`, where a new step adds its undo, and the node `announce`s unless mpv is
   gone). Taken apart, it holds the party's stamp on its own entry or second, a tie it can win;
-  so it speaks for the entry it is **heading** to, never mpv's (`held`). A change of its own
-  while mpv answers a step is newer: `adopt` stops there. A newer resume on another entry stops
-  the party: loading, it can't keep up.
+  so it speaks for the entry it is **heading** to, never mpv's (`held`). A newer resume on
+  another entry stops the party: loading, it can't keep up.
 - **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
   stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
 
@@ -166,8 +166,7 @@ reason: nobody starts the next one until someone resumes.
   report drops entries up to its own; `file-loaded` clears the rest once this node is where it
   headed, as there-and-back can report nothing. mpv's first report of where it started uses up
   nothing: it can land after a peer sent this node elsewhere.
-- **Any other report is a key press and clears the queue,** so the party hears every report
-  from there on.
+- **Any other report is a key press and clears the queue,** so the party hears every report from there on.
 - **A switch resets `c.pos` and `seeks` to 0** (`clear`). The old position would go out with
   the pause, and the new file's `time-pos` 0 would go out as a seek.
 - **`loading` holds a seek until the entry it is heading to has loaded** (`heldSeek`), or it
