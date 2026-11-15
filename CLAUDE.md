@@ -19,13 +19,13 @@ rule or contract that spans packages.
 make -j                                    # cli, gui and relay for this machine, into .bin/
 make -j gui linux                          # components × OSes: any of cli gui relay, linux darwin windows
 make -j test                               # unit tests (-race) and e2e.py together, ~60s
-go test -race -count=30 -cpu=1,4,16 ./...  # stress a changed test before trusting it
+go test -race -short -count=30 -cpu=1,4,16 ./...  # stress a changed test; -short skips seed sweeps
 go mod tidy                                # run it yourself; CI only does go mod download
 make e2e E2E="--mode gui"                  # e2e.py in docker; python e2e_windows.py on Windows
 CREATE_KEY=k ./relay                       # :8080, then -relay ws://host:8080 -room r -secret s [-createKey k]
 ```
 
-CI: `pr.yml` builds every OS, runs `make -j test`, and Windows unit + `e2e_windows.py`; a tag runs `publisher.yml` (11 files).
+CI: `pr.yml` builds; unit, a new `SIM_SEED`, a `-short` stress; a job per e2e phase under `--jitter`; Windows.
 
 ## Architecture
 

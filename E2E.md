@@ -7,7 +7,8 @@ and Chrome or Chromium on PATH and a `-local`-reachable interface.
 ## Phases
 
 The six phases run at once as copies of the script, `--port-base` + 20 apart, which works
-because relay-mode nodes open no ports. The slowest phase sets the total, so a new slow case
+because relay-mode nodes open no ports; they share binaries the parent builds once
+(`--bin`). CI runs each phase as a job of its own. The slowest phase sets the total, so a new slow case
 goes in whichever phase is shortest. `caps` can't go below about 45s: `[R20]` waits out the
 real 30s ping and 10s pong timeout.
 
@@ -59,7 +60,7 @@ A flake is a bug until shown otherwise; several were real ones. Reproduce it wit
 injected delay before fixing it. No retries in CI, and raising a ceiling is not a fix.
 
 `--jitter SEED` holds each direction of each relay connection, and each page's `/state`
-and `/log` answers, for a random time. CI runs it on every PR with a new seed. A seed fixes
+and `/log` answers, for a random time. CI runs every phase with it, and a new seed, on every PR. A seed fixes
 the delays, not the run: threads still race, so a failure may not repeat on replay.
 A case with its own proxy, like `[R11g]` or `[R12]`, skips it unless pointed at it. It
 can't reorder what stays in order on one connection or happens inside one process, so

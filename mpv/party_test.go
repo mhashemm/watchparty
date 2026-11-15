@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -483,13 +485,33 @@ func forSeeds(t *testing.T, f func(t *testing.T, seed uint64)) {
 	forManySeeds(t, 200, f)
 }
 
+// forManySeeds runs seeds 0 to seeds-1, which keep the orders that once failed, or from
+// SIM_SEED on when it is set: CI sets a new one each run, so every run tries orders no run
+// tried before. A seed always picks the same orders, so -count adds nothing: -short skips
+// the sweep, to stress the other tests.
 func forManySeeds(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64)) {
 	t.Parallel()
-	for seed := range seeds {
-		synctest.Test(t, func(t *testing.T) { f(t, seed) })
-		if t.Failed() {
-			return
+	if testing.Short() {
+		t.Skip("a seed sweep, skipped by -short")
+	}
+	base := uint64(0)
+	if v := os.Getenv("SIM_SEED"); v != "" {
+		var err error
+		if base, err = strconv.ParseUint(v, 10, 64); err != nil {
+			t.Fatalf("SIM_SEED=%q: %v", v, err)
 		}
+	}
+	run := "^" + strings.ReplaceAll(regexp.QuoteMeta(t.Name()), "/", "$/^") + "$"
+	for seed := base; seed < base+seeds; seed++ {
+		// a failure inside the bubble ends this test too, so it says how to replay from there
+		synctest.Test(t, func(t *testing.T) {
+			t.Cleanup(func() {
+				if t.Failed() {
+					t.Logf("replay: SIM_SEED=%d go test -race -run '%s' ./mpv", seed, run)
+				}
+			})
+			f(t, seed)
+		})
 	}
 }
 
