@@ -198,7 +198,7 @@ stubs = []
 
 def ok(name, cond, detail=""):
     if not cond:
-        now = getattr(running, "id", None) or (cases[-1][0] if cases else None)
+        now = getattr(running, "id", None)
         fails.append(f"{now} {name}" if now else name)
     print(("  PASS  " if cond else "  FAIL  ") + name + (f"  [{detail}]" if detail else ""))
 
@@ -249,7 +249,7 @@ class Stop(Exception):
 
 
 def must(name, cond, detail=""):
-    """ok(), but a failure ends the phase here instead of cascading into later cases."""
+    """ok(), but a failure ends the case here instead of cascading into its later checks."""
     ok(name, cond, detail)
     if not cond:
         raise Stop(name)
@@ -666,15 +666,21 @@ def fingerprint(n):
     return log(n).split("file fingerprint: ", 1)[1].split("\n", 1)[0].strip()
 
 
+making = threading.Lock()  # cases side by side mustn't read a file another is still writing
+
+
 def variants():
     """MEDIA copied under another name, folder and timestamp, and MEDIA one byte longer."""
-    os.makedirs(f"{RUN}/elsewhere", exist_ok=True)
     same, diff = f"{RUN}/elsewhere/renamed copy.mkv", f"{RUN}/different.mkv"
-    shutil.copyfile(MEDIA, same)
-    os.utime(same, (0, 0))
-    shutil.copyfile(MEDIA, diff)
-    with open(diff, "ab") as f:
-        f.write(b"\0")
+    with making:
+        if not os.path.exists(diff):
+            os.makedirs(f"{RUN}/elsewhere", exist_ok=True)
+            shutil.copyfile(MEDIA, same)
+            os.utime(same, (0, 0))
+            shutil.copyfile(MEDIA, diff + ".part")
+            with open(diff + ".part", "ab") as f:
+                f.write(b"\0")
+            os.rename(diff + ".part", diff)
     return same, diff
 
 
@@ -766,6 +772,15 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
     if browser in ("headless", "xvfb"):
         attach(key, opened + 1)
     return key
+
+
+def kill_gui(n):
+    """A GUI's whole process group: its browser, its mpv, a GUI it restarted into."""
+    try:
+        os.killpg(nodes[n]["proc"].pid, signal.SIGKILL)
+    except OSError:
+        pass
+    nodes[n]["proc"].wait(timeout=5)
 
 
 def script(path, body):
@@ -880,7 +895,6 @@ def mark(name):
     marks.append((name, time.time()))
 
 
-cases = []    # (id, start) of each story header, timed until the next one starts
 took = []     # (seconds, id) of each case that ran on its own
 pending = []  # (title, function, serial, group) of each @case, run by run_cases()
 running = threading.local()  # the case this thread runs, and the buffer its prints go to
@@ -908,13 +922,6 @@ class CaseOutput:
 sys.stdout = CaseOutput(sys.stdout)
 
 
-def header(title):
-    """A case in a phase still written as one story: says what it checks, and times it
-    until the next one starts."""
-    cases.append((title.split()[0], time.time()))
-    print("\n" + title)
-
-
 def part(title):
     """A labelled step inside a case: its failures carry its own id."""
     running.id = title.split()[0]
@@ -933,8 +940,13 @@ def case(title, serial=False, group=None):
     return add
 
 
+def on_end(fn):
+    """Runs fn when the running case ends, however it ends: for what no with-block holds."""
+    running.cleanup.append(fn)
+
+
 def run_case(title, f):
-    running.id, running.buf = title.split()[0], []
+    running.id, running.buf, running.cleanup = title.split()[0], [], []
     start = time.time()
     print("\n" + title)
     try:
@@ -944,6 +956,11 @@ def run_case(title, f):
     except Exception:
         traceback.print_exc(file=sys.stdout)
         fails.append(f"{title.split()[0]} crashed")
+    for fn in reversed(running.cleanup):
+        try:
+            fn()
+        except Exception:
+            traceback.print_exc(file=sys.stdout)
     took.append((time.time() - start, title.split()[0]))
     out, running.buf, running.id = "".join(running.buf), None, None
     print(out, end="")
@@ -983,9 +1000,8 @@ def run_cases(at_once=CASES_AT_ONCE):
         run_case(title, f)
 
 
-def slowest(end, n=5):
-    told = sorted([(t2 - t1, c) for (c, t1), (_, t2) in zip(cases, cases[1:] + [("", end)])] + took, reverse=True)
-    return ", ".join(f"{c} {t:.0f}s" for t, c in told[:n])
+def slowest(n=5):
+    return ", ".join(f"{c} {t:.0f}s" for t, c in sorted(took, reverse=True)[:n])
 
 
 need("go")
@@ -1047,9 +1063,10 @@ def videos_in(path, names):
     os.makedirs(path)
     for name, picture in zip(names, ("testsrc", "testsrc2", "smptebars")):
         target = f"{RUN}/{picture}.mkv"
-        if not os.path.exists(target):
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{picture}=size=160x120:rate=10", "-t", "12",
-                            "-c:v", "libx264", "-pix_fmt", "yuv420p", target], check=True)
+        with making:
+            if not os.path.exists(target):
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{picture}=size=160x120:rate=10", "-t", "12",
+                                "-c:v", "libx264", "-pix_fmt", "yuv420p", target], check=True)
         shutil.copy(target, f"{path}/{name}")
     return path
 
@@ -2441,14 +2458,13 @@ def caps_suite():
 
 def gui_suite():
     global BUS
-    H, G, KEY = "guiHost", "guiGuest", "e2ekey"
-    print("\n=== gui setup: two real GUIs, each in headless Chromium, through one relay ===")
+    KEY = "e2ekey"
+    print("\n=== gui: real GUIs, each in headless Chromium, and GUIs of its own for every case ===")
     BUS = private_bus()
-    relay = launch_relay({"CREATE_KEY": KEY})
+    launch_relay({"CREATE_KEY": KEY})
     until(lambda: listening(PORTS["relay"]))
-    launch_gui(H)
-    launch_gui(G, portal=False)
-    X = launch_gui("guiXvfb", browser="xvfb")
+    # the playlist the check-mark cases open, each in a room of its own
+    folder = videos_in(f"{RUN}/guifolder", ("e1.mkv", "e2.mkv", "e3.mkv"))
 
     def mpv_of(n):
         return child_mpv_socket(nodes[n]["proc"].pid)
@@ -2462,660 +2478,724 @@ def gui_suite():
         nodes[n]["sock"] = mpv_of(n)
         return status(n).startswith("You're in")
 
-    header("[G1] the GUI opens its own app window at the phone-sized window")
-    for n in (H, G):
-        argv = launches(n)[0]
-        ok(f"{n} opened {nodes[n]['url']} as an app", f"--app={nodes[n]['url']} " in argv, argv)
-        ok(f"{n} asked for 560x940", "--window-size=560,940" in argv)
-    until(lambda: js(H, '$("version-text").textContent') != "Checking the version…")
-    ok("a dev build says so and offers no update", js(H, '$("version-text").textContent == "Development build" && $("update").hidden'))
+    def gui(name, key=None, relay=RELAY_URL, **kw):
+        """A GUI of its own for one case, with its relay, mpv flags and maybe the create key
+        saved, killed when the case ends. Its name is its folder, so a case's are its own."""
+        n = launch_gui(name, **kw)
+        on_end(lambda: kill_gui(n))
+        fields = {"set-relay": relay, "mpvFlags": MPVFLAGS, **({"createKey": key} if key else {})}
+        must(f"{n} saved its settings", save_settings(n, **fields) == "Saved.", js(n, '$("settings-saved").textContent'))
+        return n
 
-    header("[G1b] the window asks for no Google keys, and doesn't invite selecting or inspecting")
-    ok("the browser is told there are no keys", open(f"{nodes[H]['home']}/browser.key").read().strip() == "no")
-    ok("text can't be selected", js(H, 'getComputedStyle(document.body).userSelect') == "none")
-    ok("but the invite can", js(H, 'getComputedStyle($("share-text")).userSelect') == "text")
-    prevented = lambda target, event: js(H, f'!{target}.dispatchEvent(new {event})')
-    ok("no right-click menu on the page", prevented("document.body", 'MouseEvent("contextmenu", {bubbles: true, cancelable: true})'))
-    ok("but there is in a field, to paste", not prevented('$("invite")', 'MouseEvent("contextmenu", {bubbles: true, cancelable: true})'))
-    for name, keys in (("F12", 'key: "F12"'), ("Ctrl+Shift+I", 'key: "I", ctrlKey: true, shiftKey: true'), ("Cmd+Alt+J", 'key: "j", metaKey: true, altKey: true'), ("Ctrl+U", 'key: "u", ctrlKey: true')):
-        ok(f"{name} is blocked", prevented("document.body", f'KeyboardEvent("keydown", {{{keys}, bubbles: true, cancelable: true}})'))
-    ok("Ctrl+V isn't", not prevented('$("invite")', 'KeyboardEvent("keydown", {key: "v", ctrlKey: true, bubbles: true, cancelable: true})'))
-    js(H, "window.notReloaded = true")
-    for key, code, vk, mods in (("F5", "F5", 116, 0), ("r", "KeyR", 82, 2), ("r", "KeyR", 82, 4), ("R", "KeyR", 82, 10)):
-        for kind in ("rawKeyDown", "keyUp"):
-            nodes[H]["page"].call("Input.dispatchKeyEvent", type=kind, key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk, modifiers=mods)
-    time.sleep(QUIET)
-    ok("F5, Ctrl+R, Cmd+R and Ctrl+Shift+R, pressed for real, don't reload it", js(H, "window.notReloaded") is True)
-
-    header("[G2] the tabs switch views and the address remembers which")
-    for view in ("history", "settings", "party"):
-        tab(H, view)
-        shown = js(H, '["party", "history", "settings"].filter(v => !$("view-" + v).hidden)')
-        ok(f"{view} tab shows only its view", shown == [view], str(shown))
-        ok(f"{view} tab sets the address", js(H, "location.hash") == ("" if view == "party" else "#" + view))
-
-    header("[G3] Settings saves, and fills the party's relay")
-    ok(f"{H} saved", save_settings(H, **{"set-relay": RELAY_URL, "createKey": KEY, "mpvFlags": MPVFLAGS}) == "Saved.")
-    ok(f"{G} saved", save_settings(G, **{"set-relay": RELAY_URL, "mpvFlags": MPVFLAGS, "mpv": f"{nodes[G]['home']}/slow-mpv"}) == "Saved.")
-    s = state(H)["settings"]
-    ok("the settings reached the store", (s["relay"], s["createKey"], s["mpvFlags"]) == (RELAY_URL, KEY, MPVFLAGS), str(s))
-    ok("the party's relay was filled in", js(H, '$("relay").value') == RELAY_URL)
-    store = js(H, '$("store-path").textContent')
-    ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty", store)
-    ok("the settings are 0600 in a 0700 folder", (os.stat(f"{store}/gui.json").st_mode & 0o777, os.stat(store).st_mode & 0o777) == (0o600, 0o700))
-
-    ok("the mpv path shows the one it will use", js(H, '$("mpv").placeholder') == f"{nodes[H]['home']}/bin/mpv" and js(H, 'document.querySelector("label[for=mpv]").textContent') == "mpv path", js(H, '$("mpv").placeholder'))
-    ok("the cache folder shows the one it will use", js(H, '$("cacheDir").placeholder') == f"{nodes[H]['home']}/.cache/watchparty", js(H, '$("cacheDir").placeholder'))
-
-    header("[G3b] the ? button opens the help, one topic at a time")
-    ok("it starts closed", js(H, '$("tip").hidden'))
-    click(H, "#tip-button")
-    ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
-    sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
-    ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
-    tip = js(H, '$("tip").textContent')
-    ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
-    click(H, "#tip h2")
-    ok("a click inside keeps it open", js(H, '!$("tip").hidden'))
-    click(H, "#tip-button")
-    ok("the button closes it", js(H, '$("tip").hidden'))
-    click(H, "#tip-button")
-    js(H, 'document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}))')
-    ok("Escape closes it", js(H, '$("tip").hidden'))
-    click(H, "#tip-button")
-    click(H, "h1")
-    ok("a click elsewhere closes it", js(H, '$("tip").hidden'))
-
-    header("[G4] Browse uses the desktop portal, and says so when there is none")
-    click(H, "[data-pick=file]")
-    ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
-    click(H, "[data-pick=cacheDir]")
-    ok(f"{H} picked a folder through it too", until(lambda: js(H, '$("cacheDir").value') == os.path.dirname(MEDIA)), js(H, '$("cacheDir").value'))
-    js(H, '$("cacheDir").value = ""')
-    click(H, "[data-pick=mpv]")
-    ok(f"{H} can pick mpv, which no video filter would show", until(lambda: js(H, '$("mpv").value') == MEDIA + ".unfiltered"), js(H, '$("mpv").value'))
-    js(H, '$("mpv").value = ""')
-    click(G, "[data-pick=file]")
-    until(lambda: js(G, '!$("error").hidden'))
-    ok(f"{G}, with no portal, is told to type the path", js(G, '$("error").textContent').startswith("No file picker found"), js(G, '$("error").textContent'))
-
-    header("[G5] the form refuses what can't start")
-    fill(H, file="   ")
-    click(H, "#go")
-    ok("a blank path asks for a video", js(H, '$("error").textContent') == "Pick a video first.")
-    fill(H, file=MEDIA, relay="")
-    click(H, "#go")
-    until(lambda: js(H, '$("error").textContent').startswith("Diagnosis"))
-    ok("relay mode with no relay is refused", js(H, '$("error").textContent') == "Diagnosis: enter the relay address, or paste an invite.", js(H, '$("error").textContent'))
-    ok("and nothing started", js(H, '$("vitals").hidden'))
-
-    header("[G6] the host starts a relay party from the form and gets an invite")
-    start(H, hostname=H, relay=RELAY_URL)
-    must(f"{H} is in", joined(H), status(H))
-    until(lambda: js(H, '$("share-text").textContent') != "")
-    invite = js(H, '$("share-text").textContent')
-    room, secret = invite.split("-room ", 1)[1].split()[0], invite.split("-secret ", 1)[1].split()[0]
-    ok(f"{H} shows an invite", invite == f"-relay {RELAY_URL} -room {room} -secret {secret}", invite)
-    ok(f"{H} hides the form and shows the invite box", js(H, '$("fields").hidden && !$("share").hidden'))
-    ok("Update and Restart are off during a party", js(H, '$("update").disabled && $("restart").disabled && $("restart-now").disabled'))
-
-    header("[G7] Copy invite puts it on the clipboard")
-    click(H, "#copy")
-    until(lambda: js(H, '$("copy").textContent') != "Copy invite")
-    ok("the button says Copied", js(H, '$("copy").textContent') == "Copied", js(H, '$("copy").textContent'))
-    ok("the clipboard has the invite", js(H, "navigator.clipboard.readText()") == invite)
-    ok("the button comes back", until(lambda: js(H, '$("copy").textContent') == "Copy invite", 5))
-
-    header("[G8] Save chart downloads the whole log")
-    click(H, "#save-chart")
-    dl = f"{nodes[H]['home']}/downloads"
-    until(lambda: any(f.endswith(".log") for f in os.listdir(dl)))
-    saved = [f for f in os.listdir(dl) if f.endswith(".log")]
-    ok("one watchparty-<date>.log", len(saved) == 1 and saved[0].startswith("watchparty-"), str(saved))
-    chart = open(f"{dl}/{saved[0]}").read() if saved else ""
-    ok("it holds the party's log", "init done" in chart and invite in chart)
-
-    header("[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
-    js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '
-          '$("invite").dispatchEvent(new Event("input"))')
-    ok(f"{G} filled relay, room and secret from it", js(G, f'$("relay").value == {json.dumps(RELAY_URL)} && $("room").value == {json.dumps(room)} '
-                                                      f'&& $("secret").value == {json.dumps(secret)} && !$("invite-hint").hidden'))
-    start(G, hostname=G, file=MEDIA)
-    ok(f"{G} said it is opening mpv", until(lambda: status(G).startswith("Opening mpv"), BOOT), status(G))
-    ok(f"{G} walks while it waits", js(G, 'document.body.classList.contains("walking")'))
-    must(f"{G} is in", joined(G), status(G))
-    until(lambda: f"{G} has joined" in feed(H) and f"connected to {H}" in feed(G))
-    ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
-    ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
-
-    header(f"[G10] a resume in {G}'s mpv: the feeds say who did it")
-    must("the join is over", quiet((H, G)))
-    setp(G, "pause", False)
-    until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
-    ok(f"{H}'s mpv resumed", get(H, "pause") is False)
-    ok(f"{H}'s feed credits {G}", f"resumed by {G}" in feed(H), str(feed(H)))
-    ok(f"{G}'s feed says you", feed(G)[:1] == ["resumed by you"], str(feed(G)))
-
-    header("[G11] a seek while playing pauses everyone, and the feeds say why")
-    reasons = log(G).count('"name":"pause-reason"')
-    ipc(nodes[G]["sock"], "seek", 30)
-    # mpv's notice can land on either side of the pause, and the pause-reason that retracts
-    # "paused by you" comes after it, so the feed is checked once the page has read them all
-    until(lambda: get(H, "pause") is True and f"paused for {G}: seek" in feed(H) and "paused for everyone: seek" in feed(G)
-          and log(G).count('"name":"pause-reason"') > reasons and read_all(G))
-    ok(f"{H}'s feed says why", f"paused for {G}: seek" in feed(H), str(feed(H)))
-    ok(f"{G}'s feed says why", "paused for everyone: seek" in feed(G), str(feed(G)))
-    ok(f"{G}'s feed doesn't also say paused by you", "paused by you" not in feed(G), str(feed(G)))
-
-    header(f"[G12] resuming after the seek shows up in {G}'s feed")
-    setp(G, "pause", False)
-    until(lambda: get(H, "pause") is False and feed(G)[:1] == ["resumed by you"])
-    ok(f"{G}'s feed moved on from the seek", feed(G)[:1] == ["resumed by you"], str(feed(G)))
-
-    header(f"[G13] a pause in {H}'s mpv")
-    setp(H, "pause", True)
-    until(lambda: get(G, "pause") is True and feed(H)[:1] == ["paused by you"] and f"paused by {H}" in feed(G))
-    ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
-    ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
-
-    header(f"[G14] {H}'s history has the real room and secret, and who came")
-    last = state(H)["history"][-1]
-    ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
-    ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
-    ok("the history and its secret are 0600 in their own file", os.stat(f"{store}/history.json").st_mode & 0o777 == 0o600 and secret in open(f"{store}/history.json").read())
-    ok("the settings file has no party in it", secret not in open(f"{store}/gui.json").read() and "history" not in open(f"{store}/gui.json").read())
-
-    header(f"[G15] {G} ends the party from the page, which pauses {H}")
-    setp(H, "pause", False)
-    must("the party is playing", until(lambda: get(G, "pause") is False and feed(H)[:1] == ["resumed by you"]))
-    asked = end(G)
-    ok("it asked first", asked == "End the party? mpv closes for you, and everyone else keeps watching.", str(asked))
-    ok(f"{G} shows the form again", js(G, '!$("fields").hidden && $("go-label").textContent == "Start the party"'))
-    ok(f"{G}'s mpv closed", until(lambda: not mpv_of(G)))
-    ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
-    ok(f"{H} paused and says why", until(lambda: get(H, "pause") is True and f"paused for {G}: left" in feed(H)), str(feed(H)))
-    ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
-    ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
-
-    header("[G16] a missing mpv is diagnosed as one")
-    save_settings(G, mpv="/nonexistent/mpv")
-    go(G)
-    until(lambda: status(G).startswith("Diagnosis"), BOOT)
-    ok("it says mpv isn't installed", status(G).startswith("Diagnosis: mpv isn't installed"), status(G))
-    ok("in red, with the chart open", js(G, '$("status").classList.contains("bad") && $("chart").open'))
-    save_settings(G, mpv="")
-
-    header("[G17] a wrong secret, and a different file, are diagnosed")
-    fill(G, secret="wrong" + secret)
-    go(G)
-    until(lambda: status(G).startswith("Diagnosis"), BOOT)
-    ok("the relay rejected the secret", status(G) == "Diagnosis: the relay rejected this room or secret. Check the invite and start again.", status(G))
-    _, diff = variants()
-    fill(G, secret=secret, file=diff)
-    go(G)
-    until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
-    ok("the relay rejected the file", status(G) == NOT_THE_SAME_VIDEO, status(G))
-    ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
-
-    header("[G17b] opening a new party without the create key is diagnosed, not left waiting")
-    fill(G, file=MEDIA, room="", secret="")
-    go(G)
-    until(lambda: status(G).startswith("Diagnosis"), BOOT)
-    ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
-    ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
-
-    header("[G17c] a relay that is rate limiting, or full, says so instead of \"Lost the relay\"")
-    busy = {"status": 429}
-
-    class Busy(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(busy["status"])
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
-        def log_message(self, *a):
-            pass
-    refusing = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Busy)
-    threading.Thread(target=refusing.serve_forever, daemon=True).start()
-    fill(G, file=MEDIA, relay=f"ws://127.0.0.1:{refusing.server_address[1]}", room="busy", secret="busy")
-    go(G)
-    ok("a rate limit is named", until(lambda: status(G) == "This relay has had too many attempts from your network. Trying again; it clears within the hour.", BOOT), status(G))
-    busy["status"] = 503
-    ok("so is a full relay", until(lambda: status(G) == "The relay is full right now. Trying again…", BOOT), status(G))
-    end(G)
-    ok(f"{G}'s party ended", until(lambda: status(G) == "The party has ended."), status(G))
-    refusing.shutdown()
-    fill(G, relay=RELAY_URL)
-
-    header("[G17d] a magnet link nobody seeds says so, and Stop still works")
-    fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
-    go(G)
-    until(lambda: status(G).startswith("Looking"), BOOT)
-    ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
-    ok("and started no mpv", not mpv_of(G))
-    end(G)
-    ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
-    chosen = f"{RUN}/guichosen"
-    ok("the cache folder saves", save_settings(G, cacheDir=chosen) == "Saved.")
-    ok("and reaches the store", state(G)["settings"]["cacheDir"] == chosen, str(state(G)["settings"]))
-    go(G)
-    ok("a party uses it", until(lambda: glob.glob(f"{chosen}/torrent-*")), str(glob.glob(f"{chosen}/*")))
-    end(G)
-    ok("and leaving empties it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
-    ok("emptying the setting saves", save_settings(G, cacheDir="") == "Saved." and state(G)["settings"]["cacheDir"] == "")
-    ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Video", js(G, 'fileName($("file").value)'))
-
-    header("[G17c] the check mark loads the file's folder, and starts on that file")
-    folder = videos_in(f"{RUN}/guifolder", ("e1.mkv", "e2.mkv", "e3.mkv"))
-    js(G, '$("playlist").checked = true')
-    start(G, file=f"{folder}/e2.mkv", room="e2eplaylist", secret="e2eplaylist")
-    until(lambda: mpv_of(G), BOOT)
-    nodes[G]["sock"] = mpv_of(G)
-    ok("it opens the picked file", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
-    ok("with its neighbours", get(G, "playlist-count") == 3, get(G, "playlist-count"))
-    ok("history remembers it", state(G)["history"][-1].get("playlist") is True, str(state(G)["history"][-1]))
-    groups = lambda: nodes[G]["page"].feed_groups()
-    def showing(*names):
-        return lambda: [g[0] for g in groups()] == list(names) and [g[1] for g in groups()] == [True] + [False] * (len(names) - 1)
-    videos = lambda: state(G)["history"][-1].get("videos", [])
-    ok("the feed opens on that file", until(showing("e2.mkv")), str(groups()))
-    ok("history has it from when it opened", [v["name"] for v in videos()] == ["e2.mkv"], str(videos()))
-    ipc(nodes[G]["sock"], "playlist-next")
-    ok("the next file gets its own group, and only it is open", until(showing("e3.mkv", "e2.mkv")), str(groups()))
-    ipc(nodes[G]["sock"], "playlist-prev")
-    ok("going back reopens that file's group", until(showing("e2.mkv", "e3.mkv")), str(groups()))
-    ok("every switch is its own entry", until(lambda: [v["name"] for v in videos()] == ["e2.mkv", "e3.mkv", "e2.mkv"]), str(videos()))
-    ok("each was left when the next opened", all(a.get("ended") == b["started"] for a, b in zip(videos(), videos()[1:])), str(videos()))
-    ok("the open one hasn't been left", "ended" not in videos()[-1], str(videos()))
-    end(G)
-    ok("ending the party finishes it", videos()[-1].get("ended") == state(G)["history"][-1]["ended"], str(videos()))
-    tab(G, "history")
-    until(lambda: js(G, '$("history-list").querySelector(".videos") !== null'))
-    shown = js(G, '$("history-list").firstElementChild.textContent')
-    ok("the History page names the folder by its full path, counts files rather than plays, and shows each with its times", f"{folder} (2 videos)" in shown and "e3.mkv" in shown and " to " in shown, shown)
-    title = lambda file, playlist=True: js(G, f'partyTitle({{file: {json.dumps(file)}, playlist: {json.dumps(playlist)}}}, 2)')
-    ok("a torrent has no folder of its own, so it's named for itself", (title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent")) == ("The.Pack (2 videos)", "/d/pack.torrent (2 videos)"), str((title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent"))))
-    ok("a Windows path works, and a path with no folder just counts", (title("C:\\v\\trip\\a.mkv"), title("a.mkv")) == ("C:\\v\\trip (2 videos)", "2 videos"), str((title("C:\\v\\trip\\a.mkv"), title("a.mkv"))))
-    ok("one file is its own full path", js(G, 'partyTitle({file: "/v/a.mkv"}, 1)') == "/v/a.mkv", js(G, 'partyTitle({file: "/v/a.mkv"}, 1)'))
-    tab(G, "party")
-    line = lambda m, at="18:00:00": f"2026/11/05 {at} {m}"
-    notice = lambda text, at="18:00:00": line("do: sent request: " + json.dumps({"command": ["show-text", text, 5000]}, separators=(",", ":")), at)
-    js(G, f'handle({json.dumps(notice("paused by Sam"))}); handle({json.dumps(notice("from e2\nsecond line.mkv to e1.mkv, by Sam"))}); handle({json.dumps(notice("synced by Sam"))}); handle({json.dumps(notice("paused for Sam: video changed"))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
-    ok("a move's notices land with the file it moved to, in order, whichever came first", groups()[0][0] == "e1.mkv" and groups()[0][2] == ["paused for Sam: video changed", "synced by Sam", "from e2\nsecond line.mkv to e1.mkv, by Sam"], str(groups()))
-    ok("and the rest stays behind", "paused by Sam" in groups()[1][2], str(groups()))
-    js(G, f'handle({json.dumps(line("now playing: " + json.dumps("e3.mkv"), "18:00:10"))})')
-    ok("a later move leaves the notices of the one before", groups()[1][0] == "e1.mkv" and len(groups()[1][2]) == 3, str(groups()))
-    js(G, f'handle({json.dumps(notice("synced by Noor", "18:00:20"))}); handle({json.dumps(line("now playing: " + json.dumps("e2.mkv"), "18:00:20"))})')
-    ok("a seek on its own stays with the file it was on", groups()[1][0] == "e3.mkv" and "synced by Noor" in groups()[1][2], str(groups()))
-    row = '[...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent == "synced by Noor")'
-    got = js(G, f'[+{row}.dataset.at, {row}.querySelector("time").textContent]')
-    want = js(G, '[+new Date(2026, 10, 5, 18, 0, 20), clock(new Date(2026, 10, 5, 18, 0, 20))]')
-    ok("a row's moment and time are the log line's own", got == want, str((got, want)))
-    stops = json.dumps(line('Watch: broadcasted event: {"name":"pause","data":"yes"}', "18:01:00"))
-    js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:00"))}); handle({stops})')
-    ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
-    js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
-    ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
-    for why, text in (("joining", "paused for Sam: joining"), ("out of sync", "paused: out of sync with Sam")):
-        js(G, f'handle({json.dumps(notice(text, "18:01:30"))}); handle({stops})')
-        ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
-    js(G, '$("playlist").checked = false')
-
-    header("[G18] a guest who comes first waits for the host, then gets in by itself")
-    end(H)
-    start(G, file=MEDIA, room="e2ewait", secret="e2ewaitsecret")
-    until(lambda: status(G).startswith("Waiting"), BOOT)
-    ok(f"{G} is waiting for the host", status(G) == "Waiting for the host to open this room. It starts by itself once they're in.", status(G))
-    start(H, room="e2ewait", secret="e2ewaitsecret")
-    must(f"{H} opened it", joined(H), status(H))
-    must(f"{G} got in", joined(G), status(G))
-
-    header("[G19] losing the relay shows on both, both play on, and both come back")
-    must(f"{G}'s join is over", until(lambda: f"paused for {G}: joining" in feed(H)) and quiet([H, G]))
-    setp(H, "pause", False)
-    must("the party is playing", until(lambda: get(H, "pause") is False and get(G, "pause") is False))
-    relay.kill(); relay.wait(timeout=10)
-    until(lambda: all(status(n).startswith("Lost the relay") for n in (H, G)))
-    for n in (H, G):
-        ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
-        ok(f"{n} plays on, and its feed says so", until(lambda: "lost the relay, reconnecting" in feed(n) and read_all(n))
-           and get(n, "pause") is False, str(feed(n)[:3]))
-    relay = launch_relay({"CREATE_KEY": KEY})
-    until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
-    for n in (H, G):
-        must(f"{n} is back in", status(n).startswith("You're in"), status(n))
-    must("the returns are over", quiet([H, G]))
-    ok("nobody stopped", all(get(n, "pause") is False for n in (H, G)), str([feed(n)[:2] for n in (H, G)]))
-    for n in (G, H):
-        end(n)
-
-    header("[G19b] an invite ticks the box, so a playlist party can't be missed by accident")
-    fill(H, room="", secret="")
-    js(H, '$("playlist").checked = true')
-    start(H, file=f"{folder}/e2.mkv")
-    must(f"{H} is in", joined(H), status(H))
-    until(lambda: js(H, '$("share-text").textContent'))
-    invite = js(H, '$("share-text").textContent')
-    ok("the invite asks for the playlist", invite.endswith(" -playlist"), invite)
-    relay_addr = js(G, '$("relay").value')
-    def paste(text):
-        js(G, f'$("invite").value = {json.dumps(text)}; $("invite").dispatchEvent(new Event("input"))')
-    paste(invite)
-    ok(f"pasting it ticks {G}'s box", js(G, '$("playlist").checked'))
-    start(G, file=f"{folder}/e1.mkv")
-    must(f"{G} is in", joined(G), status(G))
-    ok(f"{G} goes to {H}'s entry", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
-    setp(H, "pause", False)
-    must("they play", until(lambda: get(G, "pause") is False))
-    ipc(nodes[H]["sock"], "playlist-next")
-    top = lambda n: (nodes[n]["page"].feed_groups() or [[None, None, []]])[0]
-    ok(f"{G}'s real notices about the move are with the file it moved to", until(lambda: top(G)[0] == "e3.mkv" and {f"from e2.mkv to e3.mkv, by {H}", f"paused for {H}: video changed"} <= set(top(G)[2])), str(nodes[G]["page"].feed_groups()))
-    ok(f"so are {H}'s", until(lambda: top(H)[0] == "e3.mkv" and "paused for everyone: video changed" in top(H)[2]), str(nodes[H]["page"].feed_groups()))
-    end(G)
-    ok(f"{G}'s history has every file it was on", [v["name"] for v in state(G)["history"][-1].get("videos", [])] == ["e1.mkv", "e2.mkv", "e3.mkv"], str(state(G)["history"][-1]))
-    js(G, '$("playlist").checked = false')
-    fill(G, file=f"{folder}/e2.mkv")
-    go(G)
-    until(lambda: status(G).startswith("Diagnosis"), BOOT)
-    ok("with the box unticked, it says to tick it", status(G) == NOT_THE_SAME_VIDEO, status(G))
-    short = f"{RUN}/guishort"
-    shutil.copytree(folder, short)
-    os.remove(f"{short}/e3.mkv")
-    js(G, '$("playlist").checked = true')
-    fill(G, file=f"{short}/e2.mkv")
-    go(G)
-    until(lambda: status(G).startswith("Diagnosis: this folder"), BOOT)
-    ok("with another folder, it says the folders differ", status(G) == NOT_THE_SAME_FOLDER, status(G))
-    paste("-relay ws://example.invalid -room r -secret s")
-    ok("an invite with no playlist unticks it", not js(G, '$("playlist").checked'))
-    fill(G, relay=relay_addr, room="", secret="", file=MEDIA)
-    js(G, '$("invite").value = ""')
-    end(H)
-    js(H, '$("playlist").checked = false')
-    fill(H, file=MEDIA)
-
-    header("[G19c] Continue: the same room again, each from where it stopped (videos are 12s), then the key holder's spot")
-    for n in (H, G):
-        js(n, '$("playlist").checked = true')
-    start(H, file=f"{folder}/e1.mkv", room="e2econt", secret="e2econtsecret")
-    must(f"{H} is in", joined(H), status(H))
-    start(G, file=f"{folder}/e1.mkv", room="e2econt", secret="e2econtsecret")
-    must(f"{G} is in", joined(G), status(G))
-    must("the join is over", quiet((H, G)))
-    setp(H, "playlist-pos", 1)
-    must(f"{G} followed to e2.mkv", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
-    must("the move is over", quiet((H, G)))
-    setp(H, "time-pos", 3)
-    must(f"{G} followed to 3s", until(lambda: near(get(G, "time-pos"), 3, 0.2)), get(G, "time-pos"))
-    end(G)
-    setp(H, "time-pos", 6)
-    until(lambda: near(get(H, "time-pos"), 6, 0.2))
-    end(H)
-    parties = len(state(H)["history"])
-    ok("each remembers where it stopped", [state(n)["history"][-1].get("stopped") for n in (H, G)] == [{"entry": "e2.mkv", "at": 6}, {"entry": "e2.mkv", "at": 3}], str([state(n)["history"][-1].get("stopped") for n in (H, G)]))
     def press_continue(n):
         tab(n, "history")
         run = js(n, "run")
         click(n, "#history-list li .continue")
         until(lambda: js(n, "run") > run, BOOT)
-    press_continue(G)
-    ok(f"{G}, with no key, waits for the key holder to open the room", until(lambda: status(G).startswith("Waiting"), BOOT), status(G))
-    ok("Continue can't be pressed during a party", js(G, '[...$("history-list").querySelectorAll(".continue")].every(b => b.disabled)'))
-    press_continue(H)
-    must(f"{H} is back in", joined(H), status(H))
-    ok(f"{H} opens on e2.mkv at 6s", until(lambda: get(H, "filename") == "e2.mkv" and near(get(H, "time-pos"), 6, 0.2)), f'{get(H, "filename")} {get(H, "time-pos")}')
-    ok("the same party moved to the top, not a new one", len(state(H)["history"]) == parties and state(H)["history"][-1]["room"] == "e2econt" and "ended" not in state(H)["history"][-1], str(state(H)["history"][-1]))
-    must(f"{G} got in by itself", joined(G), status(G))
-    ok(f"{G} takes the key holder's spot, not its own 3s", until(lambda: get(G, "filename") == "e2.mkv" and near(get(G, "time-pos"), 6, 0.2)), f'{get(G, "filename")} {get(G, "time-pos")}')
-    must("the join is over", quiet((H, G)))
-    ok(f"{H} stayed there", near(get(H, "time-pos"), 6, 0.2), get(H, "time-pos"))
-    setp(H, "playlist-pos", 2)
-    ok("the next file starts at its beginning", until(lambda: all(get(n, "filename") == "e3.mkv" and near(get(n, "time-pos"), 0, 1) for n in (H, G))), str([get(n, "time-pos") for n in (H, G)]))
-    must("the move is over", quiet((H, G)))
-    setp(H, "time-pos", 9)
-    must(f"{G} followed to 9s", until(lambda: near(get(G, "time-pos"), 9, 0.2)), get(G, "time-pos"))
-    setp(H, "pause", False)
-    for n in (H, G):
-        ok(f"{n}'s party ends with its last file", until(lambda: status(n) == "The party has ended.", BOOT), status(n))
-    ok("both know it was played to the end", all(state(n)["history"][-1].get("finished") for n in (H, G)), str([state(n)["history"][-1] for n in (H, G)]))
-    tab(H, "history")
-    ok("so it has no Continue", js(H, '$("history-list").firstElementChild.querySelector(".continue") === null'))
-    ago = lambda days: js(H, f'continuable({{mode: "relay", room: "r", secret: "s", ended: new Date(Date.now() - {days} * 864e5).toISOString()}})')
-    ok("Continue is gone once the relay has forgotten the room, 30 days after", (ago(29), ago(31)) == (True, False), str((ago(29), ago(31))))
-    tab(H, "party")
-    for n in (G, H):
-        js(n, '$("playlist").checked = false')
-    fill(H, file=MEDIA, room="", secret="")
-    fill(G, file=MEDIA, room="", secret="")
 
-    header("[G19d] Continue a torrent: the same file of it, by the name mpv reported, at the same second")
-    pack = f"{RUN}/guipack"
-    os.makedirs(pack)
-    for name in ("e1.mkv", "Part 2 #b.mkv"):
-        shutil.copy(MEDIA, f"{pack}/{name}")
-    start(H, file=seeder(pack), room="e2etorrent", secret="e2etorrentsecret")
-    must(f"{H} is in", until(lambda: status(H).startswith("You're in"), 60) and joined(H), status(H))
-    setp(H, "playlist-pos", 1)
-    must("it moved to the second file", until(lambda: get(H, "filename") == "Part 2 #b.mkv"), get(H, "filename"))
-    setp(H, "time-pos", 50)
-    until(lambda: near(get(H, "time-pos"), 50, 0.2))
-    end(H)
-    press_continue(H)
-    must(f"{H} is back in", until(lambda: status(H).startswith("You're in"), 60) and joined(H), status(H))
-    ok("it opens that file at 50s", until(lambda: get(H, "filename") == "Part 2 #b.mkv" and near(get(H, "time-pos"), 50, 0.2)), f'{get(H, "filename")} {get(H, "time-pos")}')
-    end(H)
-    fill(H, file=MEDIA, room="", secret="")
+    @case("[G1] the GUI opens its own app window at the phone-sized window")
+    def _():
+        H = gui("g1")
+        argv = launches(H)[0]
+        ok(f"it opened {nodes[H]['url']} as an app", f"--app={nodes[H]['url']} " in argv, argv)
+        ok("it asked for 560x940", "--window-size=560,940" in argv)
+        until(lambda: js(H, '$("version-text").textContent') != "Checking the version…")
+        ok("a dev build says so and offers no update", js(H, '$("version-text").textContent == "Development build" && $("update").hidden'))
 
-    header("[G19e] with keep-open=always mpv stays on a file it finished, and Continue starts the next one")
-    fill(H, mpvFlags=f"{MPVFLAGS} --keep-open=always")
-    js(H, '$("playlist").checked = true')
-    start(H, file=f"{folder}/e1.mkv", room="e2ekeep", secret="e2ekeepsecret")
-    must(f"{H} is in", joined(H), status(H))
-    setp(H, "time-pos", 9)
-    until(lambda: near(get(H, "time-pos"), 9, 0.2))
-    setp(H, "pause", False)
-    must("it plays to the end of e1.mkv and stays there", until(lambda: get(H, "pause") is True and (get(H, "time-pos") or 0) > 11 and get(H, "filename") == "e1.mkv"), f'{get(H, "filename")} {get(H, "time-pos")}')
-    end(H)
-    last = state(H)["history"][-1]
-    ok("it continues from the next file, which nobody opened yet", last.get("stopped") == {"entry": "e2.mkv"} and not last.get("finished") and [v["name"] for v in last["videos"]] == ["e1.mkv"], str(last))
-    press_continue(H)
-    must(f"{H} is back in", joined(H), status(H))
-    ok("and opens it at its start", until(lambda: get(H, "filename") == "e2.mkv" and near(get(H, "time-pos"), 0, 1)), f'{get(H, "filename")} {get(H, "time-pos")}')
-    end(H)
-    js(H, '$("playlist").checked = false')
-    fill(H, file=MEDIA, room="", secret="", mpvFlags=MPVFLAGS)
+        part("[G1b] the window asks for no Google keys, and doesn't invite selecting or inspecting")
+        ok("the browser is told there are no keys", open(f"{nodes[H]['home']}/browser.key").read().strip() == "no")
+        ok("text can't be selected", js(H, 'getComputedStyle(document.body).userSelect') == "none")
+        ok("but the invite can", js(H, 'getComputedStyle($("share-text")).userSelect') == "text")
+        prevented = lambda target, event: js(H, f'!{target}.dispatchEvent(new {event})')
+        ok("no right-click menu on the page", prevented("document.body", 'MouseEvent("contextmenu", {bubbles: true, cancelable: true})'))
+        ok("but there is in a field, to paste", not prevented('$("invite")', 'MouseEvent("contextmenu", {bubbles: true, cancelable: true})'))
+        for name, keys in (("F12", 'key: "F12"'), ("Ctrl+Shift+I", 'key: "I", ctrlKey: true, shiftKey: true'), ("Cmd+Alt+J", 'key: "j", metaKey: true, altKey: true'), ("Ctrl+U", 'key: "u", ctrlKey: true')):
+            ok(f"{name} is blocked", prevented("document.body", f'KeyboardEvent("keydown", {{{keys}, bubbles: true, cancelable: true}})'))
+        ok("Ctrl+V isn't", not prevented('$("invite")', 'KeyboardEvent("keydown", {key: "v", ctrlKey: true, bubbles: true, cancelable: true})'))
+        js(H, "window.notReloaded = true")
+        for key, code, vk, mods in (("F5", "F5", 116, 0), ("r", "KeyR", 82, 2), ("r", "KeyR", 82, 4), ("R", "KeyR", 82, 10)):
+            for kind in ("rawKeyDown", "keyUp"):
+                nodes[H]["page"].call("Input.dispatchKeyEvent", type=kind, key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk, modifiers=mods)
+        time.sleep(QUIET)  # a reload would land right behind the keys
+        ok("F5, Ctrl+R, Cmd+R and Ctrl+Shift+R, pressed for real, don't reload it", js(H, "window.notReloaded") is True)
 
-    header("[G20] a peer-to-peer party: the invite switches the guest to Peer-to-Peer")
-    js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
-    start(H, port=str(PORTS["wifiHost"]))
-    must(f"{H} is in", joined(H), status(H))
-    until(lambda: "-addrs" in js(H, '$("share-text").textContent'))
-    wifi = js(H, '$("share-text").textContent')
-    addr, wsecret = wifi.split()[1], wifi.split()[3]
-    ok(f"{H}'s invite has its Wi-Fi address", wifi.startswith("-addrs ") and addr.endswith(f":{PORTS['wifiHost']}"), wifi)
-    header(f"[G20b] a stranger with no secret can't rewrite {H}'s invite or status through its log")
-    before = status(H), state(H)["history"][-1]
-    for forged in ("relay: disconnected", "relay: rejected by relay", "your address to share is -addrs 6.6.6.6:1 -secret FORGED"):
-        code = raw(f"127.0.0.1:{PORTS['wifiHost']}", "/hi", {"hit-me-up": forged, "secret": "wrong"})
-        ok(f"{forged!r} is refused", code in (401, 403), f"HTTP {code}")
-    until(lambda: "-secret FORGED" in js(H, '$("log").textContent'))
-    ok("the page has read the forged line", "-secret FORGED" in js(H, '$("log").textContent'))
-    ok("the invite is unchanged", js(H, '$("share-text").textContent') == wifi, js(H, '$("share-text").textContent'))
-    ok("the status is unchanged", status(H) == before[0], status(H))
-    ok("the saved session is unchanged", state(H)["history"][-1] == before[1], str(state(H)["history"][-1]))
+    @case("[G2] the tabs switch views and the address remembers which")
+    def _():
+        H = gui("g2")
+        for view in ("history", "settings", "party"):
+            tab(H, view)
+            shown = js(H, '["party", "history", "settings"].filter(v => !$("view-" + v).hidden)')
+            ok(f"{view} tab shows only its view", shown == [view], str(shown))
+            ok(f"{view} tab sets the address", js(H, "location.hash") == ("" if view == "party" else "#" + view))
 
-    js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
-    ok(f"{G} switched to Peer-to-Peer and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
-    _, diff = variants()
-    start(G, file=diff, port=str(PORTS["wifiGuest"]))
-    until(lambda: status(G).startswith("Diagnosis"), BOOT)
-    ok("over Wi-Fi, another file gets the same diagnosis", status(G) == NOT_THE_SAME_VIDEO, status(G))
-    fill(G, file=MEDIA)
-    start(G, port=str(PORTS["wifiGuest"]))
-    must(f"{G} is in", joined(G), status(G))
-    until(lambda: f"{G} has joined" in feed(H) or f"connected to {G}" in feed(H))
-    setp(H, "pause", False)
-    until(lambda: get(G, "pause") is False and f"resumed by {H}" in feed(G))
-    ok(f"{G} follows {H} over Wi-Fi", get(G, "pause") is False and f"resumed by {H}" in feed(G), str(feed(G)))
+    @case("[G3] Settings saves, and fills the party's relay")
+    def _():
+        H = launch_gui("g3")
+        on_end(lambda: kill_gui(H))
+        ok("it saved", save_settings(H, **{"set-relay": RELAY_URL, "createKey": KEY, "mpvFlags": MPVFLAGS}) == "Saved.")
+        s = state(H)["settings"]
+        ok("the settings reached the store", (s["relay"], s["createKey"], s["mpvFlags"]) == (RELAY_URL, KEY, MPVFLAGS), str(s))
+        ok("the party's relay was filled in", js(H, '$("relay").value') == RELAY_URL)
+        store = js(H, '$("store-path").textContent')
+        ok("the store is where the page says", store == f"{nodes[H]['home']}/config/watchparty", store)
+        ok("the settings are 0600 in a 0700 folder", (os.stat(f"{store}/gui.json").st_mode & 0o777, os.stat(store).st_mode & 0o777) == (0o600, 0o700))
+        ok("the mpv path shows the one it will use", js(H, '$("mpv").placeholder') == f"{nodes[H]['home']}/bin/mpv" and js(H, 'document.querySelector("label[for=mpv]").textContent') == "mpv path", js(H, '$("mpv").placeholder'))
+        ok("the cache folder shows the one it will use", js(H, '$("cacheDir").placeholder') == f"{nodes[H]['home']}/.cache/watchparty", js(H, '$("cacheDir").placeholder'))
 
-    header(f"[G21] quitting mpv ends {G}'s party without a diagnosis")
-    ipc(nodes[G]["sock"], "quit")
-    until(lambda: not js(G, "running"))
-    ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
-    ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+    @case("[G3b] the ? button opens the help, one topic at a time")
+    def _():
+        H = gui("g3b")
+        ok("it starts closed", js(H, '$("tip").hidden'))
+        click(H, "#tip-button")
+        ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
+        sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
+        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+        tip = js(H, '$("tip").textContent')
+        ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
+        click(H, "#tip h2")
+        ok("a click inside keeps it open", js(H, '!$("tip").hidden'))
+        click(H, "#tip-button")
+        ok("the button closes it", js(H, '$("tip").hidden'))
+        click(H, "#tip-button")
+        js(H, 'document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}))')
+        ok("Escape closes it", js(H, '$("tip").hidden'))
+        click(H, "#tip-button")
+        click(H, "h1")
+        ok("a click elsewhere closes it", js(H, '$("tip").hidden'))
 
-    header(f"[G22] SIGTERM ends {H} mid-party, mpv, window and all")
-    sock = nodes[H]["sock"]
-    window = next(c for c in children(nodes[H]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
-    nodes[H]["proc"].send_signal(signal.SIGTERM)
-    ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
-    ok(f"{H}'s mpv closed", not listening_unix(sock))
-    ok(f"{H}'s window closed", until(lambda: gone(window)))
-    ok("and its browser profile is deleted", not os.path.exists(profile(H)), profile(H))
+    @case("[G4] Browse uses the desktop portal, and says so when there is none")
+    def _():
+        H, G = gui("g4"), gui("g4NoPortal", portal=False)
+        click(H, "[data-pick=file]")
+        ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
+        click(H, "[data-pick=cacheDir]")
+        ok(f"{H} picked a folder through it too", until(lambda: js(H, '$("cacheDir").value') == os.path.dirname(MEDIA)), js(H, '$("cacheDir").value'))
+        js(H, '$("cacheDir").value = ""')
+        click(H, "[data-pick=mpv]")
+        ok(f"{H} can pick mpv, which no video filter would show", until(lambda: js(H, '$("mpv").value') == MEDIA + ".unfiltered"), js(H, '$("mpv").value'))
+        click(G, "[data-pick=file]")
+        until(lambda: js(G, '!$("error").hidden'))
+        ok(f"{G}, with no portal, is told to type the path", js(G, '$("error").textContent').startswith("No file picker found"), js(G, '$("error").textContent'))
 
-    header(f"[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
-    tab(G, "history")
-    until(lambda: js(G, '$("history-list").children.length') == len(state(G)["history"]))
-    items = js(G, '[...$("history-list").children].map(li => li.textContent)')
-    ok("newest first, a peer-to-peer party with the host", "peer-to-peer" in items[0] and f"with {H}" in items[0], items[0])
-    ok("the first is over the internet with the host", "over the internet" in items[-1] and f"with {H}" in items[-1], items[-1])
-    buttons = lambda li: js(G, f'[...$("history-list").{li}.querySelectorAll("button")].map(b => b.textContent)')
-    ok("a peer-to-peer party has Watch again alone", buttons("firstElementChild") == ["Watch again"], str(buttons("firstElementChild")))
-    ok("a party over the internet has Continue alone", buttons("lastElementChild") == ["Continue"], str(buttons("lastElementChild")))
-    click(G, "#history-list li .again")
-    ok("Watch again fills Peer-to-Peer and shows the form", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)} && !$("view-party").hidden'))
+    @case("[G5] the form refuses what can't start")
+    def _():
+        H = gui("g5")
+        fill(H, file="   ")
+        click(H, "#go")
+        ok("a blank path asks for a video", js(H, '$("error").textContent') == "Pick a video first.")
+        fill(H, file=MEDIA, relay="")
+        click(H, "#go")
+        until(lambda: js(H, '$("error").textContent').startswith("Diagnosis"))
+        ok("relay mode with no relay is refused", js(H, '$("error").textContent') == "Diagnosis: enter the relay address, or paste an invite.", js(H, '$("error").textContent'))
+        ok("and nothing started", js(H, '$("vitals").hidden'))
 
-    header(f"[G24] closing {G}'s window ends its GUI")
-    browser = next(c for c in children(nodes[G]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
-    os.kill(browser, signal.SIGTERM)
-    ok(f"{G} exited", until(lambda: nodes[G]["proc"].poll() is not None))
-    ok(f"{G} logged it", "gui: window closed" in log(G))
+    @case("[G6] the host starts a relay party from the form and gets an invite")
+    def _():
+        H, G = gui("g6Host", key=KEY), gui("g6Guest")
+        save_settings(G, mpv=f"{nodes[G]['home']}/slow-mpv")
+        start(H, hostname=H, relay=RELAY_URL, file=MEDIA)
+        must(f"{H} is in", joined(H), status(H))
+        until(lambda: js(H, '$("share-text").textContent') != "")
+        invite = js(H, '$("share-text").textContent')
+        room, secret = invite.split("-room ", 1)[1].split()[0], invite.split("-secret ", 1)[1].split()[0]
+        ok(f"{H} shows an invite", invite == f"-relay {RELAY_URL} -room {room} -secret {secret}", invite)
+        ok(f"{H} hides the form and shows the invite box", js(H, '$("fields").hidden && !$("share").hidden'))
+        ok("Update and Restart are off during a party", js(H, '$("update").disabled && $("restart").disabled && $("restart-now").disabled'))
 
-    header(f"[G25] {G} again, on the same folder: everything was kept")
-    count = len(items)
-    G2 = launch_gui(G, tag="guiGuest2", portal=False)
-    ok("a new port", nodes[G2]["url"] != nodes[G]["url"])
-    ok("the name, relay and Wi-Fi port are filled in", js(G2, f'$("hostname").value == {json.dumps(G)} && $("relay").value == {json.dumps(RELAY_URL)} '
-                                                         f'&& $("port").value == {json.dumps(str(PORTS["wifiGuest"]))} && $("local").checked'))
-    tab(G2, "settings")
-    ok("the settings are kept", js(G2, f'$("mpvFlags").value == {json.dumps(MPVFLAGS)} && $("set-relay").value == {json.dumps(RELAY_URL)}'))
-    tab(G2, "history")
-    ok("the history is kept", until(lambda: js(G2, '$("history-list").children.length') == count))
+        part("[G7] Copy invite puts it on the clipboard")
+        click(H, "#copy")
+        until(lambda: js(H, '$("copy").textContent') != "Copy invite")
+        ok("the button says Copied", js(H, '$("copy").textContent') == "Copied", js(H, '$("copy").textContent'))
+        ok("the clipboard has the invite", js(H, "navigator.clipboard.readText()") == invite)
+        ok("the button comes back", until(lambda: js(H, '$("copy").textContent') == "Copy invite", 5))
 
-    header("[G26] Clear history asks, then empties it")
-    click(G2, "#clear-history")
-    until(lambda: js(G2, '$("history-list").children.length') == 0)
-    ok("it asked first", js(G2, "window.asked") == "Clear the whole party history?")
-    ok("the list is empty and says so", js(G2, '!$("history-empty").hidden && $("clear-history").hidden'))
-    ok("the store is empty", not state(G2)["history"])
+        part("[G8] Save chart downloads the whole log")
+        click(H, "#save-chart")
+        dl = f"{nodes[H]['home']}/downloads"
+        until(lambda: any(f.endswith(".log") for f in os.listdir(dl)))
+        saved = [f for f in os.listdir(dl) if f.endswith(".log")]
+        ok("one watchparty-<date>.log", len(saved) == 1 and saved[0].startswith("watchparty-"), str(saved))
+        chart = open(f"{dl}/{saved[0]}").read() if saved else ""
+        ok("it holds the party's log", "init done" in chart and invite in chart)
 
-    header("[G27] the cat")
-    js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
-    ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
+        part("[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
+        js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '
+              '$("invite").dispatchEvent(new Event("input"))')
+        ok(f"{G} filled relay, room and secret from it", js(G, f'$("relay").value == {json.dumps(RELAY_URL)} && $("room").value == {json.dumps(room)} '
+                                                          f'&& $("secret").value == {json.dumps(secret)} && !$("invite-hint").hidden'))
+        start(G, hostname=G, file=MEDIA)
+        ok(f"{G} said it is opening mpv", until(lambda: status(G).startswith("Opening mpv"), BOOT), status(G))
+        ok(f"{G} walks while it waits", js(G, 'document.body.classList.contains("walking")'))
+        must(f"{G} is in", joined(G), status(G))
+        until(lambda: f"{G} has joined" in feed(H) and f"connected to {H}" in feed(G))
+        ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
+        ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
 
-    header(f"[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
-    nodes[G2]["page"].call("Page.reload")
-    time.sleep(3 + QUIET)  # the GUI's closeGrace
-    ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
-    try:
-        nodes[G2]["page"].call("Page.close")
-    except (OSError, RuntimeError, ValueError):
-        pass  # the page can go before it answers
-    ok(f"{G2} exited", until(lambda: nodes[G2]["proc"].poll() is not None, 10))
-    ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
-    ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
+        part(f"[G10] a resume in {G}'s mpv: the feeds say who did it")
+        must("the join is over", quiet((H, G)))
+        setp(G, "pause", False)
+        until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
+        ok(f"{H}'s mpv resumed", get(H, "pause") is False)
+        ok(f"{H}'s feed credits {G}", f"resumed by {G}" in feed(H), str(feed(H)))
+        ok(f"{G}'s feed says you", feed(G)[:1] == ["resumed by you"], str(feed(G)))
 
-    header("[G27b] a history saved by an older version moves to its own file, and is kept")
-    folder = f"{nodes[G]['home']}/config/watchparty"
-    os.remove(f"{folder}/history.json")
-    saved = json.load(open(f"{folder}/gui.json"))
-    saved["history"] = [{"started": "2026-01-02T03:04:05Z", "ended": "2026-01-02T04:04:05Z", "file": "/m/from-before.mkv", "mode": "direct", "people": ["Sam"]}]
-    json.dump(saved, open(f"{folder}/gui.json", "w"))
-    G3 = launch_gui(G, tag="guiGuest3", portal=False)
-    tab(G3, "history")
-    ok("the page shows it", until(lambda: "from-before.mkv" in js(G3, '$("history-list").textContent')))
-    ok("it moved", "from-before.mkv" in open(f"{folder}/history.json").read() and "history" not in open(f"{folder}/gui.json").read())
-    ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
-    stop(G3)
+        part("[G11] a seek while playing pauses everyone, and the feeds say why")
+        reasons = log(G).count('"name":"pause-reason"')
+        ipc(nodes[G]["sock"], "seek", 30)
+        # mpv's notice can land on either side of the pause, and the pause-reason that retracts
+        # "paused by you" comes after it, so the feed is checked once the page has read them all
+        until(lambda: get(H, "pause") is True and f"paused for {G}: seek" in feed(H) and "paused for everyone: seek" in feed(G)
+              and log(G).count('"name":"pause-reason"') > reasons and read_all(G))
+        ok(f"{H}'s feed says why", f"paused for {G}: seek" in feed(H), str(feed(H)))
+        ok(f"{G}'s feed says why", "paused for everyone: seek" in feed(G), str(feed(G)))
+        ok(f"{G}'s feed doesn't also say paused by you", "paused by you" not in feed(G), str(feed(G)))
 
-    header("[G28] self-update: offered, refused on a bad digest, installed on a good one")
-    rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
-    os.makedirs(f"{RUN}/upd")
-    exe = f"{RUN}/upd/watchparty-gui"
-    shutil.copy(RUN + "/gui-v0.0.1", exe)
-    old = sha(exe)
-    U = launch_gui("guiUpdate", exe=exe)
-    tab(U, "settings")
-    until(lambda: js(U, '!$("update").hidden'))
-    ok("it offers v0.0.2", js(U, '$("version-text").textContent == "Version v0.0.1" && $("update").textContent == "Update to v0.0.2" && !$("update-dot").hidden'))
-    click(U, "#update")
-    until(lambda: js(U, '$("version-text").textContent').startswith("Update failed"))
-    ok("a bad digest is refused", js(U, '$("version-text").textContent') == "Update failed: the download does not match its published sha256, not installing it.", js(U, '$("version-text").textContent'))
-    ok("and the binary is untouched", sha(exe) == old)
-    ok("and no download is left behind", os.listdir(f"{RUN}/upd") == ["watchparty-gui"], str(os.listdir(f"{RUN}/upd")))
-    rel.digest = "sha256:" + rel.sha
-    click(U, "#update")
-    until(lambda: js(U, '$("restart-dialog").open'))
-    ok("a good one is installed", sha(exe) == rel.sha)
-    ok("and it asks to restart", js(U, '$("restart-text").textContent') == "Version v0.0.2 is installed. A restart is required to start using it.")
-    click(U, "#restart-later")
-    ok("Restart later closes the dialog and leaves the button", js(U, '!$("restart-dialog").open && !$("restart").hidden && $("update").hidden'))
+        part(f"[G12] resuming after the seek shows up in {G}'s feed")
+        setp(G, "pause", False)
+        until(lambda: get(H, "pause") is False and feed(G)[:1] == ["resumed by you"])
+        ok(f"{G}'s feed moved on from the seek", feed(G)[:1] == ["resumed by you"], str(feed(G)))
 
-    header("[G29] Restart now hands over to the new version")
-    click(U, "#restart")
-    ok("the old one exited", until(lambda: nodes[U]["proc"].poll() is not None))
-    attach(U, 2)
-    until(lambda: js(U, '$("version-text").textContent') != "Checking the version…")
-    ok("the new window runs v0.0.2", js(U, '$("version-text").textContent') == "Version v0.0.2", js(U, '$("version-text").textContent'))
-    ok("and offers nothing", js(U, '$("update").hidden && $("restart").hidden'))
+        part(f"[G13] a pause in {H}'s mpv")
+        setp(H, "pause", True)
+        until(lambda: get(G, "pause") is True and feed(H)[:1] == ["paused by you"] and f"paused by {H}" in feed(G))
+        ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
+        ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
 
-    header("[G29b] the cli updates itself the same way, with its own asset")
-    rel = Release(PORTS["cliRelease"], RUN + "/cli-v0.0.2", "watchparty_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
-    os.makedirs(f"{RUN}/updcli")
-    exe = f"{RUN}/updcli/watchparty"
-    shutil.copy(RUN + "/cli-v0.0.1", exe)
-    old = sha(exe)
-    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
-    ok("a bad digest is refused", res.returncode != 0 and "does not match its published sha256" in res.stderr, res.stderr)
-    ok("and the binary is untouched", sha(exe) == old)
-    ok("and no download is left behind", os.listdir(f"{RUN}/updcli") == ["watchparty"], str(os.listdir(f"{RUN}/updcli")))
-    rel.digest = "sha256:" + rel.sha
-    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
-    ok("a good one is installed", res.returncode == 0 and sha(exe) == rel.sha, res.stderr)
-    res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
-    ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
-    res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
-    ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
+        part(f"[G14] {H}'s history has the real room and secret, and who came")
+        store = js(H, '$("store-path").textContent')
+        last = state(H)["history"][-1]
+        ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
+        ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
+        ok("the history and its secret are 0600 in their own file", os.stat(f"{store}/history.json").st_mode & 0o777 == 0o600 and secret in open(f"{store}/history.json").read())
+        ok("the settings file has no party in it", secret not in open(f"{store}/gui.json").read() and "history" not in open(f"{store}/gui.json").read())
 
-    header("[G30] a browser that hands the page off doesn't count as closing the window")
-    O = launch_gui("guiHandoff", browser="handoff")
-    until(lambda: launches(O))
-    time.sleep(QUIET)
-    ok("the GUI is still up", nodes[O]["proc"].poll() is None and listening(int(nodes[O]["url"].rsplit(":", 1)[1].strip("/"))))
-    ok("and didn't log a closed window", "gui: window closed" not in log(O))
-    stop(O)
+        part(f"[G15] {G} ends the party from the page, which pauses {H}")
+        setp(H, "pause", False)
+        must("the party is playing", until(lambda: get(G, "pause") is False and feed(H)[:1] == ["resumed by you"]))
+        asked = end(G)
+        ok("it asked first", asked == "End the party? mpv closes for you, and everyone else keeps watching.", str(asked))
+        ok(f"{G} shows the form again", js(G, '!$("fields").hidden && $("go-label").textContent == "Start the party"'))
+        ok(f"{G}'s mpv closed", until(lambda: not mpv_of(G)))
+        ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+        ok(f"{H} paused and says why", until(lambda: get(H, "pause") is True and f"paused for {G}: left" in feed(H)), str(feed(H)))
+        ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
+        ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
 
-    header("[G31] with no browser at all, it says where the page is")
-    system = [d for d in ("/var/lib/flatpak/exports/share/applications", "/var/lib/snapd/desktop/applications")
-              if os.path.isdir(d) and any(re.search("chrom|edge|brave|vivaldi", f, re.I) for f in os.listdir(d))]
-    if system:
-        print(f"  SKIP  a system-wide browser in {system} would open on screen")
-    else:
+    @case("[G16] a missing mpv is diagnosed as one")
+    def _():
+        G = gui("g16")
+        save_settings(G, mpv="/nonexistent/mpv")
+        start(G, hostname=G, file=MEDIA, room="g16", secret="g16secret")
+        until(lambda: status(G).startswith("Diagnosis"), BOOT)
+        ok("it says mpv isn't installed", status(G).startswith("Diagnosis: mpv isn't installed"), status(G))
+        ok("in red, with the chart open", js(G, '$("status").classList.contains("bad") && $("chart").open'))
+
+    @case("[G17] a wrong secret, and a different file, are diagnosed")
+    def _():
+        with party("g17", 1, create_key=KEY):
+            G = gui("g17Guest")
+            start(G, hostname=G, file=MEDIA, room="g17", secret="wrong" + SECRET)
+            until(lambda: status(G).startswith("Diagnosis"), BOOT)
+            ok("the relay rejected the secret", status(G) == "Diagnosis: the relay rejected this room or secret. Check the invite and start again.", status(G))
+            _, diff = variants()
+            start(G, secret=SECRET, file=diff)
+            until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
+            ok("the relay rejected the file", status(G) == NOT_THE_SAME_VIDEO, status(G))
+            ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    @case("[G17b] opening a new party without the create key is diagnosed, not left waiting")
+    def _():
+        G = gui("g17b")
+        start(G, hostname=G, file=MEDIA, room="", secret="")
+        until(lambda: status(G).startswith("Diagnosis"), BOOT)
+        ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
+        ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
+
+    @case("[G17c] a relay that is rate limiting, or full, says so instead of \"Lost the relay\"")
+    def _():
+        G = gui("g17c")
+        busy = {"status": 429}
+
+        class Busy(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(busy["status"])
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        refusing = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Busy)
+        threading.Thread(target=refusing.serve_forever, daemon=True).start()
+        on_end(refusing.shutdown)
+        start(G, hostname=G, file=MEDIA, relay=f"ws://127.0.0.1:{refusing.server_address[1]}", room="busy", secret="busy")
+        ok("a rate limit is named", until(lambda: status(G) == "This relay has had too many attempts from your network. Trying again; it clears within the hour.", BOOT), status(G))
+        busy["status"] = 503
+        ok("so is a full relay", until(lambda: status(G) == "The relay is full right now. Trying again…", BOOT), status(G))
+        end(G)
+        ok(f"{G}'s party ended", until(lambda: status(G) == "The party has ended."), status(G))
+
+    @case("[G17d] a magnet link nobody seeds says so, and Stop still works")
+    def _():
+        G = gui("g17d")
+        start(G, hostname=G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="g17d", secret="g17dsecret")
+        until(lambda: status(G).startswith("Looking"), BOOT)
+        ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
+        ok("and started no mpv", not mpv_of(G))
+        end(G)
+        ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
+        chosen = f"{RUN}/guichosen"
+        ok("the cache folder saves", save_settings(G, cacheDir=chosen) == "Saved.")
+        ok("and reaches the store", state(G)["settings"]["cacheDir"] == chosen, str(state(G)["settings"]))
+        go(G)
+        ok("a party uses it", until(lambda: glob.glob(f"{chosen}/torrent-*")), str(glob.glob(f"{chosen}/*")))
+        end(G)
+        ok("and leaving empties it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
+        ok("emptying the setting saves", save_settings(G, cacheDir="") == "Saved." and state(G)["settings"]["cacheDir"] == "")
+        ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Video", js(G, 'fileName($("file").value)'))
+
+    @case("[G17e] the check mark loads the file's folder, and starts on that file")
+    def _():
+        G = gui("g17e")
+        js(G, '$("playlist").checked = true')
+        start(G, hostname=G, file=f"{folder}/e2.mkv", room="g17e", secret="g17esecret")
+        until(lambda: mpv_of(G), BOOT)
+        nodes[G]["sock"] = mpv_of(G)
+        ok("it opens the picked file", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+        ok("with its neighbours", get(G, "playlist-count") == 3, get(G, "playlist-count"))
+        ok("history remembers it", state(G)["history"][-1].get("playlist") is True, str(state(G)["history"][-1]))
+        groups = lambda: nodes[G]["page"].feed_groups()
+        def showing(*names):
+            return lambda: [g[0] for g in groups()] == list(names) and [g[1] for g in groups()] == [True] + [False] * (len(names) - 1)
+        videos = lambda: state(G)["history"][-1].get("videos", [])
+        ok("the feed opens on that file", until(showing("e2.mkv")), str(groups()))
+        ok("history has it from when it opened", [v["name"] for v in videos()] == ["e2.mkv"], str(videos()))
+        ipc(nodes[G]["sock"], "playlist-next")
+        ok("the next file gets its own group, and only it is open", until(showing("e3.mkv", "e2.mkv")), str(groups()))
+        ipc(nodes[G]["sock"], "playlist-prev")
+        ok("going back reopens that file's group", until(showing("e2.mkv", "e3.mkv")), str(groups()))
+        ok("every switch is its own entry", until(lambda: [v["name"] for v in videos()] == ["e2.mkv", "e3.mkv", "e2.mkv"]), str(videos()))
+        ok("each was left when the next opened", all(a.get("ended") == b["started"] for a, b in zip(videos(), videos()[1:])), str(videos()))
+        ok("the open one hasn't been left", "ended" not in videos()[-1], str(videos()))
+        end(G)
+        ok("ending the party finishes it", videos()[-1].get("ended") == state(G)["history"][-1]["ended"], str(videos()))
+        tab(G, "history")
+        until(lambda: js(G, '$("history-list").querySelector(".videos") !== null'))
+        shown = js(G, '$("history-list").firstElementChild.textContent')
+        ok("the History page names the folder by its full path, counts files rather than plays, and shows each with its times", f"{folder} (2 videos)" in shown and "e3.mkv" in shown and " to " in shown, shown)
+        title = lambda file, playlist=True: js(G, f'partyTitle({{file: {json.dumps(file)}, playlist: {json.dumps(playlist)}}}, 2)')
+        ok("a torrent has no folder of its own, so it's named for itself", (title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent")) == ("The.Pack (2 videos)", "/d/pack.torrent (2 videos)"), str((title("magnet:?xt=urn:btih:x&dn=The.Pack"), title("/d/pack.torrent"))))
+        ok("a Windows path works, and a path with no folder just counts", (title("C:\\v\\trip\\a.mkv"), title("a.mkv")) == ("C:\\v\\trip (2 videos)", "2 videos"), str((title("C:\\v\\trip\\a.mkv"), title("a.mkv"))))
+        ok("one file is its own full path", js(G, 'partyTitle({file: "/v/a.mkv"}, 1)') == "/v/a.mkv", js(G, 'partyTitle({file: "/v/a.mkv"}, 1)'))
+        tab(G, "party")
+        line = lambda m, at="18:00:00": f"2026/11/05 {at} {m}"
+        notice = lambda text, at="18:00:00": line("do: sent request: " + json.dumps({"command": ["show-text", text, 5000]}, separators=(",", ":")), at)
+        js(G, f'handle({json.dumps(notice("paused by Sam"))}); handle({json.dumps(notice("from e2\nsecond line.mkv to e1.mkv, by Sam"))}); handle({json.dumps(notice("synced by Sam"))}); handle({json.dumps(notice("paused for Sam: video changed"))}); handle({json.dumps(line("now playing: " + json.dumps("e1.mkv")))})')
+        ok("a move's notices land with the file it moved to, in order, whichever came first", groups()[0][0] == "e1.mkv" and groups()[0][2] == ["paused for Sam: video changed", "synced by Sam", "from e2\nsecond line.mkv to e1.mkv, by Sam"], str(groups()))
+        ok("and the rest stays behind", "paused by Sam" in groups()[1][2], str(groups()))
+        js(G, f'handle({json.dumps(line("now playing: " + json.dumps("e3.mkv"), "18:00:10"))})')
+        ok("a later move leaves the notices of the one before", groups()[1][0] == "e1.mkv" and len(groups()[1][2]) == 3, str(groups()))
+        js(G, f'handle({json.dumps(notice("synced by Noor", "18:00:20"))}); handle({json.dumps(line("now playing: " + json.dumps("e2.mkv"), "18:00:20"))})')
+        ok("a seek on its own stays with the file it was on", groups()[1][0] == "e3.mkv" and "synced by Noor" in groups()[1][2], str(groups()))
+        row = '[...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent == "synced by Noor")'
+        got = js(G, f'[+{row}.dataset.at, {row}.querySelector("time").textContent]')
+        want = js(G, '[+new Date(2026, 10, 5, 18, 0, 20), clock(new Date(2026, 10, 5, 18, 0, 20))]')
+        ok("a row's moment and time are the log line's own", got == want, str((got, want)))
+        stops = json.dumps(line('Watch: broadcasted event: {"name":"pause","data":"yes"}', "18:01:00"))
+        js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:00"))}); handle({stops})')
+        ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
+        js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
+        ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
+        for why, text in (("joining", "paused for Sam: joining"), ("out of sync", "paused: out of sync with Sam")):
+            js(G, f'handle({json.dumps(notice(text, "18:01:30"))}); handle({stops})')
+            ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
+
+    @case("[G18] a guest who comes first waits for the host, then gets in by itself")
+    def _():
+        H, G = gui("g18Host", key=KEY), gui("g18Guest")
+        start(G, hostname=G, file=MEDIA, room="g18", secret="g18secret")
+        until(lambda: status(G).startswith("Waiting"), BOOT)
+        ok(f"{G} is waiting for the host", status(G) == "Waiting for the host to open this room. It starts by itself once they're in.", status(G))
+        start(H, hostname=H, file=MEDIA, room="g18", secret="g18secret")
+        must(f"{H} opened it", joined(H), status(H))
+        must(f"{G} got in", joined(G), status(G))
+
+    @case("[G19] losing the relay shows on both, both play on, and both come back")
+    def _():
+        # a relay of its own, since this one dies; delayed like the phase's under --jitter
+        port = free_port()
+        own = [launch_relay({"CREATE_KEY": KEY}, port)]
+        on_end(lambda: own[0].kill())
+        until(lambda: listening(port))
+        url = f"ws://127.0.0.1:{port}"
+        if JITTERED:
+            hop = free_port()
+            on_end(lag(hop, port, jitter).close)
+            url = f"ws://127.0.0.1:{hop}"
+        H, G = gui("g19Host", key=KEY, relay=url), gui("g19Guest", relay=url)
+        start(H, hostname=H, file=MEDIA, room="g19", secret="g19secret")
+        must(f"{H} is in", joined(H), status(H))
+        start(G, hostname=G, file=MEDIA, room="g19", secret="g19secret")
+        must(f"{G} is in", joined(G), status(G))
+        must(f"{G}'s join is over", until(lambda: f"paused for {G}: joining" in feed(H)) and quiet([H, G]))
+        setp(H, "pause", False)
+        must("the party is playing", until(lambda: get(H, "pause") is False and get(G, "pause") is False))
+        own[0].kill(); own[0].wait(timeout=10)
+        until(lambda: all(status(n).startswith("Lost the relay") for n in (H, G)))
+        for n in (H, G):
+            ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
+            ok(f"{n} plays on, and its feed says so", until(lambda: "lost the relay, reconnecting" in feed(n) and read_all(n))
+               and get(n, "pause") is False, str(feed(n)[:3]))
+        own[0] = launch_relay({"CREATE_KEY": KEY}, port)
+        until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
+        for n in (H, G):
+            must(f"{n} is back in", status(n).startswith("You're in"), status(n))
+        must("the returns are over", quiet([H, G]))
+        ok("nobody stopped", all(get(n, "pause") is False for n in (H, G)), str([feed(n)[:2] for n in (H, G)]))
+
+    @case("[G19b] an invite ticks the box, so a playlist party can't be missed by accident")
+    def _():
+        H, G = gui("g19bHost", key=KEY), gui("g19bGuest")
+        js(H, '$("playlist").checked = true')
+        start(H, hostname=H, file=f"{folder}/e2.mkv", room="", secret="")
+        must(f"{H} is in", joined(H), status(H))
+        until(lambda: js(H, '$("share-text").textContent'))
+        invite = js(H, '$("share-text").textContent')
+        ok("the invite asks for the playlist", invite.endswith(" -playlist"), invite)
+        relay_addr = js(G, '$("relay").value')
+        def paste(text):
+            js(G, f'$("invite").value = {json.dumps(text)}; $("invite").dispatchEvent(new Event("input"))')
+        paste(invite)
+        ok(f"pasting it ticks {G}'s box", js(G, '$("playlist").checked'))
+        start(G, hostname=G, file=f"{folder}/e1.mkv")
+        must(f"{G} is in", joined(G), status(G))
+        ok(f"{G} goes to {H}'s entry", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+        setp(H, "pause", False)
+        must("they play", until(lambda: get(G, "pause") is False))
+        ipc(nodes[H]["sock"], "playlist-next")
+        top = lambda n: (nodes[n]["page"].feed_groups() or [[None, None, []]])[0]
+        ok(f"{G}'s real notices about the move are with the file it moved to", until(lambda: top(G)[0] == "e3.mkv" and {f"from e2.mkv to e3.mkv, by {H}", f"paused for {H}: video changed"} <= set(top(G)[2])), str(nodes[G]["page"].feed_groups()))
+        ok(f"so are {H}'s", until(lambda: top(H)[0] == "e3.mkv" and "paused for everyone: video changed" in top(H)[2]), str(nodes[H]["page"].feed_groups()))
+        end(G)
+        ok(f"{G}'s history has every file it was on", [v["name"] for v in state(G)["history"][-1].get("videos", [])] == ["e1.mkv", "e2.mkv", "e3.mkv"], str(state(G)["history"][-1]))
+        js(G, '$("playlist").checked = false')
+        fill(G, file=f"{folder}/e2.mkv")
+        go(G)
+        until(lambda: status(G).startswith("Diagnosis"), BOOT)
+        ok("with the box unticked, it says to tick it", status(G) == NOT_THE_SAME_VIDEO, status(G))
+        short = f"{RUN}/guishort"
+        with making:
+            shutil.copytree(folder, short)
+            os.remove(f"{short}/e3.mkv")
+        js(G, '$("playlist").checked = true')
+        fill(G, file=f"{short}/e2.mkv")
+        go(G)
+        until(lambda: status(G).startswith("Diagnosis: this folder"), BOOT)
+        ok("with another folder, it says the folders differ", status(G) == NOT_THE_SAME_FOLDER, status(G))
+        paste("-relay ws://example.invalid -room r -secret s")
+        ok("an invite with no playlist unticks it", not js(G, '$("playlist").checked'))
+
+    @case("[G19c] Continue: the same room again, each from where it stopped (videos are 12s), then the key holder's spot")
+    def _():
+        H, G = gui("g19cHost", key=KEY), gui("g19cGuest")
+        for n in (H, G):
+            js(n, '$("playlist").checked = true')
+        start(H, hostname=H, file=f"{folder}/e1.mkv", room="g19c", secret="g19csecret")
+        must(f"{H} is in", joined(H), status(H))
+        start(G, hostname=G, file=f"{folder}/e1.mkv", room="g19c", secret="g19csecret")
+        must(f"{G} is in", joined(G), status(G))
+        must("the join is over", quiet((H, G)))
+        setp(H, "playlist-pos", 1)
+        must(f"{G} followed to e2.mkv", until(lambda: get(G, "filename") == "e2.mkv"), get(G, "filename"))
+        must("the move is over", quiet((H, G)))
+        setp(H, "time-pos", 3)
+        must(f"{G} followed to 3s", until(lambda: near(get(G, "time-pos"), 3, 0.2)), get(G, "time-pos"))
+        end(G)
+        setp(H, "time-pos", 6)
+        until(lambda: near(get(H, "time-pos"), 6, 0.2))
+        end(H)
+        parties = len(state(H)["history"])
+        ok("each remembers where it stopped", [state(n)["history"][-1].get("stopped") for n in (H, G)] == [{"entry": "e2.mkv", "at": 6}, {"entry": "e2.mkv", "at": 3}], str([state(n)["history"][-1].get("stopped") for n in (H, G)]))
+        press_continue(G)
+        ok(f"{G}, with no key, waits for the key holder to open the room", until(lambda: status(G).startswith("Waiting"), BOOT), status(G))
+        ok("Continue can't be pressed during a party", js(G, '[...$("history-list").querySelectorAll(".continue")].every(b => b.disabled)'))
+        press_continue(H)
+        must(f"{H} is back in", joined(H), status(H))
+        ok(f"{H} opens on e2.mkv at 6s", until(lambda: get(H, "filename") == "e2.mkv" and near(get(H, "time-pos"), 6, 0.2)), f'{get(H, "filename")} {get(H, "time-pos")}')
+        ok("the same party moved to the top, not a new one", len(state(H)["history"]) == parties and state(H)["history"][-1]["room"] == "g19c" and "ended" not in state(H)["history"][-1], str(state(H)["history"][-1]))
+        must(f"{G} got in by itself", joined(G), status(G))
+        ok(f"{G} takes the key holder's spot, not its own 3s", until(lambda: get(G, "filename") == "e2.mkv" and near(get(G, "time-pos"), 6, 0.2)), f'{get(G, "filename")} {get(G, "time-pos")}')
+        must("the join is over", quiet((H, G)))
+        ok(f"{H} stayed there", near(get(H, "time-pos"), 6, 0.2), get(H, "time-pos"))
+        setp(H, "playlist-pos", 2)
+        ok("the next file starts at its beginning", until(lambda: all(get(n, "filename") == "e3.mkv" and near(get(n, "time-pos"), 0, 1) for n in (H, G))), str([get(n, "time-pos") for n in (H, G)]))
+        must("the move is over", quiet((H, G)))
+        setp(H, "time-pos", 9)
+        must(f"{G} followed to 9s", until(lambda: near(get(G, "time-pos"), 9, 0.2)), get(G, "time-pos"))
+        setp(H, "pause", False)
+        for n in (H, G):
+            ok(f"{n}'s party ends with its last file", until(lambda: status(n) == "The party has ended.", BOOT), status(n))
+        ok("both know it was played to the end", all(state(n)["history"][-1].get("finished") for n in (H, G)), str([state(n)["history"][-1] for n in (H, G)]))
+        tab(H, "history")
+        ok("so it has no Continue", js(H, '$("history-list").firstElementChild.querySelector(".continue") === null'))
+        ago = lambda days: js(H, f'continuable({{mode: "relay", room: "r", secret: "s", ended: new Date(Date.now() - {days} * 864e5).toISOString()}})')
+        ok("Continue is gone once the relay has forgotten the room, 30 days after", (ago(29), ago(31)) == (True, False), str((ago(29), ago(31))))
+
+    @case("[G19d] Continue a torrent: the same file of it, by the name mpv reported, at the same second")
+    def _():
+        H = gui("g19dHost", key=KEY)
+        pack = f"{RUN}/guipack"
+        os.makedirs(pack)
+        for name in ("e1.mkv", "Part 2 #b.mkv"):
+            shutil.copy(MEDIA, f"{pack}/{name}")
+        start(H, hostname=H, file=seeder(pack), room="g19d", secret="g19dsecret")
+        must(f"{H} is in", until(lambda: status(H).startswith("You're in"), 60) and joined(H), status(H))
+        setp(H, "playlist-pos", 1)
+        must("it moved to the second file", until(lambda: get(H, "filename") == "Part 2 #b.mkv"), get(H, "filename"))
+        setp(H, "time-pos", 50)
+        until(lambda: near(get(H, "time-pos"), 50, 0.2))
+        end(H)
+        press_continue(H)
+        must(f"{H} is back in", until(lambda: status(H).startswith("You're in"), 60) and joined(H), status(H))
+        ok("it opens that file at 50s", until(lambda: get(H, "filename") == "Part 2 #b.mkv" and near(get(H, "time-pos"), 50, 0.2)), f'{get(H, "filename")} {get(H, "time-pos")}')
+
+    @case("[G19e] with keep-open=always mpv stays on a file it finished, and Continue starts the next one")
+    def _():
+        H = gui("g19eHost", key=KEY)
+        fill(H, mpvFlags=f"{MPVFLAGS} --keep-open=always")
+        js(H, '$("playlist").checked = true')
+        start(H, hostname=H, file=f"{folder}/e1.mkv", room="g19e", secret="g19esecret")
+        must(f"{H} is in", joined(H), status(H))
+        setp(H, "time-pos", 9)
+        until(lambda: near(get(H, "time-pos"), 9, 0.2))
+        setp(H, "pause", False)
+        must("it plays to the end of e1.mkv and stays there", until(lambda: get(H, "pause") is True and (get(H, "time-pos") or 0) > 11 and get(H, "filename") == "e1.mkv"), f'{get(H, "filename")} {get(H, "time-pos")}')
+        end(H)
+        last = state(H)["history"][-1]
+        ok("it continues from the next file, which nobody opened yet", last.get("stopped") == {"entry": "e2.mkv"} and not last.get("finished") and [v["name"] for v in last["videos"]] == ["e1.mkv"], str(last))
+        press_continue(H)
+        must(f"{H} is back in", joined(H), status(H))
+        ok("and opens it at its start", until(lambda: get(H, "filename") == "e2.mkv" and near(get(H, "time-pos"), 0, 1)), f'{get(H, "filename")} {get(H, "time-pos")}')
+
+    @case("[G20] a peer-to-peer party after one over the relay: the invite switches the guest to Peer-to-Peer")
+    def _():
+        H, G = gui("g20Host", key=KEY), gui("g20Guest", portal=False)
+        hport, gport = free_port(), free_port()
+        # the party over the internet that [G23]'s history starts with
+        start(H, hostname=H, file=MEDIA, room="g20", secret="g20secret")
+        must(f"{H} is in over the relay", joined(H), status(H))
+        start(G, hostname=G, file=MEDIA, room="g20", secret="g20secret")
+        must(f"{G} is in over the relay", joined(G), status(G))
+        end(G)
+        end(H)
+        js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
+        start(H, port=str(hport))
+        must(f"{H} is in", joined(H), status(H))
+        until(lambda: "-addrs" in js(H, '$("share-text").textContent'))
+        wifi = js(H, '$("share-text").textContent')
+        addr, wsecret = wifi.split()[1], wifi.split()[3]
+        ok(f"{H}'s invite has its Wi-Fi address", wifi.startswith("-addrs ") and addr.endswith(f":{hport}"), wifi)
+
+        part(f"[G20b] a stranger with no secret can't rewrite {H}'s invite or status through its log")
+        before = status(H), state(H)["history"][-1]
+        for forged in ("relay: disconnected", "relay: rejected by relay", "your address to share is -addrs 6.6.6.6:1 -secret FORGED"):
+            code = raw(f"127.0.0.1:{hport}", "/hi", {"hit-me-up": forged, "secret": "wrong"})
+            ok(f"{forged!r} is refused", code in (401, 403), f"HTTP {code}")
+        until(lambda: "-secret FORGED" in js(H, '$("log").textContent'))
+        ok("the page has read the forged line", "-secret FORGED" in js(H, '$("log").textContent'))
+        ok("the invite is unchanged", js(H, '$("share-text").textContent') == wifi, js(H, '$("share-text").textContent'))
+        ok("the status is unchanged", status(H) == before[0], status(H))
+        ok("the saved session is unchanged", state(H)["history"][-1] == before[1], str(state(H)["history"][-1]))
+
+        js(G, f'$("invite").value = {json.dumps(wifi)}; $("invite").dispatchEvent(new Event("input"))')
+        ok(f"{G} switched to Peer-to-Peer and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
+        _, diff = variants()
+        start(G, file=diff, port=str(gport))
+        until(lambda: status(G).startswith("Diagnosis"), BOOT)
+        ok("over Wi-Fi, another file gets the same diagnosis", status(G) == NOT_THE_SAME_VIDEO, status(G))
+        start(G, file=MEDIA, port=str(gport))
+        must(f"{G} is in", joined(G), status(G))
+        until(lambda: f"{G} has joined" in feed(H) or f"connected to {G}" in feed(H))
+        setp(H, "pause", False)
+        until(lambda: get(G, "pause") is False and f"resumed by {H}" in feed(G))
+        ok(f"{G} follows {H} over Wi-Fi", get(G, "pause") is False and f"resumed by {H}" in feed(G), str(feed(G)))
+
+        part(f"[G21] quitting mpv ends {G}'s party without a diagnosis")
+        ipc(nodes[G]["sock"], "quit")
+        until(lambda: not js(G, "running"))
+        ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
+        ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
+
+        part(f"[G22] SIGTERM ends {H} mid-party, mpv, window and all")
+        sock = nodes[H]["sock"]
+        window = next(c for c in children(nodes[H]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
+        nodes[H]["proc"].send_signal(signal.SIGTERM)
+        ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None, 20))
+        ok(f"{H}'s mpv closed", not listening_unix(sock))
+        ok(f"{H}'s window closed", until(lambda: gone(window)))
+        ok("and its browser profile is deleted", not os.path.exists(profile(H)), profile(H))
+
+        part(f"[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
+        tab(G, "history")
+        until(lambda: js(G, '$("history-list").children.length') == len(state(G)["history"]))
+        items = js(G, '[...$("history-list").children].map(li => li.textContent)')
+        ok("newest first, a peer-to-peer party with the host", "peer-to-peer" in items[0] and f"with {H}" in items[0], items[0])
+        ok("the first is over the internet with the host", "over the internet" in items[-1] and f"with {H}" in items[-1], items[-1])
+        buttons = lambda li: js(G, f'[...$("history-list").{li}.querySelectorAll("button")].map(b => b.textContent)')
+        ok("a peer-to-peer party has Watch again alone", buttons("firstElementChild") == ["Watch again"], str(buttons("firstElementChild")))
+        ok("a party over the internet has Continue alone", buttons("lastElementChild") == ["Continue"], str(buttons("lastElementChild")))
+        click(G, "#history-list li .again")
+        ok("Watch again fills Peer-to-Peer and shows the form", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)} && !$("view-party").hidden'))
+
+        part(f"[G24] closing {G}'s window ends its GUI")
+        browser = next(c for c in children(nodes[G]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
+        os.kill(browser, signal.SIGTERM)
+        ok(f"{G} exited", until(lambda: nodes[G]["proc"].poll() is not None))
+        ok(f"{G} logged it", "gui: window closed" in log(G))
+
+        part(f"[G25] {G} again, on the same folder: everything was kept")
+        count = len(items)
+        G2 = launch_gui(G, tag=f"{G}2", portal=False)
+        on_end(lambda: kill_gui(G2))
+        ok("a new port", nodes[G2]["url"] != nodes[G]["url"])
+        ok("the name, relay and Wi-Fi port are filled in", js(G2, f'$("hostname").value == {json.dumps(G)} && $("relay").value == {json.dumps(RELAY_URL)} '
+                                                             f'&& $("port").value == {json.dumps(str(gport))} && $("local").checked'))
+        tab(G2, "settings")
+        ok("the settings are kept", js(G2, f'$("mpvFlags").value == {json.dumps(MPVFLAGS)} && $("set-relay").value == {json.dumps(RELAY_URL)}'))
+        tab(G2, "history")
+        ok("the history is kept", until(lambda: js(G2, '$("history-list").children.length') == count))
+
+        part("[G26] Clear history asks, then empties it")
+        click(G2, "#clear-history")
+        until(lambda: js(G2, '$("history-list").children.length') == 0)
+        ok("it asked first", js(G2, "window.asked") == "Clear the whole party history?")
+        ok("the list is empty and says so", js(G2, '!$("history-empty").hidden && $("clear-history").hidden'))
+        ok("the store is empty", not state(G2)["history"])
+
+        part("[G27] the cat")
+        js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
+        ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
+
+        part(f"[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
+        nodes[G2]["page"].call("Page.reload")
+        time.sleep(3 + QUIET)  # the GUI's closeGrace
+        ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
+        try:
+            nodes[G2]["page"].call("Page.close")
+        except (OSError, RuntimeError, ValueError):
+            pass  # the page can go before it answers
+        ok(f"{G2} exited", until(lambda: nodes[G2]["proc"].poll() is not None, 10))
+        ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
+        ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
+
+    @case("[G27b] a history saved by an older version moves to its own file, and is kept")
+    def _():
+        G = gui("g27b")
+        kill_gui(G)
+        folder = f"{nodes[G]['home']}/config/watchparty"
+        if os.path.exists(f"{folder}/history.json"):
+            os.remove(f"{folder}/history.json")
+        saved = json.load(open(f"{folder}/gui.json"))
+        saved["history"] = [{"started": "2026-01-02T03:04:05Z", "ended": "2026-01-02T04:04:05Z", "file": "/m/from-before.mkv", "mode": "direct", "people": ["Sam"]}]
+        json.dump(saved, open(f"{folder}/gui.json", "w"))
+        G3 = launch_gui(G, tag=f"{G}3", portal=False)
+        on_end(lambda: kill_gui(G3))
+        tab(G3, "history")
+        ok("the page shows it", until(lambda: "from-before.mkv" in js(G3, '$("history-list").textContent')))
+        ok("it moved", "from-before.mkv" in open(f"{folder}/history.json").read() and "history" not in open(f"{folder}/gui.json").read())
+        ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
+
+    @case("[G28] self-update: offered, refused on a bad digest, installed on a good one")
+    def _():
+        # the stamped binaries ask this port for their release
+        rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
+        os.makedirs(f"{RUN}/upd")
+        exe = f"{RUN}/upd/watchparty-gui"
+        shutil.copy(RUN + "/gui-v0.0.1", exe)
+        old = sha(exe)
+        U = launch_gui("guiUpdate", exe=exe)
+        on_end(lambda: kill_gui(U))
+        tab(U, "settings")
+        until(lambda: js(U, '!$("update").hidden'))
+        ok("it offers v0.0.2", js(U, '$("version-text").textContent == "Version v0.0.1" && $("update").textContent == "Update to v0.0.2" && !$("update-dot").hidden'))
+        click(U, "#update")
+        until(lambda: js(U, '$("version-text").textContent').startswith("Update failed"))
+        ok("a bad digest is refused", js(U, '$("version-text").textContent') == "Update failed: the download does not match its published sha256, not installing it.", js(U, '$("version-text").textContent'))
+        ok("and the binary is untouched", sha(exe) == old)
+        ok("and no download is left behind", os.listdir(f"{RUN}/upd") == ["watchparty-gui"], str(os.listdir(f"{RUN}/upd")))
+        rel.digest = "sha256:" + rel.sha
+        click(U, "#update")
+        until(lambda: js(U, '$("restart-dialog").open'))
+        ok("a good one is installed", sha(exe) == rel.sha)
+        ok("and it asks to restart", js(U, '$("restart-text").textContent') == "Version v0.0.2 is installed. A restart is required to start using it.")
+        click(U, "#restart-later")
+        ok("Restart later closes the dialog and leaves the button", js(U, '!$("restart-dialog").open && !$("restart").hidden && $("update").hidden'))
+
+        part("[G29] Restart now hands over to the new version")
+        click(U, "#restart")
+        ok("the old one exited", until(lambda: nodes[U]["proc"].poll() is not None))
+        attach(U, 2)
+        until(lambda: js(U, '$("version-text").textContent') != "Checking the version…")
+        ok("the new window runs v0.0.2", js(U, '$("version-text").textContent') == "Version v0.0.2", js(U, '$("version-text").textContent'))
+        ok("and offers nothing", js(U, '$("update").hidden && $("restart").hidden'))
+
+    @case("[G29b] the cli updates itself the same way, with its own asset")
+    def _():
+        rel = Release(PORTS["cliRelease"], RUN + "/cli-v0.0.2", "watchparty_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
+        os.makedirs(f"{RUN}/updcli")
+        exe = f"{RUN}/updcli/watchparty"
+        shutil.copy(RUN + "/cli-v0.0.1", exe)
+        old = sha(exe)
+        res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+        ok("a bad digest is refused", res.returncode != 0 and "does not match its published sha256" in res.stderr, res.stderr)
+        ok("and the binary is untouched", sha(exe) == old)
+        ok("and no download is left behind", os.listdir(f"{RUN}/updcli") == ["watchparty"], str(os.listdir(f"{RUN}/updcli")))
+        rel.digest = "sha256:" + rel.sha
+        res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+        ok("a good one is installed", res.returncode == 0 and sha(exe) == rel.sha, res.stderr)
+        res = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=BOOT)
+        ok("and it runs as v0.0.2", res.stdout.strip() == "v0.0.2", res.stdout)
+        res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
+        ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
+
+    @case("[G30] a browser that hands the page off doesn't count as closing the window")
+    def _():
+        O = launch_gui("guiHandoff", browser="handoff")
+        on_end(lambda: kill_gui(O))
+        until(lambda: launches(O))
+        time.sleep(QUIET)
+        ok("the GUI is still up", nodes[O]["proc"].poll() is None and listening(int(nodes[O]["url"].rsplit(":", 1)[1].strip("/"))))
+        ok("and didn't log a closed window", "gui: window closed" not in log(O))
+
+    @case("[G31] with no browser at all, it says where the page is")
+    def _():
+        system = [d for d in ("/var/lib/flatpak/exports/share/applications", "/var/lib/snapd/desktop/applications")
+                  if os.path.isdir(d) and any(re.search("chrom|edge|brave|vivaldi", f, re.I) for f in os.listdir(d))]
+        if system:
+            print(f"  SKIP  a system-wide browser in {system} would open on screen")
+            return
         N = launch_gui("guiNoBrowser", browser=None)
+        on_end(lambda: kill_gui(N))
         until(lambda: "no browser could be opened" in log(N))
         ok("it tried xdg-open", open(f"{nodes[N]['home']}/xdg-open.args").read().strip() == nodes[N]["url"])
         ok("and logged the address", f"gui: no browser could be opened (exit status 1), open {nodes[N]['url']} yourself" in log(N), log(N).strip())
-        stop(N)
 
-    header("[G32] window.close() from the page closes a real window, and the GUI with it")
-    # headless Chromium ignores window.close() on an --app window; Restart now relies on it
-    try:
-        js(X, "window.close()")
-    except (OSError, RuntimeError, ValueError):
-        pass  # the page can go before it answers
-    ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
-    ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
-    install_suite()
+    @case("[G32] window.close() from the page closes a real window, and the GUI with it")
+    def _():
+        # headless Chromium ignores window.close() on an --app window; Restart now relies on it
+        X = launch_gui("guiXvfb", browser="xvfb")
+        on_end(lambda: kill_gui(X))
+        try:
+            js(X, "window.close()")
+        except (OSError, RuntimeError, ValueError):
+            pass  # the page can go before it answers
+        ok("the GUI exited", until(lambda: nodes[X]["proc"].poll() is not None))
+        ok("on a closed window", "gui: window closed" in log(X), log(X).strip())
+
+    @case("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
+    def _():
+        install_suite()
+
+    run_cases()
 
 
 def upnp_suite():
@@ -3228,7 +3308,6 @@ time.sleep(600)
 
 
 def install_suite():
-    header("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
     stubs = f"{RUN}/installer"
     os.makedirs(stubs)
     script(stubs + "/uname", 'case $1 in -m) echo "$FAKE_M" ;; *) echo "$FAKE_S" ;; esac')
@@ -3334,7 +3413,7 @@ finally:
             p.wait(timeout=5)
     mark("cases")
     print("took: " + ", ".join(f"{n} {t - marks[i][1]:.0f}s" for i, (n, t) in enumerate(marks[1:])) + f", total {time.time() - marks[0][1]:.0f}s")
-    print("slowest: " + slowest(marks[-1][1]))
+    print("slowest: " + slowest())
     # here, so a crash or an early exit still leaves its logs
     print(f"\nlogs: {keep_logs()}")
 

@@ -28,6 +28,8 @@ real 30s ping and 10s pong timeout.
   - Drive a page with `js(n, expr)` and `click()`, read it with `feed()`/`status()`.
     `go()` waits for the new run, or a check reads the last party's status.
     `confirm()` is replaced on attach; `window.asked` holds the question.
+  - A case's GUIs come from `gui(name, key=)`: a folder of its own, relay, mpv flags
+    and the create key saved, killed when the case ends. Name them after the case.
   - Cleanup kills each GUI's process group: its browser, its mpv, a restarted GUI.
 - URL cases share one HTTP server (`Quiet`). Slow only your own client, by its user
   agent: `Quiet.held[agent]` seconds per request or `Quiet.rate[agent]` bytes/s, and
@@ -38,8 +40,7 @@ real 30s ping and 10s pong timeout.
 
 ## Writing a case
 
-- **A case starts from a party of its own, never from what the last case left**
-  (every phase but `gui`, which still runs as one story under `header()`).
+- **A case starts from a party of its own, never from what the last case left.**
   `@case("[R3] ...")` adds the function under it as a case; `with party("r3") as P:`
   gives it nodes in a fresh room, booted, connected, paused and quiet, and stops every
   `r3-*` node at the end. A case sets up what it checks itself (seek to 30s, then play).
@@ -59,7 +60,7 @@ real 30s ping and 10s pong timeout.
   `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen sleeps
   (`QUIET`, after its positive half holds).
 - **A step the rest of a case needs is `must()`, not `ok()`**: a failure ends that case
-  with `STOP` (the phase, in a story phase) instead of one cause showing up as ten FAILs.
+  with `STOP` instead of one cause showing up as ten FAILs.
   A crash in an `@case` fails that case alone.
 - **`osd()` returns a list**, so `.count(x)` is an exact match, never a substring. Use
   the full string (`f"paused by {A}"`) or `pauses()`.
