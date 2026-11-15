@@ -608,6 +608,11 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 // positionChanged is a seek while paused, which goes out, or playback moving on, which
 // doesn't, unless it is where a seek while playing landed: that pauses the party.
 func (c *Client) positionChanged() error {
+	// a stop this node applied that mpv hasn't reported: mpv answers the set first, and
+	// plays until it reports it (MPV.md), so this is playback moving on
+	if c.paused && c.applied[pause] == "yes" {
+		return errDoNotSend
+	}
 	if c.paused {
 		// its own seek: wherever it was being sent, this is where it is now, and mpv reports
 		// nothing of a seek applied before it (MPV.md), so their markers would only swallow

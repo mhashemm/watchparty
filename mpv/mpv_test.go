@@ -2979,3 +2979,30 @@ func TestAFoldedSeekWhilePlayingPausesTheParty(t *testing.T) {
 		}
 	})
 }
+
+// A peer's stop at 9.5 reaches this node while it plays on 9.45: mpv answers the stop, then
+// reports one more playing position, 9.5, and only then the stop (mpv 0.40, e2e [R6c] under
+// --jitter 14). The node took the stop at the answer, so that position read as the person's
+// seek while stopped, and the party stopped for it, catching up. It is mpv playing on.
+func TestAPositionBeforeAStopIsReportedIsNoSeek(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvSays(mpvAt(9))
+		n.plays()
+		n.mpvSays(mpvAt(9.45))
+		n.peerSays("a", `{"stamp":9,"at":9.5,"name":"pause","data":"yes"}`)
+		if told := n.mpvWasTold(); len(told) == 0 || told[0] != "set_property pause true" {
+			t.Fatalf("told mpv %q, want the stop", told)
+		}
+		n.mpvSays(mpvAt(9.5))
+		n.mpvObeys()
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q, want nothing", said(got))
+		}
+		// stopped, a position is the person's seek again
+		n.mpvSays(mpvAt(20))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=20.000000]" {
+			t.Fatalf("broadcast %q, want the person's seek", got)
+		}
+	})
+}

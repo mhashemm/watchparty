@@ -144,7 +144,8 @@ Seen during a normal run:
     a loop wrap.
 - On unpause, the `pause` → `"no"` event arrives before the first playing
   `time-pos`. On pause, only `pause` → `"yes"` arrives; the position doesn't
-  re-fire.
+  re-fire. A playing `time-pos` can still come after the reply to the set, before
+  that report (0.40.0, e2e `[R6c]` under `--jitter 14`).
 
 ### Ending
 
