@@ -575,8 +575,13 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 	}
 	c.paused = paused
 	if !paused {
-		c.seeks, c.seeking, c.landing = nil, false, false
-		c.since = c.target()
+		// it plays from where it is heading: a seek mpv hasn't reported yet runs after this
+		if n := len(c.seeks); c.landing && n > 0 {
+			c.seeks = c.seeks[n-1:]
+		} else {
+			c.seeks, c.landing = nil, false
+		}
+		c.seeking, c.since = false, c.target()
 		return extra, nil
 	}
 	// stopped from playing: where it is now, whatever seek was on its way

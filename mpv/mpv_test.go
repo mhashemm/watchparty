@@ -2820,3 +2820,26 @@ func TestAStopThatLandsOffItsSecondIsSeekedBack(t *testing.T) {
 		})
 	}
 }
+
+// The person resumes while mpv still holds a peer's seek to 60, which runs after the
+// resume: mpv plays from 60, so the resume says so, as this node was heading there. Said
+// from 30, the others played from 30 and this node from 60.
+func TestAResumeWhileASeekLandsPlaysFromItsSecond(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.takes(2, true, 30)
+		n.mpvAnswersLate()
+		n.peerSays("a", stamped(3, seekEvent(60)))
+		if told := n.mpvWasTold(); fmt.Sprint(told) != "[set_property time-pos 60.000000]" {
+			t.Fatalf("told mpv %q, want the seek", told)
+		}
+		n.mpvSays(propertyChangeLine(pause, "no", 0))
+		if got := n.broadcasts(); fmt.Sprint(said(got)) != "[pause=no]" || *got[0].At != 60 {
+			t.Fatalf("broadcast %+v, want the person's resume, from 60", got)
+		}
+		n.mpvObeys()
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q, want nothing", said(got))
+		}
+	})
+}

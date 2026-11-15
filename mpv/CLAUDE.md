@@ -51,12 +51,11 @@ a's pause to a, and the relay, which has no counters, loops forever.
 
 - **Mark before the IPC call** (`commit` and `resume` set `applied`, `mark` appends to `seeks`): the echo can arrive before `do()` returns.
 - `pause` matches exactly and deletes the marker; none is set for a pause mpv already has (no event).
-- `time-pos` matches any entry of `seeks` (every seek applied since the last resume, its own or
-  a peer's, or the person's last seek, capped at 16) within **±0.1s**. On a match at entry *i*,
-  earlier entries are dropped (mpv handles seeks in order) and *i* becomes the echoed value,
-  because one seek can echo twice, a frame apart. One marker isn't enough: an earlier seek's
-  echo can land after a later seek was applied. 0.1s covers a frame at ≥10fps under the pinned
-  `--hr-seek=yes`; a deliberate seek of 0.1s or more still goes out.
+- `time-pos` matches any entry of `seeks` (those applied since the last resume, or still landing
+  through it, or the person's last seek; capped at 16) within **±0.1s**. On a match at entry *i*,
+  earlier entries go (mpv handles seeks in order) and *i* becomes the echoed value: one seek can
+  echo twice, a frame apart, and an earlier seek's echo can land after a later one was applied.
+  0.1s covers a frame at ≥10fps under `--hr-seek=yes`; a deliberate seek of 0.1s or more goes out.
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 
