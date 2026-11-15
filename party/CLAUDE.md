@@ -94,7 +94,8 @@ torrent of long videos. The check mark doesn't matter.
 |---|---|
 | The caller cancelled `parent` (Ctrl-C, GUI Stop or exit) | `nil` |
 | **The user quit mpv** | `nil` |
-| Something inside cancelled `c` (relay rejection, failed bind) | `errStopped` |
+| Something inside cancelled `c` (relay rejection, the mesh's server failing) | `errStopped` |
+| P2P: the port is taken | that error, naming the port |
 | Setup failed (unreadable file, no mpv, UPNP, no LAN IP) | that error |
 | P2P bootstrap plays another file / refuses the secret | `server.ErrDifferentFile` / `ErrWrongSecret` |
 | P2P: none of `-addrs` answered | `errNobody` |
@@ -125,8 +126,9 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 - **It returns its cleanup instead of deferring it**, so `/bye` → `http.Server.Shutdown`
   → `DeletePortMapping` run when `Run` ends, not when `runMesh` returns. On an error it
   runs the cleanup collected so far, so a half-done setup never leaks a router mapping.
-- Any `ListenAndServe` error cancels `c`: harmless at shutdown, ends the party on a
-  failed bind.
+- **It listens before it greets anyone**, so a taken port is the error `Run` returns. Found by
+  the serving goroutine it only cancelled `c`: a joiner said nobody answered, a host just
+  stopped. A later `Serve` error cancels `c`, harmless at shutdown.
 - A failed `-addrs` peer is logged, not fatal, except `ErrDifferentFile` and
   `ErrWrongSecret`, **unless every one failed** (`errNobody`): that joiner would play alone.
 - **Given no `-addrs`, it tells mpv `Opened`**, as the relay client does for the key holder:

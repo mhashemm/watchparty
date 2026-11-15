@@ -1293,7 +1293,7 @@ def p2p_suite():
             setp(c, "pause", False)
             ok(f"{b} is still in the mesh: it still hears events", until(lambda: get(b, "pause") is False), where(P))
 
-    @case("[11b] a joiner playing a different file is refused; the same file renamed is not; a wrong secret or nobody to join ends it")
+    @case("[11b] a joiner playing a different file is refused; the same file renamed is not; a wrong secret, nobody to join or a taken port ends it")
     def _():
         with mesh("p11b", 2) as P:
             a = P[0]
@@ -1323,6 +1323,13 @@ def p2p_suite():
             ok("a joiner nobody answered exited with an error instead of playing alone", nodes[alone]["proc"].poll() not in (None, 0) and "init done" not in log(alone),
                f"rc={nodes[alone]['proc'].returncode}")
             ok("it was told why", "nobody answered at the address you were given" in log(alone), log(alone)[-300:])
+            taken = "p11b-taken"
+            launch(taken, nodes[a]["addr"], port=nodes[a]["port"])
+            until(lambda: nodes[taken]["proc"].poll() is not None, BOOT)
+            ok("a joiner on a port already in use exited with an error", nodes[taken]["proc"].poll() not in (None, 0),
+               f"rc={nodes[taken]['proc'].returncode}")
+            ok("it was told the port, not that nobody answered", f"can't take port {nodes[a]['port']}" in log(taken) and "nobody answered" not in log(taken),
+               log(taken)[-300:])
 
     @case("[11c] a joiner while the party plays pauses it once loaded, and starts where it stopped")
     def _():

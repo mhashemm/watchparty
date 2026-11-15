@@ -423,8 +423,15 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	})
 	cleanup = append(cleanup, ser.Shutdown)
 
+	// listening here, not in the goroutine: a port in use is why this party can't start, and
+	// found later it only cancelled c, so a joiner said nobody answered and a host just stopped
+	l, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		runCleanup()
+		return nil, fmt.Errorf("can't take port %d, maybe another program has it; choose another port: %w", cfg.Port, err)
+	}
 	go func() {
-		err := s.ListenAndServe()
+		err := s.Serve(l)
 		if err != nil {
 			cancel()
 			log.Println(err)
