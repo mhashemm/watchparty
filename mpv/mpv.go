@@ -645,23 +645,37 @@ func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
 	var newest *IncomingMessage
 	var best state
 	notices := []IncomingMessage{}
+	heard := func(e IncomingMessage) {
+		event := Event{}
+		err := json.Unmarshal(e.Event, &event)
+		if err != nil || !shared(event) {
+			notices = append(notices, e)
+			return
+		}
+		// each says the party's whole state, so the newest is all there is to know
+		if s, err := c.stateOf(event); err == nil && (newest == nil || s.over(best) > 0) {
+			newest, best = &e, s
+		}
+	}
 	for loading := true; loading; {
 		select {
 		case e := <-incoming:
-			event := Event{}
-			err := json.Unmarshal(e.Event, &event)
-			if err != nil || !shared(event) {
-				notices = append(notices, e)
-				continue
-			}
-			// each says the party's whole state, so the newest is all there is to know
-			if s, err := c.stateOf(event); err == nil && (newest == nil || s.over(best) > 0) {
-				newest, best = &e, s
-			}
+			heard(e)
 		case <-c.ready:
 			loading = false
 		case <-c.ctx.Done():
 			return
+		}
+	}
+	// select picks at random when the file loaded with messages still waiting: they
+	// arrived while it loaded, and one applied after the join is announced would be taken
+	// over the unheard stamp, however old
+	for waiting := true; waiting; {
+		select {
+		case e := <-incoming:
+			heard(e)
+		default:
+			waiting = false
 		}
 	}
 	// a continued party seeks only the file it continues on, before the party's position
