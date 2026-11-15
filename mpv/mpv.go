@@ -439,7 +439,6 @@ func (c *Client) react(event Event) ([][]byte, error) {
 		c.began = true
 	case playbackRestart:
 		c.peerSeek = false
-		// not while playing: every resume ends landing
 		if c.landing && c.began && len(c.seeks) > 0 && c.seeks[len(c.seeks)-1] == c.sent {
 			c.later = append(c.later, c.landed)
 		}
@@ -589,8 +588,11 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 	}
 	c.paused = paused
 	if !paused {
-		// it plays from where it is heading: a seek mpv hasn't reported yet runs after this
-		if n := len(c.seeks); c.landing && n > 0 {
+		// it plays from where it is heading: a seek sent that mpv hasn't run runs after this.
+		// Not one only planned, which never reaches mpv, as the step sending it stops
+		// (moved); nor one mpv has run (peerSeek ends), which may have folded the person's
+		// own into it, and mpv plays from where it is.
+		if n := len(c.seeks); c.landing && c.peerSeek && n > 0 && c.seeks[n-1] == c.sent {
 			c.seeks = c.seeks[n-1:]
 		} else {
 			c.seeks, c.landing = nil, false
@@ -1496,7 +1498,9 @@ func (c *Client) stoppedOff() {
 // back, and hasn't reported that second. mpv folds seeks: the person's own made right
 // behind it is all that lands, and on the second mpv was already on, nothing is reported
 // (MPV.md). mpv answers with a seek's second at once, so anywhere else is the person's
-// seek, and goes out.
+// seek, and goes out. Playing (a resume made while the seek landed), it is a seek while
+// playing: it pauses the party, and the pause says where mpv stopped, as the second read
+// here is already behind.
 func (c *Client) landed() {
 	want, from := c.sent, c.stamp
 	data, err := c.ask("get_property_string", timePos)
@@ -1511,6 +1515,10 @@ func (c *Client) landed() {
 	}
 	// no marker may swallow it: they are all for seeks that came before it
 	c.seeks, c.landing = nil, false
+	if !c.paused {
+		c.pauseParty("seek")
+		return
+	}
 	line, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: data})
 	c.broadcast(c.handleEvent(Event{EventType: propertyChange, Name: timePos, Data: data}, line))
 }

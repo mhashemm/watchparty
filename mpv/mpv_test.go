@@ -2746,8 +2746,8 @@ func TestAFoldedSeekBackIsThePersonsOwn(t *testing.T) {
 			}
 		})
 	})
-	// a node that plays has moved on from where the seek landed, and every resume ends the
-	// seek it was landing: it isn't asked
+	// a node that plays has moved on from where the seek landed, and a resume taken from a
+	// peer ends the seek it was landing: it isn't asked
 	t.Run("playing", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{})
@@ -2900,6 +2900,82 @@ func TestAResumeWhileASeekLandsPlaysFromItsSecond(t *testing.T) {
 		n.mpvObeys()
 		if got := n.broadcasts(); len(got) != 0 {
 			t.Fatalf("broadcast %q, want nothing", said(got))
+		}
+	})
+}
+
+// A peer's stop at 60 reaches this node while it plays on 30: mpv is told to stop first,
+// and the seek to 60 is only marked. The person presses play before mpv answers the stop:
+// the step that would send the seek stops (moved), so the resume plays from where mpv is.
+// Said from 60, it played on from 30 while everyone else played from 60
+// (SIM_SEED=736469209410).
+func TestAResumeBeforeASeekIsSentPlaysFromWhereMpvIs(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.takes(2, false, 30)
+		n.mpvAnswersLate()
+		n.peerSays("a", `{"stamp":3,"at":60,"name":"pause","data":"yes"}`)
+		if told := n.mpvWasTold(); fmt.Sprint(told) != "[set_property pause true]" {
+			t.Fatalf("told mpv %q, want only the stop", told)
+		}
+		// mpv stops, the person resumes, then mpv answers the stop
+		n.mpvObeys(propertyChangeLine(pause, "no", 0))
+		if got := n.broadcasts(); fmt.Sprint(said(got)) != "[pause=no]" || *got[0].At != 30 {
+			t.Fatalf("broadcast %+v, want the person's resume, from 30", got)
+		}
+		if got := seeksIn(n.mpvWasTold()); len(got) != 0 {
+			t.Fatalf("seeks %q, want none", got)
+		}
+	})
+}
+
+// A peer sent this node to 38, then to 7, and the person seeked back to 38: mpv folds the
+// two, reports 38, which reads as the first seek's echo, and plays back. The person presses
+// play before mpv says where it is: mpv has run the seek to 7 already, so the resume plays
+// from where mpv is (SIM_SEED=388032164346). Said from 7, it played on from 38.
+func TestAResumeAfterAFoldedSeekPlaysFromWhereMpvIs(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.takes(2, true, 30)
+		n.peerSays("a", stamped(3, seekEvent(38)))
+		n.mpvObeys()
+		n.mpvWasTold()
+		n.mpvAnswersLate()
+		n.peerSays("a", stamped(4, seekEvent(7)))
+		if told := n.mpvWasTold(); fmt.Sprint(told) != "[set_property time-pos 7.000000]" {
+			t.Fatalf("told mpv %q, want the seek", told)
+		}
+		n.mpvHoldsWhere()
+		n.mpvSays(`{"event":"seek"}`, mpvAt(38), `{"event":"playback-restart"}`, propertyChangeLine(pause, "no", 0))
+		if got := n.broadcasts(); fmt.Sprint(said(got)) != "[pause=no]" || *got[0].At != 38 {
+			t.Fatalf("broadcast %+v, want the person's resume, from 38", got)
+		}
+	})
+}
+
+// The person presses play while a peer's seek to 60 lands, then seeks to 42 while it plays,
+// and mpv folds the two: it reports 42 and plays on. Asked where it is, mpv says 42.1. That
+// is the person's seek while playing, so it pauses the party, and the pause says where mpv
+// stopped, not the second read while it played on (SIM_SEED=831497494691).
+func TestAFoldedSeekWhilePlayingPausesTheParty(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.takes(2, true, 30)
+		n.mpvAnswersLate()
+		n.peerSays("a", stamped(3, seekEvent(60)))
+		n.mpvWasTold()
+		n.mpvSays(propertyChangeLine(pause, "no", 0))
+		n.broadcasts()
+		n.mpvIsAt(42.1)
+		n.mpvSays(`{"event":"seek"}`, mpvAt(42), `{"event":"playback-restart"}`, mpvAt(42.1), mpvAt(42.2))
+		if told := n.mpvWasTold(); !slices.Contains(told, "set_property pause true") {
+			t.Fatalf("told mpv %q, want the party paused", told)
+		}
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		n.mpvAnswers()
+		got := n.broadcasts()
+		if fmt.Sprint(said(got)) != "[pause=yes time-pos=42.200000 pause-reason=seek]" || *got[0].At != 42.2 {
+			t.Fatalf("broadcast %+v, want the party paused at 42.2 for a seek", got)
 		}
 	})
 }
