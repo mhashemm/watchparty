@@ -35,6 +35,8 @@ type node struct {
 	// late: mpv answers a set only after reporting it (mpvAnswersLate); held: those answers
 	late bool
 	held []string
+	// quitOn: mpv hangs up on a command starting with this (mpvQuitsOn)
+	quitOn string
 	// what mpv holds, from what it reported
 	paused bool
 	entry  int
@@ -114,6 +116,12 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		said := strings.TrimSpace(fmt.Sprintln(req.Command...))
 		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 		n.mu.Lock()
+		if n.quitOn != "" && strings.HasPrefix(said, n.quitOn) {
+			n.told = append(n.told, said)
+			n.mu.Unlock()
+			conn.Close()
+			return
+		}
 		for prefix, why := range n.refuse {
 			if strings.HasPrefix(said, prefix) {
 				reply = fmt.Sprintf(`{"request_id":%d,"error":%q}`+"\n", req.RequestId, why)
@@ -272,6 +280,20 @@ func (n *node) mpvRefuses(prefix, why string) {
 	n.refuse[prefix] = why
 }
 
+// mpvTakesAgain lifts every refusal.
+func (n *node) mpvTakesAgain() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.refuse = map[string]string{}
+}
+
+// mpvQuitsOn makes mpv hang up when it is sent a command starting with prefix.
+func (n *node) mpvQuitsOn(prefix string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.quitOn = prefix
+}
+
 // peerSays is a member's message arriving, whole state filled in as peer() does.
 func (n *node) peerSays(host, event string) {
 	n.t.Helper()
@@ -343,10 +365,16 @@ func (n *node) plays() {
 // and mpv doing it. Nothing it said or told mpv is left to read.
 func (n *node) takes(stamp int, paused bool, at float64) {
 	n.t.Helper()
+	n.takesFrom("z", stamp, paused, at)
+}
+
+// takesFrom is takes, from that member.
+func (n *node) takesFrom(host string, stamp int, paused bool, at float64) {
+	n.t.Helper()
 	n.mu.Lock()
 	entry := n.entry
 	n.mu.Unlock()
-	n.peerSays("z", fmt.Sprintf(`{"stamp":%d,"at":%f,"entry":%d,"event":"property-change","name":"pause","data":"%s"}`, stamp, at, entry, map[bool]string{true: "yes", false: "no"}[paused]))
+	n.peerSays(host, fmt.Sprintf(`{"stamp":%d,"at":%f,"entry":%d,"event":"property-change","name":"pause","data":"%s"}`, stamp, at, entry, map[bool]string{true: "yes", false: "no"}[paused]))
 	n.mpvObeys()
 	n.broadcasts()
 	n.mpvWasTold()
