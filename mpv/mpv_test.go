@@ -2687,3 +2687,98 @@ func TestAnOlderMessageThatAgreesIsNotCaughtUp(t *testing.T) {
 		}
 	})
 }
+
+// mpv folds a seek into the one right behind it: a peer sends this node to 70, and before
+// mpv gets there the person seeks back to 3, where mpv already was. mpv says it began a
+// seek and played back, and reports no second, as it never changed (MPV.md); or reports 3,
+// which a marker of the person's earlier seek there would swallow (SIM_SEED=60097). Asked
+// where it is, mpv says 3: the person's seek, which goes out.
+func TestAFoldedSeekBackIsThePersonsOwn(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		playing bool     // the person's first seek to 3 is made while playing, which marks it
+		reports []string // what mpv says once the two seeks fold
+	}{
+		"nothing reported":     {false, []string{`{"event":"seek"}`, `{"event":"playback-restart"}`}},
+		"reported on a marker": {true, []string{`{"event":"seek"}`, mpvAt(3), `{"event":"playback-restart"}`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nodeTest(t, func(t *testing.T) {
+				n := ready(t, setup{})
+				if c.playing {
+					n.plays()
+					n.mpvSays(`{"event":"seek"}`, mpvAt(3), `{"event":"playback-restart"}`)
+					n.mpvObeys()
+				} else {
+					n.mpvSays(mpvAt(3))
+				}
+				got := n.broadcasts()
+				if len(got) == 0 {
+					t.Fatal("broadcast nothing for the person's seek to 3")
+				}
+				stamp := got[0].Stamp + 1
+				n.mpvWasTold()
+				n.peerSays("a", stamped(stamp, seekEvent(70)))
+				if told := n.mpvWasTold(); len(told) == 0 || told[0] != "set_property time-pos 70.000000" {
+					t.Fatalf("told mpv %q, want the peer's seek", told)
+				}
+				n.mpvIsAt(3)
+				n.mpvSays(c.reports...)
+				got = n.broadcasts()
+				if fmt.Sprint(said(got)) != "[time-pos=3.000000]" || got[0].Stamp != stamp+1 {
+					t.Fatalf("broadcast %+v, want the person's seek back to 3, newer than the peer's", got)
+				}
+			})
+		})
+	}
+	// the person seeks to 5 while mpv answers: theirs goes out, and what mpv answered was
+	// before it
+	t.Run("moved meanwhile", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.peerSays("a", stamped(5, seekEvent(70)))
+			n.mpvIsAt(3)
+			n.mpvSays(`{"event":"seek"}`, `{"event":"playback-restart"}`, `{"event":"seek"}`, mpvAt(5))
+			if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=5.000000]" {
+				t.Fatalf("broadcast %q, want only the person's seek to 5", got)
+			}
+		})
+	})
+	// a node that plays has moved on from where the seek landed, and every resume ends the
+	// seek it was landing: it isn't asked
+	t.Run("playing", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.mpvSays(mpvAt(30))
+			n.broadcasts()
+			n.peerSays("a", `{"stamp":5,"at":70,"name":"pause","data":"no"}`)
+			n.mpvWasTold()
+			n.mpvIsAt(70.4)
+			n.mpvSays(`{"event":"seek"}`, `{"event":"playback-restart"}`)
+			if got := n.mpvWasTold(); slices.Contains(got, "get_property_string time-pos") {
+				t.Fatalf("told mpv %q, want it not asked while playing", got)
+			}
+		})
+	})
+	// mpv began a seek, its own or the person's before this node's, and played back: asked,
+	// it is where this node sent it, so nothing goes out
+	t.Run("landed where sent", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.peerSays("a", stamped(5, seekEvent(70)))
+			n.mpvIsAt(70)
+			n.mpvSays(`{"event":"seek"}`, `{"event":"playback-restart"}`)
+			if got := n.broadcasts(); len(got) != 0 {
+				t.Fatalf("broadcast %q, want nothing", said(got))
+			}
+			if got := n.mpvWasTold(); !slices.Contains(got, "get_property_string time-pos") {
+				t.Fatalf("told mpv %q, want it asked where it is", got)
+			}
+			// mpv's report of 70 after it is still the echo
+			n.mpvSays(mpvAt(70))
+			if got := n.broadcasts(); len(got) != 0 {
+				t.Fatalf("broadcast %q, want the echo swallowed", said(got))
+			}
+		})
+	})
+}

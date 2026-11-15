@@ -107,6 +107,8 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 
 // model answers requests the way mpv does (MPV.md): a no-op set says nothing, and a seek
 // reports later, ahead of a pause sent right behind it but after the reply to that pause.
+// Seeks fold into the last, which reports no second if mpv was already on it; asked where
+// it is, mpv answers with the second a seek heads to at once.
 // A set of playlist-pos replies first and reports later, so the next set can overtake the
 // report, and two close together can report only the last (MPV.md). Late, events can come
 // before an answer, as MPV.md allows; never a later request's, as mpv's IPC thread runs one
@@ -135,6 +137,12 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 		case name == setProperty && req.Command[1] == playlistPos:
 			i, _ := strconv.Atoi(fmt.Sprint(req.Command[2]))
 			n.request(i)
+		case name == "get_property_string" && req.Command[1] == timePos:
+			at := fmt.Sprintf("%f", n.pos)
+			if len(n.seeks) > 0 {
+				at = n.seeks[len(n.seeks)-1]
+			}
+			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", at, req.RequestId)
 		}
 		if n.late {
 			if !replied {
@@ -216,9 +224,12 @@ func (n *simNode) landSeekLocked() {
 	}
 	last := n.seeks[len(n.seeks)-1]
 	n.seeks = nil
+	was := fmt.Sprintf("%f", n.pos)
 	n.pos, _ = strconv.ParseFloat(last, 64)
 	n.emit(`{"event":"seek"}` + "\n")
-	n.emit(propertyChangeLine(timePos, last, 0))
+	if last != was {
+		n.emit(propertyChangeLine(timePos, last, 0))
+	}
 	n.emit(`{"event":"playback-restart"}` + "\n")
 }
 

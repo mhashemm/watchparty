@@ -102,8 +102,14 @@ type connection struct {
 // transport message waits its turn (handle). Any other request's answer is kept for the do()
 // waiting on it. Never from another goroutine.
 func (c *Client) do(args ...any) error {
+	_, err := c.ask(args...)
+	return err
+}
+
+// ask is do, and gives the answer's data: get_property_string's value.
+func (c *Client) ask(args ...any) (string, error) {
 	if c.gone {
-		return ErrClosed
+		return "", ErrClosed
 	}
 	req := Request{
 		Command:   args,
@@ -111,7 +117,7 @@ func (c *Client) do(args ...any) error {
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	id := req.RequestId
 	if c.out == nil {
@@ -127,24 +133,24 @@ func (c *Client) do(args ...any) error {
 		if r, ok := c.replies[id]; ok {
 			delete(c.replies, id)
 			if r.unsent != nil {
-				return fmt.Errorf("%w: %v", ErrClosed, r.unsent)
+				return "", fmt.Errorf("%w: %v", ErrClosed, r.unsent)
 			}
 			if r.expired {
 				log.Printf("do: response timeout: [requestId=%d]\n", id)
-				return errTimeout
+				return "", errTimeout
 			}
 			log.Printf("do: received response: [requestId=%d] [error=%s]\n", r.RequestId, r.Error)
 			if r.Error != "success" {
-				return errors.New(r.Error)
+				return "", errors.New(r.Error)
 			}
-			return nil
+			return r.data, nil
 		}
 		if c.gone {
-			return ErrClosed
+			return "", ErrClosed
 		}
 		in, ok := c.next()
 		if !ok {
-			return ErrClosed
+			return "", ErrClosed
 		}
 		c.handle(in)
 	}
@@ -215,6 +221,7 @@ func (c *Client) writer(out *mailbox[request]) {
 // outcome is mpv's answer to one request, or none in 5s.
 type outcome struct {
 	Response
+	data    string
 	expired bool
 	unsent  error
 }
@@ -307,6 +314,9 @@ type Client struct {
 	applied  map[string]string
 	seeks    []float64
 	peerSeek bool
+	// sent: the last seek this node sent mpv; began: mpv started a seek since
+	sent  float64
+	began bool
 	// landing: mpv hasn't reported the last seek this node applied, so it is not yet on
 	// the second it is heading to. Not peerSeek: a playback-restart ends that, and one from
 	// a slow load can arrive after the first seek was sent.
@@ -408,8 +418,13 @@ func (c *Client) react(event Event) ([][]byte, error) {
 		if !c.paused && !c.peerSeek {
 			c.seeking = true
 		}
+		c.began = true
 	case playbackRestart:
 		c.peerSeek = false
+		// not while playing: every resume ends landing
+		if c.landing && c.began && len(c.seeks) > 0 && c.seeks[len(c.seeks)-1] == c.sent {
+			c.later = append(c.later, c.landed)
+		}
 	case startFile:
 		c.started, c.loaded, c.cleared = event.EntryID, 0, false
 		c.stray = event.EntryID != c.heading()+1
@@ -856,7 +871,7 @@ func (c *Client) mpvSaid(line []byte) {
 	}
 	if event.RequestId > 0 && event.Error != "" {
 		if c.waiting[event.RequestId] {
-			c.replies[event.RequestId] = outcome{Response: event.Response}
+			c.replies[event.RequestId] = outcome{Response: event.Response, data: event.Data}
 			log.Println("Watch: queued response:", string(line))
 		} else {
 			log.Println("Watch: dropped response:", string(line))
@@ -865,7 +880,11 @@ func (c *Client) mpvSaid(line []byte) {
 	if event.EventType == "" {
 		return
 	}
-	for _, b := range c.handleEvent(event, line) {
+	c.broadcast(c.handleEvent(event, line))
+}
+
+func (c *Client) broadcast(out [][]byte) {
+	for _, b := range out {
 		select {
 		case c.outgoing <- b:
 			log.Printf("Watch: broadcasted event: %s\n", b)
@@ -1379,8 +1398,31 @@ func (c *Client) mark(pos float64) bool {
 // event is this one (peerSeek): set when it is planned, it swallowed the person's own seek
 // made while mpv still answered an earlier step.
 func (c *Client) seekReq(pos float64) error {
-	c.peerSeek = true
+	c.peerSeek, c.sent, c.began = true, pos, false
 	return c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
+}
+
+// landed asks mpv where it is, as mpv began a seek after this node sent its own, played
+// back, and hasn't reported that second. mpv folds seeks: the person's own made right
+// behind it is all that lands, and on the second mpv was already on, nothing is reported
+// (MPV.md). mpv answers with a seek's second at once, so anywhere else is the person's
+// seek, and goes out.
+func (c *Client) landed() {
+	want, from := c.sent, c.stamp
+	data, err := c.ask("get_property_string", timePos)
+	if err != nil {
+		log.Println("where mpv landed:", err)
+		return
+	}
+	pos, err := strconv.ParseFloat(data, 64)
+	// meanwhile the person moved, or this node took a newer state, or sent another seek
+	if err != nil || c.moved(from) || c.sent != want || math.Abs(pos-want) <= timePosTolerance {
+		return
+	}
+	// no marker may swallow it: they are all for seeks that came before it
+	c.seeks, c.landing = nil, false
+	line, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: data})
+	c.broadcast(c.handleEvent(Event{EventType: propertyChange, Name: timePos, Data: data}, line))
 }
 
 // target is where this node is, or where a seek it applied will land: a member that

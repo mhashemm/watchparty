@@ -37,6 +37,8 @@ type node struct {
 	held []string
 	// quitOn: mpv hangs up on a command starting with this (mpvQuitsOn)
 	quitOn string
+	// where: what mpv answers when asked where it is (mpvIsAt)
+	where string
 	// what mpv holds, from what it reported
 	paused bool
 	entry  int
@@ -126,6 +128,9 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			if strings.HasPrefix(said, prefix) {
 				reply = fmt.Sprintf(`{"request_id":%d,"error":%q}`+"\n", req.RequestId, why)
 			}
+		}
+		if said == "get_property_string time-pos" && n.where != "" {
+			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", n.where, req.RequestId)
 		}
 		taken := strings.Contains(reply, `"error":"success"`)
 		if name != "observe_property_string" {
@@ -278,6 +283,14 @@ func (n *node) mpvRefuses(prefix, why string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.refuse[prefix] = why
+}
+
+// mpvIsAt makes mpv answer get_property_string time-pos with pos, as it does with a seek's
+// second at once, before it reports it.
+func (n *node) mpvIsAt(pos float64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.where = fmt.Sprintf("%f", pos)
 }
 
 // mpvTakesAgain lifts every refusal.
