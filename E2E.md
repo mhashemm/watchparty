@@ -36,11 +36,22 @@ real 30s ping and 10s pong timeout.
 
 ## Writing a case
 
+- **A case starts from a party of its own, never from what the last case left**
+  (`relay` so far; the other phases still run as one story). `@case("[R3] ...")` runs
+  the function under it as the case; `with party("r3") as P:` gives it nodes in a fresh
+  room, booted, connected, paused and quiet, and stops every `r3-*` node at the end. A
+  case sets up what it checks itself (seek to 30s, then play) instead of inheriting it.
+  Each party costs about a second, its `quiet()`.
+- **Positions are compared only stopped: `in_step(P, at)`**, everyone paused on one file
+  and one second. Each node starts playing when the resume reaches it, so playing nodes
+  are apart by however long that took. For "nothing moved" while playing, compare
+  `offsets(P)` before and after with `unmoved()`.
 - **No fixed sleeps for things that happen.** Every wait is `until(cond, ceiling)`;
   `BOOT` and `SETTLE` are ceilings. Only a check that something did *not* happen sleeps
   (`QUIET`, after its positive half holds).
-- **A step every later case needs is `must()`, not `ok()`**: a failure ends the phase
-  with `STOP` instead of one cause showing up as ten FAILs. Logs are still kept.
+- **A step the rest of a case needs is `must()`, not `ok()`**: a failure ends that case
+  with `STOP` (the phase, in a story phase) instead of one cause showing up as ten FAILs.
+  A crash in an `@case` fails that case alone.
 - **`osd()` returns a list**, so `.count(x)` is an exact match, never a substring. Use
   the full string (`f"paused by {A}"`) or `pauses()`.
 - The suite reads nodes through their log lines (root `CLAUDE.md` has the table).
