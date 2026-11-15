@@ -521,11 +521,7 @@ func (s state) agrees(h state) bool {
 // could win, and would drag the party back. Stopped once it is stopping the party
 // (pauseParty): its own move says so, before mpv has stopped.
 func (c *Client) held() state {
-	s := state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
-	if c.loading && c.heldSeek == "" {
-		s.at = 0
-	}
-	return s
+	return state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
 }
 
 // tag says what state a message was sent from, so whoever gets it knows whether it is
@@ -1142,9 +1138,13 @@ func (c *Client) seekReq(pos float64) error {
 
 // target is where this node is, or where a seek it applied will land: a member that
 // just arrived is still on its way, and answering another joiner with the old spot
-// would drag the party back to it.
+// would drag the party back to it. A file still loading opens at its start, unless a seek
+// waits for it: the second it left, read as where it is, makes a seek there look done.
 func (c *Client) target() float64 {
 	held := c.heldSeek
+	if held == "" && c.loading {
+		return 0
+	}
 	if held == "" && c.landing && len(c.seeks) > 0 {
 		return c.seeks[len(c.seeks)-1]
 	}

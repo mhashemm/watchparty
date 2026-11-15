@@ -1080,6 +1080,22 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 	})
 }
 
+// While a move loads, this node is at the new file's start, not on the second it left: a
+// seek there on the new file is still to make. Seed 436890989886 of
+// TestAJoinCrossingAMoveEndsOnThePartysEntry found it.
+func TestASeekWhileLoadingToTheSecondItLeftIsMade(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.takes(3, true, 30)
+		n.peerSays("a", move(5, 1))
+		n.peerSays("a", stamped(6, tagged(1, seekEvent(30))))
+		n.mpvObeys()
+		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 30.000000]" {
+			t.Fatalf("seeks %q once e2 loaded, want the seek to 30", got)
+		}
+	})
+}
+
 // A node that hasn't heard the party answers too, with what it holds: its stamp is below
 // any the party has, so only a fellow joiner can take it.
 func TestJoiningNodeAnswersWithAnUnheardStamp(t *testing.T) {
