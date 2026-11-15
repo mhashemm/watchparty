@@ -288,6 +288,10 @@ func (c *Client) isEcho(event Event) bool {
 func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// mpv's own order, to read after a run; not its position while playing, one per frame
+	if event.Name != timePos || c.paused {
+		log.Printf("Watch: mpv said: %s\n", line)
+	}
 	out, err := c.react(event)
 	if err == nil {
 		out = append([][]byte{line}, out...)
