@@ -379,7 +379,7 @@ func (c *Client) isEcho(event Event) bool {
 }
 
 // handleEvent returns what goes out for one line from mpv: the line itself when it is
-// this node's own change, and whatever must follow it. Each is tagged under the lock that
+// this node's own change, and whatever must follow it. Each is tagged in the step that
 // decided it, so its stamp is the one that change was given.
 func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	// mpv's own order, to read after a run; not its position while playing, one per frame
@@ -1066,7 +1066,7 @@ type adoption struct {
 	stop, moving, seek, now bool
 }
 
-// commit takes a newer state under the lock that weighed it: the stamp with the entry, the
+// commit takes a newer state in the step that weighed it: the stamp with the entry, the
 // stop and the second it stands for, all marked before mpv is told. Taken apart, this node
 // would hold the party's stamp on its own entry or second, a tie it could win; and whatever
 // it says meanwhile already names where it is going.

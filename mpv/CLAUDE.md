@@ -6,19 +6,21 @@ and why each flag is pinned, is in **`MPV.md`**: read it before changing anythin
 Security: the wire carries raw mpv JSON, but `apply` dispatches only the allow-list below,
 never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and holds the trust model.
 
-## The connection
+## The loop
 
-- **`watch()` is the only reader of the socket**, and `do()` waits for a reply only
-  `watch()` delivers. So `watch` starts before `New`'s observe calls, and
-  **`c.mu` is never held across `do()`**: `watch` needs `c.mu` for `handleEvent`, so
-  every call would become a 5s timeout. Lock, mutate, unlock, then IPC.
-- **`New` waits for `ready`**, the first `time-pos` with data, i.e. the first file is loaded.
-  - Before `ready`, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run`
+- **One goroutine owns a node's state** (`watch`, then `serve`). The rest only hand it inputs
+  (mpv's lines and close, `do()`'s timer and writer, `incoming`, read first), taken one at a
+  time in the order they came. No lock, no goroutine touching `Client`'s fields: an outcome
+  would hang on which ready channel a `select` picks.
+- **`do()` takes inputs while it waits**: mpv's lines are handled, other replies kept by id,
+  a transport message queued while a peer's change is in flight (`busy`). A command an mpv
+  line starts (`pauseParty`, a held seek) waits in `later` until that line's broadcast is out.
+- **`New` waits for `opened`**: the first `time-pos` with data and every observe taken, or the close.
+  - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run`
     reads mpv's real exit status. Cancelling would kill the exiting mpv and turn
     "exit status 2" into "signal: killed". **A hang-up doesn't prove mpv is exiting:** the
     socket has dropped with mpv alive and well, so that wait has to be bounded.
-  - After `ready`, `watch` ending (EOF on quit) calls `cancel`: that is how the party
-    learns mpv is gone. `party.Run` wraps that cancel to tell a quit from other stops.
+  - After, the close calls `cancel`, which `party.Run` wraps to tell a quit from other stops.
 - `TestWatchDoesNotAliasScannerBuffer` catches a missing `bytes.Clone` only because
   `dripReader` returns ~7 bytes per `Read`; with the whole input in one fill the bug hides.
 
@@ -46,14 +48,13 @@ Applying a peer's change makes mpv report it back. Without suppression b rebroad
 a's pause to a, and the relay, which has no counters, loops forever.
 
 - **Mark before the IPC call** (`commit` and `resume` set `applied`, `mark` appends to `seeks`): the echo can arrive before `do()` returns.
-- `pause` matches exactly and deletes the marker. A no-op set emits nothing, so
-  none is marked for a pause mpv already has.
-- `time-pos` matches any entry of `seeks` (every seek applied since the last resume,
-  capped at 16) within **±0.1s**. On a match at entry *i*, earlier entries are dropped
-  (mpv handles seeks in order) and *i* becomes the echoed value, because one seek can
-  echo twice, a frame apart. One marker isn't enough: an earlier seek's echo can land
-  after a later seek was applied. 0.1s covers a frame at ≥10fps under the pinned
-  `--hr-seek=yes`; a deliberate seek of 0.1s or more still goes out.
+- `pause` matches exactly and deletes the marker; none is set for a pause mpv already has (no event).
+- `time-pos` matches any entry of `seeks` (every seek applied since the last resume, capped
+  at 16) within **±0.1s**. On a match at entry *i*, earlier entries are dropped (mpv handles
+  seeks in order) and *i* becomes the echoed value, because one seek can echo twice, a frame
+  apart. One marker isn't enough: an earlier seek's echo can land after a later seek was
+  applied. 0.1s covers a frame at ≥10fps under the pinned `--hr-seek=yes`; a deliberate seek
+  of 0.1s or more still goes out.
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 
@@ -69,29 +70,28 @@ step, so that node pauses everyone with a reason:
   pause, position and reason itself. Applying it and re-pausing doesn't work, since mpv
   folds the two sets into no `property-change`.
 
-`pauseParty` sends the pause **in a goroutine** (it runs under `c.mu` inside
-`handleEvent`, and `do()` from there deadlocks) and doesn't mark `applied`, so mpv's
+`pauseParty` sends the pause after the line that started it (`later`), unmarked, so mpv's
 `pause=yes` goes out as this node's own, followed by the extras. Peers get pause before
-position: P2P `broadcast` waits per event and the relay keeps a FIFO per member.
-e2e `[R6b]`, `[R11f]`.
+position: P2P `broadcast` waits per event and the relay keeps a FIFO per member. e2e `[R6b]`,
+`[R11f]`.
 
-## Applying remote events (`ProcessIncomingEvents`)
+## Applying remote events (`apply`)
 
-**It drains `incoming` from `New`, not from `ready`.** A slow load (a URL, a slow disk)
-must never make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked
-relay read lets the relay's 64-frame buffer fill and drop the member. Until `ready` it
-keeps the notices in order and, of every `pause` and `time-pos`, only the newest **by
-stamp**: each says the party's whole state, and an older one applied after would be
-answered as behind. Then it seeks where a continued party stopped (`resumeAt`, marked like
-a peer's seek, so not broadcast), applies that one, announces `joined`, then the notices.
-e2e `[R11d]`.
+**`incoming` is read from `New`, not from the load.** A slow load (a URL, a slow disk) must
+never make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked relay read
+fills the relay's 64-frame buffer and drops the member. While `opening`, `hear` keeps the
+notices in order and, of every `pause` and `time-pos`, only the newest **by stamp**: each
+says the party's whole state, and an older one applied after would be answered as behind.
+Then `join` seeks where a continued party stopped (`resumeAt`, marked like a peer's seek, so
+not broadcast), applies that one, announces `joined`, then the notices, all as one message:
+what comes meanwhile waits. e2e `[R11d]`.
 
 ### One rule for who follows whom (`stamp`)
 
 Every message says the state it was sent from (`tag`, `held`): a `stamp` (a Lamport clock),
 `paused`, `at` (where it stopped, or resumes from), in a playlist `entry`; one missing any is
 refused (`stateOf`), and `take` weighs it. A move while playing says stopped. A node's own
-change takes the next stamp, **written under the lock that decided the event goes out**
+change takes the next stamp, **written in the step that decided the event goes out**
 (`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
 
 - **Newer is taken. The same stamp means made at once, and the safer wins for everyone**
@@ -106,7 +106,7 @@ change takes the next stamp, **written under the lock that decided the event goe
 - **A joiner syncs with the party, never the party with it.** `announce` sets the stamp to
   `unheard`, far below any a party holds: nothing it does before it is answered wins, and
   joiners still order among themselves. `Opened` takes 1.
-- **A newer state is taken whole, under the lock that weighed it, before mpv is told**
+- **A newer state is taken whole, in the step that weighed it, before mpv is told**
   (`commit`: stamp, entry, the stop and the seek marked; `adopt` then tells mpv; a step mpv
   refuses is unmarked by `release`, where a new step adds its undo, and the node `announce`s
   unless mpv is gone). Taken apart, it holds the party's stamp on its own entry or second, a

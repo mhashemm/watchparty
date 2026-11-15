@@ -82,10 +82,10 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 - Synthetic notices use a non-blocking send (`Server.notify`).
 - `Shutdown` uses `context.WithoutCancel`; the party context is already cancelled.
 - Every per-party goroutine selects on the party context. Channels are never closed.
-- Never `panic`, `log.Fatal` or `os.Exit` outside `main.go`: they skip `Run`'s defers
-  and kill the GUI.
+- Never `panic`, `log.Fatal` or `os.Exit` outside `main.go`: they skip `Run`'s defers and kill the GUI.
+- A node's sync state belongs to `mpv`'s loop, one input at a time; no outcome hangs on which ready `select` case fires (`party.outcome` decides from facts).
 - `defer cmd.Cancel()` only after `cmd.Start()` succeeds.
-- `bytes.Clone` anything from `scanner.Bytes()` before it goes on a channel.
+- `bytes.Clone` anything from `scanner.Bytes()` before another goroutine sees it.
 
 ## Conventions
 
