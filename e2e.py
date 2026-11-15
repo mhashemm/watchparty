@@ -882,7 +882,7 @@ def mark(name):
 
 cases = []    # (id, start) of each story header, timed until the next one starts
 took = []     # (seconds, id) of each case that ran on its own
-pending = []  # (title, function, serial) of each @case, run by run_cases()
+pending = []  # (title, function, serial, group) of each @case, run by run_cases()
 running = threading.local()  # the case this thread runs, and the buffer its prints go to
 
 
@@ -921,12 +921,14 @@ def part(title):
     print("\n" + title)
 
 
-def case(title, serial=False):
+def case(title, serial=False, group=None):
     """Adds the function below as a case, which run_cases() runs. It sets up what it checks
-    from a party() of its own, so cases run side by side; serial is for one that touches
-    what all share, like the relay itself. A must() that fails or a crash ends it alone."""
+    from a party() of its own, so cases run side by side. serial is for one that touches
+    what all share, like the relay itself: it runs alone, after the rest. Cases of one group
+    share a thing only one can use at a time, like the LAN's one router: they take turns,
+    in order, beside the other cases. A must() that fails or a crash ends one case alone."""
     def add(f):
-        pending.append((title, f, serial))
+        pending.append((title, f, serial, group))
         return f
     return add
 
@@ -948,23 +950,36 @@ def run_case(title, f):
 
 
 def run_cases(at_once=CASES_AT_ONCE):
-    """Runs every @case so far, at_once at a time, then the serial ones alone."""
-    side, alone = [c for c in pending if not c[2]], [c for c in pending if c[2]]
+    """Runs every @case so far, at_once at a time (a group counts as one, its cases in
+    turn), then the serial ones alone."""
+    units, groups = [], {}
+    for title, f, serial, group in pending:
+        if serial:
+            continue
+        if group is None:
+            units.append([(title, f)])
+        elif group in groups:
+            groups[group].append((title, f))
+        else:
+            groups[group] = [(title, f)]
+            units.append(groups[group])
+    alone = [(title, f) for title, f, serial, _ in pending if serial]
     pending.clear()
     threads, free = [], threading.Semaphore(at_once)
 
-    def one(title, f):
+    def one(unit):
         try:
-            run_case(title, f)
+            for title, f in unit:
+                run_case(title, f)
         finally:
             free.release()
-    for title, f, _ in side:
+    for unit in units:
         free.acquire()
-        threads.append(threading.Thread(target=one, args=(title, f)))
+        threads.append(threading.Thread(target=one, args=(unit,)))
         threads[-1].start()
     for t in threads:
         t.join()
-    for title, f, _ in alone:
+    for title, f in alone:
         run_case(title, f)
 
 
@@ -3108,72 +3123,82 @@ def upnp_suite():
     print("\n=== upnp: a fake router on the LAN ===")
     BUS = private_bus()
     if not os.environ.get("E2E_NO_SANDBOX"):
-        header("[G34] skipped outside the container: a real router on this LAN would answer and map ports")
+        print("\n[G34] skipped outside the container: a real router on this LAN would answer and map ports")
     else:
-        header("[G34] UPnP behind carrier NAT: the party starts, warns, and removes its mapping")
+        # the LAN has one router, so the cases that ask it take turns (group "router"), and
+        # each sets the address it reports itself
         gw = Gateway(PORTS["gateway"], "10.172.178.175")
-        n = launch("upnpCarrier", port=PORTS["upnpNode"], local=False)
-        must("it starts", until(lambda: booted(n), BOOT), log(n))
-        ok("the mapping was added", "AddPortMapping" in gw.actions, str(gw.actions))
-        ok("it warns", "unreachable address: 10.172.178.175 " in log(n), log(n))
-        ok("and still prints the invite, for friends on the LAN", "your address to share is -addrs 10.172.178.175:" in log(n), log(n))
-        stop(n)
-        ok("quitting removes the mapping", "DeletePortMapping" in gw.actions and "upnp: port mapping deleted" in log(n), str(gw.actions))
 
-        header("[G34b] a public address gets no warning")
-        gw.ip = "203.0.113.7"
-        n = launch("upnpPublic", port=PORTS["upnpNode"], local=False)
-        must("it starts", until(lambda: booted(n), BOOT), log(n))
-        ok("the invite has it", "your address to share is -addrs 203.0.113.7:" in log(n), log(n))
-        ok("and no warning", "unreachable address" not in log(n), log(n))
-        stop(n)
+        @case("[G34] UPnP behind carrier NAT: the party starts, warns, and removes its mapping", group="router")
+        def _():
+            gw.ip = "10.172.178.175"
+            n = launch("upnpCarrier", port=PORTS["upnpNode"], local=False)
+            must("it starts", until(lambda: booted(n), BOOT), log(n))
+            ok("the mapping was added", "AddPortMapping" in gw.actions, str(gw.actions))
+            ok("it warns", "unreachable address: 10.172.178.175 " in log(n), log(n))
+            ok("and still prints the invite, for friends on the LAN", "your address to share is -addrs 10.172.178.175:" in log(n), log(n))
+            stop(n)
+            ok("quitting removes the mapping", "DeletePortMapping" in gw.actions and "upnp: port mapping deleted" in log(n), str(gw.actions))
 
-        header("[G34c] a gateway can't start a log line of its own through the address it reports")
-        gw.ip = "10.0.0.1&#10;2026/01/01 00:00:00 FORGED"
-        n = launch("upnpForged", port=PORTS["upnpNode"], local=False)
-        must("it starts", until(lambda: booted(n), BOOT), log(n))
-        ok("an address that isn't one warns too", "unreachable address: 10.0.0.1 2026/01/01" in log(n), log(n))
-        ok("and nothing it sent starts a line", not [l for l in log(n).splitlines() if l.startswith("2026/01/01")], log(n))
-        stop(n)
+        @case("[G34b] a public address gets no warning", group="router")
+        def _():
+            gw.ip = "203.0.113.7"
+            n = launch("upnpPublic", port=PORTS["upnpNode"], local=False)
+            must("it starts", until(lambda: booted(n), BOOT), log(n))
+            ok("the invite has it", "your address to share is -addrs 203.0.113.7:" in log(n), log(n))
+            ok("and no warning", "unreachable address" not in log(n), log(n))
+            stop(n)
 
-        header("[G34d] stopping during discovery doesn't wait out the search, and isn't an error")
-        calls = len(gw.actions)
-        n = launch("upnpStopped", port=PORTS["upnpNode"], local=False)
-        must("it reached discovery", until(lambda: "file fingerprint" in log(n), BOOT), log(n))
-        began = time.time()
-        stop(n)
-        took = time.time() - began
-        ok("it stops well inside the 6.5s search", took < 4, f"{took:.1f}s")
-        ok("with exit code 0", nodes[n]["proc"].returncode == 0, str(nodes[n]["proc"].returncode))
-        ok("and no error, and nothing mapped", "canceled" not in log(n) and "AddPortMapping" not in gw.actions[calls:], log(n))
+        @case("[G34c] a gateway can't start a log line of its own through the address it reports", group="router")
+        def _():
+            gw.ip = "10.0.0.1&#10;2026/01/01 00:00:00 FORGED"
+            n = launch("upnpForged", port=PORTS["upnpNode"], local=False)
+            must("it starts", until(lambda: booted(n), BOOT), log(n))
+            ok("an address that isn't one warns too", "unreachable address: 10.0.0.1 2026/01/01" in log(n), log(n))
+            ok("and nothing it sent starts a line", not [l for l in log(n).splitlines() if l.startswith("2026/01/01")], log(n))
+            stop(n)
 
-        header("[G35] the GUI says so too, and only for the party it's true of")
-        gw.ip = "10.172.178.175"
-        P = launch_gui("guiUpnp")
-        ok(f"{P} saved", save_settings(P, mpvFlags=MPVFLAGS) == "Saved.", js(P, '$("settings-saved").textContent'))
-        js(P, 'setMode("direct"); $("local").checked = false')
-        start(P, hostname=P, file=MEDIA, port=str(PORTS["upnpNode"]))
-        must("it starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
-        ok("the status warns", status(P) == "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.", status(P))
-        until(lambda: js(P, '$("share-text").textContent'))
-        ok("and the invite still shows", js(P, '$("share-text").textContent').startswith("-addrs 10.172.178.175:"), js(P, '$("share-text").textContent'))
-        end(P)
-        gw.ip = "203.0.113.7"
-        go(P)
-        must("the next party starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
-        ok("with a public address it doesn't warn", status(P) == "You're in. Pause or seek in mpv and everyone follows.", status(P))
-        end(P)
+        @case("[G34d] stopping during discovery doesn't wait out the search, and isn't an error", group="router")
+        def _():
+            calls = len(gw.actions)
+            n = launch("upnpStopped", port=PORTS["upnpNode"], local=False)
+            must("it reached discovery", until(lambda: "file fingerprint" in log(n), BOOT), log(n))
+            began = time.time()
+            stop(n)
+            took = time.time() - began
+            ok("it stops well inside the 6.5s search", took < 4, f"{took:.1f}s")
+            ok("with exit code 0", nodes[n]["proc"].returncode == 0, str(nodes[n]["proc"].returncode))
+            ok("and no error, and nothing mapped", "canceled" not in log(n) and "AddPortMapping" not in gw.actions[calls:], log(n))
 
-        header("[G35b] the GUI's Stop during discovery ends the party, without a diagnosis")
-        go(P)
-        began = time.time()
-        end(P)
-        took = time.time() - began
-        ok("it says it ended", status(P) == "The party has ended.", status(P))
-        ok("well inside the 6.5s search", took < 4, f"{took:.1f}s")
-        stop(P)
+        @case("[G35] the GUI says so too, and only for the party it's true of; its Stop during discovery ends the party, without a diagnosis", group="router")
+        def _():
+            gw.ip = "10.172.178.175"
+            P = launch_gui("guiUpnp")
+            try:
+                ok(f"{P} saved", save_settings(P, mpvFlags=MPVFLAGS) == "Saved.", js(P, '$("settings-saved").textContent'))
+                js(P, 'setMode("direct"); $("local").checked = false')
+                start(P, hostname=P, file=MEDIA, port=str(PORTS["upnpNode"]))
+                must("it starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
+                ok("the status warns", status(P) == "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.", status(P))
+                until(lambda: js(P, '$("share-text").textContent'))
+                ok("and the invite still shows", js(P, '$("share-text").textContent').startswith("-addrs 10.172.178.175:"), js(P, '$("share-text").textContent'))
+                end(P)
+                gw.ip = "203.0.113.7"
+                go(P)
+                must("the next party starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
+                ok("with a public address it doesn't warn", status(P) == "You're in. Pause or seek in mpv and everyone follows.", status(P))
+                end(P)
 
-    header("[G36] mpv's socket dropping while mpv stays alive ends the party with a reason, not a hang")
+                part("[G35b] the GUI's Stop during discovery ends the party, without a diagnosis")
+                go(P)
+                began = time.time()
+                end(P)
+                took = time.time() - began
+                ok("it says it ended", status(P) == "The party has ended.", status(P))
+                ok("well inside the 6.5s search", took < 4, f"{took:.1f}s")
+            finally:
+                stop(P)
+
     pidfile = f"{RUN}/hungup.pid"
     with open(f"{RUN}/hungup.py", "w") as f:
         f.write(f"""import json, os, socket, sys, time
@@ -3191,10 +3216,15 @@ c.close()
 time.sleep(600)
 """)
     script(f"{RUN}/hungup", f'exec python3 {RUN}/hungup.py "$@"')
-    n = launch("hungUp", port=PORTS["upnpNode"], mpv=f"{RUN}/hungup")
-    ok("it exits with an error", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and nodes[n]["proc"].returncode == 1, str(nodes[n]["proc"].poll()))
-    ok("that says what happened", "mpv stopped answering" in log(n), log(n))
-    ok("and takes mpv with it", until(lambda: gone(int(open(pidfile).read()))))
+
+    @case("[G36] mpv's socket dropping while mpv stays alive ends the party with a reason, not a hang")
+    def _():
+        n = launch("hungUp", port=free_port(), mpv=f"{RUN}/hungup")
+        ok("it exits with an error", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and nodes[n]["proc"].returncode == 1, str(nodes[n]["proc"].poll()))
+        ok("that says what happened", "mpv stopped answering" in log(n), log(n))
+        ok("and takes mpv with it", until(lambda: gone(int(open(pidfile).read()))))
+
+    run_cases()
 
 
 def install_suite():

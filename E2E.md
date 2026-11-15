@@ -39,7 +39,7 @@ real 30s ping and 10s pong timeout.
 ## Writing a case
 
 - **A case starts from a party of its own, never from what the last case left**
-  (`relay` so far; the other phases still run as one story, under `header()`).
+  (every phase but `gui`, which still runs as one story under `header()`).
   `@case("[R3] ...")` adds the function under it as a case; `with party("r3") as P:`
   gives it nodes in a fresh room, booted, connected, paused and quiet, and stops every
   `r3-*` node at the end. A case sets up what it checks itself (seek to 30s, then play).
@@ -47,7 +47,10 @@ real 30s ping and 10s pong timeout.
   `run_cases()`; each one's output comes out whole when it ends. So a case touches
   nothing another uses: its own room, node names, user agent and ports. One that must
   touch what all share, like killing the relay (`[R13]`), is `@case(..., serial=True)`
-  and runs alone after the rest. A labelled step inside a case is `part("[R12b] ...")`.
+  and runs alone after the rest. Cases that share a thing only one can use at a time,
+  like the LAN's one router in `upnp`, are one `group=`: they take turns, in order, beside
+  the rest, and each still sets up what it needs. A labelled step inside a case is
+  `part("[R12b] ...")`. `mesh()` is `party()` for `p2p`, on free ports.
 - **Positions are compared only stopped: `in_step(P, at)`**, everyone paused on one file
   and one second. Each node starts playing when the resume reaches it, so playing nodes
   are apart by however long that took. For "nothing moved" while playing, compare
