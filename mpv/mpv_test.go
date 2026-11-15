@@ -1096,6 +1096,27 @@ func TestASeekWhileLoadingToTheSecondItLeftIsMade(t *testing.T) {
 	})
 }
 
+// A key press opens a file before mpv reports the entry. A stop taken meanwhile is for the
+// file this node left: its seek would land on the new one and go out as this node's own,
+// after its move, so the party would follow it there. The move alone goes out, from 0.
+// Seed 436890989886 of TestAJoinCrossingAMoveEndsOnThePartysEntry found it.
+func TestAStopTakenAsAKeyPressOpensAFileDoesNotSeekIt(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.mpvSays(started(1), `{"event":"file-loaded"}`)
+		n.peerSays("b", `{"stamp":3,"at":30,"entry":0,"event":"property-change","name":"pause","data":"yes"}`)
+		n.mpvSays(propertyChangeLine(playlistPos, "1", 0), mpvAt(0))
+		n.mpvObeys()
+		got := n.broadcasts()
+		if fmt.Sprint(said(got)) != "[playlist-pos=1]" || got[0].Stamp <= 3 || got[0].At == nil || *got[0].At != 0 {
+			t.Fatalf("broadcast %+v, want only the move, newer than the stop, from 0", got)
+		}
+		if got := seeksIn(n.mpvWasTold()); len(got) != 0 {
+			t.Fatalf("seeks %q, want none", got)
+		}
+	})
+}
+
 // A node that hasn't heard the party answers too, with what it holds: its stamp is below
 // any the party has, so only a fellow joiner can take it.
 func TestJoiningNodeAnswersWithAnUnheardStamp(t *testing.T) {
