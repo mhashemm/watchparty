@@ -294,7 +294,10 @@ def toggle(n=None, settle=0.9):
 
 
 def log(n):
-    return open(nodes[n]["log"]).read()
+    """Its log's finished lines: a line longer than what is left of a page is written a page at
+    a time, so a read can end halfway through it."""
+    text = open(nodes[n]["log"]).read()
+    return text[:text.rfind("\n") + 1]
 
 
 def played(n):
