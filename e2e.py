@@ -53,6 +53,7 @@ MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --c
 BOOT = 20            # mpv loading the file, plus the handshake
 SETTLE = 10          # an event reaching every node
 QUIET = 1.0
+CASES_AT_ONCE = 4    # cases with parties of their own run side by side, this many at a time
 JITTER = 0.4         # a message crosses the proxy twice, node to relay to node: this stays under QUIET
 STUB_HOST = "slowpeer"
 
@@ -197,7 +198,8 @@ stubs = []
 
 def ok(name, cond, detail=""):
     if not cond:
-        fails.append(f"{cases[-1][0]} {name}" if cases else name)
+        now = getattr(running, "id", None) or (cases[-1][0] if cases else None)
+        fails.append(f"{now} {name}" if now else name)
     print(("  PASS  " if cond else "  FAIL  ") + name + (f"  [{detail}]" if detail else ""))
 
 
@@ -362,15 +364,19 @@ def party(room, n=3, **kw):
     one booted, connected, paused and quiet. A case starts from this, never from what the
     last case left. Name what it adds room + "-..." and that stops with it too."""
     names = [f"{room}-{chr(ord('a') + i)}" for i in range(n)]
+
+    def ready(name, cond, detail):
+        if not cond:  # a setup that worked says nothing
+            must(name, cond, detail())
     try:
         launch(names[0], room=room, **kw)
-        must(f"{names[0]} opened {room}", until(lambda: booted(names[0]) and connected(names[0]), BOOT), log(names[0])[-300:])
+        ready(f"{names[0]} opened {room}", until(lambda: booted(names[0]) and connected(names[0]), BOOT), lambda: log(names[0])[-300:])
         for name in names[1:]:
             launch(name, room=room, **kw)
-        must("everyone is in", until(lambda: all(booted(x) and connected(x) for x in names), BOOT))
+        ready("everyone is in", until(lambda: all(booted(x) and connected(x) for x in names), BOOT), lambda: str([log(x)[-200:] for x in names]))
         for name in names:
             resolve(name)
-        must("and paused, with every join over", quiet(names) and stopped(names), where(names))
+        ready("and paused, with every join over", quiet(names) and stopped(names), lambda: where(names))
         yield names
     finally:
         for name in [k for k in nodes if k.startswith(room + "-")]:
@@ -833,30 +839,97 @@ def mark(name):
     marks.append((name, time.time()))
 
 
-cases = []
+cases = []    # (id, start) of each story header, timed until the next one starts
+took = []     # (seconds, id) of each case that ran on its own
+pending = []  # (title, function, serial) of each @case, run by run_cases()
+running = threading.local()  # the case this thread runs, and the buffer its prints go to
 
 
-def case(title):
-    """Starts a case: says what it checks, and times it until the next one starts. As a
-    decorator it also runs the function below as the case, and a must() that fails or a
-    crash in it ends that case alone, not the phase."""
+class CaseOutput:
+    """Each case's prints go to a buffer of its own while cases run side by side, and come
+    out whole, so two cases' lines never interleave."""
+
+    def __init__(self, real):
+        self.real, self.lock = real, threading.Lock()
+
+    def write(self, text):
+        buf = getattr(running, "buf", None)
+        if buf is None:
+            with self.lock:
+                self.real.write(text)
+        else:
+            buf.append(text)
+
+    def flush(self):
+        self.real.flush()
+
+
+sys.stdout = CaseOutput(sys.stdout)
+
+
+def header(title):
+    """A case in a phase still written as one story: says what it checks, and times it
+    until the next one starts."""
     cases.append((title.split()[0], time.time()))
     print("\n" + title)
 
-    def run(f):
+
+def part(title):
+    """A labelled step inside a case: its failures carry its own id."""
+    running.id = title.split()[0]
+    print("\n" + title)
+
+
+def case(title, serial=False):
+    """Adds the function below as a case, which run_cases() runs. It sets up what it checks
+    from a party() of its own, so cases run side by side; serial is for one that touches
+    what all share, like the relay itself. A must() that fails or a crash ends it alone."""
+    def add(f):
+        pending.append((title, f, serial))
+        return f
+    return add
+
+
+def run_case(title, f):
+    running.id, running.buf = title.split()[0], []
+    start = time.time()
+    print("\n" + title)
+    try:
+        f()
+    except Stop as e:
+        print(f"  STOP  the rest of this case depends on: {e}")
+    except Exception:
+        traceback.print_exc(file=sys.stdout)
+        fails.append(f"{title.split()[0]} crashed")
+    took.append((time.time() - start, title.split()[0]))
+    out, running.buf, running.id = "".join(running.buf), None, None
+    print(out, end="")
+
+
+def run_cases(at_once=CASES_AT_ONCE):
+    """Runs every @case so far, at_once at a time, then the serial ones alone."""
+    side, alone = [c for c in pending if not c[2]], [c for c in pending if c[2]]
+    pending.clear()
+    threads, free = [], threading.Semaphore(at_once)
+
+    def one(title, f):
         try:
-            f()
-        except Stop as e:
-            print(f"  STOP  the rest of this case depends on: {e}")
-        except Exception:
-            traceback.print_exc(file=sys.stdout)
-            fails.append(f"{title.split()[0]} crashed")
-    return run
+            run_case(title, f)
+        finally:
+            free.release()
+    for title, f, _ in side:
+        free.acquire()
+        threads.append(threading.Thread(target=one, args=(title, f)))
+        threads[-1].start()
+    for t in threads:
+        t.join()
+    for title, f, _ in alone:
+        run_case(title, f)
 
 
 def slowest(end, n=5):
-    took = sorted(((t2 - t1, c) for (c, t1), (_, t2) in zip(cases, cases[1:] + [("", end)])), reverse=True)
-    return ", ".join(f"{c} {t:.0f}s" for t, c in took[:n])
+    told = sorted([(t2 - t1, c) for (c, t1), (_, t2) in zip(cases, cases[1:] + [("", end)])] + took, reverse=True)
+    return ", ".join(f"{c} {t:.0f}s" for t, c in told[:n])
 
 
 need("go")
@@ -948,18 +1021,18 @@ def p2p_suite():
     for n in NODES:
         ok(f"{n} advertised the expected address", nodes[n]["addr"] == addr_of[n], nodes[n]["addr"])
 
-    case(f"[1] mesh closes transitively: every node learns all {len(NODES) - 1} others")
+    header(f"[1] mesh closes transitively: every node learns all {len(NODES) - 1} others")
     until(lambda: all(set(others(n)) <= known(n) for n in NODES))
     for n in NODES:
         missing = set(others(n)) - known(n)
         ok(f"{n} knows the whole mesh", not missing, f"missing {sorted(missing)}" if missing else "")
     ok("nobody connected to itself", not any(n in known(n) for n in NODES))
 
-    case(f"[2] all {len(NODES)} start paused")
+    header(f"[2] all {len(NODES)} start paused")
     for n in NODES:
         ok(f"{n} paused", get(n, "pause") is True)
 
-    case("[2a] -h explains the app, one topic at a time, then lists every flag")
+    header("[2a] -h explains the app, one topic at a time, then lists every flag")
     h = subprocess.run([BIN, "-h"], capture_output=True, text=True)
     text = h.stdout + h.stderr
     ok("it exits 0", h.returncode == 0, h.returncode)
@@ -968,14 +1041,14 @@ def p2p_suite():
     ok("it lists the flags", "-playlist" in text and "-createKey" in text)
     ok("it isn't tied to one kind of video", not COUPLED.search(text), str(COUPLED.findall(text)))
 
-    case("[2b] the sync-critical mpv options win over the user's own flags")
+    header("[2b] the sync-critical mpv options win over the user's own flags")
     for n in NODES:
         ok(f"{n} plays at normal speed", get(n, "speed") == 1, f"speed={get(n, 'speed')}")
         ok(f"{n} seeks precisely", get(n, "hr-seek") in (True, "yes"), f"hr-seek={get(n, 'hr-seek')}")
         ok(f"{n} ignores saved positions", get(n, "resume-playback") is False)
         ok(f"{n} waits for its cache", get(n, "cache-pause") is True)
 
-    case(f"[3] resume on {A} propagates to all {len(NODES) - 1} others")
+    header(f"[3] resume on {A} propagates to all {len(NODES) - 1} others")
     must("the joins are over", quiet(NODES))
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES)
@@ -985,7 +1058,7 @@ def p2p_suite():
     for n in others(A):
         ok(f"{n} credited {A}", f"resumed by {A}" in osd(n))
 
-    case(f"[4] pause on {LAST} propagates back to everyone (no central host)")
+    header(f"[4] pause on {LAST} propagates back to everyone (no central host)")
     time.sleep(1.5)
     setp(LAST, "pause", True)
     until(lambda: all(get(n, "pause") is True for n in NODES) and f"paused by {LAST}" in osd(A))
@@ -993,7 +1066,7 @@ def p2p_suite():
         ok(f"{n} paused", get(n, "pause") is True)
     ok(f"{A} credited {LAST}", f"paused by {LAST}" in osd(A))
 
-    case(f"[5] seek while paused syncs everyone (from {LAST}, which drove the pause)")
+    header(f"[5] seek while paused syncs everyone (from {LAST}, which drove the pause)")
     setp(LAST, "time-pos", 77.0)
     until(lambda: all(near(get(n, "time-pos"), 77.0) for n in others(LAST)) and f"synced by {LAST}" in osd(A))
     for n in others(LAST):
@@ -1001,7 +1074,7 @@ def p2p_suite():
         ok(f"{n} followed to 77s", near(v, 77.0), f"time-pos={v}")
     ok(f"{A} credited {LAST} for sync", f"synced by {LAST}" in osd(A))
 
-    case("[5b] any paused peer can seek for everyone, not just whoever drove the pause")
+    header("[5b] any paused peer can seek for everyone, not just whoever drove the pause")
     b = NODES[1]  # applied LAST's pause in [4]; under the old slave hack this was muted
     setp(b, "time-pos", 12.0)
     until(lambda: all(near(get(n, "time-pos"), 12.0) for n in others(b)))
@@ -1009,7 +1082,7 @@ def p2p_suite():
         v = get(n, "time-pos")
         ok(f"{n} followed {b}'s seek", near(v, 12.0), f"time-pos={v}")
 
-    case("[5d] an arrow-key (relative) seek lands exactly, and goes out once")
+    header("[5d] an arrow-key (relative) seek lands exactly, and goes out once")
     sent = lambda: sum("broadcasted event" in l and '"time-pos"' in l for l in log(b).splitlines())
     before = sent()
     ipc(nodes[b]["sock"], "seek", 7, "relative")
@@ -1020,7 +1093,7 @@ def p2p_suite():
         ok(f"{n} at exactly 19s, not a keyframe", near(v, 19.0, 0.15), f"time-pos={v}")
     ok(f"{b} broadcast one position for one seek", sent() - before == 1, f"{sent() - before} sent")
 
-    case("[5c] an applied event is not echoed back (the a->b->a rebound)")
+    header("[5c] an applied event is not echoed back (the a->b->a rebound)")
     # start from a known state: everyone playing, so the pause below is a real change
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES))
@@ -1043,7 +1116,7 @@ def p2p_suite():
         got = pauses(n) - before[n]
         ok(f"{n} applied {A}'s pause exactly once", got == 1, f"{got} pause notices")
 
-    case("[6] time-pos is NOT forwarded while playing (sync semantics stay narrow)")
+    header("[6] time-pos is NOT forwarded while playing (sync semantics stay narrow)")
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES))
     counts = {n: osd(n).count(f"synced by {A}") for n in others(A)}
@@ -1052,7 +1125,7 @@ def p2p_suite():
         after = osd(n).count(f"synced by {A}")
         ok(f"no time-pos storm reached {n}", after == counts[n], f"{after - counts[n]} sync notices in 4s")
 
-    case("[7] a peer that only ever followed can still drive the party")
+    header("[7] a peer that only ever followed can still drive the party")
     b = NODES[1]
     setp(b, "pause", True)
     until(lambda: get(A, "pause") is True)
@@ -1062,7 +1135,7 @@ def p2p_suite():
     for n in others(b):
         ok(f"{b} (ex-slave) resume reached {n}", get(n, "pause") is False)
 
-    case("[8] repeated round trips are not swallowed by the counter check")
+    header("[8] repeated round trips are not swallowed by the counter check")
     rounds = 0
     for i in range(5):
         setp(A, "pause", True)
@@ -1074,12 +1147,12 @@ def p2p_suite():
     for n in others(A):
         ok(f"{n} skipped no events", "skipped event from" not in log(n))
 
-    case("[9] /event from an unknown address is rejected")
+    header("[9] /event from an unknown address is rejected")
     code = raw(nodes[A]["addr"], "/event", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger", "secret": SECRET},
                b'{"event":"property-change","name":"pause","data":"yes"}')
     ok(f"{A} rejects unknown peer's event", code == 400, f"HTTP {code}")
 
-    case("[9b] a client that never finishes its headers is dropped, and huge headers are refused")
+    header("[9b] a client that never finishes its headers is dropped, and huge headers are refused")
     host, port = nodes[A]["addr"].rsplit(":", 1)
     with socket.create_connection((host, int(port)), timeout=SETTLE) as s:
         s.sendall(b"POST /hi HTTP/1.1\r\nHost: x\r\nsecret:")
@@ -1093,11 +1166,11 @@ def p2p_suite():
         got = s.recv(64)
         ok("20KB of headers gets a 431", got.startswith(b"HTTP/1.1 431"), str(got))
 
-    case("[10] /bye from an unknown address is rejected")
+    header("[10] /bye from an unknown address is rejected")
     code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": f"{IP}:9999", "counter": "5", "hostname": "stranger", "secret": SECRET})
     ok(f"{A} rejects unknown peer's bye", code == 400, f"HTTP {code}")
 
-    case("[10b] without the secret, a peer's own address forges nothing")
+    header("[10b] without the secret, a peer's own address forges nothing")
     pause = b'{"event":"property-change","name":"pause","data":"yes"}'
     for secret in (None, "wrongsecret"):
         h = {"hit-me-up": nodes[b]["addr"], "counter": "999999", "hostname": b, "file": fingerprint(A)}
@@ -1115,7 +1188,7 @@ def p2p_suite():
     setp(LAST, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES))
 
-    case("[11] /bye with a stale counter cannot evict a live peer")
+    header("[11] /bye with a stale counter cannot evict a live peer")
     code = raw(nodes[A]["addr"], "/bye", {"hit-me-up": nodes[b]["addr"], "counter": "1", "hostname": b, "secret": SECRET})
     until(lambda: "skipped bye from" in log(A), 5)
     ok(f"{A} skipped the stale bye", code == 204, f"HTTP {code}")
@@ -1126,7 +1199,7 @@ def p2p_suite():
     setp(LAST, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES))
 
-    case("[11b] a joiner playing a different file is refused; the same file renamed is not")
+    header("[11b] a joiner playing a different file is refused; the same file renamed is not")
     same, diff = variants()
     launch("nodeSame", addr_of[A], media=same)
     until(lambda: booted("nodeSame") and all("nodeSame has joined" in osd(n) for n in NODES), BOOT)
@@ -1163,7 +1236,7 @@ def p2p_suite():
     stop("nodeSame")
     until(lambda: all("nodeSame has left" in osd(n) for n in NODES))
 
-    case("[11c] a mid-party joiner pauses the party once loaded, and starts where it stopped")
+    header("[11c] a mid-party joiner pauses the party once loaded, and starts where it stopped")
     setp(A, "pause", False)
     until(lambda: all(get(n, "pause") is False for n in NODES))
     launch("nodeMid", addr_of[A], tag="mid", port=PORTS["nodeSame"])
@@ -1180,7 +1253,7 @@ def p2p_suite():
        f"time-pos={get('mid', 'time-pos')}")
     stop("mid")
 
-    case(f"[12] SIGKILL {LAST}: every survivor evicts it after 3 strikes and stays synced")
+    header(f"[12] SIGKILL {LAST}: every survivor evicts it after 3 strikes and stays synced")
     stop(LAST, signal.SIGKILL)
     dead = addr_of[LAST]
     survivors = others(LAST)
@@ -1203,7 +1276,7 @@ def p2p_suite():
     for n in survivors[1:]:
         ok(f"{A} still drives {n} after the eviction", get(n, "pause") is want)
 
-    case("[13] one success resets the strike count (a flaky peer must not be evicted)")
+    header("[13] one success resets the strike count (a flaky peer must not be evicted)")
     s1 = stub(nodes[A]["addr"])
     until(lambda: f"{STUB_HOST} has joined" in osd(A), 5)
     ok("stub peer joined the mesh", f"{STUB_HOST} has joined" in osd(A))
@@ -1235,7 +1308,7 @@ def p2p_suite():
     until(lambda: dropped(A, STUB_ADDR), 5)
     ok("3rd consecutive strike evicts", dropped(A, STUB_ADDR))
 
-    case("[13c] a peer that missed a pause and a resume is sent the state again once it is back; a newer resume reaching a node that plays stops the party")
+    header("[13c] a peer that missed a pause and a resume is sent the state again once it is back; a newer resume reaching a node that plays stops the party")
     s4 = stub(nodes[A]["addr"])
     must("stub peer joined again", until(lambda: osd(A).count(f"{STUB_HOST} has joined") >= 2, 5))
     setp(A, "pause", False)
@@ -1270,7 +1343,7 @@ def p2p_suite():
         tries += 1
     must("and is dropped once gone", drops() > before)
 
-    case("[13b] with the default -evictAfter, a burst of strikes does not evict a peer")
+    header("[13b] with the default -evictAfter, a burst of strikes does not evict a peer")
     launch("nodeKeep", evict=None)
     until(lambda: booted("nodeKeep"), BOOT)
     resolve("nodeKeep")
@@ -1286,7 +1359,7 @@ def p2p_suite():
        f"{strikes('nodeKeep', STUB_ADDR, STUB_HOST)} failures logged, evictAfter is 5m")
     stop("nodeKeep")
 
-    case("[13d] a member whose process stalls past the send timeout misses a resume; once it runs, the party ends in step")
+    header("[13d] a member whose process stalls past the send timeout misses a resume; once it runs, the party ends in step")
     X, Y = survivors[-1], survivors[1]
     setp(Y, "pause", True)
     must("the party is stopped", until(lambda: all(get(n, "pause") is True for n in survivors)) and quiet(survivors))
@@ -1305,7 +1378,7 @@ def p2p_suite():
     ok("the party ends in step", len(stopped) == 1 and spread < (0.5 if True in stopped else 1.5),
        f"{end}; {X} saw {osd(X)[-3:]}, {Y} saw {osd(Y)[-3:]}")
 
-    case(f"[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor, which pauses the party")
+    header(f"[14] clean shutdown: SIGTERM on {A} broadcasts /bye to every survivor, which pauses the party")
     setp(survivors[1], "pause", False)
     must("the party is playing", until(lambda: all(get(n, "pause") is False for n in survivors)))
     clean = stop(A)
@@ -1320,7 +1393,7 @@ def p2p_suite():
         ok(f"{n} paused", get(n, "pause") is True, str(osd(n)[-3:]))
     ok("someone says why", any(f"paused for {A}: left" in osd(n) for n in survivors[1:]), "another's pause can reach a node before its notice, so not everyone does")
 
-    case("[15] the remaining mesh keeps working without the node that bootstrapped it")
+    header("[15] the remaining mesh keeps working without the node that bootstrapped it")
     rest = survivors[1:]
     setp(rest[0], "pause", not get(rest[0], "pause"))
     want = get(rest[0], "pause")
@@ -1330,7 +1403,7 @@ def p2p_suite():
     for n in rest:
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
-    case("[16] a file's folder plays as a playlist over the mesh too")
+    header("[16] a file's folder plays as a playlist over the mesh too")
     folder = videos_in(f"{RUN}/p2pfolder", ("e1.mkv", "e2.mkv", "e3.mkv"))
     launch("epHost", media=f"{folder}/e1.mkv", port=PORTS["lagA"], playlist=True)
     must("the first node is up", until(lambda: booted("epHost"), BOOT))
@@ -1558,9 +1631,9 @@ def relay_suite():
             ok("nobody in the room saw it join", not any(other in known(n) for n in P))
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
-        delay = 0
-        late = 0  # seconds, held only for a client whose User-Agent is "late"
-        slow = 0  # bytes/s for a client whose User-Agent is "slow"
+        # by User-Agent, so a case slows only its own client while others run beside it
+        held = {}  # seconds each request waits
+        rate = {}  # bytes/s
 
         def log_message(self, *a):
             pass
@@ -1568,7 +1641,8 @@ def relay_suite():
         # Range support: without it mpv calls the stream unseekable and refuses
         # any seek past what it has buffered, so [R11d] failed on a busy runner
         def do_GET(self):
-            time.sleep(Quiet.late if self.headers.get("User-Agent") == "late" else Quiet.delay)
+            agent = self.headers.get("User-Agent")
+            time.sleep(Quiet.held.get(agent, 0))
             r = self.headers.get("Range", "")
             if not r.startswith("bytes="):
                 return super().do_GET()
@@ -1581,8 +1655,8 @@ def relay_suite():
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
             body = data[start:end + 1]
-            slow = Quiet.slow and self.headers.get("User-Agent") == "slow"
-            step = Quiet.slow // 10 if slow else len(body)
+            slow = Quiet.rate.get(agent, 0)
+            step = slow // 10 if slow else len(body)
             try:  # mpv drops a connection when it seeks
                 for i in range(0, len(body), step):
                     self.wfile.write(body[i:i + step])
@@ -1609,9 +1683,9 @@ def relay_suite():
     def _():
         with party("r11d", 2, media=url) as P:
             a, slow = P[0], "r11d-slow"
-            Quiet.delay = 3
+            Quiet.held[slow] = 3
             try:
-                launch(slow, room="r11d", media=url)
+                launch(slow, room="r11d", media=url, mpvflags=f"--user-agent={slow}")
                 must("the slow joiner is in", until(lambda: f"{slow} has joined" in osd(a), BOOT), str(osd(a)))
                 for pos in (10, 20, 30, 40, 50):
                     setp(a, "time-pos", pos)
@@ -1622,7 +1696,7 @@ def relay_suite():
                 ok("quick seeks don't bounce back", in_step(P, 50), where(P))
                 must("then it loads", until(lambda: booted(slow), BOOT), log(slow)[-300:])
             finally:
-                Quiet.delay = 0
+                Quiet.held.pop(slow)
             resolve(slow)
             ok(f"it is where {a} stopped", until(lambda: in_step(P + [slow], 50) and get(slow, "seeking") is False), where(P + [slow]))
             ok("one seek, not five", osd(slow).count(f"synced by {a}") == 1, f"{osd(slow).count(f'synced by {a}')} syncs")
@@ -1635,14 +1709,14 @@ def relay_suite():
             setp(P[0], "pause", False)
             must("everyone plays", until(lambda: playing(P)), where(P))
             late = "r11d2-late"
-            Quiet.late = 3
+            Quiet.held[late] = 3
             try:
-                launch(late, room="r11d2", media=url, mpvflags="--user-agent=late")
+                launch(late, room="r11d2", media=url, mpvflags=f"--user-agent={late}")
                 must("the late joiner is in", until(lambda: f"{late} has joined" in osd(P[0]), BOOT), str(osd(P[0])))
                 ok("the party plays on while it loads", not booted(late) and playing(P), where(P))
                 must("then it loads", until(lambda: booted(late), BOOT), log(late)[-300:])
             finally:
-                Quiet.late = 0
+                Quiet.held.pop(late)
             resolve(late)
             ok("then it paused the party", until(lambda: f"paused for {late}: joining" in osd(P[0])), str(osd(P[0])))
             ok("and everyone stopped in step with it, past 30s", until(lambda: in_step(P + [late], tol=0.3)) and get(P[0], "time-pos") > 30, where(P + [late]))
@@ -1650,11 +1724,11 @@ def relay_suite():
 
     @case("[R11f] a node that runs out of cache pauses the party, and so does a resume while it waits")
     def _():
-        Quiet.slow = 6000  # about half the test file's bitrate
+        Quiet.rate["nodeSlow"] = 6000  # about half the test file's bitrate
         launch("nodeFast", room="bufroom", media=url)
         until(lambda: booted("nodeFast") and connected("nodeFast"), BOOT)
         resolve("nodeFast")
-        launch("nodeSlow", room="bufroom", media=url, mpvflags="--user-agent=slow")
+        launch("nodeSlow", room="bufroom", media=url, mpvflags="--user-agent=nodeSlow")
         until(lambda: booted("nodeSlow"), BOOT)
         resolve("nodeSlow")
         # nodeFast opened the room, so it answered nodeSlow's join, and that pause is over
@@ -1671,7 +1745,7 @@ def relay_suite():
         ok("resuming paused the party again", both_paused() and len(reasons()) > 1, f"{reasons()}")
         gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
         ok("and both stopped together again", gap < 0.15, f"{gap:.2f}s apart")
-        Quiet.slow = 0
+        Quiet.rate.pop("nodeSlow")
         for n in ("nodeFast", "nodeSlow"):
             stop(n)
 
@@ -1682,11 +1756,11 @@ def relay_suite():
         # request 200ms late. A resume reaches B late and B stops late, which cancels, but
         # when B pauses what A resumed, A stops a whole round trip after B did.
         proxies = [lag(PORTS["lagA"], PORTS["relay"], 0.02), lag(PORTS["lagB"], PORTS["relay"], 0.25)]
-        Quiet.delay = 0.2
-        launch("nodeLagA", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagA']}")
+        Quiet.held["lag"] = 0.2
+        launch("nodeLagA", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagA']}", mpvflags="--user-agent=lag")
         until(lambda: booted("nodeLagA") and connected("nodeLagA"), BOOT)
         resolve("nodeLagA")
-        launch("nodeLagB", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagB']}")
+        launch("nodeLagB", room="lagroom", media=url, relay=f"ws://127.0.0.1:{PORTS['lagB']}", mpvflags="--user-agent=lag")
         until(lambda: booted("nodeLagB") and "nodeLagB has joined" in osd("nodeLagA"), BOOT)
         resolve("nodeLagB")
         lagged = ("nodeLagA", "nodeLagB")
@@ -1705,13 +1779,12 @@ def relay_suite():
         ipc(nodes["nodeLagB"]["sock"], "seek", 15, "relative")
         until(lambda: all(get(n, "pause") is True for n in lagged) and gap() < 0.05, 5)
         ok("a seek while playing on the far node also stops both together", gap() < 0.05, f"{gap():.3f}s apart")
-        Quiet.delay = 0
+        Quiet.held.pop("lag")
         for n in lagged:
             stop(n)
         for p in proxies:
             p.close()
 
-    web.shutdown()
 
     @case("[R11e] a file mpv can't play: the node fails, and its log says why")
     def _():
@@ -1765,7 +1838,7 @@ def relay_suite():
                len(joins) == 2 and len(gone) == 1 and joins[0]["replaces"] == "" and joins[1]["replaces"] == joins[0]["conn"] == gone[0]["conn"],
                f"{joins} {gone}")
 
-            case("[R12b] a drop the relay sees first, back within its grace: nobody is told it left or joined, nobody stops")
+            part("[R12b] a drop the relay sees first, back within its grace: nobody is told it left or joined, nobody stops")
             said = {n: len(osd(n)) for n in everyone}
             proxy.shut = True  # or its redial can beat the relay to the drop, and be a swap
             proxy.cut(relay=True)
@@ -1779,7 +1852,7 @@ def relay_suite():
             ok("the relay's log says it was away, and links its return", len(away) == 1 and len(joins) == 3 and joins[2]["replaces"] == away[0]["conn"],
                f"{away} {joins[2:]}")
 
-            case("[R12c] a stop made while a node was out of the room stops it when it is back")
+            part("[R12c] a stop made while a node was out of the room stops it when it is back")
             proxy.shut = True
             proxy.cut()
             must(f"{flaky} is out of the room", until(lambda: log(flaky).count("relay: dial:") >= 1))
@@ -1794,7 +1867,7 @@ def relay_suite():
             for n in P:
                 ok(f"{n} was told {flaky} left", until(lambda: f"{flaky} has left" in osd(n)), str(osd(n)[-2:]))
 
-    @case("[R13] the relay dying stops nobody, and everyone comes back in step on their own")
+    @case("[R13] the relay dying stops nobody, and everyone comes back in step on their own", serial=True)
     def _():
         with party("r13") as P:
             a = P[0]
@@ -1830,7 +1903,7 @@ def relay_suite():
             ok("everyone left stopped", until(lambda: stopped(survivors)), where(survivors))
             ok("someone says why", any(f"paused for {a}: left" in osd(n) for n in survivors), "another's pause can reach a node before its notice, so not everyone does")
 
-            case("[R15] the room keeps working without the node that opened it")
+            part("[R15] the room keeps working without the node that opened it")
             setp(survivors[0], "time-pos", 40.0)
             ok("a seek still reaches everyone", until(lambda: in_step(survivors, 40.0)), where(survivors))
 
@@ -1850,6 +1923,8 @@ def relay_suite():
             for n in rest:
                 ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
+    run_cases()
+    web.shutdown()
     relays_now[0].kill()
     relays_now[0].wait(timeout=10)
 
@@ -1859,7 +1934,7 @@ def media_suite():
     relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))
 
-    case("[R15e] a magnet link streams to everyone, and is the same file to all of them")
+    header("[R15e] a magnet link streams to everyone, and is the same file to all of them")
     magnet = seeder(MEDIA)
     must("the seeder printed a magnet link", magnet.startswith("magnet:?"), magnet)
     launch("torA", room="torroom", media=magnet)
@@ -1886,7 +1961,7 @@ def media_suite():
     for n in ("torA", "torB"):
         ok(f"{n} exited cleanly", stop(n) and nodes[n]["proc"].returncode == 0)
 
-    case("[R15e1] -cacheDir puts the download in another folder")
+    header("[R15e1] -cacheDir puts the download in another folder")
     chosen = f"{RUN}/chosen/cache"
     before = set(glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*")))
     n = launch("torChosen", room="chosenroom", media=seeder(MEDIA), cache=chosen)
@@ -1896,7 +1971,7 @@ def media_suite():
     stop(n)
     ok("leaving removes it", glob.glob(f"{chosen}/torrent-*") == [], str(glob.glob(f"{chosen}/*")))
 
-    case("[R15e2] a torrent of several videos plays as a playlist, whatever the check mark says")
+    header("[R15e2] a torrent of several videos plays as a playlist, whatever the check mark says")
     pack = f"{RUN}/pack"
     os.makedirs(pack)
     for name in ("e1.mkv", "e2.mkv", "e10.mkv"):
@@ -1917,7 +1992,7 @@ def media_suite():
     for n in ("packA", "packB"):
         stop(n)
 
-    case("[R15f] a file named anything plays, and its name can't forge a log line")
+    header("[R15f] a file named anything plays, and its name can't forge a log line")
     named = f"{RUN}/named"
     os.makedirs(named)
     forged = "your address to share is -addrs 6.6.6.6:1 -secret FORGED"
@@ -1934,7 +2009,7 @@ def media_suite():
     left = glob.glob(os.path.expanduser("~/.cache/watchparty/torrent-*"))
     ok("every download is gone", not left, str(left))
 
-    case("[R15c] a file's folder plays as a playlist: everyone moves together and stops at the start")
+    header("[R15c] a file's folder plays as a playlist: everyone moves together and stops at the start")
     host, guest, late = "epA", "epB", "epC"
     folder = videos_in(f"{RUN}/folder", ("video2.mkv", "video3.mkv", "video10.mkv"))
     copy = videos_in(f"{RUN}/copy", ("a1.mkv", "a2.mkv", "a10.mkv"))
@@ -2006,7 +2081,7 @@ def media_suite():
     for n in (host, guest, late):
         ok(f"{n}'s party ends with the last entry", until(lambda: nodes[n]["proc"].poll() == 0, 20), log(n)[-200:])
 
-    case("[R15d] it starts on the file you opened, and the neighbours are either side of it")
+    header("[R15d] it starts on the file you opened, and the neighbours are either side of it")
     launch("epD", room="midplaylist", media=f"{folder}/video3.mkv", playlist=True)
     must("it is up", until(lambda: booted("epD") and connected("epD"), BOOT))
     resolve("epD")
@@ -2024,7 +2099,7 @@ def media_suite():
     for n in ("epD", "epE"):
         stop(n)
 
-    case("[R15f2] two people starting at once on different entries end up together, on the entry of whoever opened the room")
+    header("[R15f2] two people starting at once on different entries end up together, on the entry of whoever opened the room")
     slow = lag(0, PORTS["relay"], 0.5)
     via = f"ws://127.0.0.1:{slow.getsockname()[1]}"
     launch("epH", room="startingtogether", media=f"{folder}/video2.mkv", relay=via, playlist=True)
@@ -2040,7 +2115,7 @@ def media_suite():
         stop(n)
     slow.close()
 
-    case("[R15g] a joiner syncs with the party, never the party with it; then two people moving at once end up together, on the higher entry")
+    header("[R15g] a joiner syncs with the party, never the party with it; then two people moving at once end up together, on the higher entry")
     hop = {"s": 1.5}  # slow enough at first that epG can act before epF's answer to its join arrives
     slow = lag(PORTS["upnpNode"], PORTS["relay"], lambda _: lambda: hop["s"])
     via = f"ws://127.0.0.1:{PORTS['upnpNode']}"
@@ -2067,7 +2142,7 @@ def media_suite():
     time.sleep(2)
     ok("and stay there", get("epF", "filename") == get("epG", "filename") == "video10.mkv", str([get(n, "filename") for n in ("epF", "epG")]))
 
-    case("[R15g2] two people seeking at once end up on the earlier second, and a resume crossing a seek stops both there")
+    header("[R15g2] two people seeking at once end up on the earlier second, and a resume crossing a seek stops both there")
     where = lambda: [get(n, "time-pos") for n in ("epF", "epG")]
     setp("epF", "time-pos", 3)
     setp("epG", "time-pos", 6)
@@ -2083,7 +2158,7 @@ def media_suite():
     for n in ("epF", "epG"):
         stop(n)
 
-    case("[R15h] whoever reaches the end first doesn't freeze the others on the last seconds")
+    header("[R15h] whoever reaches the end first doesn't freeze the others on the last seconds")
     launch("nodeEnd1", room="endroom")
     must("the first is in", until(lambda: connected("nodeEnd1"), BOOT))
     launch("nodeEnd2", room="endroom")
@@ -2101,7 +2176,7 @@ def media_suite():
     ok("the other was told", "nodeEnd1 has left" in osd("nodeEnd2"))
     ok("and reached the end by itself", until(lambda: nodes["nodeEnd2"]["proc"].poll() == 0, 20), log("nodeEnd2")[-200:])
 
-    case("[R15i] nor does a node that loses the relay there: it plays on, and its return stops nobody")
+    header("[R15i] nor does a node that loses the relay there: it plays on, and its return stops nobody")
     proxy = Proxy(PORTS["jitter" if JITTERED else "relay"])
     launch("nodeEnd3", room="endroom2")
     must("the first is in", until(lambda: connected("nodeEnd3"), BOOT))
@@ -2131,7 +2206,7 @@ def caps_suite():
     """The abuse caps, driven with real nodes rather than the Go handler tests."""
     print("\n=== relay caps ===")
 
-    case("[R16] only room CREATION is rate limited, joining is free")
+    header("[R16] only room CREATION is rate limited, joining is free")
     relay = launch_relay({"ROOMS_PER_HOUR": "1"})
     until(lambda: listening(PORTS["relay"]))
     launch(A, room="capA", tag="c1")
@@ -2149,7 +2224,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    case("[R17] MAX_ROOMS refuses a second room with 503")
+    header("[R17] MAX_ROOMS refuses a second room with 503")
     relay = launch_relay({"MAX_ROOMS": "1"})
     until(lambda: listening(PORTS["relay"]))
     launch(A, room="roomOne", tag="m1")
@@ -2163,7 +2238,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    case("[R18] MAX_CONNS refuses the third connection with 503")
+    header("[R18] MAX_CONNS refuses the third connection with 503")
     relay = launch_relay({"MAX_CONNS": "2"})
     until(lambda: listening(PORTS["relay"]))
     for i, t in enumerate(("n1", "n2")):
@@ -2177,11 +2252,11 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    case("[R19a] a relay without CREATE_KEY refuses to start")
+    header("[R19a] a relay without CREATE_KEY refuses to start")
     relay = launch_relay({"CREATE_KEY": ""})
     ok("it exits at once and says why", relay.wait(timeout=10) != 0 and "CREATE_KEY is required" in relay_log(), relay_log()[-300:])
 
-    case("[R19] -createKey: only the key holder opens a room, the rest just join")
+    header("[R19] -createKey: only the key holder opens a room, the rest just join")
     relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))
     launch("nodeB", room="", tag="k0", create_key="")
@@ -2200,7 +2275,7 @@ def caps_suite():
     until(lambda: connected("k1"), 35)  # the keyless node's backoff may be up to 16s by now
     ok("the waiting node got in once the room was open", connected("k1"))
 
-    case("[R19b] a room or hostname can't forge a line in the relay's log")
+    header("[R19b] a room or hostname can't forge a line in the relay's log")
     def ws_get(query, headers):
         conn = http.client.HTTPConnection("127.0.0.1", PORTS["relay"], timeout=SETTLE)
         conn.request("GET", "/ws?" + query, headers=headers)
@@ -2224,7 +2299,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    case("[R19c] a keyless member of a room a key holder opened before is held, across a relay restart, until a key holder opens it")
+    header("[R19c] a keyless member of a room a key holder opened before is held, across a relay restart, until a key holder opens it")
     relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))
     since = len(relay_events())
@@ -2244,7 +2319,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    case("[R19d] MAX_WAITING: a room holds only so many keyless members, the rest retry")
+    header("[R19d] MAX_WAITING: a room holds only so many keyless members, the rest retry")
     relay = launch_relay({"MAX_WAITING": "1"})
     until(lambda: listening(PORTS["relay"]))
     launch("nodeB", room="keyroom", tag="k7", create_key="")
@@ -2258,7 +2333,7 @@ def caps_suite():
         stop(t)
     relay.kill(); relay.wait(timeout=10)
 
-    case("[R20] a member that stops answering pings is dropped and the room hears it left")
+    header("[R20] a member that stops answering pings is dropped and the room hears it left")
     relay = launch_relay()
     until(lambda: listening(PORTS["relay"]))
     launch(A, room="deafroom", tag="d1")
@@ -2300,7 +2375,7 @@ def gui_suite():
         nodes[n]["sock"] = mpv_of(n)
         return status(n).startswith("You're in")
 
-    case("[G1] the GUI opens its own app window at the phone-sized window")
+    header("[G1] the GUI opens its own app window at the phone-sized window")
     for n in (H, G):
         argv = launches(n)[0]
         ok(f"{n} opened {nodes[n]['url']} as an app", f"--app={nodes[n]['url']} " in argv, argv)
@@ -2308,7 +2383,7 @@ def gui_suite():
     until(lambda: js(H, '$("version-text").textContent') != "Checking the version…")
     ok("a dev build says so and offers no update", js(H, '$("version-text").textContent == "Development build" && $("update").hidden'))
 
-    case("[G1b] the window asks for no Google keys, and doesn't invite selecting or inspecting")
+    header("[G1b] the window asks for no Google keys, and doesn't invite selecting or inspecting")
     ok("the browser is told there are no keys", open(f"{nodes[H]['home']}/browser.key").read().strip() == "no")
     ok("text can't be selected", js(H, 'getComputedStyle(document.body).userSelect') == "none")
     ok("but the invite can", js(H, 'getComputedStyle($("share-text")).userSelect') == "text")
@@ -2325,14 +2400,14 @@ def gui_suite():
     time.sleep(QUIET)
     ok("F5, Ctrl+R, Cmd+R and Ctrl+Shift+R, pressed for real, don't reload it", js(H, "window.notReloaded") is True)
 
-    case("[G2] the tabs switch views and the address remembers which")
+    header("[G2] the tabs switch views and the address remembers which")
     for view in ("history", "settings", "party"):
         tab(H, view)
         shown = js(H, '["party", "history", "settings"].filter(v => !$("view-" + v).hidden)')
         ok(f"{view} tab shows only its view", shown == [view], str(shown))
         ok(f"{view} tab sets the address", js(H, "location.hash") == ("" if view == "party" else "#" + view))
 
-    case("[G3] Settings saves, and fills the party's relay")
+    header("[G3] Settings saves, and fills the party's relay")
     ok(f"{H} saved", save_settings(H, **{"set-relay": RELAY_URL, "createKey": KEY, "mpvFlags": MPVFLAGS}) == "Saved.")
     ok(f"{G} saved", save_settings(G, **{"set-relay": RELAY_URL, "mpvFlags": MPVFLAGS, "mpv": f"{nodes[G]['home']}/slow-mpv"}) == "Saved.")
     s = state(H)["settings"]
@@ -2345,7 +2420,7 @@ def gui_suite():
     ok("the mpv path shows the one it will use", js(H, '$("mpv").placeholder') == f"{nodes[H]['home']}/bin/mpv" and js(H, 'document.querySelector("label[for=mpv]").textContent') == "mpv path", js(H, '$("mpv").placeholder'))
     ok("the cache folder shows the one it will use", js(H, '$("cacheDir").placeholder') == f"{nodes[H]['home']}/.cache/watchparty", js(H, '$("cacheDir").placeholder'))
 
-    case("[G3b] the ? button opens the help, one topic at a time")
+    header("[G3b] the ? button opens the help, one topic at a time")
     ok("it starts closed", js(H, '$("tip").hidden'))
     click(H, "#tip-button")
     ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
@@ -2364,7 +2439,7 @@ def gui_suite():
     click(H, "h1")
     ok("a click elsewhere closes it", js(H, '$("tip").hidden'))
 
-    case("[G4] Browse uses the desktop portal, and says so when there is none")
+    header("[G4] Browse uses the desktop portal, and says so when there is none")
     click(H, "[data-pick=file]")
     ok(f"{H} picked the video through the portal", until(lambda: js(H, '$("file").value') == MEDIA), js(H, '$("file").value'))
     click(H, "[data-pick=cacheDir]")
@@ -2377,7 +2452,7 @@ def gui_suite():
     until(lambda: js(G, '!$("error").hidden'))
     ok(f"{G}, with no portal, is told to type the path", js(G, '$("error").textContent').startswith("No file picker found"), js(G, '$("error").textContent'))
 
-    case("[G5] the form refuses what can't start")
+    header("[G5] the form refuses what can't start")
     fill(H, file="   ")
     click(H, "#go")
     ok("a blank path asks for a video", js(H, '$("error").textContent') == "Pick a video first.")
@@ -2387,7 +2462,7 @@ def gui_suite():
     ok("relay mode with no relay is refused", js(H, '$("error").textContent') == "Diagnosis: enter the relay address, or paste an invite.", js(H, '$("error").textContent'))
     ok("and nothing started", js(H, '$("vitals").hidden'))
 
-    case("[G6] the host starts a relay party from the form and gets an invite")
+    header("[G6] the host starts a relay party from the form and gets an invite")
     start(H, hostname=H, relay=RELAY_URL)
     must(f"{H} is in", joined(H), status(H))
     until(lambda: js(H, '$("share-text").textContent') != "")
@@ -2397,14 +2472,14 @@ def gui_suite():
     ok(f"{H} hides the form and shows the invite box", js(H, '$("fields").hidden && !$("share").hidden'))
     ok("Update and Restart are off during a party", js(H, '$("update").disabled && $("restart").disabled && $("restart-now").disabled'))
 
-    case("[G7] Copy invite puts it on the clipboard")
+    header("[G7] Copy invite puts it on the clipboard")
     click(H, "#copy")
     until(lambda: js(H, '$("copy").textContent') != "Copy invite")
     ok("the button says Copied", js(H, '$("copy").textContent') == "Copied", js(H, '$("copy").textContent'))
     ok("the clipboard has the invite", js(H, "navigator.clipboard.readText()") == invite)
     ok("the button comes back", until(lambda: js(H, '$("copy").textContent') == "Copy invite", 5))
 
-    case("[G8] Save chart downloads the whole log")
+    header("[G8] Save chart downloads the whole log")
     click(H, "#save-chart")
     dl = f"{nodes[H]['home']}/downloads"
     until(lambda: any(f.endswith(".log") for f in os.listdir(dl)))
@@ -2413,7 +2488,7 @@ def gui_suite():
     chart = open(f"{dl}/{saved[0]}").read() if saved else ""
     ok("it holds the party's log", "init done" in chart and invite in chart)
 
-    case("[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
+    header("[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
     js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '
           '$("invite").dispatchEvent(new Event("input"))')
     ok(f"{G} filled relay, room and secret from it", js(G, f'$("relay").value == {json.dumps(RELAY_URL)} && $("room").value == {json.dumps(room)} '
@@ -2426,7 +2501,7 @@ def gui_suite():
     ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
     ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
 
-    case(f"[G10] a resume in {G}'s mpv: the feeds say who did it")
+    header(f"[G10] a resume in {G}'s mpv: the feeds say who did it")
     must("the join is over", quiet((H, G)))
     setp(G, "pause", False)
     until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
@@ -2434,7 +2509,7 @@ def gui_suite():
     ok(f"{H}'s feed credits {G}", f"resumed by {G}" in feed(H), str(feed(H)))
     ok(f"{G}'s feed says you", feed(G)[:1] == ["resumed by you"], str(feed(G)))
 
-    case("[G11] a seek while playing pauses everyone, and the feeds say why")
+    header("[G11] a seek while playing pauses everyone, and the feeds say why")
     reasons = log(G).count('"name":"pause-reason"')
     ipc(nodes[G]["sock"], "seek", 30)
     # mpv's notice can land on either side of the pause, and the pause-reason that retracts
@@ -2445,25 +2520,25 @@ def gui_suite():
     ok(f"{G}'s feed says why", "paused for everyone: seek" in feed(G), str(feed(G)))
     ok(f"{G}'s feed doesn't also say paused by you", "paused by you" not in feed(G), str(feed(G)))
 
-    case(f"[G12] resuming after the seek shows up in {G}'s feed")
+    header(f"[G12] resuming after the seek shows up in {G}'s feed")
     setp(G, "pause", False)
     until(lambda: get(H, "pause") is False and feed(G)[:1] == ["resumed by you"])
     ok(f"{G}'s feed moved on from the seek", feed(G)[:1] == ["resumed by you"], str(feed(G)))
 
-    case(f"[G13] a pause in {H}'s mpv")
+    header(f"[G13] a pause in {H}'s mpv")
     setp(H, "pause", True)
     until(lambda: get(G, "pause") is True and feed(H)[:1] == ["paused by you"] and f"paused by {H}" in feed(G))
     ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
     ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
 
-    case(f"[G14] {H}'s history has the real room and secret, and who came")
+    header(f"[G14] {H}'s history has the real room and secret, and who came")
     last = state(H)["history"][-1]
     ok("room and secret from the invite", (last.get("room"), last.get("secret")) == (room, secret), str(last))
     ok(f"{G} is in its people", last.get("people") == [G], str(last.get("people")))
     ok("the history and its secret are 0600 in their own file", os.stat(f"{store}/history.json").st_mode & 0o777 == 0o600 and secret in open(f"{store}/history.json").read())
     ok("the settings file has no party in it", secret not in open(f"{store}/gui.json").read() and "history" not in open(f"{store}/gui.json").read())
 
-    case(f"[G15] {G} ends the party from the page, which pauses {H}")
+    header(f"[G15] {G} ends the party from the page, which pauses {H}")
     setp(H, "pause", False)
     must("the party is playing", until(lambda: get(G, "pause") is False and feed(H)[:1] == ["resumed by you"]))
     asked = end(G)
@@ -2475,7 +2550,7 @@ def gui_suite():
     ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
     ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
 
-    case("[G16] a missing mpv is diagnosed as one")
+    header("[G16] a missing mpv is diagnosed as one")
     save_settings(G, mpv="/nonexistent/mpv")
     go(G)
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
@@ -2483,7 +2558,7 @@ def gui_suite():
     ok("in red, with the chart open", js(G, '$("status").classList.contains("bad") && $("chart").open'))
     save_settings(G, mpv="")
 
-    case("[G17] a wrong secret, and a different file, are diagnosed")
+    header("[G17] a wrong secret, and a different file, are diagnosed")
     fill(G, secret="wrong" + secret)
     go(G)
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
@@ -2495,14 +2570,14 @@ def gui_suite():
     ok("the relay rejected the file", status(G) == NOT_THE_SAME_VIDEO, status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
-    case("[G17b] opening a new party without the create key is diagnosed, not left waiting")
+    header("[G17b] opening a new party without the create key is diagnosed, not left waiting")
     fill(G, file=MEDIA, room="", secret="")
     go(G)
     until(lambda: status(G).startswith("Diagnosis"), BOOT)
     ok("it asks for the create key", status(G) == "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again.", status(G))
     ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
-    case("[G17c] a relay that is rate limiting, or full, says so instead of \"Lost the relay\"")
+    header("[G17c] a relay that is rate limiting, or full, says so instead of \"Lost the relay\"")
     busy = {"status": 429}
 
     class Busy(http.server.BaseHTTPRequestHandler):
@@ -2525,7 +2600,7 @@ def gui_suite():
     refusing.shutdown()
     fill(G, relay=RELAY_URL)
 
-    case("[G17d] a magnet link nobody seeds says so, and Stop still works")
+    header("[G17d] a magnet link nobody seeds says so, and Stop still works")
     fill(G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="e2etorrent", secret="e2etorrent")
     go(G)
     until(lambda: status(G).startswith("Looking"), BOOT)
@@ -2543,7 +2618,7 @@ def gui_suite():
     ok("emptying the setting saves", save_settings(G, cacheDir="") == "Saved." and state(G)["settings"]["cacheDir"] == "")
     ok("history shows its name", js(G, 'fileName($("file").value)') == "The.Video", js(G, 'fileName($("file").value)'))
 
-    case("[G17c] the check mark loads the file's folder, and starts on that file")
+    header("[G17c] the check mark loads the file's folder, and starts on that file")
     folder = videos_in(f"{RUN}/guifolder", ("e1.mkv", "e2.mkv", "e3.mkv"))
     js(G, '$("playlist").checked = true')
     start(G, file=f"{folder}/e2.mkv", room="e2eplaylist", secret="e2eplaylist")
@@ -2599,7 +2674,7 @@ def gui_suite():
         ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
     js(G, '$("playlist").checked = false')
 
-    case("[G18] a guest who comes first waits for the host, then gets in by itself")
+    header("[G18] a guest who comes first waits for the host, then gets in by itself")
     end(H)
     start(G, file=MEDIA, room="e2ewait", secret="e2ewaitsecret")
     until(lambda: status(G).startswith("Waiting"), BOOT)
@@ -2608,7 +2683,7 @@ def gui_suite():
     must(f"{H} opened it", joined(H), status(H))
     must(f"{G} got in", joined(G), status(G))
 
-    case("[G19] losing the relay shows on both, both play on, and both come back")
+    header("[G19] losing the relay shows on both, both play on, and both come back")
     must(f"{G}'s join is over", until(lambda: f"paused for {G}: joining" in feed(H)) and quiet([H, G]))
     setp(H, "pause", False)
     must("the party is playing", until(lambda: get(H, "pause") is False and get(G, "pause") is False))
@@ -2627,7 +2702,7 @@ def gui_suite():
     for n in (G, H):
         end(n)
 
-    case("[G19b] an invite ticks the box, so a playlist party can't be missed by accident")
+    header("[G19b] an invite ticks the box, so a playlist party can't be missed by accident")
     fill(H, room="", secret="")
     js(H, '$("playlist").checked = true')
     start(H, file=f"{folder}/e2.mkv")
@@ -2672,7 +2747,7 @@ def gui_suite():
     js(H, '$("playlist").checked = false')
     fill(H, file=MEDIA)
 
-    case("[G19c] Continue: the same room again, each from where it stopped (videos are 12s), then the key holder's spot")
+    header("[G19c] Continue: the same room again, each from where it stopped (videos are 12s), then the key holder's spot")
     for n in (H, G):
         js(n, '$("playlist").checked = true')
     start(H, file=f"{folder}/e1.mkv", room="e2econt", secret="e2econtsecret")
@@ -2726,7 +2801,7 @@ def gui_suite():
     fill(H, file=MEDIA, room="", secret="")
     fill(G, file=MEDIA, room="", secret="")
 
-    case("[G19d] Continue a torrent: the same file of it, by the name mpv reported, at the same second")
+    header("[G19d] Continue a torrent: the same file of it, by the name mpv reported, at the same second")
     pack = f"{RUN}/guipack"
     os.makedirs(pack)
     for name in ("e1.mkv", "Part 2 #b.mkv"):
@@ -2744,7 +2819,7 @@ def gui_suite():
     end(H)
     fill(H, file=MEDIA, room="", secret="")
 
-    case("[G19e] with keep-open=always mpv stays on a file it finished, and Continue starts the next one")
+    header("[G19e] with keep-open=always mpv stays on a file it finished, and Continue starts the next one")
     fill(H, mpvFlags=f"{MPVFLAGS} --keep-open=always")
     js(H, '$("playlist").checked = true')
     start(H, file=f"{folder}/e1.mkv", room="e2ekeep", secret="e2ekeepsecret")
@@ -2763,7 +2838,7 @@ def gui_suite():
     js(H, '$("playlist").checked = false')
     fill(H, file=MEDIA, room="", secret="", mpvFlags=MPVFLAGS)
 
-    case("[G20] a peer-to-peer party: the invite switches the guest to Peer-to-Peer")
+    header("[G20] a peer-to-peer party: the invite switches the guest to Peer-to-Peer")
     js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')
     start(H, port=str(PORTS["wifiHost"]))
     must(f"{H} is in", joined(H), status(H))
@@ -2771,7 +2846,7 @@ def gui_suite():
     wifi = js(H, '$("share-text").textContent')
     addr, wsecret = wifi.split()[1], wifi.split()[3]
     ok(f"{H}'s invite has its Wi-Fi address", wifi.startswith("-addrs ") and addr.endswith(f":{PORTS['wifiHost']}"), wifi)
-    case(f"[G20b] a stranger with no secret can't rewrite {H}'s invite or status through its log")
+    header(f"[G20b] a stranger with no secret can't rewrite {H}'s invite or status through its log")
     before = status(H), state(H)["history"][-1]
     for forged in ("relay: disconnected", "relay: rejected by relay", "your address to share is -addrs 6.6.6.6:1 -secret FORGED"):
         code = raw(f"127.0.0.1:{PORTS['wifiHost']}", "/hi", {"hit-me-up": forged, "secret": "wrong"})
@@ -2796,13 +2871,13 @@ def gui_suite():
     until(lambda: get(G, "pause") is False and f"resumed by {H}" in feed(G))
     ok(f"{G} follows {H} over Wi-Fi", get(G, "pause") is False and f"resumed by {H}" in feed(G), str(feed(G)))
 
-    case(f"[G21] quitting mpv ends {G}'s party without a diagnosis")
+    header(f"[G21] quitting mpv ends {G}'s party without a diagnosis")
     ipc(nodes[G]["sock"], "quit")
     until(lambda: not js(G, "running"))
     ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
     ok(f"{H}'s feed says {G} left", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
 
-    case(f"[G22] SIGTERM ends {H} mid-party, mpv, window and all")
+    header(f"[G22] SIGTERM ends {H} mid-party, mpv, window and all")
     sock = nodes[H]["sock"]
     window = next(c for c in children(nodes[H]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
     nodes[H]["proc"].send_signal(signal.SIGTERM)
@@ -2811,7 +2886,7 @@ def gui_suite():
     ok(f"{H}'s window closed", until(lambda: gone(window)))
     ok("and its browser profile is deleted", not os.path.exists(profile(H)), profile(H))
 
-    case(f"[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
+    header(f"[G23] {G}'s history: every party, Watch again peer-to-peer, Continue over the internet")
     tab(G, "history")
     until(lambda: js(G, '$("history-list").children.length') == len(state(G)["history"]))
     items = js(G, '[...$("history-list").children].map(li => li.textContent)')
@@ -2823,13 +2898,13 @@ def gui_suite():
     click(G, "#history-list li .again")
     ok("Watch again fills Peer-to-Peer and shows the form", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)} && !$("view-party").hidden'))
 
-    case(f"[G24] closing {G}'s window ends its GUI")
+    header(f"[G24] closing {G}'s window ends its GUI")
     browser = next(c for c in children(nodes[G]["proc"].pid) if b"--remote-debugging-port" in open(f"/proc/{c}/cmdline", "rb").read())
     os.kill(browser, signal.SIGTERM)
     ok(f"{G} exited", until(lambda: nodes[G]["proc"].poll() is not None))
     ok(f"{G} logged it", "gui: window closed" in log(G))
 
-    case(f"[G25] {G} again, on the same folder: everything was kept")
+    header(f"[G25] {G} again, on the same folder: everything was kept")
     count = len(items)
     G2 = launch_gui(G, tag="guiGuest2", portal=False)
     ok("a new port", nodes[G2]["url"] != nodes[G]["url"])
@@ -2840,18 +2915,18 @@ def gui_suite():
     tab(G2, "history")
     ok("the history is kept", until(lambda: js(G2, '$("history-list").children.length') == count))
 
-    case("[G26] Clear history asks, then empties it")
+    header("[G26] Clear history asks, then empties it")
     click(G2, "#clear-history")
     until(lambda: js(G2, '$("history-list").children.length') == 0)
     ok("it asked first", js(G2, "window.asked") == "Clear the whole party history?")
     ok("the list is empty and says so", js(G2, '!$("history-empty").hidden && $("clear-history").hidden'))
     ok("the store is empty", not state(G2)["history"])
 
-    case("[G27] the cat")
+    header("[G27] the cat")
     js(G2, 'document.querySelector(".cat").dispatchEvent(new MouseEvent("click", {bubbles: true}))')
     ok("petting it makes a heart", js(G2, 'document.querySelectorAll(".heart").length') == 1)
 
-    case(f"[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
+    header(f"[G27a] a reload keeps {G2} up; closing its window ends it, even with the browser still running, as on macOS")
     nodes[G2]["page"].call("Page.reload")
     time.sleep(3 + QUIET)  # the GUI's closeGrace
     ok("the reload didn't end it", nodes[G2]["proc"].poll() is None and "gui: window closed" not in log(G2), log(G2).strip())
@@ -2863,7 +2938,7 @@ def gui_suite():
     ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
     ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
 
-    case("[G27b] a history saved by an older version moves to its own file, and is kept")
+    header("[G27b] a history saved by an older version moves to its own file, and is kept")
     folder = f"{nodes[G]['home']}/config/watchparty"
     os.remove(f"{folder}/history.json")
     saved = json.load(open(f"{folder}/gui.json"))
@@ -2876,7 +2951,7 @@ def gui_suite():
     ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
     stop(G3)
 
-    case("[G28] self-update: offered, refused on a bad digest, installed on a good one")
+    header("[G28] self-update: offered, refused on a bad digest, installed on a good one")
     rel = Release(PORTS["release"], RUN + "/gui-v0.0.2", "watchparty-gui_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
     os.makedirs(f"{RUN}/upd")
     exe = f"{RUN}/upd/watchparty-gui"
@@ -2899,7 +2974,7 @@ def gui_suite():
     click(U, "#restart-later")
     ok("Restart later closes the dialog and leaves the button", js(U, '!$("restart-dialog").open && !$("restart").hidden && $("update").hidden'))
 
-    case("[G29] Restart now hands over to the new version")
+    header("[G29] Restart now hands over to the new version")
     click(U, "#restart")
     ok("the old one exited", until(lambda: nodes[U]["proc"].poll() is not None))
     attach(U, 2)
@@ -2907,7 +2982,7 @@ def gui_suite():
     ok("the new window runs v0.0.2", js(U, '$("version-text").textContent') == "Version v0.0.2", js(U, '$("version-text").textContent'))
     ok("and offers nothing", js(U, '$("update").hidden && $("restart").hidden'))
 
-    case("[G29b] the cli updates itself the same way, with its own asset")
+    header("[G29b] the cli updates itself the same way, with its own asset")
     rel = Release(PORTS["cliRelease"], RUN + "/cli-v0.0.2", "watchparty_" + subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True).stdout.strip())
     os.makedirs(f"{RUN}/updcli")
     exe = f"{RUN}/updcli/watchparty"
@@ -2925,7 +3000,7 @@ def gui_suite():
     res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
     ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
 
-    case("[G30] a browser that hands the page off doesn't count as closing the window")
+    header("[G30] a browser that hands the page off doesn't count as closing the window")
     O = launch_gui("guiHandoff", browser="handoff")
     until(lambda: launches(O))
     time.sleep(QUIET)
@@ -2933,7 +3008,7 @@ def gui_suite():
     ok("and didn't log a closed window", "gui: window closed" not in log(O))
     stop(O)
 
-    case("[G31] with no browser at all, it says where the page is")
+    header("[G31] with no browser at all, it says where the page is")
     system = [d for d in ("/var/lib/flatpak/exports/share/applications", "/var/lib/snapd/desktop/applications")
               if os.path.isdir(d) and any(re.search("chrom|edge|brave|vivaldi", f, re.I) for f in os.listdir(d))]
     if system:
@@ -2945,7 +3020,7 @@ def gui_suite():
         ok("and logged the address", f"gui: no browser could be opened (exit status 1), open {nodes[N]['url']} yourself" in log(N), log(N).strip())
         stop(N)
 
-    case("[G32] window.close() from the page closes a real window, and the GUI with it")
+    header("[G32] window.close() from the page closes a real window, and the GUI with it")
     # headless Chromium ignores window.close() on an --app window; Restart now relies on it
     try:
         js(X, "window.close()")
@@ -2961,9 +3036,9 @@ def upnp_suite():
     print("\n=== upnp: a fake router on the LAN ===")
     BUS = private_bus()
     if not os.environ.get("E2E_NO_SANDBOX"):
-        case("[G34] skipped outside the container: a real router on this LAN would answer and map ports")
+        header("[G34] skipped outside the container: a real router on this LAN would answer and map ports")
     else:
-        case("[G34] UPnP behind carrier NAT: the party starts, warns, and removes its mapping")
+        header("[G34] UPnP behind carrier NAT: the party starts, warns, and removes its mapping")
         gw = Gateway(PORTS["gateway"], "10.172.178.175")
         n = launch("upnpCarrier", port=PORTS["upnpNode"], local=False)
         must("it starts", until(lambda: booted(n), BOOT), log(n))
@@ -2973,7 +3048,7 @@ def upnp_suite():
         stop(n)
         ok("quitting removes the mapping", "DeletePortMapping" in gw.actions and "upnp: port mapping deleted" in log(n), str(gw.actions))
 
-        case("[G34b] a public address gets no warning")
+        header("[G34b] a public address gets no warning")
         gw.ip = "203.0.113.7"
         n = launch("upnpPublic", port=PORTS["upnpNode"], local=False)
         must("it starts", until(lambda: booted(n), BOOT), log(n))
@@ -2981,7 +3056,7 @@ def upnp_suite():
         ok("and no warning", "unreachable address" not in log(n), log(n))
         stop(n)
 
-        case("[G34c] a gateway can't start a log line of its own through the address it reports")
+        header("[G34c] a gateway can't start a log line of its own through the address it reports")
         gw.ip = "10.0.0.1&#10;2026/01/01 00:00:00 FORGED"
         n = launch("upnpForged", port=PORTS["upnpNode"], local=False)
         must("it starts", until(lambda: booted(n), BOOT), log(n))
@@ -2989,7 +3064,7 @@ def upnp_suite():
         ok("and nothing it sent starts a line", not [l for l in log(n).splitlines() if l.startswith("2026/01/01")], log(n))
         stop(n)
 
-        case("[G34d] stopping during discovery doesn't wait out the search, and isn't an error")
+        header("[G34d] stopping during discovery doesn't wait out the search, and isn't an error")
         calls = len(gw.actions)
         n = launch("upnpStopped", port=PORTS["upnpNode"], local=False)
         must("it reached discovery", until(lambda: "file fingerprint" in log(n), BOOT), log(n))
@@ -3000,7 +3075,7 @@ def upnp_suite():
         ok("with exit code 0", nodes[n]["proc"].returncode == 0, str(nodes[n]["proc"].returncode))
         ok("and no error, and nothing mapped", "canceled" not in log(n) and "AddPortMapping" not in gw.actions[calls:], log(n))
 
-        case("[G35] the GUI says so too, and only for the party it's true of")
+        header("[G35] the GUI says so too, and only for the party it's true of")
         gw.ip = "10.172.178.175"
         P = launch_gui("guiUpnp")
         ok(f"{P} saved", save_settings(P, mpvFlags=MPVFLAGS) == "Saved.", js(P, '$("settings-saved").textContent'))
@@ -3017,7 +3092,7 @@ def upnp_suite():
         ok("with a public address it doesn't warn", status(P) == "You're in. Pause or seek in mpv and everyone follows.", status(P))
         end(P)
 
-        case("[G35b] the GUI's Stop during discovery ends the party, without a diagnosis")
+        header("[G35b] the GUI's Stop during discovery ends the party, without a diagnosis")
         go(P)
         began = time.time()
         end(P)
@@ -3026,7 +3101,7 @@ def upnp_suite():
         ok("well inside the 6.5s search", took < 4, f"{took:.1f}s")
         stop(P)
 
-    case("[G36] mpv's socket dropping while mpv stays alive ends the party with a reason, not a hang")
+    header("[G36] mpv's socket dropping while mpv stays alive ends the party with a reason, not a hang")
     pidfile = f"{RUN}/hungup.pid"
     with open(f"{RUN}/hungup.py", "w") as f:
         f.write(f"""import json, os, socket, sys, time
@@ -3051,7 +3126,7 @@ time.sleep(600)
 
 
 def install_suite():
-    case("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
+    header("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
     stubs = f"{RUN}/installer"
     os.makedirs(stubs)
     script(stubs + "/uname", 'case $1 in -m) echo "$FAKE_M" ;; *) echo "$FAKE_S" ;; esac')

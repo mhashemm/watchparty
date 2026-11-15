@@ -29,19 +29,25 @@ real 30s ping and 10s pong timeout.
     `go()` waits for the new run, or a check reads the last party's status.
     `confirm()` is replaced on attach; `window.asked` holds the question.
   - Cleanup kills each GUI's process group: its browser, its mpv, a restarted GUI.
-- URL cases share one HTTP server (`Quiet`). To slow one client only, use `late` and
-  `--user-agent=late`; `delay` holds every client, which made `[R11d2]` flaky.
+- URL cases share one HTTP server (`Quiet`). Slow only your own client, by its user
+  agent: `Quiet.held[agent]` seconds per request or `Quiet.rate[agent]` bytes/s, and
+  launch it with `--user-agent=<agent>`. A delay for every client made `[R11d2]` flaky,
+  and now it would slow the cases running beside it.
 - Slow networks come from `lag(port, target, delay)`, a TCP proxy. P2P can't use it,
   since peers dial the address each node advertises.
 
 ## Writing a case
 
 - **A case starts from a party of its own, never from what the last case left**
-  (`relay` so far; the other phases still run as one story). `@case("[R3] ...")` runs
-  the function under it as the case; `with party("r3") as P:` gives it nodes in a fresh
-  room, booted, connected, paused and quiet, and stops every `r3-*` node at the end. A
-  case sets up what it checks itself (seek to 30s, then play) instead of inheriting it.
-  Each party costs about a second, its `quiet()`.
+  (`relay` so far; the other phases still run as one story, under `header()`).
+  `@case("[R3] ...")` adds the function under it as a case; `with party("r3") as P:`
+  gives it nodes in a fresh room, booted, connected, paused and quiet, and stops every
+  `r3-*` node at the end. A case sets up what it checks itself (seek to 30s, then play).
+- **Cases run side by side**, `CASES_AT_ONCE` at a time, when the phase calls
+  `run_cases()`; each one's output comes out whole when it ends. So a case touches
+  nothing another uses: its own room, node names, user agent and ports. One that must
+  touch what all share, like killing the relay (`[R13]`), is `@case(..., serial=True)`
+  and runs alone after the rest. A labelled step inside a case is `part("[R12b] ...")`.
 - **Positions are compared only stopped: `in_step(P, at)`**, everyone paused on one file
   and one second. Each node starts playing when the resume reaches it, so playing nodes
   are apart by however long that took. For "nothing moved" while playing, compare
