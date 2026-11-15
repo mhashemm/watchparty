@@ -662,6 +662,19 @@ func TestAChangeMadeWhileTakingAStateIsNotUndone(t *testing.T) {
 			}
 		})
 	})
+	t.Run("a seek while playing, before the peer's seek is sent", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.plays()
+			n.mpvWasTold()
+			n.mpvAnswersLate()
+			n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"yes","at":40}`))
+			n.mpvObeys(propertyChangeLine(pause, "no", 0), `{"event":"seek"}`, mpvAt(90), `{"event":"playback-restart"}`)
+			if got := said(n.broadcasts()); !slices.Contains(got, "pause-reason=seek") {
+				t.Fatalf("broadcast %q, want its seek while playing to stop the party", got)
+			}
+		})
+	})
 	t.Run("the seek after a stop", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{})

@@ -446,7 +446,7 @@ func (c *Client) fileLoaded() {
 	if held := c.heldSeek; held != "" {
 		// still on its way until seekTo has marked the seek, or target sees neither
 		pos, _ := strconv.ParseFloat(held, 64)
-		c.heldSeek, c.peerSeek, c.landing, c.seeks = "", true, true, append(c.seeks, pos)
+		c.heldSeek, c.landing, c.seeks = "", true, append(c.seeks, pos)
 		c.later = append(c.later, func() {
 			if err := c.seekTo(held); err != nil {
 				log.Println("seek after loading:", err)
@@ -1360,11 +1360,15 @@ func (c *Client) mark(pos float64) bool {
 		c.heldSeek = strconv.FormatFloat(pos, 'f', 6, 64)
 		return false
 	}
-	c.peerSeek, c.landing = true, true
+	c.landing = true
 	return true
 }
 
+// seekReq sends mpv a seek this node applies. From now until mpv's playback-restart, a seek
+// event is this one (peerSeek): set when it is planned, it swallowed the person's own seek
+// made while mpv still answered an earlier step.
 func (c *Client) seekReq(pos float64) error {
+	c.peerSeek = true
 	return c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
 }
 
