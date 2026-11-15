@@ -42,11 +42,13 @@ type node struct {
 
 // setup is how a node starts. The zero value opened the party, with one file, paused at 0.
 type setup struct {
-	names  []string // a playlist of these
-	start  int      // the entry it opens on
-	at     float64  // where a continued party stopped
-	joiner bool     // it didn't open the room: its stamp is unheard until a member answers
-	first  []string // what mpv says before the file's values, as while it still loads
+	names  []string          // a playlist of these
+	start  int               // the entry it opens on
+	at     float64           // where a continued party stopped
+	joiner bool              // it didn't open the room: its stamp is unheard until a member answers
+	first  []string          // what mpv says before the file's values, as while it still loads
+	heard  []IncomingMessage // what the party says while mpv loads
+	late   bool              // mpv answers sets late from the start (mpvAnswersLate)
 }
 
 // newNode starts a node and returns once its file has loaded: what joining said, it still
@@ -55,7 +57,7 @@ func newNode(t *testing.T, s setup) *node {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, late: s.late}
 	t.Cleanup(func() { cancel(); ours.Close(); theirs.Close() })
 	go func() {
 		for {
@@ -76,6 +78,9 @@ func newNode(t *testing.T, s setup) *node {
 	go n.mpv(theirs, observes, s)
 	if !s.joiner {
 		n.in <- IncomingMessage{Opened: true}
+	}
+	for _, m := range s.heard {
+		n.in <- m
 	}
 	c, err := New(ctx, cancel, ours, n.out, n.in, s.names, s.start, s.at)
 	if err != nil {
@@ -280,6 +285,17 @@ func (n *node) mpvWasTold() []string {
 	return told
 }
 
+// seeksIn is the seeks among what it told mpv.
+func seeksIn(told []string) []string {
+	out := []string{}
+	for _, s := range told {
+		if strings.HasPrefix(s, "set_property time-pos") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // said is its broadcasts as name=data, the shortest way to compare them.
 func said(events []Event) []string {
 	out := []string{}
@@ -294,6 +310,16 @@ func (n *node) plays() {
 	n.t.Helper()
 	n.mpvSays(propertyChangeLine(pause, "no", 0))
 	n.broadcasts()
+}
+
+// takes is the node taking a member's state, stopped or playing from at, with its stamp,
+// and mpv doing it. Nothing it said or told mpv is left to read.
+func (n *node) takes(stamp int, paused bool, at float64) {
+	n.t.Helper()
+	n.peerSays("z", fmt.Sprintf(`{"stamp":%d,"at":%f,"event":"property-change","name":"pause","data":"%s"}`, stamp, at, map[bool]string{true: "yes", false: "no"}[paused]))
+	n.mpvObeys()
+	n.broadcasts()
+	n.mpvWasTold()
 }
 
 // nodeTest runs f in a bubble of its own.
