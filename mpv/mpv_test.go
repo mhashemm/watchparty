@@ -42,7 +42,10 @@ func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 		applied:  map[string]string{},
 		seen:     map[string]bool{},
 		missed:   map[string]bool{},
-		conn:     &connection{scanner: sc, pending: map[int64]chan Response{}, closed: make(chan struct{})},
+		conn:     &connection{scanner: sc, closed: make(chan struct{})},
+		inbox:    newMailbox[input](),
+		replies:  map[int64]outcome{},
+		waiting:  map[int64]bool{},
 	}
 }
 
@@ -115,8 +118,9 @@ func TestARequestOnAClosedSocketIsErrClosed(t *testing.T) {
 	nc, peer := net.Pipe()
 	defer peer.Close()
 	nc.Close()
-	conn := &connection{conn: nc, pending: map[int64]chan Response{}, closed: make(chan struct{})}
-	if err := conn.do("observe_property_string", 1, pause); !errors.Is(err, ErrClosed) {
+	c := newTestClient(nil, nil)
+	c.conn.conn = nc
+	if err := c.do("observe_property_string", 1, pause); !errors.Is(err, ErrClosed) {
 		t.Fatalf("got %v, want ErrClosed", err)
 	}
 }
@@ -256,57 +260,75 @@ func TestAppliedPauseIsNotRebroadcast(t *testing.T) {
 	})
 }
 
-// Two do() calls in flight must each get their own reply, even when mpv answers
-// them out of order. A shared response channel let one steal the other's reply
-// and leave it to time out.
+// Two do() calls in flight must each get their own reply, in whichever order mpv answers
+// them. A shared response channel let one steal the other's reply and leave it to time
+// out. Two are in flight when one waits inside the other: a line mpv sends meanwhile starts
+// a second request (as a stall starts pauseParty's) before the first is answered.
 func TestConcurrentRequestsGetTheirOwnResponse(t *testing.T) {
+	t.Parallel()
+	for _, reversed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("answered reversed %v", reversed), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ours, theirs := net.Pipe()
+				defer ours.Close()
+				defer theirs.Close()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				c := newTestClient(make(chan []byte, 1), bufio.NewScanner(ours))
+				c.ctx, c.conn.conn = ctx, ours
+				go func() {
+					sc := bufio.NewScanner(theirs)
+					ids := []int64{}
+					for len(ids) < 2 && sc.Scan() {
+						req := Request{}
+						json.Unmarshal(sc.Bytes(), &req)
+						ids = append(ids, req.RequestId)
+						if len(ids) == 1 {
+							fmt.Fprint(theirs, `{"event":"seek"}`+"\n")
+						}
+					}
+					if reversed {
+						slices.Reverse(ids)
+					}
+					for _, id := range ids {
+						fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", id)
+					}
+				}()
+				errs := make(chan error, 2)
+				c.later = append(c.later, func() {
+					// the second, once the line that comes while the first waits is handled
+					c.later = append(c.later, func() { errs <- c.do("get_property", pause) })
+					errs <- c.do("get_property", pause)
+				})
+				go c.watch()
+				for range 2 {
+					if err := <-errs; err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestTheLoopStopsWithTheParty(t *testing.T) {
 	t.Parallel()
 	ours, theirs := net.Pipe()
 	defer ours.Close()
 	defer theirs.Close()
-	c := newTestClient(make(chan []byte, 1), bufio.NewScanner(ours))
-	c.conn.conn = ours
-	go c.watch()
-
-	go func() {
-		sc := bufio.NewScanner(theirs)
-		ids := []int64{}
-		for len(ids) < 2 && sc.Scan() {
-			req := Request{}
-			json.Unmarshal(sc.Bytes(), &req)
-			ids = append(ids, req.RequestId)
-		}
-		for i := len(ids) - 1; i >= 0; i-- {
-			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", ids[i])
-		}
-	}()
-
-	errs := make(chan error, 2)
-	for range 2 {
-		go func() { errs <- c.conn.do("get_property", pause) }()
-	}
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestProcessIncomingEventsStopsWithTheParty(t *testing.T) {
-	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(nil, nil)
-	c.ctx = ctx
+	c := newTestClient(nil, bufio.NewScanner(ours))
+	c.ctx, c.incoming = ctx, make(chan IncomingMessage)
 	done := make(chan struct{})
 	go func() {
-		c.ProcessIncomingEvents(make(chan IncomingMessage))
+		c.watch()
 		close(done)
 	}()
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("ProcessIncomingEvents outlived the party")
+		t.Fatal("the loop outlived the party")
 	}
 }
 
@@ -379,6 +401,165 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 		synctest.Wait()
 		if cancelled.Load() {
 			t.Fatal("cancelled the party before the video was ready")
+		}
+	})
+}
+
+// An answer mpv sent before hanging up is an answer: the command was done, whichever the
+// node reads first, as both come in the socket's order.
+func TestAnAnswerBeforeAHangUpCountsAsDone(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			if sc.Scan() {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			}
+			theirs.Close()
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		c := newTestClient(make(chan []byte, 1), bufio.NewScanner(ours))
+		c.ctx, c.conn.conn = ctx, ours
+		errs := make(chan error, 1)
+		c.later = append(c.later, func() { errs <- c.do(setProperty, pause, true) })
+		go c.watch()
+		if err := <-errs; err != nil {
+			t.Fatalf("got %v, want the command done", err)
+		}
+	})
+}
+
+// What the transport has handed over comes before mpv's next line, whatever ran first: a
+// message sent before the file loaded is heard while it loads, so an older one isn't
+// applied after a newer one, as if its sender had fallen behind (#89, at the loop).
+func TestWhatTheTransportHandedOverComesBeforeMpvsNextLine(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		defer theirs.Close()
+		told := make(chan string, 16)
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			for sc.Scan() {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				told <- strings.TrimSpace(fmt.Sprintln(req.Command...))
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			}
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		c := newTestClient(make(chan []byte, 8), bufio.NewScanner(ours))
+		c.ctx, c.conn.conn, c.paused, c.stamp, c.opening = ctx, ours, true, unheard, true
+		incoming := make(chan IncomingMessage, 2)
+		incoming <- peer("a", `{"stamp":5,"at":30,"name":"pause","data":"yes"}`)
+		incoming <- peer("b", stamped(3, seekEvent(10)))
+		c.incoming = incoming
+		// both are waiting when the loop first looks: the line in its inbox, the messages
+		// in the transport's channel
+		c.inbox.put(input{line: []byte(mpvAt(0))})
+		go c.watch()
+		synctest.Wait()
+		got := []string{}
+		for len(told) > 0 {
+			got = append(got, <-told)
+		}
+		if fmt.Sprint(got) != "[set_property time-pos 30.000000]" {
+			t.Fatalf("told mpv %q, want only the newer of the two", got)
+		}
+	})
+}
+
+// The party starts only with everything observed: an observe mpv refuses, even after the
+// file loaded, fails New, or the party would run without a rule it relies on (a stall
+// unobserved never pauses anyone).
+func TestNewFailsWhenAnObserveIsRefusedAfterTheFileLoaded(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		defer theirs.Close()
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			for n := 1; sc.Scan(); n++ {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				if n == 4 {
+					fmt.Fprintf(theirs, `{"request_id":%d,"error":"property not found"}`+"\n", req.RequestId)
+					continue
+				}
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+				if n == 3 {
+					fmt.Fprint(theirs, mpvAt(0))
+				}
+			}
+		}()
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); err == nil || err.Error() != "property not found" {
+			t.Fatalf("got %v, want the refused observe", err)
+		}
+	})
+}
+
+// mpv closing after it took every observe, with the file never loaded (a URL that never
+// opens), still ends New with ErrClosed, at once.
+func TestNewReturnsWhenMpvGoesAwayBeforeTheFileLoads(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			for n := 1; n <= 5 && sc.Scan(); n++ {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			}
+			theirs.Close()
+		}()
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		start := time.Now()
+		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
+			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
+		}
+	})
+}
+
+// mpv that loads the file and quits right after (a person closing it at once) started the
+// party: New succeeds, and the party then learns mpv is gone. The load came first on the
+// socket, so it counts first.
+func TestNewSucceedsWhenMpvLoadsThenQuitsAtOnce(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			for n := 1; n <= 5 && sc.Scan(); n++ {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+			}
+			fmt.Fprint(theirs, mpvAt(0))
+			theirs.Close()
+		}()
+		cancelled := atomic.Bool{}
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if _, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); err != nil {
+			t.Fatalf("got %v, want the party started", err)
+		}
+		synctest.Wait()
+		if !cancelled.Load() {
+			t.Fatal("mpv quit and the party never heard")
 		}
 	})
 }
@@ -2290,6 +2471,50 @@ func TestARefusedStepLeavesNoMarker(t *testing.T) {
 				t.Fatalf("broadcast %q, want nothing: it is leaving", said(got))
 			}
 		})
+	})
+}
+
+// A member's change is applied to its end, each step as mpv takes it, before the next
+// message is weighed: weighed in between, it would meet a node half way there.
+func TestAMessageWaitsForTheChangeBeforeIt(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvAnswersLate()
+		n.peerSays("a", `{"stamp":5,"at":30,"name":"pause","data":"yes"}`)
+		n.peerSays("b", `{"stamp":6,"at":40,"name":"pause","data":"yes"}`)
+		n.mpvObeys()
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property pause true show-text paused by a 5000 set_property time-pos 30.000000 set_property time-pos 40.000000]" {
+			t.Fatalf("told mpv %q, want a's change whole, then b's", got)
+		}
+	})
+}
+
+// mpv hanging up while a member's change waits on it asks nobody anything, then or later:
+// the node is leaving, and a request it never got an answer to is not a refusal.
+func TestMpvGoneMidChangeAsksNobodyEvenLater(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvQuitsOn(setProperty)
+		n.peerSays("a", `{"stamp":3,"at":30,"name":"pause","data":"yes"}`)
+		time.Sleep(10 * time.Second)
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q, want nothing: it is leaving", said(got))
+		}
+	})
+}
+
+// A message that comes while a joiner applies what it heard waits for all of it: the seek
+// to where it continues, the party's state, the join, and the notices heard while loading.
+func TestAMessageDuringTheJoinWaitsForTheNotices(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := newNode(t, setup{at: 40, joiner: true, late: true, heard: []IncomingMessage{peer("a", `{"name":"show-text","data":"heard"}`)}})
+		n.peerSays("a", `{"name":"show-text","data":"later"}`)
+		n.mpvObeys()
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property time-pos 40.000000 show-text heard 5000 show-text later 5000]" {
+			t.Fatalf("told mpv %q, want the notice heard while loading first", got)
+		}
 	})
 }
 

@@ -89,17 +89,8 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 				}
 			}
 		}()
+		n.c.incoming = n.in
 		go n.c.watch()
-		go func() {
-			for {
-				select {
-				case m := <-n.in:
-					n.c.apply(m)
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
 		s.nodes = append(s.nodes, n)
 	}
 	return s

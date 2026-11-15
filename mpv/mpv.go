@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,41 +94,17 @@ type IncomingMessage struct {
 type connection struct {
 	conn    net.Conn
 	scanner *bufio.Scanner
-	mu      sync.Mutex
-	pending map[int64]chan Response
 	closed  chan struct{}
 }
 
-func (c *connection) wait(id int64) chan Response {
-	ch := make(chan Response, 1)
-	c.mu.Lock()
-	c.pending[id] = ch
-	c.mu.Unlock()
-	return ch
-}
-
-func (c *connection) done(id int64) {
-	c.mu.Lock()
-	delete(c.pending, id)
-	c.mu.Unlock()
-}
-
-func (c *connection) respond(res Response) bool {
-	c.mu.Lock()
-	ch, ok := c.pending[res.RequestId]
-	c.mu.Unlock()
-	if !ok {
-		return false
+// do sends mpv one command and waits for its answer on the loop, the node's one goroutine:
+// meanwhile it takes the inputs that come, as loop does, so mpv's lines are handled and a
+// transport message waits its turn (handle). Any other request's answer is kept for the do()
+// waiting on it. Never from another goroutine.
+func (c *Client) do(args ...any) error {
+	if c.gone {
+		return ErrClosed
 	}
-	select {
-	case ch <- res:
-		return true
-	default:
-		return false
-	}
-}
-
-func (c *connection) do(args ...any) error {
 	req := Request{
 		Command:   args,
 		RequestId: rand.Int63(),
@@ -136,27 +113,121 @@ func (c *connection) do(args ...any) error {
 	if err != nil {
 		return err
 	}
-	ch := c.wait(req.RequestId)
-	defer c.done(req.RequestId)
-	_, err = c.conn.Write(append(body, '\n'))
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrClosed, err)
+	id := req.RequestId
+	if c.out == nil {
+		c.out = newMailbox[request]()
+		go c.writer(c.out)
 	}
-	log.Printf("do: sent request: %s\n", body)
-
-	select {
-	case res := <-ch:
-		log.Printf("do: received response: [requestId=%d] [error=%s]\n", res.RequestId, res.Error)
-		if res.Error != "success" {
-			return errors.New(res.Error)
+	c.out.put(request{id: id, body: body})
+	c.waiting[id] = true
+	defer delete(c.waiting, id)
+	expire := time.AfterFunc(5*time.Second, func() { c.post(input{expired: id}) })
+	defer expire.Stop()
+	for {
+		if r, ok := c.replies[id]; ok {
+			delete(c.replies, id)
+			if r.unsent != nil {
+				return fmt.Errorf("%w: %v", ErrClosed, r.unsent)
+			}
+			if r.expired {
+				log.Printf("do: response timeout: [requestId=%d]\n", id)
+				return errTimeout
+			}
+			log.Printf("do: received response: [requestId=%d] [error=%s]\n", r.RequestId, r.Error)
+			if r.Error != "success" {
+				return errors.New(r.Error)
+			}
+			return nil
 		}
-		return nil
-	case <-c.closed:
-		return ErrClosed
-	case <-time.After(5 * time.Second):
-		log.Printf("do: response timeout: [requestId=%d]\n", req.RequestId)
-		return errTimeout
+		if c.gone {
+			return ErrClosed
+		}
+		in, ok := c.next()
+		if !ok {
+			return ErrClosed
+		}
+		c.handle(in)
 	}
+}
+
+// mailbox is the loop's inbox: what it is given, in the order given. Giving never waits,
+// so mpv's lines are read while the loop writes to mpv: a reader waiting on the loop while
+// the loop waits on mpv, and mpv on the reader, would wait forever.
+type mailbox[T any] struct {
+	mu    sync.Mutex
+	items []T
+	ready chan struct{}
+}
+
+func newMailbox[T any]() *mailbox[T] {
+	return &mailbox[T]{ready: make(chan struct{}, 1)}
+}
+
+func (m *mailbox[T]) put(v T) {
+	m.mu.Lock()
+	m.items = append(m.items, v)
+	m.mu.Unlock()
+	select {
+	case m.ready <- struct{}{}:
+	default:
+	}
+}
+
+func (m *mailbox[T]) poll() (T, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var v T
+	if len(m.items) == 0 {
+		return v, false
+	}
+	v = m.items[0]
+	m.items = m.items[1:]
+	return v, true
+}
+
+// request is one command on its way to mpv's socket.
+type request struct {
+	id   int64
+	body []byte
+}
+
+// writer writes requests to mpv's socket in order, so the loop never waits on mpv reading
+// it: a stalled mpv would make every peer wait. A write that fails comes back as an input.
+func (c *Client) writer(out *mailbox[request]) {
+	for {
+		r, ok := out.poll()
+		if !ok {
+			select {
+			case <-out.ready:
+				continue
+			case <-c.ctx.Done():
+				return
+			}
+		}
+		if _, err := c.conn.conn.Write(append(r.body, '\n')); err != nil {
+			c.post(input{unsent: r.id, err: err})
+			continue
+		}
+		log.Printf("do: sent request: %s\n", r.body)
+	}
+}
+
+// outcome is mpv's answer to one request, or none in 5s.
+type outcome struct {
+	Response
+	expired bool
+	unsent  error
+}
+
+// input is one thing that happened to this node: a line mpv sent, mpv's socket closing, a
+// request's 5s running out or its write failing, or a transport message.
+type input struct {
+	line    []byte
+	closed  bool
+	expired int64
+	unsent  int64
+	err     error
+	msg     *IncomingMessage
 }
 
 type Event struct {
@@ -196,8 +267,33 @@ type Client struct {
 	outgoing chan<- []byte
 	conn     *connection
 
-	// mu guards everything below, and is never held across conn.do
-	mu sync.Mutex
+	// the loop: the only goroutine that reads or writes what follows. It takes the
+	// transport's messages from incoming, everything else from inbox, in the order it came;
+	// a transport message waits in queue while another's change is still being applied
+	// (busy); later is what an input started that sends mpv a command, run once it is
+	// handled; replies are answers kept for the do() waiting on them
+	incoming <-chan IncomingMessage
+	inbox    *mailbox[input]
+	out      *mailbox[request]
+	queue    []IncomingMessage
+	busy     int
+	later    []func()
+	replies  map[int64]outcome
+	waiting  map[int64]bool
+	// gone: mpv's socket closed
+	gone bool
+	// opening: the first file hasn't loaded yet. early is the newest state heard meanwhile,
+	// by stamp, and notices the rest, in order
+	opening bool
+	early   *IncomingMessage
+	best    state
+	notices []IncomingMessage
+	// snap is what Position and Finished read from another goroutine
+	snap atomic.Pointer[snapshot]
+	// opened is New's one answer: nil once the first file loaded and mpv took every
+	// observe (observed), or why it never will
+	opened   chan error
+	observed bool
 
 	// what mpv last reported
 	paused   bool
@@ -286,8 +382,6 @@ func (c *Client) isEcho(event Event) bool {
 // this node's own change, and whatever must follow it. Each is tagged under the lock that
 // decided it, so its stamp is the one that change was given.
 func (c *Client) handleEvent(event Event, line []byte) [][]byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	// mpv's own order, to read after a run; not its position while playing, one per frame
 	if event.Name != timePos || c.paused {
 		log.Printf("Watch: mpv said: %s\n", line)
@@ -353,11 +447,11 @@ func (c *Client) fileLoaded() {
 		// still on its way until seekTo has marked the seek, or target sees neither
 		pos, _ := strconv.ParseFloat(held, 64)
 		c.heldSeek, c.peerSeek, c.landing, c.seeks = "", true, true, append(c.seeks, pos)
-		go func() {
+		c.later = append(c.later, func() {
 			if err := c.seekTo(held); err != nil {
 				log.Println("seek after loading:", err)
 			}
-		}()
+		})
 	}
 }
 
@@ -593,122 +687,231 @@ func position(name string, pos float64) []byte {
 
 func (c *Client) pauseParty(reason string) {
 	c.reason = reason
-	go func() {
+	c.later = append(c.later, func() {
 		err := c.pauseReq(true)
 		if err != nil {
 			log.Println("pauseParty:", err)
-			c.mu.Lock()
 			c.reason = ""
-			c.mu.Unlock()
 			return
 		}
 		c.showText("paused for everyone: " + reason)
-	}()
+	})
 }
 
+// watch runs the loop until mpv's socket closes: a reader hands it mpv's lines in order,
+// and it handles them and everything else that comes, one at a time.
 func (c *Client) watch() error {
-	scanner := c.conn.scanner
-	for scanner.Scan() {
-		event := Event{}
-		err := json.Unmarshal(scanner.Bytes(), &event)
-		if err != nil {
-			log.Println("Watch: unmarshal:", err, scanner.Text())
-			continue
-		}
-		if event.RequestId > 0 && event.Error != "" {
-			if c.conn.respond(event.Response) {
-				log.Println("Watch: queued response:", scanner.Text())
-			} else {
-				log.Println("Watch: dropped response:", scanner.Text())
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := c.conn.scanner
+		for scanner.Scan() {
+			// the scanner reuses its buffer on the next Scan
+			if !c.post(input{line: bytes.Clone(scanner.Bytes())}) {
+				return
 			}
 		}
-		if event.EventType == "" {
-			continue
+		err = scanner.Err()
+		c.post(input{closed: true})
+	}()
+	c.runLater()
+	for !c.gone {
+		in, ok := c.next()
+		if !ok {
+			return c.ctx.Err()
 		}
-		for _, b := range c.handleEvent(event, bytes.Clone(scanner.Bytes())) {
-			select {
-			case c.outgoing <- b:
-				log.Printf("Watch: broadcasted event: %s\n", b)
-			case <-c.ctx.Done():
-				return c.ctx.Err()
-			}
-		}
+		c.handle(in)
 	}
-
-	return scanner.Err()
+	<-done
+	return err
 }
 
-// ProcessIncomingEvents drains incoming from the start, so peers never wait on a
-// file that is slow to load. Until it has loaded, only the latest pause and
-// time-pos are kept; position goes first because mpv starts paused.
-func (c *Client) ProcessIncomingEvents(incoming <-chan IncomingMessage) {
-	var newest *IncomingMessage
-	var best state
-	notices := []IncomingMessage{}
-	heard := func(e IncomingMessage) {
-		event := Event{}
-		err := json.Unmarshal(e.Event, &event)
-		if err != nil || !shared(event) {
-			notices = append(notices, e)
+// serve keeps taking inputs after mpv's socket closed, until the party ends: a peer still
+// never waits on this node.
+func (c *Client) serve() {
+	for {
+		in, ok := c.next()
+		if !ok {
 			return
 		}
-		// each says the party's whole state, so the newest is all there is to know
-		if s, err := c.stateOf(event); err == nil && (newest == nil || s.over(best) > 0) {
-			newest, best = &e, s
+		c.handle(in)
+	}
+}
+
+func (c *Client) post(in input) bool {
+	if c.ctx.Err() != nil {
+		return false
+	}
+	c.inbox.put(in)
+	return true
+}
+
+// next is the loop's next input. What the transport has handed over comes first: its
+// sender is done with it, so it came before whatever mpv says from here, and a message sent
+// before the file loaded is heard while it loads. Read on the loop itself, never by a
+// goroutine that would hold it a moment before passing it on.
+func (c *Client) next() (input, bool) {
+	for {
+		select {
+		case m := <-c.incoming:
+			return input{msg: &m}, true
+		default:
+		}
+		if in, ok := c.inbox.poll(); ok {
+			return in, true
+		}
+		select {
+		case m := <-c.incoming:
+			return input{msg: &m}, true
+		case <-c.inbox.ready:
+		case <-c.ctx.Done():
+			return input{}, false
 		}
 	}
-	for loading := true; loading; {
+}
+
+// handle is one input, with whatever it starts. The only rule for order: a transport
+// message is taken only when no other's change is still being applied, so each is applied
+// to its end, as mpv answers it, before the next; mpv's lines are handled meanwhile.
+func (c *Client) handle(in input) {
+	switch {
+	case in.closed:
+		c.gone = true
+		if c.opening {
+			c.open(ErrClosed)
+		}
+	case in.expired != 0:
+		if c.waiting[in.expired] {
+			c.replies[in.expired] = outcome{expired: true}
+		}
+	case in.unsent != 0:
+		if c.waiting[in.unsent] {
+			c.replies[in.unsent] = outcome{unsent: in.err}
+		}
+	case in.msg != nil:
+		if c.opening {
+			c.hear(*in.msg)
+		} else {
+			c.queue = append(c.queue, *in.msg)
+		}
+	default:
+		c.mpvSaid(in.line)
+	}
+	c.runLater()
+	if c.opening && c.seen[timePos] {
+		c.join()
+	}
+	for c.busy == 0 && len(c.queue) > 0 {
+		m := c.queue[0]
+		c.queue = c.queue[1:]
+		c.busy++
+		c.apply(m)
+		c.busy--
+	}
+	c.snapshot()
+}
+
+func (c *Client) runLater() {
+	for len(c.later) > 0 {
+		f := c.later[0]
+		c.later = c.later[1:]
+		f()
+	}
+}
+
+// open gives New its answer, once.
+func (c *Client) open(err error) {
+	select {
+	case c.opened <- err:
+	default:
+	}
+}
+
+// snapshot is what Position and Finished need, as of the last input.
+type snapshot struct {
+	current, entries int
+	pos, duration    float64
+}
+
+func (c *Client) snapshot() {
+	c.snap.Store(&snapshot{current: c.current, entries: len(c.names), pos: c.pos, duration: c.duration})
+}
+
+// mpvSaid is one line from mpv: an answer to a request, or an event.
+func (c *Client) mpvSaid(line []byte) {
+	event := Event{}
+	if err := json.Unmarshal(line, &event); err != nil {
+		log.Println("Watch: unmarshal:", err, string(line))
+		return
+	}
+	if event.RequestId > 0 && event.Error != "" {
+		if c.waiting[event.RequestId] {
+			c.replies[event.RequestId] = outcome{Response: event.Response}
+			log.Println("Watch: queued response:", string(line))
+		} else {
+			log.Println("Watch: dropped response:", string(line))
+		}
+	}
+	if event.EventType == "" {
+		return
+	}
+	for _, b := range c.handleEvent(event, line) {
 		select {
-		case e := <-incoming:
-			heard(e)
-		case <-c.ready:
-			loading = false
+		case c.outgoing <- b:
+			log.Printf("Watch: broadcasted event: %s\n", b)
 		case <-c.ctx.Done():
 			return
 		}
 	}
-	// select picks at random when the file loaded with messages still waiting: they
-	// arrived while it loaded, and one applied after the join is announced would be taken
-	// over the unheard stamp, however old
-	for waiting := true; waiting; {
-		select {
-		case e := <-incoming:
-			heard(e)
-		default:
-			waiting = false
-		}
+}
+
+// hear keeps what the transport delivers while the first file opens. Each pause and
+// time-pos says the party's whole state, so only the newest by stamp is kept; the rest
+// are notices, kept in order.
+func (c *Client) hear(e IncomingMessage) {
+	event := Event{}
+	err := json.Unmarshal(e.Event, &event)
+	if err != nil || !shared(event) {
+		c.notices = append(c.notices, e)
+		return
 	}
-	// a continued party seeks only the file it continues on, before the party's position
-	// is applied and before joining, so whatever the party says lands after it. Not
-	// --start: mpv applies it to every later entry too. If it fails, the file is at 0.
+	if s, err := c.stateOf(event); err == nil && (c.early == nil || s.over(c.best) > 0) {
+		c.early, c.best = &e, s
+	}
+}
+
+// join is the first file loaded: a continued party seeks only the file it continues on,
+// before the party's position is applied and before joining, so whatever the party says
+// lands after it. Not --start: mpv applies it to every later entry too. If it fails, the
+// file is at 0. Then the newest state heard while it opened, the join, the notices; all as
+// one transport message, so what comes meanwhile waits.
+func (c *Client) join() {
+	c.opening = false
+	if c.observed {
+		c.open(nil)
+	}
+	c.busy++
+	defer func() { c.busy-- }()
 	if c.resumeAt > 0 {
 		if err := c.seekTo(strconv.FormatFloat(c.resumeAt, 'f', 6, 64)); err != nil {
 			log.Println("continuing where it stopped:", err)
 		}
 	}
-	if newest != nil {
-		c.apply(*newest)
+	if c.early != nil {
+		c.apply(*c.early)
 	}
 	c.announce()
-	for _, e := range notices {
+	for _, e := range c.notices {
 		c.apply(e)
 	}
-	for {
-		select {
-		case e := <-incoming:
-			c.apply(e)
-		case <-c.ctx.Done():
-			return
-		}
-	}
+	c.early, c.notices = nil, nil
 }
 
 // announce joins the party: the members pause and answer with where they are, and this
 // node takes the first answer.
 func (c *Client) announce() {
-	c.mu.Lock()
 	c.stamp = unheard
-	c.mu.Unlock()
 	hello, _ := json.Marshal(Event{Name: joined})
 	select {
 	case c.outgoing <- hello:
@@ -727,7 +930,6 @@ func (c *Client) lost() error {
 // the party only for a state that isn't its own. A joiner that was never answered joins
 // again. Not while this node plays out the end: it would stop everyone just short of it.
 func (c *Client) back() {
-	c.mu.Lock()
 	joiner, finishing := c.stamp < 0, !c.paused && c.ending()
 	var check []byte
 	if !joiner && !finishing {
@@ -738,7 +940,6 @@ func (c *Client) back() {
 		check, _ = json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Check: true})
 		check = c.tag(check)
 	}
-	c.mu.Unlock()
 	switch {
 	case joiner:
 		c.announce()
@@ -752,9 +953,7 @@ func (c *Client) back() {
 
 func (c *Client) apply(e IncomingMessage) {
 	if e.Opened {
-		c.mu.Lock()
 		c.stamp = max(c.stamp, 1)
-		c.mu.Unlock()
 		return
 	}
 	if e.Lost {
@@ -787,9 +986,7 @@ func (c *Client) apply(e IncomingMessage) {
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case joined:
-			c.mu.Lock()
 			delete(c.missed, e.From)
-			c.mu.Unlock()
 			err = c.answer(e.HostName, "joining")
 		}
 	}
@@ -813,7 +1010,6 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 		return err
 	}
 	hostname := m.HostName
-	c.mu.Lock()
 	h := c.held()
 	over, told := s.over(h), c.by == m.From
 	// a resume reaching a node that plays: newer, this node missed the pause in between; a
@@ -838,7 +1034,6 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	case over > 0:
 		a = c.commit(s, m.From)
 	}
-	c.mu.Unlock()
 	switch {
 	case apart:
 		// each stops where it is, and the party settles on the earliest
@@ -921,13 +1116,11 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 			return err
 		}
 		left.stop = false
-		c.mu.Lock()
 		c.paused = true
-		c.mu.Unlock()
 		c.showText(fmt.Sprintf("paused by %s", hostname))
 	}
 	if a.moving {
-		if err = c.conn.do(setProperty, playlistPos, a.entry); err != nil {
+		if err = c.do(setProperty, playlistPos, a.entry); err != nil {
 			return err
 		}
 		left.moving = false
@@ -957,8 +1150,6 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 // reached, and take the user's own seek there for mpv's echo. One held for a file mpv never
 // opens is refused with the move.
 func (c *Client) release(a adoption) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if a.stop {
 		delete(c.applied, pause)
 	}
@@ -984,13 +1175,11 @@ func (c *Client) release(a adoption) {
 // where it is. A joiner only says where it is: it stops nobody, and only another joiner
 // can take it.
 func (c *Client) answer(hostname, reason string) error {
-	c.mu.Lock()
 	joiner, playing := c.stamp < 0, !c.paused
 	var where []byte
 	if joiner || !playing {
 		where = c.tag(position(timePos, c.held().at))
 	}
-	c.mu.Unlock()
 	if joiner {
 		select {
 		case c.outgoing <- where:
@@ -1027,15 +1216,12 @@ func (c *Client) answer(hostname, reason string) error {
 // change, and the resume that member already took from this node says it came late. A
 // joiner has no state to send yet, and a state taken from that member, it has.
 func (c *Client) chase(e IncomingMessage) error {
-	c.mu.Lock()
 	switch {
 	case e.Missed:
 		c.missed[e.From] = true
-		c.mu.Unlock()
 		return nil
 	case c.stamp < 0 || c.by == e.From:
 		// a joiner has no state yet; one taken from that member, it has
-		c.mu.Unlock()
 		c.reply(e.Reply, nil)
 		return nil
 	}
@@ -1045,7 +1231,6 @@ func (c *Client) chase(e IncomingMessage) error {
 	}
 	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Again: true})
 	again = c.tag(again)
-	c.mu.Unlock()
 	if c.reply(e.Reply, again) {
 		log.Printf("sent again, as %s missed something: %s\n", e.HostName, again)
 	}
@@ -1062,9 +1247,7 @@ func (c *Client) reply(to chan<- []byte, b []byte) bool {
 }
 
 func (c *Client) left(hostname string) error {
-	c.mu.Lock()
 	playing, ending := !c.paused, c.ending()
-	c.mu.Unlock()
 	if !playing || ending {
 		return nil
 	}
@@ -1080,15 +1263,13 @@ func (c *Client) entryName(i int) string {
 }
 
 func (c *Client) pauseReq(paused bool) error {
-	return c.conn.do(setProperty, pause, paused)
+	return c.do(setProperty, pause, paused)
 }
 
 // resume applies a peer's resume. One that reaches a node still waiting on its cache never
 // reaches mpv: the node stops the party again, with where and why.
 func (c *Client) resume(hostname string) error {
-	c.mu.Lock()
 	if !c.paused {
-		c.mu.Unlock()
 		return nil
 	}
 	if c.stalled {
@@ -1100,7 +1281,6 @@ func (c *Client) resume(hostname string) error {
 		for i, b := range out {
 			out[i] = c.tag(b)
 		}
-		c.mu.Unlock()
 		for _, b := range out {
 			select {
 			case c.outgoing <- b:
@@ -1111,20 +1291,15 @@ func (c *Client) resume(hostname string) error {
 		return c.showText("paused for everyone: still buffering")
 	}
 	c.applied[pause] = "no"
-	c.mu.Unlock()
 
 	err := c.pauseReq(false)
 	if err != nil {
 		// no echo is coming for a set mpv refused; if it only answered late, its report
 		// goes out as this node's own, which peers already in that state ignore
-		c.mu.Lock()
 		delete(c.applied, pause)
-		c.mu.Unlock()
 		return err
 	}
-	c.mu.Lock()
 	c.paused, c.landing = false, false
-	c.mu.Unlock()
 
 	c.showText(fmt.Sprintf("resumed by %s", hostname))
 	return nil
@@ -1135,9 +1310,7 @@ func (c *Client) seekTo(data string) error {
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
 	now := c.mark(pos)
-	c.mu.Unlock()
 	if !now {
 		return nil
 	}
@@ -1163,7 +1336,7 @@ func (c *Client) mark(pos float64) bool {
 }
 
 func (c *Client) seekReq(pos float64) error {
-	return c.conn.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
+	return c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
 }
 
 // target is where this node is, or where a seek it applied will land: a member that
@@ -1188,38 +1361,39 @@ func (c *Client) target() float64 {
 // endGraceSeconds of an entry's end that is the next entry's start: with keep-open=always
 // mpv stays on the finished one, and continuing there would only end it again.
 func (c *Client) Position() (int, float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.ending() {
-		return c.current, c.pos
+	s := c.snap.Load()
+	if !s.ending() {
+		return s.current, s.pos
 	}
-	return min(c.current+1, max(len(c.names)-1, 0)), 0
+	return min(s.current+1, max(s.entries-1, 0)), 0
 }
 
 // Finished is the last entry, or the only file, played to its end: nothing is left to
 // continue.
 func (c *Client) Finished() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ending() && c.current >= len(c.names)-1
+	s := c.snap.Load()
+	return s.ending() && s.current >= s.entries-1
 }
 
 func (c *Client) ending() bool {
-	return c.duration > 0 && c.duration-c.pos <= endGraceSeconds
+	return (&snapshot{pos: c.pos, duration: c.duration}).ending()
+}
+
+func (s *snapshot) ending() bool {
+	return s.duration > 0 && s.duration-s.pos <= endGraceSeconds
 }
 
 func (c *Client) showText(text string) error {
-	return c.conn.do(showText, text, showTextDurationSeconds*1000)
+	return c.do(showText, text, showTextDurationSeconds*1000)
 }
 
 // New wires up one mpv. names are its playlist entries in order, and nil for a single file;
 // start is the entry it opens on, which a peer's answer can arrive before mpv reports. A
-// continued party seeks that entry to at once it is open (see ProcessIncomingEvents).
+// continued party seeks that entry to at once it is open (see join).
 func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int, at float64) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
-		pending: map[int64]chan Response{},
 		closed:  make(chan struct{}),
 	}
 	client := &Client{
@@ -1235,9 +1409,32 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		current:  start,
 		resumeAt: at,
 		stamp:    unheard,
+		incoming: incoming,
+		inbox:    newMailbox[input](),
+		replies:  map[int64]outcome{},
+		waiting:  map[int64]bool{},
+		opening:  true,
+		opened:   make(chan error, 1),
 	}
+	client.snapshot()
 
-	go client.ProcessIncomingEvents(incoming)
+	// the loop's first step, once the reader runs: observing makes mpv say what it holds
+	events := []string{filename, pause, timePos, pausedForCache, duration}
+	if len(names) > 0 {
+		events = append(events, playlistPos)
+	}
+	client.later = append(client.later, func() {
+		for i, event := range events {
+			if err := client.do("observe_property_string", i+1, event); err != nil {
+				client.open(err)
+				return
+			}
+		}
+		client.observed = true
+		if !client.opening {
+			client.open(nil)
+		}
+	})
 	go func() {
 		err := client.watch()
 		if err != nil {
@@ -1250,24 +1447,15 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 			cancel()
 		default:
 		}
+		client.serve()
 	}()
 
-	events := []string{filename, pause, timePos, pausedForCache, duration}
-	if len(names) > 0 {
-		events = append(events, playlistPos)
-	}
-	for i, event := range events {
-		err := conn.do("observe_property_string", i+1, event)
+	select {
+	case err := <-client.opened:
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	select {
-	case <-client.ready:
 		return client, nil
-	case <-conn.closed:
-		return nil, ErrClosed
 	case <-c.Done():
 		return nil, c.Err()
 	}
