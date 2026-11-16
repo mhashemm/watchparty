@@ -16,9 +16,9 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
   a transport message queued while a peer's change is in flight (`busy`). A command an mpv
   line starts (`pauseParty`, a held seek) waits in `later` until that line's broadcast is out.
 - **So an action that waits more than once stops once this node has `moved`** (`adopt`,
-  `answer`, `resume`): the person's change went out newer. A play already sent is undone
-  (`playLate`, `converge`); why no other late step is, `playLate` says. A mark that steers how
-  mpv's lines are read is set at the step, never ahead (`peerSeek`, in `seekReq`).
+  `answer`, `resume`): the person's change went out newer. A play or seek mpv runs after it is
+  undone (`playLate`, `positionChanged`, `converge`); why no other late step is, `playLate` says.
+  A mark that steers how mpv's lines are read is set at the step, never ahead (`peerSeek`).
 - **`New` waits for `opened`**: the first `time-pos` with data and every observe taken, or the close.
   - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's
     real exit status. Cancelling would kill the exiting mpv and turn "exit status 2" into
@@ -52,11 +52,11 @@ a's pause to a, and the relay, which has no counters, loops forever.
 
 - **Mark before the IPC call** (`commit` and `resume` set `applied`, `mark` appends to `seeks`): the echo can arrive before `do()` returns.
 - `pause` matches exactly and deletes the marker; none is set for a pause mpv already has (no event).
-- `time-pos` matches any entry of `seeks` (those applied since the last resume, or still landing
-  through it, or the person's last seek; capped at 16) within **±0.1s**. On a match at entry *i*,
-  earlier entries go (mpv handles seeks in order) and *i* becomes the echoed value: one seek can
-  echo twice, a frame apart, and an earlier seek's echo can land after a later one was applied.
-  0.1s covers a frame at ≥10fps under `--hr-seek=yes`; a deliberate seek of 0.1s or more goes out.
+- `time-pos` matches any entry of `seeks` (applied since the last resume, or landing through it, or
+  run by mpv after the person's own, or the person's last seek; capped at 16) within **±0.1s**. On a
+  match at entry *i*, earlier entries go (mpv handles seeks in order) and *i* becomes the echoed value:
+  one seek can echo twice, a frame apart, and an earlier seek's echo can land after a later one was
+  applied. 0.1s covers a frame at ≥10fps under `--hr-seek=yes`; a deliberate seek of 0.1s+ goes out.
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 

@@ -110,23 +110,23 @@ Seen during a normal run:
   `--hr-seek` (we pin `yes`): `"77.000000"` echoed `77.000000`. Between frames it echoes the
   target, then the landed frame after `playback-restart` (`123.456` → `123.456000`, `123.458000`):
   **an echo can come twice, a frame off**, so `seeks` matches within ±0.1s and keeps a match.
-- **Nothing of a seek comes after the next seek's report.** A seek between frames, then a
-  second one sent at once, after the first's report or after its `playback-restart`: in 590
-  rounds (0.37.0 and 0.40.0, 2026-11-15) no report of the first ever came after the second's.
-  So the person's own seek ends every marker before it (`positionChanged`).
+- **Nothing of a seek comes after the next seek's report** (590 rounds, 0.37.0 and 0.40.0,
+  2026-11-15), so the person's own seek ends every marker before it (`positionChanged`), **but one
+  mpv has yet to run:** set while their key press is on its way, ours can run second. Theirs reported
+  before our answer ran first; after it, mpv's events from before the call can trail the answer
+  (answer, `seek`, 20, `seek`, 70, `playback-restart`), or mpv folded ours (answer, `seek`, 20,
+  `playback-restart`). Never a `playback-restart` between theirs and ours with the answer ahead:
+  0 of 48 in 1200 rounds, both versions, 2026-11-16.
 - **Two seeks at once can fold into the last, which reports no second if mpv was already
   there.** `set_property time-pos 40`, then at once `seek 3 absolute`, standing on 3: only `seek`
   and `playback-restart` in 59/60 rounds on 0.37.0, 6/60 on 0.40.0 (else 40, `seek`, 3;
   2026-11-15). So a seek this node sent that played back unreported is asked about (`landed`).
-- **`time-pos` reports the target at once, before the data is there.** Probed
-  paused on a local file: right after `set_property time-pos 50`, `get_property
-  time-pos` read `50.0` while `seeking` still read `true` (it was `false` 2s later). On a slow
-  stream that lasts until the new range arrives, and a node resumed in that window
-  "plays" with `time-pos` stuck at the target, without `paused-for-cache`. A check that
+- **`time-pos` reports the target at once, before the data is there**: right after `set_property
+  time-pos 50`, `get_property time-pos` read `50.0` while `seeking` still read `true`. On a slow
+  stream a node resumed then "plays" stuck at the target, without `paused-for-cache`: a check that
   a seek finished must wait for `seeking` to be `false`.
-- **A relative seek** (arrow keys) **is exact too, because we pin `--hr-seek=yes`**: +7 from
-  12 sent one position, `19.000000`. mpv's default snaps to a keyframe: +10 from 123.458 sent
-  `133.458000`, then `140.000000`, so peers seeked twice and landed off where the user aimed.
+- **A relative seek** (arrow keys) **is exact too, as we pin `--hr-seek=yes`**: +7 from 12 sent
+  `19.000000`. mpv's default snaps to a keyframe (+10 from 123.458 sent `133.458000`, then `140`).
 
 ### Playing and pausing
 

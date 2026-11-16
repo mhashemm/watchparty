@@ -314,9 +314,18 @@ type Client struct {
 	applied  map[string]string
 	seeks    []float64
 	peerSeek bool
-	// sent: the last seek this node sent mpv; began: mpv started a seek since
-	sent  float64
-	began bool
+	// sent: the last seek this node sent mpv; began: mpv started a seek since. unrun: mpv
+	// may still run it after what it reports now; answered: mpv answered it, and its next
+	// playback-restart ends unrun
+	sent            float64
+	began           bool
+	unrun, answered bool
+	// undoing: the first of seeks is undoAt, which mpv runs after the person's own, newer
+	// seek, so its report sends mpv back (converge). sure: the person's was reported before
+	// mpv's answer; otherwise mpv may have folded undoAt into it, as the next
+	// playback-restart says
+	undoAt            float64
+	undoing, undoSure bool
 	// stopAt: the second of a stop this node took while playing on it, until mpv reports
 	// the stop (stopping)
 	stopAt   float64
@@ -368,6 +377,12 @@ func (c *Client) isEcho(event Event) bool {
 		}
 		for i, want := range c.seeks {
 			if math.Abs(got-want) <= timePosTolerance {
+				if c.undoing && i == 0 && want == c.undoAt {
+					c.later = append(c.later, c.converge)
+				}
+				// a seek this node sent after it is reported: nothing of it comes after that
+				c.undoing = false
+				c.unrun = c.unrun && math.Abs(got-c.sent) > timePosTolerance
 				// landed once mpv reports the second of the last one, whichever it matched
 				c.landing = c.landing && math.Abs(got-c.seeks[len(c.seeks)-1]) > timePosTolerance
 				c.seeks = c.seeks[i:]
@@ -439,6 +454,13 @@ func (c *Client) react(event Event) ([][]byte, error) {
 		c.began = true
 	case playbackRestart:
 		c.peerSeek = false
+		if c.answered && c.unrun {
+			c.unrun = false
+			if c.undoing && !c.undoSure {
+				// mpv folded it into the person's seek
+				c.undoing, c.seeks = false, slices.DeleteFunc(c.seeks, func(pos float64) bool { return pos == c.undoAt })
+			}
+		}
 		if c.landing && c.began && len(c.seeks) > 0 && c.seeks[len(c.seeks)-1] == c.sent {
 			c.later = append(c.later, c.landed)
 		}
@@ -571,7 +593,7 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 // clear forgets the second this node was on and the seeks it marked, as mpv opens another
 // file: the old second would go out with a pause, and the new file's 0 as a seek.
 func (c *Client) clear() {
-	c.pos, c.seeking, c.landing, c.cleared = 0, false, false, true
+	c.pos, c.seeking, c.landing, c.cleared, c.undoing = 0, false, false, true, false
 	if c.seen[timePos] {
 		c.seeks = []float64{0}
 	}
@@ -597,6 +619,7 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 		} else {
 			c.seeks, c.landing = nil, false
 		}
+		c.undoing = false
 		c.seeking, c.since = false, c.target()
 		return extra, nil
 	}
@@ -616,8 +639,15 @@ func (c *Client) positionChanged() error {
 	if c.paused {
 		// its own seek: wherever it was being sent, this is where it is now, and mpv reports
 		// nothing of a seek applied before it (MPV.md), so their markers would only swallow
-		// the person's way back to one of them
-		c.seeks, c.landing = nil, false
+		// the person's way back to one of them. But one mpv runs after it: reported before
+		// mpv's answer to the last seek sent, the person's came first (replies keep the order
+		// of requests); after it, mpv may have run it first, its events behind the answer, or
+		// folded the two, which its next playback-restart says (MPV.md). mpv's report of that
+		// one is not the person's, and the party holds the person's, newer.
+		c.seeks, c.landing, c.undoing = nil, false, false
+		if c.unrun {
+			c.seeks, c.undoAt, c.undoing, c.undoSure = []float64{c.sent}, c.sent, true, !c.answered
+		}
 		return nil
 	}
 	if c.seeking {
@@ -1255,7 +1285,7 @@ func (c *Client) release(a adoption) {
 		c.seeks = slices.DeleteFunc(c.seeks, func(pos float64) bool { return pos == a.at })
 	}
 	if a.now {
-		c.peerSeek, c.landing = false, false
+		c.peerSeek, c.landing, c.unrun = false, false, false
 	}
 }
 
@@ -1265,8 +1295,9 @@ func (c *Client) release(a adoption) {
 // undone (converge) once mpv reports it, or now if it has. The other late steps are not
 // undone, as none leaves this node apart: a stop's echo carries the person's seek
 // (pauseExtras), the person's resume speaks for the seek still landing (pauseChanged), a
-// seek or move of the person's own clears the markers, so a late one goes out as newer, and
-// a move speaks for the entry it heads to.
+// seek mpv runs after the person's own is undone as well (positionChanged), a move of the
+// person's own clears the markers, so a late one goes out as newer, and a move speaks for the
+// entry it heads to.
 func (c *Client) playLate(from int) {
 	if !c.moved(from) {
 		return
@@ -1478,8 +1509,11 @@ func (c *Client) mark(pos float64) bool {
 // event is this one (peerSeek): set when it is planned, it swallowed the person's own seek
 // made while mpv still answered an earlier step.
 func (c *Client) seekReq(pos float64) error {
-	c.peerSeek, c.sent, c.began = true, pos, false
-	return c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
+	c.peerSeek, c.sent, c.began, c.unrun, c.answered = true, pos, false, true, false
+	err := c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
+	// not if another seek was sent meanwhile
+	c.answered = c.answered || c.sent == pos
+	return err
 }
 
 // stoppedOff seeks back to the second of a stop this node took while playing, if mpv
@@ -1519,7 +1553,7 @@ func (c *Client) landed() {
 		return
 	}
 	// no marker may swallow it: they are all for seeks that came before it
-	c.seeks, c.landing = nil, false
+	c.seeks, c.landing, c.undoing = nil, false, false
 	if !c.paused {
 		c.pauseParty("seek")
 		return
