@@ -184,20 +184,20 @@ func Run(parent context.Context, cfg Config) error {
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
+	mpvQuit := atomic.Bool{}
 	conn, err := mpv.Dial(c, mpvSocket)
 	for err != nil {
 		select {
 		case <-c.Done():
 			log.Println(c.Err())
-			return stopReason(parent)
+			return outcome(parent, c, mpvQuit.Load(), nil)
 		case err := <-exited:
-			return notReady(err)
+			return outcome(parent, c, mpvQuit.Load(), notReady(err))
 		case <-time.After(50 * time.Millisecond):
 		}
 		conn, err = mpv.Dial(c, mpvSocket)
 	}
 
-	mpvQuit := atomic.Bool{}
 	client, err := mpv.New(c, func() {
 		if c.Err() == nil {
 			mpvQuit.Store(true)
@@ -205,19 +205,10 @@ func Run(parent context.Context, cfg Config) error {
 		cancel()
 	}, conn, outgoing, incoming, names, start, startAt)
 	if err != nil {
-		switch {
-		case mpvQuit.Load():
-			return nil
-		case c.Err() != nil:
-			return stopReason(parent)
-		case errors.Is(err, mpv.ErrClosed):
+		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)
-			if parent.Err() != nil {
-				return nil
-			}
-			return err
 		}
-		return err
+		return outcome(parent, c, mpvQuit.Load(), err)
 	}
 
 	log.Println("init done. now you can start watching")
@@ -238,11 +229,20 @@ func Run(parent context.Context, cfg Config) error {
 	if err != nil {
 		log.Println(err)
 	}
-	if mpvQuit.Load() {
+	return outcome(parent, c, mpvQuit.Load(), err)
+}
+
+// outcome is what Run returns, decided from what is known once it ends, in one place, never
+// from which channel said so first: a Stop kills mpv, so "cancelled" and "mpv exited" both
+// fire, and the cancel is why mpv died. The caller cancelling parent and the user quitting
+// mpv are normal ends; anything inside cancelling c stopped the party; otherwise err, mpv's
+// own reason, stands.
+func outcome(parent, c context.Context, mpvQuit bool, err error) error {
+	switch {
+	case parent.Err() != nil, mpvQuit:
 		return nil
-	}
-	if c.Err() != nil {
-		return stopReason(parent)
+	case c.Err() != nil:
+		return errStopped
 	}
 	return err
 }
@@ -318,13 +318,6 @@ func (cfg Config) playlistFlag() string {
 		return " -playlist"
 	}
 	return ""
-}
-
-func stopReason(parent context.Context) error {
-	if parent.Err() != nil {
-		return nil
-	}
-	return errStopped
 }
 
 // fingerprint identifies a video by its content alone, so the same file under
@@ -430,8 +423,15 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	})
 	cleanup = append(cleanup, ser.Shutdown)
 
+	// listening here, not in the goroutine: a port in use is why this party can't start, and
+	// found later it only cancelled c, so a joiner said nobody answered and a host just stopped
+	l, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		runCleanup()
+		return nil, fmt.Errorf("can't take port %d, maybe another program has it; choose another port: %w", cfg.Port, err)
+	}
 	go func() {
-		err := s.ListenAndServe()
+		err := s.Serve(l)
 		if err != nil {
 			cancel()
 			log.Println(err)

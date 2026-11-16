@@ -998,7 +998,7 @@ async function startParty(extra) {
 
 let run = 0, from = 0, state = {};
 function reset() {
-  state = { ready: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, finding: false, leftPause: false, stopping: null };
+  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, finding: false, leftPause: false, stopping: null };
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -1056,6 +1056,7 @@ function handle(line) {
   let m;
   if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
+    state.relay = /^-relay /.test(m[1].trim());
   }
   if (/^relay: connected/.test(msg)) Object.assign(state, { connected: true, reconnecting: false, waiting: false, busy: "" });
   if (/^relay: (dial|disconnected)/.test(msg)) {
@@ -1118,6 +1119,9 @@ function render(exitErr) {
     text = "Looking for this torrent's peers. It can take a while…"; walking = true;
   } else if (running && !state.ready) {
     text = "Opening mpv. This takes a few seconds…"; walking = true;
+  } else if (running && state.relay && !state.connected) {
+    // mpv is ready before the relay's handshake can be done: in only once the room has this node
+    text = "Connecting to the relay…"; walking = true;
   } else if (running && state.unreachable) {
     text = "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.";
   } else if (running) {

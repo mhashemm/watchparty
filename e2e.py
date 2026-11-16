@@ -294,7 +294,10 @@ def toggle(n=None, settle=0.9):
 
 
 def log(n):
-    return open(nodes[n]["log"]).read()
+    """Its log's finished lines: a line longer than what is left of a page is written a page at
+    a time, so a read can end halfway through it."""
+    text = open(nodes[n]["log"]).read()
+    return text[:text.rfind("\n") + 1]
 
 
 def played(n):
@@ -560,11 +563,20 @@ def relay_files(port):
     return f"{RUN}/relay" if port in (None, PORTS["relay"]) else f"{RUN}/relay-{port}"
 
 
+# below 32768, where the kernel never picks a port for bind(0) or an outgoing connection, and a
+# range of this phase's own: picked by bind(0), two phases side by side got the same port
+FIRST_PORT = 16000 + 2000 * (PHASES + ("all",)).index(args.mode)
+PORT_POOL = iter(range(FIRST_PORT, FIRST_PORT + 2000))
+
+
 def free_port():
-    s = socket.create_server(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    for port in PORT_POOL:
+        try:
+            socket.create_server(("", port)).close()
+            return port
+        except OSError:
+            pass
+    raise RuntimeError("this phase used up its ports")
 
 
 def launch_relay(extra=None, port=None):
@@ -610,7 +622,8 @@ class Proxy:
 
     def cut(self, relay=False):
         """With relay, the relay's side ends too, so the relay sees the drop first."""
-        for pair in self.pairs:
+        # a copy: a redial accepted while this runs is a new connection, not one to cut
+        for pair in list(self.pairs):
             if pair["live"]:
                 pair["live"] = False
                 pair["c"].shutdown(socket.SHUT_RDWR)
@@ -1280,7 +1293,7 @@ def p2p_suite():
             setp(c, "pause", False)
             ok(f"{b} is still in the mesh: it still hears events", until(lambda: get(b, "pause") is False), where(P))
 
-    @case("[11b] a joiner playing a different file is refused; the same file renamed is not; a wrong secret or nobody to join ends it")
+    @case("[11b] a joiner playing a different file is refused; the same file renamed is not; a wrong secret, nobody to join or a taken port ends it")
     def _():
         with mesh("p11b", 2) as P:
             a = P[0]
@@ -1310,6 +1323,13 @@ def p2p_suite():
             ok("a joiner nobody answered exited with an error instead of playing alone", nodes[alone]["proc"].poll() not in (None, 0) and "init done" not in log(alone),
                f"rc={nodes[alone]['proc'].returncode}")
             ok("it was told why", "nobody answered at the address you were given" in log(alone), log(alone)[-300:])
+            taken = "p11b-taken"
+            launch(taken, nodes[a]["addr"], port=nodes[a]["port"])
+            until(lambda: nodes[taken]["proc"].poll() is not None, BOOT)
+            ok("a joiner on a port already in use exited with an error", nodes[taken]["proc"].poll() not in (None, 0),
+               f"rc={nodes[taken]['proc'].returncode}")
+            ok("it was told the port, not that nobody answered", f"can't take port {nodes[a]['port']}" in log(taken) and "nobody answered" not in log(taken),
+               log(taken)[-300:])
 
     @case("[11c] a joiner while the party plays pauses it once loaded, and starts where it stopped")
     def _():
@@ -2061,6 +2081,8 @@ def media_suite():
 
         ipc(nodes[host]["sock"], "playlist-prev")
         must("back on the middle one", until(on("video3.mkv", "a2.mkv")))
+        # the filename is mpv's from start-file, the duration only once the file has loaded
+        must("its length is known", until(lambda: get(host, "duration") is not None))
         must("near its end", seek(get(host, "duration") - 1))
         setp(host, "pause", False)
         ok("reaching the end moves everyone on", until(on("video10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
@@ -2629,6 +2651,14 @@ def gui_suite():
         end(G)
         ok(f"{G}'s party ended", until(lambda: status(G) == "The party has ended."), status(G))
 
+        part("[G17f] a relay that takes the connection and never answers: mpv is ready, and it is not in yet")
+        silent = socket.create_server(("127.0.0.1", 0))  # never accepts: the handshake waits
+        on_end(silent.close)
+        start(G, hostname=G, file=MEDIA, relay=f"ws://127.0.0.1:{silent.getsockname()[1]}", room="silent", secret="silent")
+        must("its mpv is ready", until(lambda: booted(G), BOOT), log(G)[-300:])
+        ok("it says it is connecting", until(lambda: status(G) == "Connecting to the relay…"), status(G))
+        end(G)
+
     @case("[G17d] a magnet link nobody seeds says so, and Stop still works")
     def _():
         G = gui("g17d")
@@ -2880,6 +2910,8 @@ def gui_suite():
         must(f"{H} is in over the relay", joined(H), status(H))
         start(G, hostname=G, file=MEDIA, room="g20", secret="g20secret")
         must(f"{G} is in over the relay", joined(G), status(G))
+        # "You're in" is mpv being ready, which can come before the relay's handshake
+        must(f"{G} met {H}", until(lambda: f"connected to {H}" in feed(G)), str(feed(G)))
         end(G)
         end(H)
         js(H, 'setMode("direct"); $("addrs").value = ""; $("psecret").value = ""')

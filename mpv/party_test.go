@@ -20,8 +20,9 @@ import (
 // A whole party in one bubble: real Clients, a small model of mpv under each, and a
 // network that a seed reorders. After each step everything has run as far as it can, so a
 // failing seed fails again. Each sender's messages stay in order, as on a connection; what
-// varies is who hears what first, and when mpv reports a seek. Checks are what the protocol
-// guarantees, for every order: that is what e2e can only sample.
+// varies is who hears what first, when mpv reports a seek, and in a second pass when mpv
+// answers. Checks are what the protocol guarantees, for every order: that is what e2e can
+// only sample.
 type simNode struct {
 	name   string
 	c      *Client
@@ -39,6 +40,11 @@ type simNode struct {
 	// reports: what mpv holds back until its event queue is empty (client.h), so a move's
 	// report can come after its file-loaded
 	reports []string
+	// late: mpv answers a request when the seed picks (answers), with events before it;
+	// answer is the one it holds, and it reads the next request only once that is out
+	late     bool
+	answer   string
+	answered chan struct{}
 }
 
 type sim struct {
@@ -61,17 +67,20 @@ type sim struct {
 	late   map[[2]string]int
 	ticks  int
 	script []func()
+	// newest: the highest stamp each node has sent
+	newest map[string]int
 }
 
 const simEntries = 3
 
 func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
-	s := &sim{t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}, held: map[[2]string]bool{}, late: map[[2]string]int{}}
+	s := &sim{newest: map[string]int{}, t: t, rng: rand.New(rand.NewPCG(seed, 0)), links: map[[2]string][]IncomingMessage{}, down: map[string]bool{}, lost: map[[2]string]func(Event) bool{}, missed: map[[2]string]bool{}, told: map[*simNode][]IncomingMessage{}, held: map[[2]string]bool{}, late: map[[2]string]int{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	for _, name := range names {
 		ours, theirs := net.Pipe()
-		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true}
+		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true,
+			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{})}
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
 		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names = ctx, ours, true, slices.Repeat([]string{"e"}, entries)
 		n.c.seen[pause], n.c.seen[timePos], n.c.seen[playlistPos] = true, true, true
@@ -89,17 +98,8 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 				}
 			}
 		}()
+		n.c.incoming = n.in
 		go n.c.watch()
-		go func() {
-			for {
-				select {
-				case m := <-n.in:
-					n.c.apply(m)
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
 		s.nodes = append(s.nodes, n)
 	}
 	return s
@@ -107,21 +107,28 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 
 // model answers requests the way mpv does (MPV.md): a no-op set says nothing, and a seek
 // reports later, ahead of a pause sent right behind it but after the reply to that pause.
+// Seeks fold into the last, which reports no second if mpv was already on it; asked where
+// it is, mpv answers with the second a seek heads to at once.
 // A set of playlist-pos replies first and reports later, so the next set can overtake the
-// report, and two close together can report only the last (MPV.md).
+// report, and two close together can report only the last (MPV.md). Late, events can come
+// before an answer, as MPV.md allows; never a later request's, as mpv's IPC thread runs one
+// request at a time and answers it before it reads the next.
 func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
 		req := Request{}
 		json.Unmarshal(sc.Bytes(), &req)
 		name := fmt.Sprint(req.Command[0])
+		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		replied := false
 		n.mu.Lock()
 		switch {
 		case name == showText:
 			n.notices = append(n.notices, fmt.Sprint(req.Command[1]))
 		case name == setProperty && req.Command[1] == pause:
 			if len(n.seeks) > 0 {
-				n.emit(fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId))
+				n.emit(reply)
+				replied = true
 			}
 			n.setPause(req.Command[2] == true)
 		case name == setProperty && req.Command[1] == timePos:
@@ -130,14 +137,44 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 		case name == setProperty && req.Command[1] == playlistPos:
 			i, _ := strconv.Atoi(fmt.Sprint(req.Command[2]))
 			n.request(i)
+		case name == "get_property_string" && req.Command[1] == timePos:
+			at := fmt.Sprintf("%f", n.pos)
+			if len(n.seeks) > 0 {
+				at = n.seeks[len(n.seeks)-1]
+			}
+			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", at, req.RequestId)
+		}
+		if n.late {
+			if !replied {
+				n.answer = reply
+			}
+			n.mu.Unlock()
+			if replied {
+				continue
+			}
+			select {
+			case <-n.answered:
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
 		n.mu.Unlock()
 		select {
-		case n.writes <- fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId):
+		case n.writes <- reply:
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// answers is mpv sending the answer it held; then it reads the next request.
+func (n *simNode) answers() {
+	n.mu.Lock()
+	n.writes <- n.answer
+	n.answer = ""
+	n.mu.Unlock()
+	n.answered <- struct{}{}
 }
 
 func (n *simNode) emit(line string) {
@@ -187,9 +224,12 @@ func (n *simNode) landSeekLocked() {
 	}
 	last := n.seeks[len(n.seeks)-1]
 	n.seeks = nil
+	was := fmt.Sprintf("%f", n.pos)
 	n.pos, _ = strconv.ParseFloat(last, 64)
 	n.emit(`{"event":"seek"}` + "\n")
-	n.emit(propertyChangeLine(timePos, last, 0))
+	if last != was {
+		n.emit(propertyChangeLine(timePos, last, 0))
+	}
 	n.emit(`{"event":"playback-restart"}` + "\n")
 }
 
@@ -270,6 +310,23 @@ func (s *sim) run() {
 		for _, from := range s.nodes {
 			for len(from.out) > 0 {
 				b := <-from.out
+				// a node never says a state older than one it said: what it sends after a change
+				// of its own says that change. A join starts it over from unheard.
+				e := struct {
+					Stamp *int
+					Name  string
+				}{}
+				json.Unmarshal(b, &e)
+				if e.Name == joined {
+					delete(s.newest, from.name)
+				}
+				newest, ok := s.newest[from.name]
+				if e.Stamp != nil && ok && *e.Stamp < newest {
+					s.t.Errorf("%s sent stamp %d after %d: %s", from.name, *e.Stamp, newest, b)
+				}
+				if e.Stamp != nil && (!ok || *e.Stamp > newest) {
+					s.newest[from.name] = *e.Stamp
+				}
 				for _, to := range s.nodes {
 					// a node without its relay connection sends and hears nothing
 					k := [2]string{from.name, to.name}
@@ -319,6 +376,9 @@ func (s *sim) run() {
 			}
 			if len(from.reports) > 0 {
 				next = append(next, from.landReports)
+			}
+			if from.answer != "" {
+				next = append(next, from.answers)
 			}
 			if len(from.moves) > 1 {
 				next = append(next, from.foldMoves)
@@ -417,10 +477,11 @@ func sets(n *simNode, paused bool) func() {
 }
 
 // inStep is everyone stopped on the same second, or everyone playing from it: then each
-// started when the resume reached it, at most lag seconds after the first.
+// started when the resume reached it, at most lag seconds after the first. Each stops within
+// timePosTolerance of the party's second, so two can be twice that apart (SIM_SEED=210240).
 func (s *sim) inStep(seed uint64, lag float64) {
 	s.t.Helper()
-	apart := 0.15
+	apart := 2*timePosTolerance + 0.05
 	if !s.nodes[0].paused {
 		apart += lag
 	}
@@ -488,7 +549,9 @@ func forSeeds(t *testing.T, f func(t *testing.T, seed uint64)) {
 // forManySeeds runs seeds 0 to seeds-1, which keep the orders that once failed, or from
 // SIM_SEED on when it is set: CI sets a new one each run, so every run tries orders no run
 // tried before. A seed always picks the same orders, so -count adds nothing: -short skips
-// the sweep, to stress the other tests.
+// the sweep, to stress the other tests. Then the same seeds again with mpv answering when
+// the seed picks (lateRun); a pass of its own, so the first keeps the orders seeds were
+// named for.
 func forManySeeds(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64)) {
 	t.Parallel()
 	if testing.Short() {
@@ -501,19 +564,25 @@ func forManySeeds(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64))
 			t.Fatalf("SIM_SEED=%q: %v", v, err)
 		}
 	}
-	run := "^" + strings.ReplaceAll(regexp.QuoteMeta(t.Name()), "/", "$/^") + "$"
-	for seed := base; seed < base+seeds; seed++ {
-		// a failure inside the bubble ends this test too, so it says how to replay from there
-		synctest.Test(t, func(t *testing.T) {
-			t.Cleanup(func() {
-				if t.Failed() {
-					t.Logf("replay: SIM_SEED=%d go test -race -run '%s' ./mpv", seed, run)
-				}
+	sweep := func(t *testing.T) {
+		run := "^" + strings.ReplaceAll(regexp.QuoteMeta(t.Name()), "/", "$/^") + "$"
+		for seed := base; seed < base+seeds; seed++ {
+			// a failure inside the bubble ends this test too, so it says how to replay from there
+			synctest.Test(t, func(t *testing.T) {
+				t.Cleanup(func() {
+					if t.Failed() {
+						t.Logf("replay: SIM_SEED=%d go test -race -run '%s' ./mpv", seed, run)
+					}
+				})
+				f(t, seed)
 			})
-			f(t, seed)
-		})
+		}
 	}
+	sweep(t)
+	t.Run(lateRun, sweep)
 }
+
+const lateRun = "mpv_answers_late"
 
 // Members stop a moment apart and hear each other in any order; seeds 391 and 474 were
 // the first to strand one 0.2s away, so these run 1000.
@@ -1240,4 +1309,46 @@ func TestANodeThatMissedAMoveIsBroughtOver(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A member seeks while it shows why it stops for a joiner: the seek goes out first, so where
+// the member says it is, after it, is the second it sought (newest).
+func TestASeekWhileAnsweringAJoinIsWhereTheMemberSaysItIs(t *testing.T) {
+	forManySeeds(t, 300, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "j")
+		a, b, j := s.nodes[0], s.nodes[1], s.nodes[2]
+		stopped(30, a, b)
+		joins(j)
+		j.out <- []byte(`{"name":"joined"}`)
+		s.script = []func(){seeks(b, 50)}
+		s.run()
+		s.together(seed)
+	})
+}
+
+// Anyone acts at any moment: the people pause, resume and seek while the others' changes
+// are on their way, and in the late pass while mpv still answers this node's own steps. The
+// party may end anywhere, but in one state, and no node says a state older than one it said
+// (newest): what the protocol promises, whatever anyone did.
+func TestAnyoneActingAtAnyMomentEndsInStep(t *testing.T) {
+	forManySeeds(t, 500, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		stopped(30, s.nodes...)
+		rng := rand.New(rand.NewPCG(seed, 1))
+		for range 6 {
+			n := s.nodes[rng.IntN(len(s.nodes))]
+			switch rng.IntN(3) {
+			case 0:
+				s.script = append(s.script, sets(n, true))
+			case 1:
+				s.script = append(s.script, sets(n, false))
+			default:
+				s.script = append(s.script, seeks(n, float64(rng.IntN(100))))
+			}
+		}
+		s.ticks = 30
+		s.run()
+		// each plays from when the resume reached it, at worst after every tick
+		s.inStep(seed, 3)
+	})
 }
