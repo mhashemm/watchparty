@@ -324,6 +324,23 @@ func TestAStopNobodyChoseHasNoLeader(t *testing.T) {
 	})
 }
 
+// A joiner is sent to 30 by an answer, which it doesn't follow, and the person seeks to 39
+// and back to 30. Their seek to 39 means mpv is done with 30 (MPV.md), so the way back is
+// theirs, not the answer's echo.
+func TestASeekBackToWhereAnAnswerSentItIsThePersonsOwn(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{joiner: true})
+		n.peerSays("a", `{"stamp":3,"paused":true,"at":30,"free":true,"event":"property-change","name":"time-pos","data":"30.000000"}`)
+		n.mpvObeys()
+		n.mpvSays(mpvAt(39))
+		n.broadcasts()
+		n.mpvSays(mpvAt(30))
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=30.000000]" {
+			t.Fatalf("broadcast %q, want the seek back to where the answer had sent it", got)
+		}
+	})
+}
+
 // A peer sends this node to 30, and the person seeks to 39 and back to 30: a follower keeps
 // both on its screen, and tells the person once for that state, so a held key doesn't flood
 // the GUI's feed; again once it takes the leader's next seek.
@@ -3203,14 +3220,15 @@ func TestAFoldedSeekWhilePlayingPausesTheParty(t *testing.T) {
 // A peer's stop at 9.5 reaches this node while it plays on 9.45: mpv answers the stop, then
 // reports one more playing position, 9.5, and only then the stop (mpv 0.40, e2e [R6c] under
 // --jitter 14). The node took the stop at the answer, so that position read as the person's
-// seek while stopped, and the party stopped for it, catching up. It is mpv playing on.
+// seek while stopped, and the party stopped for it, catching up. It is mpv playing on. A stop
+// nobody chose (a leave's), as a follower of a person's stop sends no seek anyway.
 func TestAPositionBeforeAStopIsReportedIsNoSeek(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
 		n.mpvSays(mpvAt(9))
 		n.plays()
 		n.mpvSays(mpvAt(9.45))
-		n.peerSays("a", `{"stamp":9,"at":9.5,"name":"pause","data":"yes"}`)
+		n.peerSays("a", `{"stamp":9,"at":9.5,"free":true,"name":"pause","data":"yes"}`)
 		if told := n.mpvWasTold(); len(told) == 0 || told[0] != "set_property pause true" {
 			t.Fatalf("told mpv %q, want the stop", told)
 		}
@@ -3219,8 +3237,10 @@ func TestAPositionBeforeAStopIsReportedIsNoSeek(t *testing.T) {
 		if got := n.broadcasts(); len(got) != 0 {
 			t.Fatalf("broadcast %q, want nothing", said(got))
 		}
-		// stopped, a position is the person's seek again, which a follower keeps
+		// stopped, a position is the person's seek again
 		n.mpvSays(mpvAt(20))
-		n.keepsTheSeek("a")
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=20.000000]" {
+			t.Fatalf("broadcast %q, want the person's seek", got)
+		}
 	})
 }
