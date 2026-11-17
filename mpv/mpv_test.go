@@ -1428,6 +1428,35 @@ func TestMovingToAnEntryWhilePlayingPausesTheParty(t *testing.T) {
 	})
 }
 
+// mpv moving on from the end of an entry is a stop nobody chose: players reach the end
+// together, and whichever won the tie would lead (e2e [R15c]). Moving on by hand leads.
+func TestMovingOnFromTheEndHasNoLeader(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		at   float64
+		free bool
+	}{
+		"from the end": {118, true},
+		"by hand":      {90, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nodeTest(t, func(t *testing.T) {
+				n := ready(t, setup{names: threeVideos})
+				n.plays()
+				n.mpvSays(mpvAt(c.at))
+				n.mpvSays(propertyChangeLine(playlistPos, "1", 0))
+				moved := n.broadcasts()
+				n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+				for _, e := range append(moved, n.broadcasts()...) {
+					if e.Free != c.free {
+						t.Fatalf("broadcast %+v, want free %v", e, c.free)
+					}
+				}
+			})
+		})
+	}
+}
+
 // A new file reports time-pos 0 while paused. Sent on, it would seek a peer still
 // playing the end of the last entry.
 func TestMovingWhilePausedSendsOnlyTheEntry(t *testing.T) {

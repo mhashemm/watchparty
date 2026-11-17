@@ -42,7 +42,7 @@ Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), 
 - **While paused only the leader seeks** (`led`: stopped on the state of a member's pause or seek):
   a follower's seek stays on its screen, told once a state ("only X can seek until resumed"), and
   `held`/`Position` keep the party's second (`since`); its resume starts everyone from its screen.
-  A stop nobody chose (`answer`, `left`, a leader that left) is `free`: the first seek leads.
+  A stop nobody chose (`answer`, `left`, its leader left, `ranOut`) is `free`: the first seek leads.
 - **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
   (`pauseExtras`), even when the pause was an echo, so a seek that raced a peer's pause isn't lost.
 - **mpv's report of a pause this node applied is when it stops or starts** (`c.paused`),
