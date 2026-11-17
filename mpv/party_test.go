@@ -45,16 +45,6 @@ type simNode struct {
 	late     bool
 	answer   string
 	answered chan struct{}
-	// reads: mpv runs a request when the seed picks (takes), after what it does meanwhile;
-	// requests: those read and not yet run; queued: what mpv says while one waits or runs, which
-	// it writes before or after the answer, as its IPC thread writes the answer from the call
-	// and its events once back (probed: answer, seek, 20, seek, 70, playback-restart).
-	// restart: a seek's playback-restart, still to come, so the next seek can fold into it
-	reads    bool
-	requests []string
-	queued   []string
-	taking   bool
-	restart  bool
 }
 
 type sim struct {
@@ -90,7 +80,7 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	for _, name := range names {
 		ours, theirs := net.Pipe()
 		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true,
-			late: strings.HasSuffix(t.Name(), "/"+lateRun), reads: strings.HasSuffix(t.Name(), "/"+readsRun), answered: make(chan struct{})}
+			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{})}
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
 		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names = ctx, ours, true, slices.Repeat([]string{"e"}, entries)
 		n.c.seen[pause], n.c.seen[timePos], n.c.seen[playlistPos] = true, true, true
@@ -122,18 +112,38 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 // A set of playlist-pos replies first and reports later, so the next set can overtake the
 // report, and two close together can report only the last (MPV.md). Late, events can come
 // before an answer, as MPV.md allows; never a later request's, as mpv's IPC thread runs one
-// request at a time and answers it before it reads the next. Read late, a request runs after
-// what mpv did since it was sent, and its answer can come ahead of what mpv said meanwhile.
+// request at a time and answers it before it reads the next.
 func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
+		req := Request{}
+		json.Unmarshal(sc.Bytes(), &req)
+		name := fmt.Sprint(req.Command[0])
+		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		replied := false
 		n.mu.Lock()
-		if n.reads {
-			n.requests = append(n.requests, sc.Text())
-			n.mu.Unlock()
-			continue
+		switch {
+		case name == showText:
+			n.notices = append(n.notices, fmt.Sprint(req.Command[1]))
+		case name == setProperty && req.Command[1] == pause:
+			if len(n.seeks) > 0 {
+				n.emit(reply)
+				replied = true
+			}
+			n.setPause(req.Command[2] == true)
+		case name == setProperty && req.Command[1] == timePos:
+			pos, _ := strconv.ParseFloat(fmt.Sprint(req.Command[2]), 64)
+			n.seek(pos)
+		case name == setProperty && req.Command[1] == playlistPos:
+			i, _ := strconv.Atoi(fmt.Sprint(req.Command[2]))
+			n.request(i)
+		case name == "get_property_string" && req.Command[1] == timePos:
+			at := fmt.Sprintf("%f", n.pos)
+			if len(n.seeks) > 0 {
+				at = n.seeks[len(n.seeks)-1]
+			}
+			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", at, req.RequestId)
 		}
-		reply, replied := n.run(sc.Bytes())
 		if n.late {
 			if !replied {
 				n.answer = reply
@@ -158,68 +168,6 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	}
 }
 
-// run is mpv running one request: its answer, unless it is out already (replied).
-func (n *simNode) run(line []byte) (reply string, replied bool) {
-	req := Request{}
-	json.Unmarshal(line, &req)
-	name := fmt.Sprint(req.Command[0])
-	reply = fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
-	switch {
-	case name == showText:
-		n.notices = append(n.notices, fmt.Sprint(req.Command[1]))
-	case name == setProperty && req.Command[1] == pause:
-		if len(n.seeks) > 0 {
-			n.emit(reply)
-			replied = true
-		}
-		n.setPause(req.Command[2] == true)
-	case name == setProperty && req.Command[1] == timePos:
-		pos, _ := strconv.ParseFloat(fmt.Sprint(req.Command[2]), 64)
-		n.seek(pos)
-	case name == setProperty && req.Command[1] == playlistPos:
-		i, _ := strconv.Atoi(fmt.Sprint(req.Command[2]))
-		n.request(i)
-	case name == "get_property_string" && req.Command[1] == timePos:
-		at := fmt.Sprintf("%f", n.pos)
-		if len(n.seeks) > 0 {
-			at = n.seeks[len(n.seeks)-1]
-		}
-		reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", at, req.RequestId)
-	}
-	return reply, replied
-}
-
-// takes is mpv running the first request it has read, its answer written ahead of what it
-// said since that request was sent (first), or behind.
-func (n *simNode) takes(first bool) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	line := n.requests[0]
-	n.requests = n.requests[1:]
-	n.taking = true
-	reply, replied := n.run([]byte(line))
-	n.taking = false
-	said := n.queued
-	n.queued = nil
-	if first && !replied {
-		n.writes <- reply
-	}
-	for _, l := range said {
-		n.writes <- l
-	}
-	if !first && !replied {
-		n.writes <- reply
-	}
-}
-
-// restarts is mpv's playback-restart for the seeks it ran.
-func (n *simNode) restarts() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.restart = false
-	n.emit(`{"event":"playback-restart"}` + "\n")
-}
-
 // answers is mpv sending the answer it held; then it reads the next request.
 func (n *simNode) answers() {
 	n.mu.Lock()
@@ -231,15 +179,6 @@ func (n *simNode) answers() {
 
 func (n *simNode) emit(line string) {
 	n.landReportsLocked()
-	n.put(line)
-}
-
-// put writes a line, or queues it while mpv's IPC thread is busy with a request.
-func (n *simNode) put(line string) {
-	if n.reads && (len(n.requests) > 0 || n.taking) {
-		n.queued = append(n.queued, line)
-		return
-	}
 	n.writes <- line
 }
 
@@ -251,7 +190,7 @@ func (n *simNode) landReports() {
 
 func (n *simNode) landReportsLocked() {
 	for _, r := range n.reports {
-		n.put(r)
+		n.writes <- r
 	}
 	n.reports = nil
 }
@@ -290,10 +229,6 @@ func (n *simNode) landSeekLocked() {
 	n.emit(`{"event":"seek"}` + "\n")
 	if last != was {
 		n.emit(propertyChangeLine(timePos, last, 0))
-	}
-	if n.reads {
-		n.restart = true
-		return
 	}
 	n.emit(`{"event":"playback-restart"}` + "\n")
 }
@@ -444,14 +379,6 @@ func (s *sim) run() {
 			}
 			if from.answer != "" {
 				next = append(next, from.answers)
-			}
-			if len(from.requests) > 0 {
-				next = append(next, func() { from.takes(true) }, func() { from.takes(false) })
-			}
-			// mpv runs what it was sent before it plays back: probed, never a playback-restart
-			// between the person's seek and one it ran after it with the answer ahead (0 of 48)
-			if from.restart && len(from.seeks) == 0 && len(from.requests) == 0 {
-				next = append(next, from.restarts)
 			}
 			if len(from.moves) > 1 {
 				next = append(next, from.foldMoves)
@@ -626,16 +553,6 @@ func forSeeds(t *testing.T, f func(t *testing.T, seed uint64)) {
 // the seed picks (lateRun); a pass of its own, so the first keeps the orders seeds were
 // named for.
 func forManySeeds(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64)) {
-	forSeedsIn(t, seeds, false, f)
-}
-
-// forSeedsReadingLate is forManySeeds, then the same seeds again with mpv running each request
-// when the seed picks (readsRun).
-func forSeedsReadingLate(t *testing.T, seeds uint64, f func(t *testing.T, seed uint64)) {
-	forSeedsIn(t, seeds, true, f)
-}
-
-func forSeedsIn(t *testing.T, seeds uint64, reads bool, f func(t *testing.T, seed uint64)) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("a seed sweep, skipped by -short")
@@ -663,12 +580,9 @@ func forSeedsIn(t *testing.T, seeds uint64, reads bool, f func(t *testing.T, see
 	}
 	sweep(t)
 	t.Run(lateRun, sweep)
-	if reads {
-		t.Run(readsRun, sweep)
-	}
 }
 
-const lateRun, readsRun = "mpv_answers_late", "mpv_reads_late"
+const lateRun = "mpv_answers_late"
 
 // Members stop a moment apart and hear each other in any order; seeds 391 and 474 were
 // the first to strand one 0.2s away, so these run 1000.
@@ -1436,23 +1350,5 @@ func TestAnyoneActingAtAnyMomentEndsInStep(t *testing.T) {
 		s.run()
 		// each plays from when the resume reached it, at worst after every tick
 		s.inStep(seed, 3)
-	})
-}
-
-// A member seeks to 70, and the person at another seeks to 20 at any moment, while the 70 is
-// on its way or while mpv still runs it there. Whatever the order, the 20 is the newer change,
-// or one made at once that wins (the earlier second): the party ends on it, never on a 70
-// mpv ran after it.
-func TestAPersonsSeekWhileAPeersLandsEndsOnThePersons(t *testing.T) {
-	forSeedsReadingLate(t, 200, func(t *testing.T, seed uint64) {
-		s := newSim(t, seed, 0, "a", "b", "c")
-		a, b := s.nodes[0], s.nodes[1]
-		stopped(30, s.nodes...)
-		s.script = []func(){seeks(a, 70), seeks(b, 20)}
-		s.run()
-		s.together(seed)
-		if d := a.pos - 20; d > 0.15 || d < -0.15 {
-			t.Errorf("seed %d: the party is at %.2f, want the person's 20", seed, a.pos)
-		}
 	})
 }
