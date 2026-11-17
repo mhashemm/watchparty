@@ -412,6 +412,24 @@ func TestAnEventSaysWhichMemberSentIt(t *testing.T) {
 	}
 }
 
+// A goodbye says which member left, by its address, not its name: its followers drop it as the
+// leader of a stop, and not a member that shares its name.
+func TestALeaveSaysWhichMemberLeft(t *testing.T) {
+	t.Parallel()
+	incoming := make(chan mpv.IncomingMessage, 8)
+	s := New(context.Background(), incoming, "127.0.0.1:1", "me", "", "", time.Hour)
+	for _, addr := range []string{"127.0.0.1:2", "127.0.0.1:3"} {
+		s.addresses[addr] = &peer{address: addr, Hostname: "laptop"}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bye", nil)
+	req.Header.Set(addressHeaderKey, "127.0.0.1:3")
+	req.Header.Set(counterHeaderKey, "1")
+	s.Bye(httptest.NewRecorder(), req)
+	if m := <-incoming; m.HostName != "laptop" || m.From != "127.0.0.1:3" || !strings.Contains(string(m.Event), "laptop"+mpv.HasLeft) {
+		t.Fatalf("told mpv %s from %q (%q), want laptop's leave from 127.0.0.1:3", m.Event, m.HostName, m.From)
+	}
+}
+
 // Greeted one by one, every peer that had vanished without a goodbye cost the joiner
 // its own 30s timeout before mpv opened. Each also answers for itself: the bootstrap's
 // copy of its counter and name is older.

@@ -237,7 +237,7 @@ func TestSmallSeekIsNotAnEcho(t *testing.T) {
 
 // A stop nobody chose has no leader, and the first seek leads: one that answers a join or a
 // leave, as each node's own. A joiner is answered with it, so its seek goes out (e2e [5]);
-// a leader that left leaves its stop with none.
+// a leader that left leaves its stop with none, told by its id, as names may be shared.
 func TestAStopNobodyChoseHasNoLeader(t *testing.T) {
 	t.Parallel()
 	free := func(t *testing.T, got []Event, name string) {
@@ -300,6 +300,16 @@ func TestAStopNobodyChoseHasNoLeader(t *testing.T) {
 			n.takes(3, true, 30)
 			n.peerSays("z", `{"name":"show-text","data":"z has left"}`)
 			seekGoesOut(n)
+		})
+	})
+	t.Run("another member of the leader's name leaves", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{})
+			n.takes(3, true, 30)
+			n.transportSays(IncomingMessage{HostName: "z", From: "z2", Event: []byte(`{"name":"show-text","data":"z has left"}`)})
+			n.mpvWasTold()
+			n.mpvSays(mpvAt(50))
+			n.keepsTheSeek("z")
 		})
 	})
 	t.Run("another member leaves", func(t *testing.T) {

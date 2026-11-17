@@ -66,9 +66,9 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | mpv | `sent again, as <host> missed something: …` | e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
-- **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
-  `server/` and `relay/`, parsed by `mpv` (a leave pauses) and `gui/store.go`, all from the
-  constants in `mpv`; e2e's `known()` spells them again. Change all or none.
+- **Notice texts** "X has joined", "connected to X", "X has left" are sent by `server/` and `relay/` with
+  the member's `From`, parsed by `mpv` (a leave pauses, and frees the stop it led) and `gui/store.go`,
+  all from the constants in `mpv`; e2e's `known()` spells them again. Change all or none.
 - **The relay protocol is `relay/wire`**, imported by both `relay/main.go` and `party/ws.go`:
   the envelope `{"hostname", "from", "event": <raw mpv JSON>}`, path, query, headers, close codes.
   It imports nothing that would grow the relay image; importing `party` would pull upnp and server.

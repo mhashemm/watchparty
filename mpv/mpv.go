@@ -1094,7 +1094,7 @@ func (c *Client) apply(e IncomingMessage) {
 		case showText:
 			err = c.showText(event.Data)
 			if event.Data == e.HostName+HasLeft {
-				err = errors.Join(err, c.left(e.HostName))
+				err = errors.Join(err, c.left(e.HostName, e.From))
 			}
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
@@ -1431,12 +1431,11 @@ func (c *Client) reply(to chan<- []byte, b []byte) bool {
 	}
 }
 
-// left pauses the party for a member that left, a stop with no leader; a leader that left
-// leaves its stop with none. Told by name, which another member may share: then the first
-// seek leads a little early.
-func (c *Client) left(hostname string) error {
+// left pauses the party for a member that left (from), a stop with no leader; a leader that
+// left leaves its stop with none. By its id, not its name, which another member may share.
+func (c *Client) left(hostname, from string) error {
 	playing, ending := !c.paused, c.ending()
-	if c.led() && c.leader == hostname {
+	if c.led() && from != "" && c.by == from {
 		c.free = true
 	}
 	if !playing || ending {

@@ -266,8 +266,8 @@ func TestAMemberBackWithinTheGraceWasNeverGone(t *testing.T) {
 	}
 }
 
-// One not back within the grace left, and the room is told; one that says goodbye is
-// gone at once.
+// One not back within the grace left, and the room is told, by its id; one that says goodbye
+// is gone at once.
 func TestAMemberNotBackOrSayingGoodbyeLeft(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -283,7 +283,7 @@ func TestAMemberNotBackOrSayingGoodbyeLeft(t *testing.T) {
 			r.grace = tc.grace
 			url := serve(t, r)
 			a, _ := join(t, url, "room", "s", "a", "k")
-			b, _ := join(t, url, "room", "s", "b&session=x")
+			b, _ := join(t, url, "room", "s", "b&session=x&id=b1")
 			tc.end(b)
 			c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -297,6 +297,10 @@ func TestAMemberNotBackOrSayingGoodbyeLeft(t *testing.T) {
 				json.Unmarshal(msg, &m)
 				json.Unmarshal(m.Event, &e)
 				got = append(got, e.Data)
+				// by the id b sends, not its name, which another member may share
+				if e.Data == "b has left" && m.From != "b1" {
+					t.Fatalf("b's leave came from %q, want its id b1", m.From)
+				}
 			}
 		})
 	}
