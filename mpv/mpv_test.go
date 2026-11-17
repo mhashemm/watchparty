@@ -1428,10 +1428,53 @@ func TestMovingToAnEntryWhilePlayingPausesTheParty(t *testing.T) {
 	})
 }
 
-// Only the person's own pause or seek leads a stop, a seek while playing too: the party
-// stops for it first. Any other stop is free, and the first seek leads: a move, by hand or
-// at the end of an entry (two players reach the end together, and the tie's winner would
-// lead, e2e [R15c]), or running out of cache.
+// A move is a seek far enough to land in another file: a follower's stays on its screen, and
+// the party is still where it was. Resumed there, the party stops on that file and second,
+// as for a move while playing, and this node leads: the others must load it first, and
+// would play that far apart.
+func TestAFollowersMoveStaysOnItsScreen(t *testing.T) {
+	t.Parallel()
+	t.Run("kept", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{names: threeVideos})
+			n.takes(3, true, 30)
+			n.mpvSays(propertyChangeLine(playlistPos, "1", 0))
+			n.keepsTheSeek("z")
+			// a joiner is told the party's entry and second, not this screen's
+			n.peerSays("j", `{"name":"joined"}`)
+			got := n.broadcasts()
+			if len(got) != 1 || *got[0].Entry != 0 || *got[0].At != 30 {
+				t.Fatalf("answered %+v, want the party's entry 0 at 30", got)
+			}
+			// and where the party continues from, if it ends now
+			if entry, at := n.c.Position(); entry != 0 || at != 30 {
+				t.Fatalf("Position %d at %v, want the party's entry 0 at 30", entry, at)
+			}
+		})
+	})
+	t.Run("resumed there", func(t *testing.T) {
+		nodeTest(t, func(t *testing.T) {
+			n := ready(t, setup{names: threeVideos})
+			n.takes(3, true, 30)
+			n.mpvSays(propertyChangeLine(playlistPos, "1", 0), mpvAt(12))
+			n.keepsTheSeek("z")
+			n.mpvSays(propertyChangeLine(pause, "no", 0))
+			if got := n.broadcasts(); len(got) != 0 {
+				t.Fatalf("broadcast %q, want no resume", said(got))
+			}
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+			got := n.broadcasts()
+			if fmt.Sprint(said(got)) != "[pause=yes time-pos=12.000000 pause-reason=video changed]" || *got[0].Entry != 1 || *got[0].At != 12 || got[0].Free {
+				t.Fatalf("broadcast %+v, want the party stopped on entry 1 at 12, led by this node", got)
+			}
+		})
+	})
+}
+
+// Only the person's own pause, seek or move leads a stop, while playing too: the party stops
+// for it first. Any other stop is free, and the first seek leads: mpv moving on from the end
+// of an entry (two players reach the end together, and the tie's winner would lead, e2e
+// [R15c]), or running out of cache.
 func TestOnlyThePersonsPauseOrSeekLeads(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -1457,8 +1500,8 @@ func TestOnlyThePersonsPauseOrSeekLeads(t *testing.T) {
 			n.plays()
 			n.mpvSays(mpvAt(90), propertyChangeLine(playlistPos, "1", 0))
 			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
-		}, true},
-		"a move while stopped": {func(n *node) { n.mpvSays(propertyChangeLine(playlistPos, "1", 0)) }, true},
+		}, false},
+		"a move while stopped": {func(n *node) { n.mpvSays(propertyChangeLine(playlistPos, "1", 0)) }, false},
 		"the person's pause after a stop nobody chose": {func(n *node) {
 			n.plays()
 			n.mpvSays(propertyChangeLine(pausedForCache, "yes", 0))
@@ -1617,7 +1660,8 @@ func TestAStopTakenAsAKeyPressOpensAFileDoesNotSeekIt(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{names: threeVideos})
 		n.mpvSays(started(1), `{"event":"file-loaded"}`)
-		n.peerSays("b", `{"stamp":3,"at":30,"entry":0,"event":"property-change","name":"pause","data":"yes"}`)
+		// a stop nobody chose: one that leads would keep the person's move on this screen
+		n.peerSays("b", `{"stamp":3,"at":30,"entry":0,"free":true,"event":"property-change","name":"pause","data":"yes"}`)
 		n.mpvSays(propertyChangeLine(playlistPos, "1", 0), mpvAt(0))
 		n.mpvObeys()
 		got := n.broadcasts()
@@ -1688,7 +1732,8 @@ func TestAnAnswerIsFollowedOnlyIfItIsNewer(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{names: threeVideos, start: 1})
 			n.takes(3, true, 0)
-			n.peerSays("a", move(4, 0))
+			// an answer is a stop nobody chose: this node doesn't follow it, and its move goes out
+			n.peerSays("a", `{"stamp":4,"free":true,"event":"property-change","name":"playlist-pos","data":"0"}`)
 			if got := n.mpvWasTold(); len(got) == 0 || got[0] != "set_property playlist-pos 0" {
 				t.Fatalf("told mpv %q, want to follow it", got)
 			}
@@ -1706,7 +1751,8 @@ func TestAnAnswerIsFollowedOnlyIfItIsNewer(t *testing.T) {
 func TestANewerStampForTheSameEntryIsTaken(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{names: threeVideos, start: 1})
-		n.peerSays("a", move(5, 1))
+		// mpv moving a on from the end: nobody leads, so this node's move goes out
+		n.peerSays("a", `{"stamp":5,"free":true,"event":"property-change","name":"playlist-pos","data":"1"}`)
 		if got := n.mpvWasTold(); len(got) != 0 {
 			t.Fatalf("told mpv %q, want nothing for the entry it is on", got)
 		}

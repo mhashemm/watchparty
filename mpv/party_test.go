@@ -905,7 +905,10 @@ func TestQuickMovesEndOnOneEntryAndLeaveNoMarker(t *testing.T) {
 				if a.entry != want || b.entry != want {
 					t.Errorf("seed %d: on entries %d and %d, want %d", seed, a.entry, b.entry, want)
 				}
-				// a marker left behind would swallow this as an echo, and nobody would follow
+				// a marker left behind would swallow this as an echo, and nobody would follow.
+				// b follows a's moves, so its own stays on its screen until the party plays.
+				s.script = []func(){sets(a, false)}
+				s.run()
 				to := (want + 1) % simEntries
 				s.script = []func(){func() {
 					b.mu.Lock()

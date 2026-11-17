@@ -39,10 +39,11 @@ Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), 
   current value at once; a fresh node is paused, so it would broadcast `time-pos=0` and
   rewind everyone. The state is still recorded.
 - **Every `time-pos` updates `c.pos`, echo or not.** It is what every pause carries (`at`).
-- **While paused only the leader seeks** (`led`: stopped on the state of a member's pause or seek):
-  a follower's seek stays on its screen, told once a state ("only X can seek until resumed"), and
-  `held`/`Position` keep the party's second (`since`); its resume starts everyone from its screen.
-  Only the person's own pause or seek leads (`handleEvent`); any other stop is `free` (`asked`).
+- **While paused only the leader seeks or moves** (`led`): a follower's seek or move stays on its
+  screen, told once a state ("only X can seek until resumed"); `held`/`Position` keep the party's
+  entry and second (`partyEntry`, `since`). Its resume starts everyone from its screen; on another
+  file the party stops there instead, as everyone must load it. Only the person's own pause, seek
+  or move leads (`handleEvent`), not mpv's move at a file's end (`ranOut`): else `free` (`asked`).
 - **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
   (`pauseExtras`), even when the pause was an echo, so a seek that raced a peer's pause isn't lost.
 - **mpv's report of a pause this node applied is when it stops or starts** (`c.paused`),
@@ -152,9 +153,8 @@ P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's 
 ### Playlists (`entries`, `adopt`)
 
 Only with `Config.Playlist` (`MPV.md`, "Playlists"), where everyone's list is identical
-(`party/CLAUDE.md`), so an index means the same file to all. `playlist-pos` moving, by hand
-or at the end of a file, goes out raw, and while playing also pauses the party with a
-reason: nobody starts the next one until someone resumes.
+(`party/CLAUDE.md`), so an index means the same file to all. A move goes out raw, and while
+playing also pauses the party with a reason: nobody starts the next one until someone resumes.
 
 - A peer's index is bounds-checked and only ever sets `playlist-pos`.
 - **`commit` sets `loading` before mpv is told.** Two players reach the end together, so
