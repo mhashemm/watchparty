@@ -349,11 +349,9 @@ type Client struct {
 	by, leader string
 	told       bool
 	// toPlay: the state this node last took from a member plays: it is no follower of a pause.
-	// free: the stop this node holds has no leader, as the program made it; freeNext: the
-	// next change of its own is such a stop (answer, left)
-	toPlay, free, freeNext bool
-	// ranOut: mpv moved on from the end of the entry it played, by itself
-	ranOut bool
+	// free: the stop this node holds has no leader, as nobody chose it; asked: this node
+	// paused mpv itself, for a reason other than the person's seek (answer, left, pauseParty)
+	toPlay, free, asked bool
 
 	// playlist
 	names     []string
@@ -429,8 +427,13 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 		out = append([][]byte{line}, out...)
 	}
 	if len(out) > 0 {
-		// this node's own change, or what it adds to a peer's: the next stamp
-		c.stamp, c.by, c.free, c.freeNext = c.stamp+1, "", c.freeNext, false
+		// this node's own change, or what it adds to a peer's: the next stamp. Only the
+		// person's own pause or seek leads; any other stop is free, and the first seek leads.
+		lead := event.Name == timePos || event.Name == pause && event.paused() && !c.asked
+		c.stamp, c.by, c.free = c.stamp+1, "", !lead
+	}
+	if event.Name == pause {
+		c.asked = false
 	}
 	for i, b := range out {
 		out[i] = c.tag(b)
@@ -533,7 +536,7 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 	case pausedForCache:
 		c.stalled = event.paused()
 		if c.stalled && !c.paused {
-			c.pauseParty("buffering", false)
+			c.pauseParty("buffering")
 		}
 		return nil, errDoNotSend
 	case playlistPos:
@@ -569,8 +572,6 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 	case playlistPos:
 		c.stray = false
 		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-			// before clear forgets the second it left
-			c.ranOut = !c.paused && c.ending()
 			c.current = n
 			moved = c.seen[timePos]
 			if !c.cleared || c.started != n+1 {
@@ -596,7 +597,7 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 		return extra, errNoChange
 	}
 	if !paused && c.stalled {
-		c.pauseParty("still buffering", false)
+		c.pauseParty("still buffering")
 		return nil, errDoNotSend
 	}
 	c.paused = paused
@@ -645,21 +646,19 @@ func (c *Client) positionChanged() error {
 	}
 	if c.seeking {
 		c.seeking = false
-		c.pauseParty("seek", false)
+		c.pauseParty("seek")
 	}
 	return errDoNotSend
 }
 
 // entryChanged is this node moving to another entry by itself: it goes out, and pauses
-// the party if it was playing. Moved on from the end, nobody chose that stop (free): players
-// reach the end together, and whichever wins the tie would lead.
+// the party if it was playing.
 func (c *Client) entryChanged(moved bool) error {
 	if !moved {
 		return errDoNotSend
 	}
 	if !c.paused {
-		c.freeNext = c.ranOut
-		c.pauseParty("video changed", c.ranOut)
+		c.pauseParty("video changed")
 	}
 	return nil
 }
@@ -793,11 +792,12 @@ func position(name string, pos float64) []byte {
 	return b
 }
 
-// pauseParty stops the party for why this node is out of step: led by it, or by nobody (free).
-func (c *Client) pauseParty(reason string, free bool) {
+// pauseParty stops the party for why this node is out of step: led by it after the person's
+// seek, by nobody otherwise.
+func (c *Client) pauseParty(reason string) {
 	c.reason = reason
 	c.later = append(c.later, func() {
-		c.freeNext = free
+		c.asked = reason != "seek"
 		err := c.pauseReq(true)
 		if err != nil {
 			log.Println("pauseParty:", err)
@@ -1377,7 +1377,7 @@ func (c *Client) answer(hostname, reason string) error {
 	}
 	// a stop nobody chose: no leader, the first seek leads
 	if playing {
-		c.freeNext = true
+		c.asked = true
 		return c.pauseReq(true)
 	}
 	c.free = true
@@ -1450,7 +1450,7 @@ func (c *Client) left(hostname, from string) error {
 		return nil
 	}
 	c.showText(fmt.Sprintf("paused for %s: left", hostname))
-	c.freeNext = true
+	c.asked = true
 	return c.pauseReq(true)
 }
 
@@ -1475,8 +1475,8 @@ func (c *Client) resume(hostname string) error {
 		c.reason = "still buffering"
 		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
 		out := append([][]byte{again}, c.pauseExtras()...)
-		// this node's own pause, newer than the resume it refuses
-		c.stamp, c.by, c.free = c.stamp+1, "", false
+		// this node's own pause, newer than the resume it refuses, a stop nobody chose
+		c.stamp, c.by, c.free = c.stamp+1, "", true
 		for i, b := range out {
 			out[i] = c.tag(b)
 		}
@@ -1589,7 +1589,7 @@ func (c *Client) landed() {
 	// no marker may swallow it: they are all for seeks that came before it
 	c.seeks, c.landing = nil, false
 	if !c.paused {
-		c.pauseParty("seek", false)
+		c.pauseParty("seek")
 		return
 	}
 	line, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: data})

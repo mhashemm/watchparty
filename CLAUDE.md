@@ -38,8 +38,8 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 - **Two channels:** `outgoing` (mpv → transport), `incoming` (transport → mpv): raw mpv JSON, never parsed.
 
 **No master, but a stop has a leader:** anyone pauses and resumes; while paused only the node whose
-pause or seek the party holds seeks for it (`led`), and a stop nobody chose (a join, a leave, a file's end) is led
-by its first seek. Another's seek stays on its screen until a resume, from the resumer's screen.
+own pause or seek (also while playing) the party holds seeks for it (`led`); any other stop (a join,
+a leave, a move, buffering) is led by its first seek. Another's seek stays on its screen until a resume, from the resumer's screen.
 Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
 once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply to an observe.
 

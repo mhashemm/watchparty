@@ -1428,26 +1428,67 @@ func TestMovingToAnEntryWhilePlayingPausesTheParty(t *testing.T) {
 	})
 }
 
-// mpv moving on from the end of an entry is a stop nobody chose: players reach the end
-// together, and whichever won the tie would lead (e2e [R15c]). Moving on by hand leads.
-func TestMovingOnFromTheEndHasNoLeader(t *testing.T) {
+// Only the person's own pause or seek leads a stop, a seek while playing too: the party
+// stops for it first. Any other stop is free, and the first seek leads: a move, by hand or
+// at the end of an entry (two players reach the end together, and the tie's winner would
+// lead, e2e [R15c]), or running out of cache.
+func TestOnlyThePersonsPauseOrSeekLeads(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
-		at   float64
+		does func(n *node)
 		free bool
 	}{
-		"from the end": {118, true},
-		"by hand":      {90, false},
+		"the person's pause": {func(n *node) {
+			n.plays()
+			n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		}, false},
+		"the person's seek": {func(n *node) { n.mpvSays(mpvAt(30)) }, false},
+		"a seek while playing": {func(n *node) {
+			n.plays()
+			n.mpvSays(`{"event":"seek"}`, mpvAt(50), `{"event":"playback-restart"}`)
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+		}, false},
+		"a move at the end": {func(n *node) {
+			n.plays()
+			n.mpvSays(mpvAt(118), propertyChangeLine(playlistPos, "1", 0))
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+		}, true},
+		"a move by hand": {func(n *node) {
+			n.plays()
+			n.mpvSays(mpvAt(90), propertyChangeLine(playlistPos, "1", 0))
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+		}, true},
+		"a move while stopped": {func(n *node) { n.mpvSays(propertyChangeLine(playlistPos, "1", 0)) }, true},
+		"the person's pause after a stop nobody chose": {func(n *node) {
+			n.plays()
+			n.mpvSays(propertyChangeLine(pausedForCache, "yes", 0))
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+			n.mpvSays(propertyChangeLine(pausedForCache, "no", 0))
+			n.plays()
+			n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		}, false},
+		"a peer's resume refused while out of cache": {func(n *node) {
+			n.plays()
+			n.mpvSays(propertyChangeLine(pausedForCache, "yes", 0))
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+			n.broadcasts()
+			n.peerSays("a", stamped(20, `{"event":"property-change","name":"pause","data":"no","at":0,"entry":0}`))
+		}, true},
+		"running out of cache": {func(n *node) {
+			n.plays()
+			n.mpvSays(propertyChangeLine(pausedForCache, "yes", 0))
+			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
+		}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			nodeTest(t, func(t *testing.T) {
 				n := ready(t, setup{names: threeVideos})
-				n.plays()
-				n.mpvSays(mpvAt(c.at))
-				n.mpvSays(propertyChangeLine(playlistPos, "1", 0))
-				moved := n.broadcasts()
-				n.mpvObeys(propertyChangeLine(pause, "yes", 0))
-				for _, e := range append(moved, n.broadcasts()...) {
+				c.does(n)
+				got := n.broadcasts()
+				if len(got) == 0 {
+					t.Fatal("broadcast nothing")
+				}
+				for _, e := range got {
 					if e.Free != c.free {
 						t.Fatalf("broadcast %+v, want free %v", e, c.free)
 					}
