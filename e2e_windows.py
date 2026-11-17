@@ -319,10 +319,11 @@ def cli_suite():
     for n in (A, C):
         ok(f"{n} paused, told why", get(n, "pause") is True and f"paused for {B}: seek" in osd(n), str(osd(n)[-3:]))
 
-    print(f"\n[W4] a seek while paused on {A} moves everyone")
-    setp(A, "time-pos", 60)
-    until(lambda: all(near(get(n, "time-pos"), 60) for n in (B, C)))
-    for n in (B, C):
+    # B's seek stopped the party, so B leads it: only its seeks move everyone until a resume
+    print(f"\n[W4] a seek while paused on {B}, who leads the stop, moves everyone")
+    setp(B, "time-pos", 60)
+    until(lambda: all(near(get(n, "time-pos"), 60) for n in (A, C)))
+    for n in (A, C):
         ok(f"{n} is at 60s", near(get(n, "time-pos"), 60), str(get(n, "time-pos")))
 
     print(f"\n[W5] Ctrl-Break ends {C} cleanly, mpv and all")
