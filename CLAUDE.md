@@ -33,15 +33,15 @@ CI: `pr.yml` builds; unit, a new `SIM_SEED`, a `-short` stress; a job per e2e ph
 and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 
 - **A transport:** the P2P HTTP mesh (`server/`, LAN IP or UPNP), or a websocket
-  relay (`-relay`, client `party/ws.go`, server `relay/`) for people behind carrier
-  NAT. Both require the party's secret on every request.
+  relay (`-relay`, client `party/ws.go`, server `relay/`) for people behind carrier NAT. Both require the party's secret on every request.
 - **`mpv/`:** the JSON IPC client over a unix socket or Windows named pipe.
 - **Two channels:** `outgoing` (mpv → transport), `incoming` (transport → mpv): raw mpv JSON, never parsed.
 
-**No master, no slave:** any peer can drive the player. Only the node that generates
-an event broadcasts it, with its `stamp`: of two changes the newer wins, and of two made at
-once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply
-to an observe. Don't bring back a `role` echo hack: it muted the peer, not the echo.
+**No master, but a stop has a leader:** anyone pauses and resumes; while paused only the node whose
+pause or seek the party holds seeks for it (`led`), and a stop nobody chose (a join, a leave) is led
+by its first seek. Another's seek stays on its screen until a resume, from the resumer's screen.
+Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
+once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while

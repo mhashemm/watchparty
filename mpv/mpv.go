@@ -250,6 +250,9 @@ type Event struct {
 	// Check: the state its sender holds, back in the room after losing the relay.
 	Again bool `json:"again,omitempty"`
 	Check bool `json:"check,omitempty"`
+	// Free: a stop nobody chose (answering a join, catching up, a leave): it has no leader,
+	// and the first seek leads
+	Free bool `json:"free,omitempty"`
 	// EntryID: the playlist entry a start-file opens, counted from 1
 	EntryID int `json:"playlist_entry_id,omitempty"`
 	Response
@@ -341,8 +344,14 @@ type Client struct {
 	missed map[string]bool
 
 	resumeAt float64
-	// by: the member (From) whose state this node last adopted
-	by string
+	// by: the member (From) whose state this node last adopted; leader: its name. told: the
+	// person here has been told who holds the seek, for that state
+	by, leader string
+	told       bool
+	// toPlay: the state this node last took from a member plays: it is no follower of a pause.
+	// free: the stop this node holds has no leader, as the program made it; freeNext: the
+	// next change of its own is such a stop (answer, left)
+	toPlay, free, freeNext bool
 
 	// playlist
 	names     []string
@@ -419,7 +428,7 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	}
 	if len(out) > 0 {
 		// this node's own change, or what it adds to a peer's: the next stamp
-		c.stamp, c.by = c.stamp+1, ""
+		c.stamp, c.by, c.free, c.freeNext = c.stamp+1, "", c.freeNext, false
 	}
 	for i, b := range out {
 		out[i] = c.tag(b)
@@ -618,6 +627,16 @@ func (c *Client) positionChanged() error {
 		// nothing of a seek applied before it (MPV.md), so their markers would only swallow
 		// the person's way back to one of them
 		c.seeks, c.landing = nil, false
+		if c.led() {
+			// a follower's seek stays on this screen until the party resumes: told once for each
+			// state it takes, so a held key doesn't flood the feed
+			if !c.told {
+				c.told = true
+				text := fmt.Sprintf("only %s can seek until resumed", c.leader)
+				c.later = append(c.later, func() { c.showText(text) })
+			}
+			return errDoNotSend
+		}
 		return nil
 	}
 	if c.seeking {
@@ -646,6 +665,8 @@ type state struct {
 	entry  int
 	paused bool
 	at     float64
+	// free: a stop with no leader (Event.Free); not weighed by over
+	free bool
 }
 
 // over orders two states the same way on every node: the higher stamp; with the same
@@ -681,7 +702,28 @@ func (s state) agrees(h state) bool {
 // could win, and would drag the party back. Stopped once it is stopping the party
 // (pauseParty): its own move says so, before mpv has stopped.
 func (c *Client) held() state {
-	return state{stamp: c.stamp, entry: c.heading(), paused: c.paused || c.reason != "", at: c.target()}
+	at := c.target()
+	if c.onAStop() {
+		// the party's second, wherever the person has taken this node's own screen since
+		at = c.since
+	}
+	paused := c.paused || c.reason != ""
+	return state{stamp: c.stamp, entry: c.heading(), paused: paused, at: at, free: paused && c.free}
+}
+
+// onAStop is a node stopped on a member's state (by). Not a joiner, whose stamp is still
+// unheard, nor a node taking a member's resume: a seek the person makes before mpv plays is
+// theirs, newer, and stops it (moved).
+func (c *Client) onAStop() bool {
+	return c.paused && c.reason == "" && c.by != "" && !c.toPlay && c.stamp >= 0
+}
+
+// led is a node following the leader of a stop: the member whose pause or seek it took. Only
+// the leader seeks for the party; a seek the person makes here stays on their screen until
+// the party resumes, from the resumer's screen. A stop nobody chose has no leader (free):
+// anyone's seek goes out, and the first leads.
+func (c *Client) led() bool {
+	return c.onAStop() && !c.free
 }
 
 // tag says what state a message was sent from, so whoever gets it knows whether it is
@@ -689,6 +731,9 @@ func (c *Client) held() state {
 func (c *Client) tag(b []byte) []byte {
 	s := c.held()
 	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,`, s.stamp, s.paused, s.at)
+	if s.free {
+		head = append(head, `"free":true,`...)
+	}
 	if len(c.names) > 0 {
 		head = fmt.Appendf(head, `"entry":%d,`, s.entry)
 	}
@@ -701,7 +746,7 @@ func (c *Client) stateOf(e Event) (state, error) {
 	if e.Paused == nil || e.At == nil || len(c.names) > 0 && e.Entry == nil {
 		return state{}, errors.New("no state")
 	}
-	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At}
+	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At, free: e.Free && *e.Paused}
 	if len(c.names) > 0 {
 		if s.entry = *e.Entry; s.entry < 0 || s.entry >= len(c.names) {
 			return s, errors.New("no such entry")
@@ -894,7 +939,12 @@ type snapshot struct {
 }
 
 func (c *Client) snapshot() {
-	c.snap.Store(&snapshot{current: c.current, entries: len(c.names), pos: c.pos, duration: c.duration})
+	pos := c.pos
+	if c.onAStop() {
+		// the party's second, wherever the person took this node's screen
+		pos = c.since
+	}
+	c.snap.Store(&snapshot{current: c.current, entries: len(c.names), pos: pos, duration: c.duration})
 }
 
 // mpvSaid is one line from mpv: an answer to a request, or an event.
@@ -1098,6 +1148,7 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 		c.stamp = max(c.stamp, s.stamp)
 	case over > 0:
 		a = c.commit(s, m.From)
+		c.leader, c.told = hostname, false
 	}
 	switch {
 	case apart:
@@ -1147,7 +1198,7 @@ func (c *Client) commit(s state, from string) adoption {
 	a.seek = !there && !away && (a.stop || c.paused)
 	// on its second as far as this node has read, but mpv plays on until the stop lands
 	c.stopAt, c.stopping = s.at, a.stop && there && !a.moving
-	c.stamp, c.by, c.since = s.stamp, from, s.at
+	c.stamp, c.by, c.since, c.toPlay, c.free = s.stamp, from, s.at, !s.paused, s.free
 	if a.stop {
 		c.applied[pause] = "yes"
 	}
@@ -1316,9 +1367,12 @@ func (c *Client) answer(hostname, reason string) error {
 	if c.moved(from) {
 		return nil
 	}
+	// a stop nobody chose: no leader, the first seek leads
 	if playing {
+		c.freeNext = true
 		return c.pauseReq(true)
 	}
+	c.free = true
 	// tagged now, not before the notice: what it says is where this node is when it goes out
 	c.say(c.tag(position(timePos, c.held().at)))
 	return nil
@@ -1377,12 +1431,19 @@ func (c *Client) reply(to chan<- []byte, b []byte) bool {
 	}
 }
 
+// left pauses the party for a member that left, a stop with no leader; a leader that left
+// leaves its stop with none. Told by name, which another member may share: then the first
+// seek leads a little early.
 func (c *Client) left(hostname string) error {
 	playing, ending := !c.paused, c.ending()
+	if c.led() && c.leader == hostname {
+		c.free = true
+	}
 	if !playing || ending {
 		return nil
 	}
 	c.showText(fmt.Sprintf("paused for %s: left", hostname))
+	c.freeNext = true
 	return c.pauseReq(true)
 }
 
@@ -1408,7 +1469,7 @@ func (c *Client) resume(hostname string) error {
 		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
 		out := append([][]byte{again}, c.pauseExtras()...)
 		// this node's own pause, newer than the resume it refuses
-		c.stamp, c.by = c.stamp+1, ""
+		c.stamp, c.by, c.free = c.stamp+1, "", false
 		for i, b := range out {
 			out[i] = c.tag(b)
 		}

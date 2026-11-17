@@ -485,9 +485,10 @@ func (s *sim) inStep(seed uint64, lag float64) {
 	if !s.nodes[0].paused {
 		apart += lag
 	}
+	first := s.nodes[0].second()
 	for _, n := range s.nodes {
-		if d := n.pos - s.nodes[0].pos; n.paused != s.nodes[0].paused || d > apart || d < -apart {
-			s.t.Errorf("seed %d: %s is at %.2f (paused %v), %s at %.2f (paused %v)", seed, n.name, n.pos, n.paused, s.nodes[0].name, s.nodes[0].pos, s.nodes[0].paused)
+		if d := n.second() - first; n.paused != s.nodes[0].paused || d > apart || d < -apart {
+			s.t.Errorf("seed %d: %s is at %.2f (paused %v), %s at %.2f (paused %v)", seed, n.name, n.second(), n.paused, s.nodes[0].name, first, s.nodes[0].paused)
 		}
 	}
 }
@@ -527,6 +528,7 @@ func play(pos float64, nodes ...*simNode) {
 	for _, n := range nodes {
 		n.paused, n.pos = false, pos
 		n.c.paused, n.c.pos, n.c.stamp = false, pos, 1
+		n.c.snapshot()
 	}
 }
 
@@ -536,10 +538,20 @@ func (s *sim) together(seed uint64) {
 		if !n.paused {
 			s.t.Errorf("seed %d: %s is playing", seed, n.name)
 		}
-		if d := n.pos - s.nodes[0].pos; d > 0.15 || d < -0.15 {
-			s.t.Errorf("seed %d: %s is at %.2f, %s at %.2f", seed, n.name, n.pos, s.nodes[0].name, s.nodes[0].pos)
+		if d := n.second() - s.nodes[0].second(); d > 0.15 || d < -0.15 {
+			s.t.Errorf("seed %d: %s is at %.2f, %s at %.2f", seed, n.name, n.second(), s.nodes[0].name, s.nodes[0].second())
 		}
 	}
+}
+
+// second is where n is: playing, its mpv's second; stopped, the party's second it holds
+// (Position), as a follower's screen stays wherever the person took it until the party resumes.
+func (n *simNode) second() float64 {
+	if !n.paused {
+		return n.pos
+	}
+	_, at := n.c.Position()
+	return at
 }
 
 func forSeeds(t *testing.T, f func(t *testing.T, seed uint64)) {
@@ -971,6 +983,7 @@ func joins(n *simNode) {
 func stopped(pos float64, nodes ...*simNode) {
 	for _, n := range nodes {
 		n.pos, n.c.pos, n.c.stamp = pos, pos, 1
+		n.c.snapshot()
 	}
 }
 
