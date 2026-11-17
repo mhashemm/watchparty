@@ -46,7 +46,7 @@ goes there too. Not in the release; deployed by hand or as the image.
 
 ## Protocol
 
-- `GET /ws?room=&hostname=&session=&file=&wait=1` upgrades. The secret is in the
+- `GET /ws?room=&hostname=&id=&session=&file=&wait=1` upgrades. The secret is in the
   **`room-secret`** header, never the query (proxies log it); the create key, needed
   only to open a room, in **`create-key`**. `file` isn't secret.
 - The 101 carries **`room-opened: yes`** for the node that created the room with the key:
@@ -59,7 +59,8 @@ goes there too. Not in the release; deployed by hand or as the image.
   per room, then 503 (the node retries): anyone with a secret could otherwise pin every
   connection for 30 minutes.
 - Notices: "X has joined" and "X has left" to the room, and "connected to Y" to the
-  joiner once per member already there, so the last joiner learns who is in the room.
+  joiner once per member already there, so the last joiner learns who is in the room. Each
+  carries the member's `id` as `from`, the id its frames carry: names may be shared.
 - **A member whose connection drops is away for `grace` (10s) before the room is told it
   left** (`leave`, `notBack`): a leave stops the party, and most drops are back in a second.
   Back with its session, it is swapped in like a reconnect, with no notice. A close with

@@ -39,6 +39,11 @@ Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), 
   current value at once; a fresh node is paused, so it would broadcast `time-pos=0` and
   rewind everyone. The state is still recorded.
 - **Every `time-pos` updates `c.pos`, echo or not.** It is what every pause carries (`at`).
+- **While paused only the leader seeks or moves** (`led`): a follower's seek or move stays on its
+  screen, told once a state ("only X can seek until resumed"); `held`/`Position` keep the party's
+  entry and second (`partyEntry`, `since`). Its resume starts everyone from its screen; on another
+  file the party stops there instead, as everyone must load it. Only the person's own pause, seek
+  or move leads (`handleEvent`), not mpv's move at a file's end (`ranOut`): else `free` (`asked`).
 - **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
   (`pauseExtras`), even when the pause was an echo, so a seek that raced a peer's pause isn't lost.
 - **mpv's report of a pause this node applied is when it stops or starts** (`c.paused`),
@@ -47,8 +52,7 @@ Only `property-change` of `pause`, and of `time-pos` **while paused** (a seek), 
 
 ### Echo suppression (`applied`, `seeks`)
 
-Applying a peer's change makes mpv report it back. Without suppression b rebroadcasts
-a's pause to a, and the relay, which has no counters, loops forever.
+Applying a peer's change makes mpv report it back; rebroadcast, it loops forever over the relay.
 
 - **Mark before the IPC call** (`commit` and `resume` set `applied`, `mark` appends to `seeks`): the echo can arrive before `do()` returns.
 - `pause` matches exactly and deletes the marker; none is set for a pause mpv already has (no event).
@@ -66,15 +70,13 @@ A seek while playing, or a node waiting on its cache, leaves the others out of s
   it landed. A peer's seek right before its resume reports after mpv replies to the resume, when
   `c.paused` is false, so until `playback-restart` (`peerSeek`) a `seek` isn't ours. mpv folds seeks.
 - **`buffering`**: `paused-for-cache` turns `yes` while playing.
-- **`still buffering`**: a local resume while `stalled` is caught and not broadcast.
-  A **peer's** resume while `stalled` never reaches mpv: `resume()` refuses it and sends
-  pause, position and reason itself. Applying it and re-pausing doesn't work, since mpv
-  folds the two sets into no `property-change`.
+- **`still buffering`**: a local resume while `stalled` is caught and not broadcast. A **peer's**
+  never reaches mpv: `resume()` refuses it and sends pause, position and reason itself. Applied
+  and re-paused, mpv folds the two sets into no `property-change`.
 
 `pauseParty` sends the pause after the line that started it (`later`), unmarked, so mpv's
-`pause=yes` goes out as this node's own, followed by the extras. Peers get pause before
-position: P2P `broadcast` waits per event and the relay keeps a FIFO per member. e2e `[R6b]`,
-`[R11f]`.
+`pause=yes` goes out as this node's own, then the extras; peers get pause before position (P2P
+`broadcast` waits per event, the relay keeps a FIFO per member). e2e `[R6b]`, `[R11f]`.
 
 ## Applying remote events (`apply`)
 
@@ -142,9 +144,8 @@ The transports' "X has left" notice, sent only for a member that says goodbye or
 relay loses, pauses the party. Reading the text means an already deployed relay works.
 P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's next send.
 
-- Each node pauses itself and it goes out as its own pause, so a node whose notice was
-  lost still stops. Nodes stop a moment apart with one stamp, so they settle on the
-  earliest stop (`over`).
+- Each node pauses itself, as its own `free` pause, so a node whose notice was lost still stops;
+  they stop a moment apart with one stamp and settle on the earliest (`over`).
 - **Not within `endGraceSeconds` of the end.** The first player to reach the end leaves,
   and a pause would hold everyone else just short of it. So `duration` is observed.
 - A notice shows first, so the GUI's feed can tell this pause from a person's. `[14]`, `[R14]`, `[R15h]`.
@@ -152,9 +153,8 @@ P2P's "dropped X" doesn't pause: it fires at least 5 minutes later, on a peer's 
 ### Playlists (`entries`, `adopt`)
 
 Only with `Config.Playlist` (`MPV.md`, "Playlists"), where everyone's list is identical
-(`party/CLAUDE.md`), so an index means the same file to all. `playlist-pos` moving, by hand
-or at the end of a file, goes out raw, and while playing also pauses the party with a
-reason: nobody starts the next one until someone resumes.
+(`party/CLAUDE.md`), so an index means the same file to all. A move goes out raw, and while
+playing also pauses the party with a reason: nobody starts the next one until someone resumes.
 
 - A peer's index is bounds-checked and only ever sets `playlist-pos`.
 - **`commit` sets `loading` before mpv is told.** Two players reach the end together, so

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -393,6 +394,19 @@ func said(events []Event) []string {
 		out = append(out, e.Name+"="+e.Data)
 	}
 	return out
+}
+
+// keepsTheSeek is a follower keeping the person's seek on its screen: nothing goes out, and the
+// person is told who holds the seek, which also says the seek wasn't taken for an echo.
+func (n *node) keepsTheSeek(leader string) {
+	n.t.Helper()
+	if got := n.broadcasts(); len(got) != 0 {
+		n.t.Fatalf("broadcast %q, want the follower's seek kept on its screen", said(got))
+	}
+	want := fmt.Sprintf("show-text only %s can seek until resumed 5000", leader)
+	if told := n.mpvWasTold(); !slices.Contains(told, want) {
+		n.t.Fatalf("told mpv %q, want %q", told, want)
+	}
 }
 
 // plays is the person at this node resuming, and mpv doing it.

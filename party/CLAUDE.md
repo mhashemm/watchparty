@@ -143,7 +143,7 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
 
 ## `ws.go`: the relay client
 
-- `dial` puts room, hostname, session and file in the query, and the secret and create
+- `dial` puts room, hostname, id, session and file in the query, and the secret and create
   key in **headers** (`room-secret`, `create-key`), since proxies log query strings. A
   trailing slash on the address is trimmed, so a pasted `wss://host/` still works.
 - How the node reacts to each relay status:

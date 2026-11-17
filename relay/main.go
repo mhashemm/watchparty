@@ -84,10 +84,12 @@ func (l *limiter) allow(key string, cap int) bool {
 type member struct {
 	id       string
 	hostname string
-	session  string
-	ch       chan []byte
-	conn     *websocket.Conn
-	log      *slog.Logger
+	// from: the id the node sends in its frames, so a notice about it names it whatever its name
+	from    string
+	session string
+	ch      chan []byte
+	conn    *websocket.Conn
+	log     *slog.Logger
 	// gone tells the room it left, once it has been away for the grace
 	gone *time.Timer
 }
@@ -155,9 +157,9 @@ func clean(s string) string {
 	}, s)
 }
 
-func notice(hostname, text string) []byte {
+func notice(m *member, text string) []byte {
 	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
-	b, _ := json.Marshal(wire.Message{Hostname: hostname, Event: event})
+	b, _ := json.Marshal(wire.Message{Hostname: m.hostname, From: m.from, Event: event})
 	return b
 }
 
@@ -332,12 +334,12 @@ func (r *relay) add(name string, m *member) (*member, bool) {
 		stale = away
 	}
 	// a reconnect is not news to the room, which never heard it leave
-	joined := notice(m.hostname, m.hostname+mpv.HasJoined)
+	joined := notice(m, m.hostname+mpv.HasJoined)
 	for other := range rm.members {
 		if stale == nil {
 			queue(other, joined)
 		}
-		queue(m, notice(other.hostname, mpv.ConnectedTo+other.hostname))
+		queue(m, notice(other, mpv.ConnectedTo+other.hostname))
 	}
 	rm.members[m] = struct{}{}
 	return stale, true
@@ -390,7 +392,7 @@ func (r *relay) leave(name string, m *member, bye bool) string {
 	case away:
 		return "away"
 	case present:
-		r.broadcast(name, m, notice(m.hostname, m.hostname+mpv.HasLeft))
+		r.broadcast(name, m, notice(m, m.hostname+mpv.HasLeft))
 		return "left"
 	}
 	return replaced
@@ -407,7 +409,7 @@ func (r *relay) notBack(name string, rm *room, m *member) {
 	}
 	r.mu.Unlock()
 	if still {
-		r.broadcast(name, m, notice(m.hostname, m.hostname+mpv.HasLeft))
+		r.broadcast(name, m, notice(m, m.hostname+mpv.HasLeft))
 		m.log.Info("not back", "seconds", int(r.grace.Seconds()))
 	}
 }
@@ -516,7 +518,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		res.Header().Set(wire.OpenedHeader, "yes")
 	}
 
-	m := &member{id: id, hostname: hostname, session: req.URL.Query().Get(wire.SessionParam), ch: make(chan []byte, sendBuffer), log: l}
+	m := &member{id: id, hostname: hostname, from: req.URL.Query().Get(wire.IDParam), session: req.URL.Query().Get(wire.SessionParam), ch: make(chan []byte, sendBuffer), log: l}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty

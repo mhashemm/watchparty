@@ -33,15 +33,15 @@ CI: `pr.yml` builds; unit, a new `SIM_SEED`, a `-short` stress; a job per e2e ph
 and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 
 - **A transport:** the P2P HTTP mesh (`server/`, LAN IP or UPNP), or a websocket
-  relay (`-relay`, client `party/ws.go`, server `relay/`) for people behind carrier
-  NAT. Both require the party's secret on every request.
+  relay (`-relay`, client `party/ws.go`, server `relay/`) for people behind carrier NAT. Both require the party's secret on every request.
 - **`mpv/`:** the JSON IPC client over a unix socket or Windows named pipe.
 - **Two channels:** `outgoing` (mpv → transport), `incoming` (transport → mpv): raw mpv JSON, never parsed.
 
-**No master, no slave:** any peer can drive the player. Only the node that generates
-an event broadcasts it, with its `stamp`: of two changes the newer wins, and of two made at
-once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply
-to an observe. Don't bring back a `role` echo hack: it muted the peer, not the echo.
+**No master, but a stop has a leader:** anyone pauses and resumes; while paused only the node whose
+own pause, seek or move (also while playing) the party holds seeks or moves for it (`led`); any other
+stop (a join, a leave, a file's end, buffering) is led by its first seek. Another's seek or move stays on its screen until a resume, from the resumer's screen (another file: the party stops there).
+Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
+once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
@@ -66,9 +66,9 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | mpv | `sent again, as <host> missed something: …` | e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
-- **Notice texts** "X has joined", "connected to X", "X has left" are sent by both
-  `server/` and `relay/`, parsed by `mpv` (a leave pauses) and `gui/store.go`, all from the
-  constants in `mpv`; e2e's `known()` spells them again. Change all or none.
+- **Notice texts** "X has joined", "connected to X", "X has left" are sent by `server/` and `relay/` with
+  the member's `From`, parsed by `mpv` (a leave pauses, and frees the stop it led) and `gui/store.go`,
+  all from the constants in `mpv`; e2e's `known()` spells them again. Change all or none.
 - **The relay protocol is `relay/wire`**, imported by both `relay/main.go` and `party/ws.go`:
   the envelope `{"hostname", "from", "event": <raw mpv JSON>}`, path, query, headers, close codes.
   It imports nothing that would grow the relay image; importing `party` would pull upnp and server.

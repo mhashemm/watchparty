@@ -202,7 +202,8 @@ func TestOpeningARoomWithoutTheKeyEndsTheParty(t *testing.T) {
 
 // After a dropped connection the node redials with the same session, which is
 // what lets the relay swap it in silently, and frames from both connections
-// reach mpv. The secret travels in a header, never the query string.
+// reach mpv. The secret travels in a header, never the query string. Its id does,
+// so the relay's notice that it left names it, whatever its name.
 func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 	t.Parallel()
 	sessions := make(chan string, 2)
@@ -211,6 +212,9 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 			t.Errorf("secret sent as %q, query %q", r.Header.Get(wire.SecretHeader), r.URL.RawQuery)
 		}
 		sessions <- r.URL.Query().Get("session")
+		if id := r.URL.Query().Get(wire.IDParam); id != "i1" {
+			t.Errorf("dialed with id %q, want i1, the From of its frames", id)
+		}
 		conn := accept(t, w, r)
 		frame := `{"hostname":"peer","from":"p1","event":{"event":"property-change","name":"pause","data":"yes"}}`
 		conn.Write(r.Context(), websocket.MessageText, []byte(frame))

@@ -82,10 +82,12 @@ func (s *Server) Guard(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) notify(hostname string, text string) {
+// notify shows a notice about the peer at from: a leave tells its followers their leader left,
+// whatever its name.
+func (s *Server) notify(hostname, from, text string) {
 	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
 	select {
-	case s.incoming <- mpv.IncomingMessage{HostName: hostname, Event: event}:
+	case s.incoming <- mpv.IncomingMessage{HostName: hostname, From: from, Event: event}:
 	default:
 	}
 }
@@ -117,7 +119,7 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 		log.Printf("%s %s: %s\n", addr, hostname, err)
 	}
 	log.Printf("connected to %s with ip %s", hostname, addr)
-	s.notify(hostname, hostname+mpv.HasJoined)
+	s.notify(hostname, addr, hostname+mpv.HasJoined)
 }
 
 func (s *Server) Event(res http.ResponseWriter, req *http.Request) {
@@ -185,7 +187,7 @@ func (s *Server) Bye(res http.ResponseWriter, req *http.Request) {
 	delete(s.addresses, addr)
 	s.mu.Unlock()
 	res.WriteHeader(http.StatusNoContent)
-	s.notify(peer.Hostname, peer.Hostname+mpv.HasLeft)
+	s.notify(peer.Hostname, addr, peer.Hostname+mpv.HasLeft)
 }
 
 func (s *Server) hi(addr string, counter uint64) (*peer, map[string]*peer, error) {
@@ -256,7 +258,7 @@ func (s *Server) add(p *peer) {
 	s.mu.Lock()
 	s.addresses[p.address] = p
 	s.mu.Unlock()
-	s.notify(p.Hostname, mpv.ConnectedTo+p.Hostname)
+	s.notify(p.Hostname, p.address, mpv.ConnectedTo+p.Hostname)
 }
 
 func (s *Server) Shutdown() {
@@ -417,7 +419,7 @@ func (s *Server) record(p *peer, err error) {
 	}
 	s.mu.Unlock()
 	if evicted {
-		s.notify(p.Hostname, fmt.Sprintf("dropped %s", p))
+		s.notify(p.Hostname, p.address, fmt.Sprintf("dropped %s", p))
 	}
 }
 

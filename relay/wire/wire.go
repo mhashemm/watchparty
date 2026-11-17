@@ -8,13 +8,14 @@ import (
 	"github.com/coder/websocket"
 )
 
-// Path is where a node dials, with the room, hostname, session and file in the query.
+// Path is where a node dials, with the room, hostname, id, session and file in the query.
 // The secret and the create key go in headers, never the query: proxies log it.
 const (
 	Path = "/ws"
 
 	RoomParam     = "room"
 	HostnameParam = "hostname"
+	IDParam       = "id"
 	SessionParam  = "session"
 	FileParam     = "file"
 	// WaitParam set to "1" says the node can be held until a key holder opens the room;
@@ -37,7 +38,8 @@ const (
 
 // Message is every frame: the sender's hostname, its id and its raw mpv JSON, which the
 // relay forwards without parsing. The id is one rand.Text() per party, never the session:
-// that and the secret replace a member. Notices the relay makes carry none.
+// that and the secret replace a member. A notice the relay makes carries the member's id,
+// as it came in the query: a leave tells its followers their leader left, whatever its name.
 type Message struct {
 	Hostname string          `json:"hostname"`
 	From     string          `json:"from,omitempty"`

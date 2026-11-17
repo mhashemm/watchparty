@@ -319,10 +319,11 @@ def cli_suite():
     for n in (A, C):
         ok(f"{n} paused, told why", get(n, "pause") is True and f"paused for {B}: seek" in osd(n), str(osd(n)[-3:]))
 
-    print(f"\n[W4] a seek while paused on {A} moves everyone")
-    setp(A, "time-pos", 60)
-    until(lambda: all(near(get(n, "time-pos"), 60) for n in (B, C)))
-    for n in (B, C):
+    # B's seek stopped the party, so B leads it: only its seeks move everyone until a resume
+    print(f"\n[W4] a seek while paused on {B}, who leads the stop, moves everyone")
+    setp(B, "time-pos", 60)
+    until(lambda: all(near(get(n, "time-pos"), 60) for n in (A, C)))
+    for n in (A, C):
         ok(f"{n} is at 60s", near(get(n, "time-pos"), 60), str(get(n, "time-pos")))
 
     print(f"\n[W5] Ctrl-Break ends {C} cleanly, mpv and all")
@@ -545,13 +546,17 @@ def gui_suite():
         open(left, "w").close()
     subprocess.run([os.path.join(target, "uninstall.exe"), "/S"], check=True, timeout=BOOT)
     ok("uninstalling removes the folder, mpv, ffmpeg and yt-dlp, and a self-update's leftovers", until(lambda: not os.path.exists(target)), str(os.path.exists(target) and os.listdir(target)))
-    ok("and both shortcuts", not os.path.exists(menu) and not os.path.exists(desktop))
+    # the uninstaller runs from a copy of itself, so /S returns at once, and it removes the
+    # folder before the shortcuts and its Add/Remove Programs entry (setup.nsi): wait for each
+    ok("and both shortcuts", until(lambda: not os.path.exists(menu) and not os.path.exists(desktop)))
     ok("and gives the user's PATH back as it was", user_path() == path_before, (path_before, user_path()))
-    try:
-        winreg.OpenKey(winreg.HKEY_CURRENT_USER, key).Close()
-        ok("and its Add/Remove Programs entry", False)
-    except FileNotFoundError:
-        ok("and its Add/Remove Programs entry", True)
+    def unlisted():
+        try:
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, key).Close()
+            return False
+        except FileNotFoundError:
+            return True
+    ok("and its Add/Remove Programs entry", until(unlisted))
 
 
 # ------------------------------------------------------------------ main --
