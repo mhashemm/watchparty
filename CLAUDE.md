@@ -8,7 +8,7 @@ rule or contract that spans packages.
 | What | Where |
 |---|---|
 | A package's rules and traps | `<pkg>/CLAUDE.md`, loaded when you work in that package |
-| How mpv really behaves; why each mpv flag is pinned | `mpv/MPV.md`. Read it before touching anything that reacts to mpv's events |
+| How mpv really behaves; why each mpv flag is pinned | `mpv/MPV.md`. Read it before touching anything that reacts to mpv's events; what mpv orders, and the script route, in `mpv/ORDER.md` (`mpv/probe/` re-runs it) |
 | The GUI's look | `gui/DESIGN.md`. Read it before any visual change |
 | Writing and running `e2e.py` cases | `E2E.md` |
 | Why something is the way it is | the commit that did it: `git log -S'<identifier>'`, `git log -L`, `git log -- <file>`. Bodies hold the incident, the rejected alternatives and what was tested |
