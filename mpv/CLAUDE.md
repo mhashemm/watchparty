@@ -16,8 +16,7 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
   a transport message queued while a peer's change is in flight (`busy`). A command an mpv
   line starts (`pauseParty`) waits in `later` until that line's broadcast is out.
 - **So an action that waits more than once stops once this node has `moved`** (`adopt`,
-  `answer`): the person's change went out newer, and a go it overtook is undone (`converge`,
-  once what waits is taken).
+  `answer`): the person's change went out newer.
 - **`New` waits for `opened`**: the first `time-pos` with data, every observe taken and the script's name, or the close.
   - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's
     real exit status. Cancelling would kill the exiting mpv and turn "exit status 2" into
@@ -58,7 +57,7 @@ state goes to the script as one go, applied whole (`watchparty.lua`), or a chang
   from before the go, which overwrites it, or from the go. A key lost so is lost everywhere.
 - **The ack is weighed, never matched** (`landed`): what differs from what this node holds is the
   person's, after the go, and goes out; a second off where mpv stood, with no seek sent, is their
-  seek just before it. Moved meanwhile, the node's own change stands (`converge`).
+  seek just before it. Another file than the one it headed to is their move, from where mpv stopped.
 - A seek the script says with this node's id, within **±0.1s** of its second (a frame at
   ≥10fps, `--hr-seek=yes`), is ours; those sent before it were folded in. Any other is the
   person's: going out, it ends every mark; a follower's stays on its screen (`positionChanged`).
@@ -161,18 +160,17 @@ playing also pauses the party with a reason: nobody starts the next one until so
 - **The script opens another entry stopped and applies the rest once it starts** (its first
   `playback-restart`): a seek before it lands on the old file, or is dropped (`MPV.md`). The ack
   waits for that, `moveLimit` not 5s (a slow stream takes longer; mpv gives up on a hung one),
-  or comes at the `end-file` of a file mpv can't open; what comes meanwhile waits, a go for that
-  file with it. `adopt` skips an entry it is on or already headed to: every member answers a
+  or at the `end-file` of a file mpv can't open (not at another's load on the way); what comes
+  meanwhile waits, a go for that file with it. `adopt` skips an entry it is on or already headed to: every member answers a
   joiner, and two nodes often reach the end together.
-- **`following` queues moves:** the next can overtake mpv's report of the last (`MPV.md`). A
-  report drops entries up to its own; `file-loaded` clears the rest once this node is where it
-  headed, as there-and-back can report nothing. mpv's first report of where it started uses up
-  nothing: it can land after a peer sent this node elsewhere.
-- **Any other report is a key press and clears the queue,** so the party hears every report from there on.
+- **Only the script's `start` moves `current`** (`started`), labelled with whose it is: the go's
+  that set the entry, `auto` (mpv's own at a file's end, or the first), else the person's.
+  `playlist-pos` isn't observed: its reports overtake each other and fold (`MPV.md`).
+- **A go names the entry it is for** (`goTo`): one a key left that this node hasn't read is
+  only stopped, and the ack's (or refusal's) entry sends the move out. A seek there would go out
+  as this node's second on the key's file, and the party would follow it there.
 - **A switch resets `c.pos` to 0 and drops the marks for other files** (`commit`, `clear`). The
   old position would go out with the pause, and a seek queued for the old file never lands.
-  **The loaded entry is `start-file`'s id, never `current`:** mpv can report the entry after
-  `file-loaded` (`MPV.md`).
 - **A pause, seek or resume from another entry that doesn't win** was sent before someone
   moved: it loses on the entry, and its sender is told where the party is (`answer`, which
   stops a playing node): the move may never have reached it.

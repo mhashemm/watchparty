@@ -52,6 +52,11 @@ type simNode struct {
 	waiting *simGo
 	loading bool
 	heading int
+	// sets: the entries gos set, with their ids, until a start opens one; sent: the script's
+	// messages so far; over: the gos whose ack says they undid the person's move (watchparty.lua)
+	sets []simSet
+	sent int
+	over map[string]bool
 }
 
 // simGo is a go the script holds until its file loads.
@@ -98,7 +103,7 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	for _, name := range names {
 		ours, theirs := net.Pipe()
 		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true,
-			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{})}
+			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{}), over: map[string]bool{}}
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
 		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names = ctx, ours, true, slices.Repeat([]string{"e"}, entries)
 		n.c.seen[pause], n.c.seen[timePos], n.c.seen[playlistPos] = true, true, true
@@ -148,8 +153,22 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 			n.writes <- reply
 			replied = true
 			arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
-			paused, second, entry, id := arg(3), arg(4), arg(5), arg(6)
-			act := func() { n.goLocked(paused, second, entry, id) }
+			paused, second, entry, id, on := arg(3), arg(4), arg(5), arg(6), arg(8)
+			act := func() {
+				now := n.entry
+				if len(n.moves) > 0 {
+					now = n.moves[len(n.moves)-1]
+				}
+				if entry == "-" && !n.loading && on != "-" && on != strconv.Itoa(now) {
+					// for a file mpv has left (watchparty.lua): only stopped, and acked
+					if paused == "yes" {
+						n.setPause(true)
+					}
+					n.emit(n.script("ack", id))
+					return
+				}
+				n.goLocked(paused, second, entry, id)
+			}
 			if n.late {
 				n.act = act
 			} else {
@@ -201,9 +220,46 @@ func (n *simNode) answers() {
 	n.answered <- struct{}{}
 }
 
+// simSet is an entry a go set, by the go's id.
+type simSet struct {
+	entry int
+	id    string
+}
+
 // script is the script saying what mpv holds (watchparty.lua).
 func (n *simNode) script(kind, id string) string {
-	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f"]}`+"\n", kind, id, holds(n.paused), n.pos)
+	return n.scriptAt(kind, id, n.entry)
+}
+
+// scriptAt is script saying entry as the one mpv is on, or opened (start).
+func (n *simNode) scriptAt(kind, id string, entry int) string {
+	n.sent++
+	over := ""
+	if kind == "ack" && n.over[id] {
+		over = "over"
+		delete(n.over, id)
+	}
+	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f","%d",%q,"%d"]}`+"\n", kind, id, holds(n.paused), n.pos, n.sent, over, entry)
+}
+
+// start is the script saying whose file entry is: the go's that set it; else the person's,
+// which a go set after it undoes. A go's set before it lost to it, and never opens.
+func (n *simNode) start(entry int) string {
+	label := ""
+	if i := slices.IndexFunc(n.sets, func(s simSet) bool { return s.entry == entry }); i >= 0 {
+		label = n.sets[i].id
+		n.sets = n.sets[i+1:]
+	} else {
+		now := entry
+		if len(n.moves) > 0 {
+			now = n.moves[len(n.moves)-1]
+		}
+		n.sets = slices.DeleteFunc(n.sets, func(s simSet) bool { return s.entry != now })
+		if n.loading && n.waiting != nil && len(n.sets) > 0 {
+			n.over[n.waiting.id] = true
+		}
+	}
+	return n.scriptAt("start", label, entry)
 }
 
 func (n *simNode) emit(line string) {
@@ -253,6 +309,7 @@ func (n *simNode) goLocked(paused, second, entry, id string) {
 		if on != e {
 			n.setPause(true)
 			n.loading, n.heading = true, e
+			n.sets = append(n.sets, simSet{e, id})
 			n.request(e)
 		}
 		n.waiting = &simGo{paused: paused, second: second, id: id, entry: e}
@@ -310,12 +367,18 @@ func (n *simNode) fileLoaded(reports ...string) {
 	if w == nil {
 		return
 	}
-	n.waiting = nil
-	if n.entry == w.entry {
-		n.apply(w.paused, w.second, w.id)
-	} else {
+	if n.entry != w.entry {
+		// another file: the go waits on while mpv is still on its way to its own
+		if len(n.moves) > 0 && n.moves[len(n.moves)-1] == w.entry {
+			n.loading = true
+			return
+		}
+		n.waiting = nil
 		n.emit(n.script("ack", w.id))
+		return
 	}
+	n.waiting = nil
+	n.apply(w.paused, w.second, w.id)
 }
 
 func (n *simNode) seek(pos float64) {
@@ -378,6 +441,7 @@ func (n *simNode) foldMoves() {
 	n.moves = nil
 	if i == n.entry {
 		n.emit(started(i))
+		n.emit(n.start(i))
 		n.fileLoaded()
 		return
 	}
@@ -396,6 +460,7 @@ func (n *simNode) move(i int, late bool) {
 	}
 	n.entry, n.pos, n.seeks = i, 0, nil
 	n.emit(started(i))
+	n.emit(n.start(i))
 	reports := []string{propertyChangeLine(playlistPos, strconv.Itoa(i), 0), propertyChangeLine(timePos, "0.000000", 0)}
 	if late {
 		n.fileLoaded(reports...)

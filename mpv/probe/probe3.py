@@ -124,9 +124,14 @@ def moves(rounds):
             m.send("keypress", "RIGHT", s=p)
         else:
             send()
-        k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
+        k = wsnap(m, lambda s: s["kind"] in ("ack", "refused") and s["id"] == tag, i, 5)
         if k is None:
             errors["ack-late"].append((scen, off, [(s["kind"], s["id"], s["entry"]) for _, s in snaps(m, i)]))
+            continue
+        if W(m.lines[k]["args"])["kind"] == "refused":
+            # a key moved mpv as the go's seek began: no file to seek in; the node weighs the
+            # refusal's entry as an ack's
+            tally(shapes, (scen, "refused", "on " + W(m.lines[k]["args"]).get("at", "")))
             continue
         time.sleep(0.8)
         ack = W(m.lines[k]["args"])

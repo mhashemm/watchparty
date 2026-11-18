@@ -167,6 +167,13 @@ labels, 0 wrong final entries on both versions. A person's start the go then und
 `over` (0 missed, 0 false). The start's entry is its `playlist_entry_id` - 1: `playlist-pos` can
 already name a later set.
 
+**A go racing a key that opens another file** (`away`, 280 rounds each): the node sends a stop
+with a second for its file (`on`) as the person presses next -20..+20ms around it, playing or
+stopped. When the ack names the key's file, the go never seeked there: 0 on both versions. The
+old file's queued seek can still be said after the ack, with no position: mpv runs it as it leaves
+that file, and the new one opens at 0. A go's seek begun just before such a key is `refused`
+instead of acked (seen once in `moves` on 0.40.0), with the key's file as its entry.
+
 ## Re-running
 
 ```sh
@@ -179,6 +186,7 @@ LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
 python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own timeout
 ./run.sh 0 probe4.py over:840                       # the ack's over flag against lost keys
 ./run.sh 0 probe4.py starts:490 autos:40            # whose file each start is
+./run.sh 0 probe4.py away:280                       # a go for the file a key is leaving
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the

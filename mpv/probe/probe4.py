@@ -74,7 +74,7 @@ def to(m, cmd, *args):
             m.sent = len(m.lines)
             seen = next((l["args"][5] for l in reversed(m.lines) if l.get("event") == "client-message"
                          and l.get("args", [None])[0] == "watchparty" and len(l["args"]) > 5), "")
-        args = (*args, seen)
+        args = (*args[:4], seen, *args[4:])
     return m.send("script-message-to", NAME, cmd.replace("wp-", "watchparty-"), *[str(a) for a in args])
 
 
@@ -326,6 +326,12 @@ def starts(rounds):
         elif scen != "key" or dest is not None:
             if fe != str(e0):
                 errors["last"].append((scen, off, e0, target, dest, st, fe))
+        # a move's ack comes once its own file has started, when it does
+        idx = {s["id"]: n for n, s in snaps(m, i) if s["kind"] == "start" and s["id"] in (tag, back)}
+        for t in (tag, back):
+            k = next((n for n, s in snaps(m, i) if s["kind"] == "ack" and s["id"] == t), None)
+            if t in idx and k is not None and k < idx[t]:
+                errors.setdefault("early", []).append((scen, off, t == back, st))
         kinds = " ".join("ours" if l in (tag, back) else "auto" if l == "auto" else "person" for l, _ in st)
         # the person's key undone by our move, unread when we sent it: their start then ours, or
         # ours alone though their key had somewhere to go (it ran first and lost to our set)
@@ -382,6 +388,56 @@ def autos(rounds):
     finally:
         os.remove(bad)
     report("autos", rounds, errors, shapes)
+
+
+# A go for the file mpv is on (a stop, a seek) racing the person's next key, as the node sends
+# it, naming that file (on): if mpv ended on the key's file, the go only stopped it there, never
+# seeking, and its ack names that file, which the node sends out as the person's move.
+def away(rounds):
+    files = [os.path.join(HERE, f"p{k}.mkv") for k in range(3)]
+    m = M(files[2], [*WP, files[0], files[1]])  # M puts the file last
+    ready(m, [])
+    p = person_conn(m)
+    errors = {"seeked": [], "ack": [], "ack-late": []}
+    shapes = {}
+    for r in range(rounds):
+        off = OFFSETS_MS[r % len(OFFSETS_MS)]
+        e0 = r % 2
+        stopped(m)
+        if get(m, "playlist-pos") != str(e0):
+            i = m.mark()
+            m.send("set_property", "playlist-pos", e0)
+            m.wait(lambda l: l.get("event") == "playback-restart", i, 5)
+            time.sleep(0.15)
+        if r % 4 >= 2:
+            m.wait(reply(m.send("set_property", "pause", False)))
+            time.sleep(0.05)
+        tag = f"w{r}"
+        i = m.mark()
+        go = lambda: to(m, "wp-go", "yes", 30, "-", tag, str(e0))
+        if off < 0:
+            m.send("keypress", ">", s=p); time.sleep(-off / 1000)
+        go()
+        if off >= 0:
+            time.sleep(off / 1000); m.send("keypress", ">", s=p)
+        k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
+        if k is None:
+            errors["ack-late"].append((off, e0))
+            continue
+        time.sleep(0.8)
+        ack = W(m.lines[k]["args"])
+        fe = get(m, "playlist-pos")
+        # a seek with no position is the old file's, run as mpv leaves it: the new one opens at
+        # 0, and the node reads no second from it
+        ours = [s for _, s in snaps(m, i) if s["kind"] == "seek" and s["id"] == tag and s["pos"] != ""]
+        moved = ack["at"] == str(e0 + 1)
+        if moved and ours:
+            errors["seeked"].append((off, e0, ack, ours))
+        if fe == str(e0 + 1) and not moved and not any(s["kind"] == "start" and s["id"] == "" for n, s in snaps(m, k + 1)):
+            errors["ack"].append((off, e0, ack, fe))
+        tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "key's file at the ack" if moved else "ours at the ack", "ends on " + fe))
+    m.stop()
+    report("away", rounds, errors, shapes)
 
 
 class Hang(http.server.BaseHTTPRequestHandler):

@@ -39,6 +39,8 @@ local replied, waiting, heading, loaded = {}, nil, nil, false
 -- ended: why the last file ended, so a start after a file's end or error is mpv's own (auto);
 -- first: the file mpv opens as it starts is nobody's move
 local moves, ended, first = {}, nil, true
+-- opened: the entry the last start opened
+local opened = nil
 -- over: the gos that undo a change of the person's the node hadn't read when it sent them, so
 -- its ack says so; seeking: the go whose seek mpv has queued but not answered
 local over, seeking = {}, nil
@@ -99,7 +101,7 @@ local function drop()
     if w then ack(w.id) end
 end
 
-mp.register_script_message("watchparty-go", function(paused, second, entry, id, seen)
+mp.register_script_message("watchparty-go", function(paused, second, entry, id, seen, on)
     if overrules(seen, paused, entry) then over[id] = true end
     if waiting then
         ack(waiting.id)
@@ -107,6 +109,13 @@ mp.register_script_message("watchparty-go", function(paused, second, entry, id, 
     end
     -- a go for the file still starting waits for it too: a seek before it can be lost
     if entry == "-" and heading then entry = heading end
+    -- for a file mpv has left by a key the node hasn't heard yet: only stopped, and the ack's
+    -- entry sends that move out; a seek here would land on the wrong file
+    if entry == "-" and on and on ~= "-" and mp.get_property("playlist-pos") ~= on then
+        if paused == "yes" then mp.set_property("pause", "yes") end
+        ack(id)
+        return
+    end
     local on = heading or mp.get_property("playlist-pos")
     if entry ~= "-" and (heading or on ~= entry) then
         if on ~= entry then
@@ -125,8 +134,9 @@ end)
 -- the node hears from mpv: the ack alone
 mp.register_event("file-loaded", function()
     if not heading then return end
-    if mp.get_property("playlist-pos") ~= heading then
-        drop()
+    if opened ~= heading then
+        -- another file: the go waits on if mpv is still on its way to its own
+        if mp.get_property("playlist-pos") ~= heading then drop() end
         return
     end
     loaded = true
@@ -164,6 +174,7 @@ end)
 mp.register_event("start-file", function(e)
     replied = {}
     local entry = tostring((e.playlist_entry_id or 0) - 1)
+    opened = entry
     local label = ""
     for i = 1, #moves do
         if moves[i].entry == entry then

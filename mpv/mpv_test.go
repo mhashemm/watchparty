@@ -39,6 +39,7 @@ func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 		ready:    make(chan struct{}),
 		outgoing: outgoing,
 		paused:   false,
+		toward:   -1,
 		seen:     map[string]bool{},
 		missed:   map[string]bool{},
 		conn:     &connection{scanner: sc, closed: make(chan struct{})},
@@ -505,7 +506,7 @@ func scriptAnswers(conn net.Conn, req Request) bool {
 // set it is to mpv: its seek ("set_property time-pos 30.000000"), or its pause; ok is false for
 // any other request.
 func scriptAcks(conn net.Conn, req Request) (said string, ok bool) {
-	if req.Command[0] != "script-message-to" || len(req.Command) != 8 || req.Command[2] != "watchparty-go" {
+	if req.Command[0] != "script-message-to" || len(req.Command) != 9 || req.Command[2] != "watchparty-go" {
 		return "", false
 	}
 	paused, second, id := fmt.Sprint(req.Command[3]), fmt.Sprint(req.Command[4]), fmt.Sprint(req.Command[6])
@@ -1624,7 +1625,7 @@ func TestOnlyThePersonsPauseOrSeekLeads(t *testing.T) {
 		}, false},
 		"a move at the end": {func(n *node) {
 			n.plays()
-			n.mpvSays(mpvAt(118), propertyChangeLine(playlistPos, "1", 0))
+			n.mpvSays(mpvAt(118), `{"event":"end-file","reason":"eof"}`, propertyChangeLine(playlistPos, "1", 0))
 			n.mpvObeys(propertyChangeLine(pause, "yes", 0))
 		}, true},
 		"a move by hand": {func(n *node) {
@@ -1857,24 +1858,41 @@ func TestASeekWhileLoadingToTheSecondItLeftIsMade(t *testing.T) {
 	})
 }
 
-// A key press opens a file before mpv reports the entry. A stop taken meanwhile is for the
-// file this node left: its seek would land on the new one and go out as this node's own,
-// after its move, so the party would follow it there. The move alone goes out, from 0.
-// Seed 436890989886 of TestAJoinCrossingAMoveEndsOnThePartysEntry found it.
+// A key press opens a file just before a peer's stop reaches mpv, and the node hasn't read it.
+// The stop is for the file this node left: its seek would land on the new one and go out as this
+// node's own second there, after its move, so the party would follow it there (SIM_SEED=6 of
+// TestAJoinCrossingAMoveEndsOnThePartysEntry, mpv answers late). The script only stops mpv, and
+// the ack's entry sends the move out, newer than the stop, from 0.
 func TestAStopTakenAsAKeyPressOpensAFileDoesNotSeekIt(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{names: threeVideos})
-		n.mpvSays(started(1), `{"event":"file-loaded"}`)
+		n.personMovesFirst(1)
 		// a stop nobody chose: one that leads would keep the person's move on this screen
 		n.peerSays("b", `{"stamp":3,"at":30,"entry":0,"free":true,"event":"property-change","name":"pause","data":"yes"}`)
-		n.mpvSays(propertyChangeLine(playlistPos, "1", 0), mpvAt(0))
 		n.mpvObeys()
 		got := n.broadcasts()
 		if fmt.Sprint(said(got)) != "[playlist-pos=1]" || got[0].Stamp <= 3 || got[0].At == nil || *got[0].At != 0 {
 			t.Fatalf("broadcast %+v, want only the move, newer than the stop, from 0", got)
 		}
-		if got := seeksIn(n.mpvWasTold()); len(got) != 0 {
-			t.Fatalf("seeks %q, want none", got)
+		if told := n.mpvWasTold(); len(seeksIn(told)) != 0 || slices.Contains(told, "set_property playlist-pos 0") {
+			t.Fatalf("told mpv %q, want no seek and no move back", told)
+		}
+	})
+}
+
+// A key opens a file once a peer's seek has begun in the script, so mpv refuses the seek: the
+// start came while the go was on its way, nobody's, and the refusal says the entry mpv ended on.
+// Another than the one this node heads to is the person's move, after the seek, and goes out.
+func TestAMoveThatMakesMpvRefuseAGoGoesOut(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.personMovesDuring(1)
+		n.mpvRefuses("set_property time-pos", "property unavailable")
+		// a seek nobody leads: one that leads would keep the person's move on this screen
+		n.peerSays("b", `{"stamp":3,"at":30,"entry":0,"free":true,"event":"property-change","name":"time-pos","data":"30.000000"}`)
+		n.mpvObeys()
+		if got := n.broadcasts(); len(got) == 0 || said(got)[0] != "playlist-pos=1" || got[0].Stamp <= 3 {
+			t.Fatalf("broadcast %+v, want the person's move, newer than the seek", got)
 		}
 	})
 }
@@ -2262,17 +2280,18 @@ func TestALowerMoveThatIsNotATieIsFollowed(t *testing.T) {
 // its file-loaded must still be marked when the report comes: its echo is no one's seek.
 func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Parallel()
-	started := strings.TrimSpace(started(2))
+	// mpv moving on from the entry's end by itself: the script says that start is mpv's own
+	ended, started := `{"event":"end-file","reason":"eof"}`, strings.TrimSpace(started(2))
 	loaded := `{"event":"file-loaded"}`
 	reported := strings.TrimSpace(propertyChangeLine(playlistPos, "2", 0))
 	for _, tc := range []struct {
 		name                            string
 		before, pausing, after, seeking []string
 	}{
-		{"reported, then loaded", nil, []string{started, reported, loaded}, nil, nil},
-		{"loaded, then reported", nil, []string{started, loaded, reported}, nil, nil},
-		{"loaded before the move came", []string{started, loaded}, []string{reported}, nil, nil},
-		{"loaded with a seek held, then reported", nil, nil, []string{started, loaded}, []string{reported}},
+		{"reported, then loaded", nil, []string{ended, started, reported, loaded}, nil, nil},
+		{"loaded, then reported", nil, []string{ended, started, loaded, reported}, nil, nil},
+		{"loaded before the move came", []string{ended, started, loaded}, []string{reported}, nil, nil},
+		{"loaded with a seek held, then reported", nil, nil, []string{ended, started, loaded}, []string{reported}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nodeTest(t, func(t *testing.T) {
@@ -2284,6 +2303,8 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 				// what mpv says while it pauses, before it answers
 				n.mpvSays(tc.pausing...)
 				n.mpvAnswers()
+				// mpv's own move, there before the other's, went out, as a stop nobody leads
+				n.broadcasts()
 				// the seek waits for the move to be done: the script acks it once its file loads
 				n.peerSays("a", stamped(6, tagged(2, seekEvent(5))))
 				n.mpvSays(tc.after...)
@@ -3370,27 +3391,21 @@ func TestAnAckAfterTheGoWasGivenUpIsDropped(t *testing.T) {
 	})
 }
 
-// The person moves to another entry while a peer's stop is on its way to mpv: the move goes
-// out, newer, so the stop's ack would bring mpv back to it (converge). A newer stop taken from
-// another member before that is where this node is now: nothing is undone, and mpv ends on it.
-func TestNothingIsUndoneOnceANewerStateIsTaken(t *testing.T) {
+// The person moves to another entry while a peer's stop is on its way to mpv: what the script
+// says meanwhile is nobody's, and the ack says the entry mpv ended on. Another than the one the
+// stop was for is the person's move, after it, and goes out, newer.
+func TestAMoveWhileAGoIsOnItsWayGoesOutAtItsAck(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{names: threeVideos})
 		n.mpvAnswersLate()
 		n.peerSays("a", `{"stamp":3,"at":40,"entry":0,"free":true,"event":"property-change","name":"pause","data":"yes"}`)
 		n.mpvSays(started(1), propertyChangeLine(playlistPos, "1", 0))
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q before the ack, want nothing: the go is on its way", said(got))
+		}
+		n.mpvAnswers()
 		if got := n.broadcasts(); fmt.Sprint(said(got)) != "[playlist-pos=1]" || got[0].Stamp != 4 {
 			t.Fatalf("broadcast %+v, want the person's move, newer", got)
-		}
-		n.peerSays("b", `{"stamp":5,"at":10,"entry":1,"event":"property-change","name":"pause","data":"yes"}`)
-		n.mpvWasTold()
-		n.mpvAnswers()
-		n.mpvAnswers()
-		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 10.000000]" {
-			t.Fatalf("seeks %q, want b's stop and nothing undone", got)
-		}
-		if got := n.broadcasts(); len(got) != 0 {
-			t.Fatalf("broadcast %q, want nothing", said(got))
 		}
 	})
 }
