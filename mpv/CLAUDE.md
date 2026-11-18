@@ -50,7 +50,7 @@ Only `pause` and the person's seek **while paused** go out, as the script says t
 ### One go per state (`goTo`, `flying`)
 
 Applying a peer's change makes mpv report it back, which can't say whose it is (`ORDER.md`): so a
-state goes to the script as one go, applied whole (`sync.lua`), or a change loops over the relay.
+state goes to the script as one go, applied whole (`watchparty.lua`), or a change loops over the relay.
 
 - **Hold before the IPC call** (`commit` sets the state, `goTo` the seek's mark): the ack can come
   before `do` returns. So `still`, mpv stopped before, is read before `commit`.

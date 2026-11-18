@@ -50,7 +50,7 @@ type node struct {
 	seeking  bool
 	pos      float64
 	// waiting: the go a move waits for, applied once its file loads; loading: a move is on its
-	// way to heading (sync.lua)
+	// way to heading (watchparty.lua)
 	waiting *fakeGo
 	loading bool
 	heading int
@@ -159,7 +159,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		said := strings.TrimSpace(fmt.Sprintln(req.Command...))
 		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 		if name == "script-message-to" && len(req.Command) == 7 && req.Command[2] == "watchparty-go" && !s.noScript {
-			// the script's go is mpv being set, as tests read it (sync.lua)
+			// the script's go is mpv being set, as tests read it (watchparty.lua)
 			arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
 			n.mu.Lock()
 			lines, quit := n.goLocked(arg(3), arg(4), arg(5), arg(6))
@@ -219,7 +219,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 	}
 }
 
-// goLocked is the script taking a go (sync.lua): another entry opens stopped, and the rest
+// goLocked is the script taking a go (watchparty.lua): another entry opens stopped, and the rest
 // waits for its file; otherwise stopped, on the second, then playing if asked, and acked. It
 // gives what the script says at once.
 func (n *node) goLocked(paused, second, entry, id string) (lines []string, quit bool) {
@@ -356,7 +356,7 @@ func (n *node) write(lines ...string) {
 		var after []string
 		switch {
 		case e.EventType == "seek":
-			// the script's ack of a go that seeks comes before any seek event (sync.lua)
+			// the script's ack of a go that seeks comes before any seek event (watchparty.lua)
 			for len(n.acks) > 0 && n.acks[0].seeks {
 				n.writes <- n.scriptLocked("ack", n.acks[0].id)
 				n.acks = n.acks[1:]
@@ -513,7 +513,7 @@ func (n *node) lateAcksLocked() []string {
 	return out
 }
 
-// scriptLocked is the script saying what mpv holds, as sync.lua does.
+// scriptLocked is the script saying what mpv holds, as watchparty.lua does.
 func (n *node) scriptLocked(kind, id string) string {
 	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f"]}`+"\n", kind, id, holds(n.paused), n.pos)
 }

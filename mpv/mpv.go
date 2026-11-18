@@ -80,7 +80,7 @@ var (
 
 // Script is the node's way into mpv, which party.Run hands mpv as ScriptFile with --script.
 //
-//go:embed sync.lua
+//go:embed watchparty.lua
 var Script []byte
 
 // ScriptFile is the file name Script is written as: mpv names a script after it.
@@ -480,7 +480,7 @@ func (c *Client) react(event Event) ([][]byte, error) {
 	return nil, errDoNotSend
 }
 
-// scriptSaid is a message from the script (sync.lua): its name, once, or what mpv holds when
+// scriptSaid is a message from the script (watchparty.lua): its name, once, or what mpv holds when
 // it was sent, as reports to read as mpv's: the pause it holds, and the person's seek. While a
 // go is on its way, what the script says is from before it, which the go overwrites, or from
 // the go itself: none is the person's, and the ack says where mpv ended (landed).
@@ -1548,7 +1548,7 @@ func (c *Client) pauseReq(paused bool) error {
 	return c.goTo(paused, nil, nil, c.paused)
 }
 
-// goTo has the script take mpv to a state in one message (sync.lua), and returns once mpv has
+// goTo has the script take mpv to a state in one message (watchparty.lua), and returns once mpv has
 // all of it (landed): stopped or playing, on the entry if one is given, on the second if one
 // is. still: mpv was stopped before. The person's key can only land before it, which it
 // overwrites, or after it, which is theirs (ORDER.md).
@@ -1602,7 +1602,7 @@ func (c *Client) refuseResume() error {
 	return c.showText("paused for everyone: still buffering")
 }
 
-// wentTo is a seek mpv runs to pos, as the script says at mpv's seek event (sync.lua), which
+// wentTo is a seek mpv runs to pos, as the script says at mpv's seek event (watchparty.lua), which
 // is where it lands (ORDER.md). This node's own if it carries this node's id and is on its
 // second; mpv runs seeks in order, so those marked before it were folded into it. Any other
 // is the person's: their seek alone, or folded into this node's (a key's step added to it, or

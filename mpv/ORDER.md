@@ -94,7 +94,7 @@ Rules the probes checked: the last snapshot is mpv's state; a `landed` or `loade
 at our target is ours, any other is the person's; a stopped snapshot's position is exactly where
 mpv stopped (the gap was 0.000000s in every round, so it is what a pause carries).
 
-**`sync.lua` says a seek at its `seek` event (`began`), not at `landed`:** the person's seek
+**`watchparty.lua` says a seek at its `seek` event (`began`), not at `landed`:** the person's seek
 while stopped, then space at once (`[R6c]`), reports the space before the landing, so a landing
 reads as a seek made while playing. `began`'s position is where the seek lands (0 off in 80
 rounds each); `seekp` and `playing` counted at `began` (`LANDING=began`) gave 0 errors in 420 and
@@ -119,7 +119,7 @@ Seen along the way:
 - Not probed: Windows, an mpv built without Lua (`--script` then fails to load it), a real
   remote stream.
 
-### One message per state (`probe/wp3.lua`, built as `sync.lua`'s go)
+### One message per state (`probe/wp3.lua`, built as `watchparty.lua`'s go)
 
 The node sends the whole state it adopts, `wp-go <yes|no> <second|-> <entry|-> <id>`; the script
 stops, moves (the rest waits for that file's `file-loaded`), seeks, plays if asked, and acks once,

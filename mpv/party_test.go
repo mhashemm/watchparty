@@ -35,7 +35,7 @@ type simNode struct {
 	pos     float64
 	entry   int
 	notices []string
-	// seeks: queued in mpv's one slot, with the id of the node's (sync.lua), none for the person's
+	// seeks: queued in mpv's one slot, with the id of the node's (watchparty.lua), none for the person's
 	seeks []simSeek
 	moves []int
 	// reports: what mpv holds back until its event queue is empty (client.h), so a move's
@@ -48,7 +48,7 @@ type simNode struct {
 	answer   string
 	act      func()
 	answered chan struct{}
-	// waiting: the go a move waits for (sync.lua), while loading heads to heading
+	// waiting: the go a move waits for (watchparty.lua), while loading heads to heading
 	waiting *simGo
 	loading bool
 	heading int
@@ -201,7 +201,7 @@ func (n *simNode) answers() {
 	n.answered <- struct{}{}
 }
 
-// script is the script saying what mpv holds (sync.lua).
+// script is the script saying what mpv holds (watchparty.lua).
 func (n *simNode) script(kind, id string) string {
 	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f"]}`+"\n", kind, id, holds(n.paused), n.pos)
 }
@@ -235,7 +235,7 @@ func (n *simNode) setPause(paused bool) {
 	n.emit(n.script("pause", ""))
 }
 
-// goLocked is the script taking a go (sync.lua): another entry opens stopped, and the rest
+// goLocked is the script taking a go (watchparty.lua): another entry opens stopped, and the rest
 // waits for its file (fileLoaded); otherwise apply.
 func (n *simNode) goLocked(paused, second, entry, id string) {
 	if n.waiting != nil {
