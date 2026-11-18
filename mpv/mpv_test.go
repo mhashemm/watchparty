@@ -1769,6 +1769,25 @@ func TestAMoveWaitsForASlowLoad(t *testing.T) {
 	})
 }
 
+// A move whose file never starts nor fails (a stream that hangs, under --network-timeout=0):
+// the node waits past the 81s mpv took to give up on one, then gives up on it, as on any go
+// mpv never acks, and asks the party where it is.
+func TestAMoveThatNeverStartsIsGivenUp(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.mpvAnswersLate()
+		n.peerSays("a", move(5, 1))
+		time.Sleep(2 * time.Minute)
+		if got := said(n.broadcasts()); len(got) != 0 {
+			t.Fatalf("broadcast %q after 2 minutes, want the move waited for", got)
+		}
+		time.Sleep(8 * time.Minute)
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
+			t.Fatalf("broadcast %q, want it to ask the party again", got)
+		}
+	})
+}
+
 // A peer's move to an entry mpv can't open: mpv says so at its end-file and moves on to the
 // next entry by itself. The script acks the move there, so the node goes on; mpv's own move
 // stays on this follower's screen, as for any follower's move, and the leader's own skip,

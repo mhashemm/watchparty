@@ -59,6 +59,14 @@ const (
 	maxSeeks                = 16
 )
 
+// How long the node waits on mpv before it gives up (errTimeout): replyLimit for a reply or a
+// go's ack, moveLimit for a move's go, acked once its file starts, which mpv gives up on after
+// its --network-timeout (60s; 81s seen, ORDER.md).
+const (
+	replyLimit = 5 * time.Second
+	moveLimit  = 3 * time.Minute
+)
+
 // The notices both transports show, around a member's name. apply reads HasLeft to pause
 // the party, and gui/store.go reads the other two; e2e spells them again.
 const (
@@ -71,7 +79,7 @@ var (
 	errNoChange  = errors.New("no change")
 	errDoNotSend = errors.New("do not send")
 	errEcho      = errors.New("echo")
-	errTimeout   = errors.New("mpv did not answer within 5s")
+	errTimeout   = errors.New("mpv did not answer in time")
 
 	ErrClosed = errors.New("mpv closed the IPC connection")
 	// ErrNoScript: mpv didn't load Script, as it was built without Lua
@@ -140,18 +148,16 @@ func (c *Client) ask(args ...any) (string, error) {
 		go c.writer(c.out)
 	}
 	c.out.put(request{id: id, body: body})
-	return c.await(id, true)
+	return c.await(id, replyLimit)
 }
 
 // await waits on the loop for id's answer, taking the inputs that come meanwhile: mpv's reply
-// to a request, or the script's ack of a go (goTo). Bounded, it gives up after 5s.
-func (c *Client) await(id int64, bounded bool) (string, error) {
+// to a request, or the script's ack of a go (goTo), for at most limit.
+func (c *Client) await(id int64, limit time.Duration) (string, error) {
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
-	if bounded {
-		expire := time.AfterFunc(5*time.Second, func() { c.post(input{expired: id}) })
-		defer expire.Stop()
-	}
+	expire := time.AfterFunc(limit, func() { c.post(input{expired: id}) })
+	defer expire.Stop()
 	for {
 		if r, ok := c.replies[id]; ok {
 			delete(c.replies, id)
@@ -1575,10 +1581,15 @@ func (c *Client) goTo(paused bool, second *float64, entry *int, still bool) erro
 	defer delete(c.waiting, id)
 	err := c.do("script-message-to", c.script, scriptName+"-go", holds(paused), at, to, strconv.FormatInt(id, 10))
 	if err == nil {
-		// a move is acked once its file loads, which a slow stream can take far longer than 5s
-		// to do; the script acks it then, or as mpv fails to open the file, and mpv quitting
-		// ends the wait
-		_, err = c.await(id, entry == nil)
+		// a move is acked once its file starts, which a slow stream can take far longer than
+		// 5s to do; the script acks it then, or as mpv gives up on the file (its
+		// --network-timeout, 60s), and mpv quitting ends the wait. moveLimit only backs that up,
+		// for a --network-timeout=0
+		limit := replyLimit
+		if entry != nil {
+			limit = moveLimit
+		}
+		_, err = c.await(id, limit)
 	}
 	if err != nil {
 		c.ground(id)

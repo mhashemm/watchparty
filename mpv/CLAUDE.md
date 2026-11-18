@@ -158,10 +158,10 @@ playing also pauses the party with a reason: nobody starts the next one until so
 - A peer's index is bounds-checked and only ever sets `playlist-pos`.
 - **The script opens another entry stopped and applies the rest once it starts** (its first
   `playback-restart`): a seek before it lands on the old file, or is dropped (`MPV.md`). The ack
-  waits for that, with no 5s limit (a slow stream takes longer), or comes at the `end-file` of a
-  file mpv can't open; what comes meanwhile waits too, and a go for that file waits with it. `adopt` skips an
-  entry it is on or already headed to: every member answers a joiner, and two nodes often
-  reach the end together.
+  waits for that, `moveLimit` not 5s (a slow stream takes longer; mpv gives up on a hung one),
+  or comes at the `end-file` of a file mpv can't open; what comes meanwhile waits, a go for that
+  file with it. `adopt` skips an entry it is on or already headed to: every member answers a
+  joiner, and two nodes often reach the end together.
 - **`following` queues moves:** the next can overtake mpv's report of the last (`MPV.md`). A
   report drops entries up to its own; `file-loaded` clears the rest once this node is where it
   headed, as there-and-back can report nothing. mpv's first report of where it started uses up
