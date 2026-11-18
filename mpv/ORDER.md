@@ -141,7 +141,8 @@ folds into ours, and space's change mark reads the state after the handler.
 messages read with the entry and cache from mpv's own reports): the same three, 0 errors on
 both versions, overwritten keys alike (never heard in 59 and 54 of 420). Then a move to a stream
 that starts 8s late and to a file mpv can't open: acked once the file started, or at the
-`end-file` of the broken one (mpv moved on to the next entry), 12 and 20 rounds, 0 errors. A seek
+`end-file` of the broken one (mpv moved on to the next entry; as the last, under `--idle`, it
+stays on none, `-1`), 12, 20 and 20 rounds, 0 errors. A seek
 at that stream's `file-loaded` was dropped in 5 of 12 rounds (acked, no `seek`, at 0), so a move's
 go waits for its first `playback-restart`.
 
@@ -153,7 +154,7 @@ cd mpv/probe && ./videos.sh                      # ffmpeg; the videos stay untra
 ./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40 ending:60
 LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
 ./run.sh 0 probe3.py go:420 moves:280 buffering:40
-./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20  # the shipped script
+./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20  # the shipped script
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the

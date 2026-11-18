@@ -3,8 +3,8 @@ pause and time-pos, and the node hears the entry and the cache from mpv's own re
 snapshot here is the script's message with the entry and cache mpv last reported, and mpv's
 reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
 entry and to one mpv can't open.
-Usage: python3 -I probe4.py <go|moves|buffering|slow|broken> <rounds>. Under load:
-./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:6 broken:20"""
+Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast> <rounds>. Under load:
+./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
 import http.server, os, socketserver, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -119,8 +119,13 @@ def slow(rounds):
 
 
 # A move to an entry mpv can't open: no file-loaded comes for it, and the go is acked at its
-# end-file, or at the file mpv opens instead.
-def broken(rounds):
+# end-file, or at the file mpv opens instead. last: it is the last entry, and --idle keeps mpv
+# open with nothing loaded, so only its end-file can ack the go.
+def brokenlast(rounds):
+    broken(rounds, last=True)
+
+
+def broken(rounds, last=False):
     # its own file: runs on two versions share this folder
     fd, bad = tempfile.mkstemp(suffix=".mkv", prefix="tmp_broken", dir=HERE)
     with os.fdopen(fd, "wb") as f:
@@ -129,7 +134,10 @@ def broken(rounds):
     shapes = {}
     try:
         for r in range(rounds):
-            m = M(os.path.join(HERE, "p1.mkv"), [*WP, os.path.join(HERE, "p0.mkv"), bad])
+            if last:
+                m = M(bad, [*WP, "--idle=yes", os.path.join(HERE, "p0.mkv")])
+            else:
+                m = M(os.path.join(HERE, "p1.mkv"), [*WP, os.path.join(HERE, "p0.mkv"), bad])
             ready(m, [])
             tag = f"x{r}"
             i = m.mark()
@@ -144,7 +152,7 @@ def broken(rounds):
             m.stop()
     finally:
         os.remove(bad)
-    report("broken", rounds, errors, shapes)
+    report("brokenlast" if last else "broken", rounds, errors, shapes)
 
 
 if __name__ == "__main__":
