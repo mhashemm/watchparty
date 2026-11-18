@@ -505,7 +505,7 @@ func scriptAnswers(conn net.Conn, req Request) bool {
 // set it is to mpv: its seek ("set_property time-pos 30.000000"), or its pause; ok is false for
 // any other request.
 func scriptAcks(conn net.Conn, req Request) (said string, ok bool) {
-	if req.Command[0] != "script-message-to" || len(req.Command) != 7 || req.Command[2] != "watchparty-go" {
+	if req.Command[0] != "script-message-to" || len(req.Command) != 8 || req.Command[2] != "watchparty-go" {
 		return "", false
 	}
 	paused, second, id := fmt.Sprint(req.Command[3]), fmt.Sprint(req.Command[4]), fmt.Sprint(req.Command[6])
@@ -3391,6 +3391,40 @@ func TestNothingIsUndoneOnceANewerStateIsTaken(t *testing.T) {
 		}
 		if got := n.broadcasts(); len(got) != 0 {
 			t.Fatalf("broadcast %q, want nothing", said(got))
+		}
+	})
+}
+
+// The person presses space just before a peer's stop reaches mpv, before this node has read
+// it: the stop undoes it, and the ack says so. Made as the party changed, the resume would lose
+// to the stop anyway, so nothing goes out, and the person is told why their key did nothing.
+func TestAKeyAGoUndoesIsShown(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.personPressesFirst()
+		n.peerSays("a", `{"stamp":5,"at":30,"name":"time-pos","data":"30.000000","paused":true}`)
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q, want the undone resume kept from the party", said(got))
+		}
+		if got := n.mpvWasTold(); !slices.Contains(got, "show-text "+overruled+" 5000") {
+			t.Fatalf("told mpv %q, want the person told", got)
+		}
+	})
+}
+
+// A seek of the person's just before a go that doesn't seek is no key lost: the ack says where
+// mpv went, and it goes out as theirs (landed). Its ack says it came first, but nothing is shown.
+func TestAKeyTheAckRevealsIsNotShown(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.personSeeksFirst(50)
+		n.peerSays("a", `{"stamp":5,"at":0,"name":"pause","data":"no","paused":false}`)
+		got := n.broadcasts()
+		if !slices.Contains(said(got), "time-pos=50.000000") {
+			t.Fatalf("broadcast %q, want the person's seek", said(got))
+		}
+		if told := n.mpvWasTold(); slices.Contains(told, "show-text "+overruled+" 5000") {
+			t.Fatalf("told mpv %q, want no notice: the key went out", told)
 		}
 	})
 }

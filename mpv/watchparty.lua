@@ -1,11 +1,18 @@
 -- The node's own way into mpv (mpv/ORDER.md): mpv runs it in order with everything else it
 -- does, and what it says reaches the node as client-message events, which mpv never merges.
 -- It decides nothing; the rules are in Go. Every message after its name says what mpv holds
--- when it is sent: watchparty <kind> <id> <pause> <time-pos>.
+-- when it is sent, and its number: watchparty <kind> <id> <pause> <time-pos> <n> [over].
 
-local function say(kind, id)
-    mp.commandv("script-message", "watchparty", kind, id or "", mp.get_property("pause", ""),
-        mp.get_property("time-pos", ""))
+-- said: what each recent message said, by its number, so a go can tell what the node had read
+local n, said = 0, {}
+
+local function say(kind, id, over)
+    n = n + 1
+    local paused = mp.get_property("pause", "")
+    said[n] = {pause = paused, seek = kind == "seek" and (id or "") == ""}
+    said[n - 256] = nil
+    mp.commandv("script-message", "watchparty", kind, id or "", paused,
+        mp.get_property("time-pos", ""), tostring(n), over and "over" or "")
 end
 
 -- hello: the node learns this script's name by asking everyone, as a user's script with the
@@ -24,11 +31,34 @@ mp.observe_property("pause", "none", function() say("pause") end)
 -- is the one that carries the node's. A move waits for its file to start (heading, loaded),
 -- and a go meanwhile replaces the one waiting.
 local replied, waiting, heading, loaded = {}, nil, nil, false
+-- over: the gos that undo a change of the person's the node hadn't read when it sent them, so
+-- its ack says so; seeking: the go whose seek mpv has queued but not answered
+local over, seeking = {}, nil
+
+-- overrules: what mpv holds now, against what the node had read (seen), undone by a go that
+-- ends on paused: the person's pause or seek the node never had
+local function overrules(seen, paused)
+    seen = tonumber(seen)
+    local last = seen and said[seen]
+    if not last then return false end
+    local now = mp.get_property("pause")
+    if now ~= last.pause and now ~= paused then return true end
+    for k = seen + 1, n do
+        if said[k] and said[k].seek then return true end
+    end
+    return false
+end
+
+local function ack(id)
+    local o = over[id]
+    over[id] = nil
+    say("ack", id, o)
+end
 
 local function apply(paused, second, id)
     local function finish()
         if paused == "no" then mp.set_property("pause", "no") end
-        say("ack", id)
+        ack(id)
     end
     if second == "-" then
         mp.set_property("pause", paused)
@@ -36,12 +66,17 @@ local function apply(paused, second, id)
         return
     end
     mp.set_property("pause", "yes")
+    seeking = id
     mp.command_native_async({"seek", second, "absolute+exact"}, function(ok)
+        seeking = nil
         if not ok then
+            over[id] = nil
             say("refused", id)
             return
         end
         table.insert(replied, id)
+        -- playing before it is played: the person's space ran between the go's stop and here
+        if paused == "no" and mp.get_property("pause") == "no" then over[id] = true end
         finish()
     end)
 end
@@ -51,12 +86,13 @@ local function drop()
     heading, loaded = nil, false
     local w = waiting
     waiting = nil
-    if w then say("ack", w.id) end
+    if w then ack(w.id) end
 end
 
-mp.register_script_message("watchparty-go", function(paused, second, entry, id)
+mp.register_script_message("watchparty-go", function(paused, second, entry, id, seen)
+    if overrules(seen, paused) then over[id] = true end
     if waiting then
-        say("ack", waiting.id)
+        ack(waiting.id)
         waiting = nil
     end
     -- a go for the file still starting waits for it too: a seek before it can be lost
@@ -103,6 +139,8 @@ end)
 -- seek: where a seek goes, read at its seek event, which is where it lands (ORDER.md), with
 -- the node's id if it carries the node's
 mp.register_event("seek", function()
+    -- a seek before ours is answered: the person's, queued before it, and lost to it
+    if seeking and #replied == 0 then over[seeking] = true end
     say("seek", replied[#replied])
     replied = {}
 end)

@@ -67,6 +67,9 @@ const (
 	moveLimit  = 3 * time.Minute
 )
 
+// overruled is shown when a go undid the person's key, pressed as the party changed.
+const overruled = "your key came as the party changed: press it again"
+
 // The notices both transports show, around a member's name. apply reads HasLeft to pause
 // the party, and gui/store.go reads the other two; e2e spells them again.
 const (
@@ -350,9 +353,11 @@ type Client struct {
 	seen     map[string]bool
 
 	// marked: the seeks this node sent that mpv hasn't landed, oldest first (wentTo).
-	// flying: the go the script hasn't acked (goTo), one at a time
+	// flying: the go the script hasn't acked (goTo), one at a time. read: the number of the
+	// last script message taken, which a go says, so the script can tell what it undoes
 	marked []ourSeek
 	flying *flight
+	read   string
 	// mine: the state this node's own last change said. undoing: mpv took a go that this
 	// node's own newer change overtook, which converge undoes once the messages waiting are
 	// taken: meanwhile this node holds mine (held)
@@ -496,6 +501,9 @@ func (c *Client) scriptSaid(args []string) []Event {
 	if len(args) < 5 || args[0] != scriptName {
 		return nil
 	}
+	if len(args) > 5 {
+		c.read = args[5]
+	}
 	kind, said := args[1], args[2]
 	if kind == "hello" {
 		if c.script != "" {
@@ -518,7 +526,7 @@ func (c *Client) scriptSaid(args []string) []Event {
 		}
 	case "ack":
 		c.answered(id, outcome{Response: Response{Error: "success"}})
-		return c.landed(id, paused, at, known)
+		return c.landed(id, paused, at, known, len(args) > 6 && args[6] == "over")
 	case "pause":
 		if c.flying != nil {
 			return nil
@@ -560,8 +568,10 @@ func (c *Client) ground(id int64) bool {
 // landed is the script's ack of the go on its way: what mpv holds once it has all of it. What
 // differs from what this node holds is the person's, made while the go was on its way and not
 // overwritten by it, and goes out as their report. If this node moved meanwhile, its own newer
-// change stands, and mpv is brought back to it (converge).
-func (c *Client) landed(id int64, paused string, at float64, known bool) []Event {
+// change stands, and mpv is brought back to it (converge). over: the go undid a key of the
+// person's this node never read; made as the party changed, it would lose to that change
+// anyway (stopped over playing), so it stays undone, and the person is told.
+func (c *Client) landed(id int64, paused string, at float64, known, over bool) []Event {
 	f := c.flying
 	if !c.ground(id) {
 		return nil
@@ -581,6 +591,9 @@ func (c *Client) landed(id int64, paused string, at float64, known bool) []Event
 		out = append(out, Event{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(at, 'f', 6, 64), fromScript: true})
 	} else if known && paused == "yes" && !f.seek {
 		c.pos = at
+	}
+	if over && len(out) == 0 {
+		c.later = append(c.later, func() { c.showText(overruled) })
 	}
 	return out
 }
@@ -1579,7 +1592,7 @@ func (c *Client) goTo(paused bool, second *float64, entry *int, still bool) erro
 	defer func() { c.busy-- }()
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
-	err := c.do("script-message-to", c.script, scriptName+"-go", holds(paused), at, to, strconv.FormatInt(id, 10))
+	err := c.do("script-message-to", c.script, scriptName+"-go", holds(paused), at, to, strconv.FormatInt(id, 10), c.read)
 	if err == nil {
 		// a move is acked once its file starts, which a slow stream can take far longer than
 		// 5s to do; the script acks it then, or as mpv gives up on the file (its

@@ -42,7 +42,14 @@ type node struct {
 	// (personUndoesThePause). acks: the gos whose acks the script says late, once mpv reports
 	// what they did, with what mpv holds then
 	undo bool
-	acks []lateAck
+	// first: the person's space runs just before the next go, which the node hasn't read when
+	// it sends it. said: the script's messages so far, with the pause each said; over: the gos
+	// whose ack says they undid a change the node hadn't read (watchparty.lua)
+	first  bool
+	seekTo float64
+	said   []scriptLine
+	over   map[string]bool
+	acks   []lateAck
 	// the script's seeks: replied, those mpv queued; carrying, the id of the seek mpv runs;
 	// seeking, a seek mpv began that the script hasn't said; pos, where mpv is
 	replied  []string
@@ -68,6 +75,13 @@ type node struct {
 type lateAck struct {
 	id    string
 	seeks bool
+}
+
+// scriptLine is a script message as the script keeps it: the pause it said, and whether it said
+// the person's seek.
+type scriptLine struct {
+	pause  string
+	person bool
 }
 
 // fakeGo is a go the script holds until its file loads.
@@ -108,7 +122,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, started: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, over: map[string]bool{}, paused: true, entry: s.start, started: s.start, late: s.late}
 	t.Cleanup(func() { cancel(); ours.Close(); theirs.Close() })
 	go func() {
 		for {
@@ -161,11 +175,32 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		name := fmt.Sprint(req.Command[0])
 		said := strings.TrimSpace(fmt.Sprintln(req.Command...))
 		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
-		if name == "script-message-to" && len(req.Command) == 7 && req.Command[2] == "watchparty-go" && !s.noScript {
+		if name == "script-message-to" && len(req.Command) == 8 && req.Command[2] == "watchparty-go" && !s.noScript {
 			// the script's go is mpv being set, as tests read it (watchparty.lua)
 			arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
 			n.mu.Lock()
+			var key []string
+			if n.first {
+				n.first, n.paused = false, !n.paused
+				key = append(key, n.scriptLocked("pause", ""))
+			}
+			if n.seekTo != 0 {
+				n.pos, n.seekTo = n.seekTo, 0
+				key = append(key, n.scriptLocked(seek, ""))
+			}
+			// what mpv holds against what the node had read, undone by the go (overrules)
+			if seen, err := strconv.Atoi(arg(7)); err == nil && seen >= 1 && seen <= len(n.said) {
+				if now := holds(n.paused); now != n.said[seen-1].pause && now != arg(3) {
+					n.over[arg(6)] = true
+				}
+				for _, s := range n.said[seen:] {
+					if s.person {
+						n.over[arg(6)] = true
+					}
+				}
+			}
 			lines, quit := n.goLocked(arg(3), arg(4), arg(5), arg(6))
+			lines = append(key, lines...)
 			n.mu.Unlock()
 			if quit {
 				conn.Close()
@@ -545,7 +580,13 @@ func (n *node) lateAcksLocked() []string {
 
 // scriptLocked is the script saying what mpv holds, as watchparty.lua does.
 func (n *node) scriptLocked(kind, id string) string {
-	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f"]}`+"\n", kind, id, holds(n.paused), n.pos)
+	n.said = append(n.said, scriptLine{holds(n.paused), kind == seek && id == ""})
+	over := ""
+	if kind == "ack" && n.over[id] {
+		over = "over"
+		delete(n.over, id)
+	}
+	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f","%d",%q]}`+"\n", kind, id, holds(n.paused), n.pos, len(n.said), over)
 }
 
 // scriptSays is scriptLocked, for a caller that doesn't hold the lock.
@@ -553,6 +594,22 @@ func (n *node) scriptSays(kind, id string) string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.scriptLocked(kind, id)
+}
+
+// personPressesFirst is the person's space running just before the next go, which the node
+// hasn't read when it sends it: the go undoes it, and its ack says so.
+func (n *node) personPressesFirst() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.first = true
+}
+
+// personSeeksFirst is the person's seek to second running just before the next go, which the
+// node hasn't read when it sends it: the script says it, and the go's ack says it came first.
+func (n *node) personSeeksFirst(second float64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.seekTo = second
 }
 
 // personUndoesThePause is the person's key undoing the pause the next go leaves, right after

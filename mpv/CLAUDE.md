@@ -63,6 +63,8 @@ state goes to the script as one go, applied whole (`watchparty.lua`), or a chang
   ≥10fps, `--hr-seek=yes`), is ours; those sent before it were folded in. Any other is the
   person's: going out, it ends every mark; a follower's stays on its screen (`positionChanged`).
 - **A stop from playing always seeks its second**: mpv plays on until the stop lands.
+- **A key a go undid before this node read it** loses to that change anyway: only shown (`overruled`),
+  when the ack says `over` (each go names the last script message read) and didn't make it theirs.
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 
