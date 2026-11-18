@@ -137,6 +137,14 @@ A key just before the handler is overwritten by it (mpv ends as sent): heard bef
 156 and 163 rounds, never heard in 59 and 59. Unheard, it left no effect anywhere: a seek key
 folds into ours, and space's change mark reads the state after the handler.
 
+**The shipped script, as the node sees it** (`probe4.py`: `watchparty.lua` unchanged, its
+messages read with the entry and cache from mpv's own reports): the same three, 0 errors on
+both versions, overwritten keys alike (never heard in 59 and 54 of 420). Then a move to a stream
+that starts 8s late and to a file mpv can't open: acked once the file started, or at the
+`end-file` of the broken one (mpv moved on to the next entry), 12 and 20 rounds, 0 errors. A seek
+at that stream's `file-loaded` was dropped in 5 of 12 rounds (acked, no `seek`, at 0), so a move's
+go waits for its first `playback-restart`.
+
 ## Re-running
 
 ```sh
@@ -145,6 +153,7 @@ cd mpv/probe && ./videos.sh                      # ffmpeg; the videos stay untra
 ./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40 ending:60
 LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
 ./run.sh 0 probe3.py go:420 moves:280 buffering:40
+./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20  # the shipped script
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
