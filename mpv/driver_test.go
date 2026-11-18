@@ -351,6 +351,8 @@ func (n *node) write(lines ...string) {
 		}
 		e := Event{}
 		json.Unmarshal([]byte(line), &e)
+		var end struct{ Reason string }
+		json.Unmarshal([]byte(line), &end)
 		n.mu.Lock()
 		// what the script says after the line, as it hears the same event
 		var after []string
@@ -372,6 +374,13 @@ func (n *node) write(lines ...string) {
 		case e.EventType == "start-file":
 			n.replied, n.carrying, n.seeking, n.pos = nil, "", false, 0
 			n.started = e.EntryID - 1
+		case e.EventType == "end-file" && end.Reason == "error" && n.loading:
+			// a file mpv couldn't open: the go waiting for it, acked alone (watchparty.lua)
+			n.loading = false
+			if w := n.waiting; w != nil {
+				n.waiting = nil
+				after = n.ackLocked(w.id, false)
+			}
 		case e.EventType == "file-loaded" && n.waiting == nil:
 			n.loading = false
 		case e.EventType == "file-loaded":

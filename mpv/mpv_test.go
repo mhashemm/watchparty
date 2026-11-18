@@ -1769,6 +1769,42 @@ func TestAMoveWaitsForASlowLoad(t *testing.T) {
 	})
 }
 
+// A peer's move to an entry mpv can't open: mpv says so at its end-file and moves on to the
+// next entry by itself. The script acks the move there, so the node goes on; mpv's own move
+// stays on this follower's screen, as for any follower's move, and the leader's own skip,
+// which goes out, takes the party there.
+func TestAMoveToAFileMpvCantOpenGoesOn(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.peerSays("a", move(5, 1))
+		n.mpvWasTold()
+		n.mpvSays(started(1), `{"event":"end-file","reason":"error"}`, started(2), propertyChangeLine(playlistPos, "2", 0), `{"event":"file-loaded"}`, mpvAt(0))
+		n.keepsTheSeek("a")
+		n.peerSays("a", move(6, 2))
+		if got, told := n.broadcasts(), n.mpvWasTold(); len(got) != 0 || len(told) != 0 {
+			t.Fatalf("broadcast %q and told mpv %q, want the leader's skip taken where mpv is", said(got), told)
+		}
+		if entry, at := n.c.Position(); entry != 2 || at != 0 {
+			t.Fatalf("Position %d at %v, want entry 2 at 0", entry, at)
+		}
+	})
+}
+
+// A peer's move to the last entry, which mpv can't open, with nothing to load after it (the
+// person's --idle keeps mpv open): only its end-file says so, and the script acks the move
+// there, so the next message is taken. Unacked, every later message waited for good.
+func TestAMoveToAFileMpvCantOpenIsAckedAtItsEnd(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.peerSays("a", move(5, 2))
+		n.mpvSays(started(2), `{"event":"end-file","reason":"error"}`)
+		n.peerSays("a", move(6, 0))
+		if got := n.mpvWasTold(); !slices.Contains(got, "set_property playlist-pos 0") {
+			t.Fatalf("told mpv %q, want the next move taken", got)
+		}
+	})
+}
+
 // A seek right after a move would land on the old file, which then ends and loses it.
 // A joiner hits this every time: it is told the entry, then the position.
 func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
@@ -3286,6 +3322,56 @@ func TestAResumeRightAfterAStopPlaysFromItsSecond(t *testing.T) {
 		n.mpvObeys(propertyChangeLine(pause, "no", 0))
 		if got := n.broadcasts(); fmt.Sprint(said(got)) != "[pause=no]" || *got[0].At != 60 {
 			t.Fatalf("broadcast %+v, want the person's resume, from 60", got)
+		}
+	})
+}
+
+// The script acks a go after this node gave up on it (no ack in 5s): the node asked the party
+// again, and the ack is for nothing on its way, so nothing goes out for it, and the next
+// message is taken as usual.
+func TestAnAckAfterTheGoWasGivenUpIsDropped(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		n.mpvAnswersLate()
+		n.peerSays("a", `{"stamp":5,"at":30,"name":"pause","data":"yes"}`)
+		time.Sleep(6 * time.Second)
+		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
+			t.Fatalf("broadcast %q, want it to ask the party again", got)
+		}
+		n.mpvWasTold()
+		n.mpvAnswers()
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q for an ack of a go given up", said(got))
+		}
+		n.peerSays("a", stamped(6, seekEvent(40)))
+		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 40.000000]" {
+			t.Fatalf("seeks %q, want the next message taken", got)
+		}
+	})
+}
+
+// The person moves to another entry while a peer's stop is on its way to mpv: the move goes
+// out, newer, so the stop's ack would bring mpv back to it (converge). A newer stop taken from
+// another member before that is where this node is now: nothing is undone, and mpv ends on it.
+func TestNothingIsUndoneOnceANewerStateIsTaken(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.mpvAnswersLate()
+		n.peerSays("a", `{"stamp":3,"at":40,"entry":0,"free":true,"event":"property-change","name":"pause","data":"yes"}`)
+		n.mpvSays(started(1), propertyChangeLine(playlistPos, "1", 0))
+		if got := n.broadcasts(); fmt.Sprint(said(got)) != "[playlist-pos=1]" || got[0].Stamp != 4 {
+			t.Fatalf("broadcast %+v, want the person's move, newer", got)
+		}
+		n.peerSays("b", `{"stamp":5,"at":10,"entry":1,"event":"property-change","name":"pause","data":"yes"}`)
+		n.mpvWasTold()
+		n.mpvAnswers()
+		n.mpvAnswers()
+		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 10.000000]" {
+			t.Fatalf("seeks %q, want b's stop and nothing undone", got)
+		}
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q, want nothing", said(got))
 		}
 	})
 }
