@@ -148,6 +148,15 @@ at that stream's `file-loaded` was dropped in 5 of 12 rounds (acked, no `seek`, 
 go waits for its first `playback-restart`. A stream that hangs (`hang`: never answers, headers
 only, or its start then a stall) never held a go past 81s: mpv gives up on it (`MPV.md`).
 
+**A key the go undoes, flagged** (`over`, 840 rounds each, keys -20..+20ms around the go): the
+script numbers its messages, each go says the last one the node read, and the ack says `over` when
+mpv's pause had changed since then, a person's seek came since, a seek ran while the go's seek
+was queued, or mpv already played when the go was to play it. That last one matters: a go that
+seeks isn't one step (stop, seek, then play at the seek's answer), and a space in between was
+missed in 6 and 4 rounds before it was checked. Then on 0.37.0 and 0.40.0: every lost key
+flagged (50, 83), none flagged with no key (212 each). 2 and 8 flags on a key not lost were all
+a seek just before a go that doesn't seek, from stopped, which the ack already sends as theirs.
+
 ## Re-running
 
 ```sh
@@ -158,6 +167,7 @@ LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
 ./run.sh 0 probe3.py go:420 moves:280 buffering:40
 ./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20  # the shipped script
 python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own timeout
+./run.sh 0 probe4.py over:840                       # the ack's over flag against lost keys
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the

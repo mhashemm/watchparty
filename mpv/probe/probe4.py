@@ -35,7 +35,8 @@ def enrich(m):
         elif l.get("event") == "client-message" and l.get("args", [None])[0] == "watchparty" and len(l["args"]) >= 5:
             a = l["args"]
             st["pause"], st["pos"] = a[3], a[4]
-            d = dict(kind=a[1], id=a[2], pause=a[3], pos=a[4], entry=st["entry"], cache=st["cache"])
+            d = dict(kind=a[1], id=a[2], pause=a[3], pos=a[4], entry=st["entry"], cache=st["cache"],
+                     n=a[5] if len(a) > 5 else "", over=len(a) > 6 and a[6] == "over")
             l["_wp"], _VIEW[id(a)] = d, d
     st["done"] = start + len(lines)
 
@@ -66,6 +67,14 @@ def wsnap(m, pred, i, timeout=3):
 
 
 def to(m, cmd, *args):
+    """A go also says the number of the last script message read before it, as the node does;
+    m.sent is how many lines had come then."""
+    if cmd == "wp-go":
+        with m.cv:
+            m.sent = len(m.lines)
+            seen = next((l["args"][5] for l in reversed(m.lines) if l.get("event") == "client-message"
+                         and l.get("args", [None])[0] == "watchparty" and len(l["args"]) > 5), "")
+        args = (*args, seen)
     return m.send("script-message-to", NAME, cmd.replace("wp-", "watchparty-"), *[str(a) for a in args])
 
 
@@ -153,6 +162,82 @@ def broken(rounds, last=False):
     finally:
         os.remove(bad)
     report("brokenlast" if last else "broken", rounds, errors, shapes)
+
+
+# Does the ack's "over" flag every key a go undoes before the node heard it, and only those? As
+# probe3's go: the node adopts a state while the person presses space or a seek key -20..+20ms
+# around it, or nothing. A key is lost when the go undid it and the node hadn't read it when it
+# sent the go (what comes until the ack is nobody's), and the ack doesn't make it the person's:
+#   space: mpv ends as sent, and the key's pause (the toggle of where mpv was) isn't the go's
+#   a seek key, the go seeking: mpv ends on the go's second
+#   a seek key, the go not seeking, mpv playing: its seek is said in flight
+#   (stopped, the ack's second off where mpv was is the person's seek: caught, not lost)
+# Errors: missed, a lost key with no flag; false, a flag with no key pressed; spare, a flag on a
+# key the node heard or caught anyway (harmless if the node then shows nothing).
+def over(rounds):
+    conf = os.path.join(HERE, "input.conf")
+    with open(conf, "w") as f:
+        f.write("F1 seek 7 absolute\n")
+    m = M(os.path.join(HERE, "v120.mkv"), [*WP, f"--input-conf={os.path.relpath(conf)}"])
+    ready(m, [])
+    p = person_conn(m)
+    states = [("yes", "-"), ("no", "-"), ("yes", "S"), ("no", "S")]
+    kinds = ["none", "space", "rel", "abskey"]
+    errors = {"missed": [], "false": [], "ack-late": []}
+    shapes = {}
+    for r in range(rounds):
+        want, seek = states[r % len(states)]
+        kind = kinds[(r // len(states)) % len(kinds)]
+        off = OFFSETS_MS[(r // (len(states) * len(kinds))) % len(OFFSETS_MS)]
+        stopped(m)
+        base = 20 + (r % 30) * 2
+        setpos(m, base)
+        pre = "yes"
+        if r % 2:
+            m.wait(reply(m.send("set_property", "pause", False)))
+            time.sleep(0.05)
+            pre = "no"
+        second = base + 40 if seek == "S" else None
+        tag = f"o{r}"
+        i = m.mark()
+        race(m, p, kind if kind != "none" else None, lambda: to(m, "wp-go", want, second if second else "-", "-", tag), off)
+        k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i)
+        if k is None:
+            errors["ack-late"].append((want, seek, kind, off))
+            continue
+        time.sleep(0.6)
+        sent = m.sent
+        ack = W(m.lines[k]["args"])
+        fp, fpos = get(m, "pause"), get(m, "time-pos")
+        msgs = snaps(m, i)
+        if kind == "space":
+            heard = any(s["kind"] == "pause" and s["pause"] != pre for n, s in msgs if n < sent)
+            lost = fp == want and pre == want and not heard
+        elif kind in ("rel", "abskey"):
+            heard = any(s["kind"] == "seek" and s["id"] == "" for n, s in msgs if n < sent)
+            # folded into ours: our seek off our second is the person's too (wentTo)
+            heard = heard or second and any(s["kind"] == "seek" and s["id"] == tag and not fnear(s["pos"], second, 0.1) for _, s in msgs)
+            if second:
+                lost = fnear(fpos, second, 0.15) and want == "yes" and not heard
+                if want == "no":
+                    # playing on: mpv moved on from the second; lost if no person's seek came after the ack
+                    lost = not heard and not any(s["kind"] == "seek" and s["id"] == "" for n, s in msgs if n > k)
+            elif pre == "no":
+                lost = not heard and any(s["kind"] == "seek" and s["id"] == "" for n, s in msgs if sent <= n < k)
+            else:
+                lost = False
+        else:
+            heard = lost = False
+        flag = ack["over"]
+        if lost and not flag:
+            errors["missed"].append((want, seek, kind, off, pre, [(s["kind"], s["id"], s["pause"], s["pos"]) for n, s in msgs if n <= k]))
+        if kind == "none" and flag:
+            errors["false"].append((want, seek, off, pre))
+        if kind != "none" and flag and not lost:
+            errors.setdefault("spare", []).append((want, seek, kind, off, pre, "heard" if heard else "-", [(s["kind"], s["id"], s["pause"], s["pos"]) for n, s in msgs if n <= k][-4:]))
+        tally(shapes, (kind, "lost" if lost else "heard" if heard else "-", "flagged" if flag else "not flagged"))
+    m.stop()
+    report("over", rounds, errors, shapes)
 
 
 class Hang(http.server.BaseHTTPRequestHandler):
