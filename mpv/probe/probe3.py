@@ -1,5 +1,6 @@
 """Probe the one-message design (wp3.lua): the node sends the whole state it adopts at once.
-Usage: python3 -I probe3.py go <rounds>. Under load: ./run.sh 0 probe3.py go:420"""
+Usage: python3 -I probe3.py <go|moves|buffering> <rounds>. Under load:
+./run.sh 0 probe3.py go:420 moves:280 buffering:40"""
 import os, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +26,7 @@ def go(rounds):
     states = [("yes", "-"), ("no", "-"), ("yes", "S"), ("no", "S")]
     kinds = ["none", "space", "rel", "abskey"]
     errors = {"silent": [], "false": [], "ack-late": []}
-    shapes = {}
+    shapes, overwritten = {}, {}
     for r in range(rounds):
         want_pause, seek = states[r % len(states)]
         kind = kinds[(r // len(states)) % len(kinds)]
@@ -39,7 +40,7 @@ def go(rounds):
         second = base + 40 if seek == "S" else None
         tag = f"g{r}"
         i = m.mark()
-        race(m, p, kind if kind != "none" else None, lambda: to(m, "wp-go", want_pause, second if second else "-", tag), off)
+        race(m, p, kind if kind != "none" else None, lambda: to(m, "wp-go", want_pause, second if second else "-", "-", tag), off)
         k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i)
         if k is None:
             errors["ack-late"].append((want_pause, seek, kind, off))
@@ -62,8 +63,139 @@ def go(rounds):
         if kind == "none" and any(differs(s) for s in after):
             errors["false"].append((want_pause, seek, off, ack, after))
         tally(shapes, (want_pause, seek, kind, "away" if away else "as sent", " ".join(s["kind"] for s in after)))
+        if kind != "none" and not away:
+            # the key acted before the handler, which overwrote it: did the node hear it first?
+            pre = "no" if r % 2 else "yes"
+            before = [s for n, s in snaps(m, i) if n < k]
+            heard = any(s["kind"] == "pause" and s["pause"] != pre for s in before) or any(s["kind"] == "seek" and s["id"] == "" for s in before)
+            tally(overwritten, (kind, "heard before the ack" if heard else "never heard"))
     m.stop()
     report("go", rounds, errors, shapes)
+    print("  overwritten keys:")
+    for key, v in sorted(overwritten.items()):
+        print(f"  {v:4d}  {key}")
+
+
+# Moves: the node adopts a state on another entry (stopped or playing, with or without a seek)
+# while the person presses next or prev, seeks right after, or mpv plays into the entry's end
+# and moves on by itself. Errors as for go, with the entry part of the state.
+def moves(rounds):
+    files = [os.path.join(HERE, f"p{k}.mkv") for k in range(3)]
+    m = M(files[2], [*WP, files[0], files[1]])  # M puts the file last
+    ready(m, [])
+    p = person_conn(m)
+    errors = {"silent": [], "false": [], "ack-late": []}
+    shapes = {}
+
+    def on(entry):
+        stopped(m)
+        if get(m, "playlist-pos") != str(entry):
+            i = m.mark()
+            m.send("set_property", "playlist-pos", entry)
+            m.wait(lambda l: l.get("event") == "playback-restart", i, 5)
+            time.sleep(0.15)
+
+    scens = ["none", ">", "<", "seek", "eof"]
+    for r in range(rounds):
+        scen = scens[r % len(scens)]
+        off = OFFSETS_MS[(r // len(scens)) % len(OFFSETS_MS)]
+        e0 = r % 3
+        on(e0)
+        want_pause = ["yes", "no"][(r // 2) % 2]
+        second = [None, 3.5][(r // 4) % 2]
+        # never where the key or the file's end goes
+        target = (e0 + 2) % 3 if scen in (">", "eof") else (e0 + 1) % 3
+        tag = f"m{r}"
+        if scen == "eof":
+            setpos(m, float(get(m, "duration")) - 0.3)
+            m.wait(reply(m.send("set_property", "pause", False)))
+            time.sleep(0.3 + off / 1000)
+        i = m.mark()
+        send = lambda: to(m, "wp-go", want_pause, second if second else "-", target, tag)
+        if scen in (">", "<"):
+            if off < 0:
+                m.send("keypress", scen, s=p); time.sleep(-off / 1000)
+            send()
+            if off >= 0:
+                time.sleep(off / 1000); m.send("keypress", scen, s=p)
+        elif scen == "seek":
+            send()
+            time.sleep(0.05 + max(off, 0) / 1000)
+            m.send("keypress", "RIGHT", s=p)
+        else:
+            send()
+        k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
+        if k is None:
+            errors["ack-late"].append((scen, off, [(s["kind"], s["id"], s["entry"]) for _, s in snaps(m, i)]))
+            continue
+        time.sleep(0.8)
+        ack = W(m.lines[k]["args"])
+        after = [s for _, s in snaps(m, k + 1)]
+        fp, fpos, fe = get(m, "pause"), get(m, "time-pos"), get(m, "playlist-pos")
+        held_pos = second if second else float(ack["pos"] or 0)
+
+        def differs(s):
+            if s["entry"] != str(target) or s["pause"] != want_pause:
+                return True
+            return want_pause == "yes" and not fnear(s["pos"], held_pos, 0.15)
+        final = {"pause": fp, "pos": fpos, "entry": fe}
+        away = differs(final) if want_pause == "yes" else (fp != want_pause or fe != str(target))
+        seen = differs(ack) or any(differs(s) for s in after)
+        if away and not seen:
+            errors["silent"].append((scen, off, want_pause, second, ack, after, final))
+        if scen == "none" and any(differs(s) for s in after):
+            errors["false"].append((off, want_pause, second, ack, after))
+        tally(shapes, (scen, want_pause, "seek" if second else "-", "away" if away else "as sent", " ".join(s["kind"] for s in after if s["kind"] != "cache")[:60]))
+    m.stop()
+    report("moves", rounds, errors, shapes)
+
+
+# Buffering: a throttled stream runs the cache dry while playing; the node adopts a stop or a
+# resume while stalled, against the person's space or nothing.
+def buffering(rounds):
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), lambda *a, **k: Slow(*a, directory=HERE, **k))
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/net.mkv"
+    errors = {"no-stall": [], "silent": [], "false": [], "ack-late": []}
+    shapes = {}
+    for r in range(rounds):
+        m = M(url, [*WP, "--cache=yes", "--demuxer-readahead-secs=1", "--cache-secs=1"])
+        p = person_conn(m)
+        m.wait(lambda l: l.get("event") == "playback-restart", 0, 10)
+        i = m.mark()
+        m.send("set_property", "pause", False)
+        if wsnap(m, lambda s: s["kind"] == "cache" and s["cache"] == "yes", i, 15) is None:
+            errors["no-stall"].append(r)
+            m.stop()
+            continue
+        want = ["yes", "no"][r % 2]
+        key = (r // 2) % 2 == 1
+        off = OFFSETS_MS[(r // 4) % len(OFFSETS_MS)]
+        if want == "no":
+            m.send("set_property", "pause", True)
+            time.sleep(0.2)
+        tag = f"b{r}"
+        i = m.mark()
+        race(m, p, "space" if key else None, lambda: to(m, "wp-go", want, "-", "-", tag), off)
+        k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
+        if k is None:
+            errors["ack-late"].append((want, key, off))
+            m.stop()
+            continue
+        time.sleep(2.0)
+        ack = W(m.lines[k]["args"])
+        after = [s for _, s in snaps(m, k + 1)]
+        fp = get(m, "pause")
+        differs = lambda s: s["pause"] != want
+        if fp != want and not (differs(ack) or any(differs(s) for s in after)):
+            errors["silent"].append((want, key, off, ack, after, fp))
+        if not key and any(differs(s) for s in after):
+            errors["false"].append((want, off, ack, [(s["kind"], s["pause"], s["cache"]) for s in after]))
+        tally(shapes, (want, "space" if key else "-", "away" if fp != want else "as sent", " ".join(f"{s['kind']}:{s['pause']}/{s['cache']}" for s in after)[:90]))
+        m.stop()
+    srv.shutdown()
+    report("buffering", rounds, errors, shapes)
 
 
 if __name__ == "__main__":
