@@ -162,7 +162,18 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 
-	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket)
+	// the node's way into mpv: mpv reads it as it starts, and loads it even under the user's
+	// load-scripts=no
+	scripts, err := os.MkdirTemp("", "watchparty")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(scripts)
+	script := filepath.Join(scripts, mpv.ScriptFile)
+	if err := os.WriteFile(script, mpv.Script, 0o600); err != nil {
+		return err
+	}
+	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script)
 	if playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
 	} else {
@@ -175,8 +186,7 @@ func Run(parent context.Context, cfg Config) error {
 	out := &lineLog{l: log.Default()}
 	cmd.Stdout, cmd.Stderr = out, out
 
-	err := cmd.Start()
-	if err != nil {
+	if err := cmd.Start(); err != nil {
 		return err
 	}
 	defer cmd.Cancel()

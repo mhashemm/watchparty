@@ -19,7 +19,7 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
   `answer`, `resume`): the person's change went out newer. A play already sent is undone
   (`playLate`, `converge`); why no other late step is, `playLate` says. A mark that steers how
   mpv's lines are read is set at the step, never ahead (`peerSeek`, in `seekReq`).
-- **`New` waits for `opened`**: the first `time-pos` with data and every observe taken, or the close.
+- **`New` waits for `opened`**: the first `time-pos` with data, every observe taken and the script's name, or the close.
   - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's
     real exit status. Cancelling would kill the exiting mpv and turn "exit status 2" into
     "signal: killed". **A hang-up doesn't prove mpv is exiting:** the socket has dropped with

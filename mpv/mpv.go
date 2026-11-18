@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,11 @@ const (
 	showText        = "show-text"
 	pauseReason     = "pause-reason"
 	joined          = "joined"
+	clientMessage   = "client-message"
+
+	// scriptName is what mpv names the script, from ScriptFile; another script with that
+	// file name takes it, and this one gets a number after it (ORDER.md)
+	scriptName = "watchparty"
 
 	lostRelay = "lost the relay, reconnecting"
 	// unheard is the stamp of a node that hasn't heard the party yet: so far below any the
@@ -69,7 +75,17 @@ var (
 	errTimeout   = errors.New("mpv did not answer within 5s")
 
 	ErrClosed = errors.New("mpv closed the IPC connection")
+	// ErrNoScript: mpv didn't load Script, as it was built without Lua
+	ErrNoScript = errors.New("this mpv can't run the sync script: install an mpv built with Lua")
 )
+
+// Script is the node's way into mpv, which party.Run hands mpv as ScriptFile with --script.
+//
+//go:embed sync.lua
+var Script []byte
+
+// ScriptFile is the file name Script is written as: mpv names a script after it.
+const ScriptFile = scriptName + ".lua"
 
 type IncomingMessage struct {
 	// HostName is who sent it, as people know them; From tells members apart, which their
@@ -255,6 +271,8 @@ type Event struct {
 	Free bool `json:"free,omitempty"`
 	// EntryID: the playlist entry a start-file opens, counted from 1
 	EntryID int `json:"playlist_entry_id,omitempty"`
+	// Args: what a script said, in a client-message
+	Args []string `json:"args,omitempty"`
 	Response
 }
 
@@ -300,10 +318,11 @@ type Client struct {
 	notices []IncomingMessage
 	// snap is what Position and Finished read from another goroutine
 	snap atomic.Pointer[snapshot]
-	// opened is New's one answer: nil once the first file loaded and mpv took every
-	// observe (observed), or why it never will
+	// opened is New's one answer: nil once the first file loaded, mpv took every observe
+	// (observed) and the script said its name (script), or why it never will
 	opened   chan error
 	observed bool
+	script   string
 
 	// what mpv last reported
 	paused   bool
@@ -468,6 +487,8 @@ func (c *Client) react(event Event) ([][]byte, error) {
 	case fileLoaded:
 		c.loaded = c.started
 		c.fileLoaded()
+	case clientMessage:
+		c.scriptSaid(event.Args)
 	case propertyChange:
 		if event.Data != "" {
 			out, err := c.propertyChanged(event)
@@ -478,6 +499,15 @@ func (c *Client) react(event Event) ([][]byte, error) {
 		}
 	}
 	return nil, errDoNotSend
+}
+
+// scriptSaid is a message from the script: its name, once.
+func (c *Client) scriptSaid(args []string) {
+	if len(args) < 3 || args[0] != scriptName || args[1] != "hello" || c.script != "" {
+		return
+	}
+	c.script = args[2]
+	c.opens()
 }
 
 // fileLoaded lets go of the seek held for the entry this node was heading to, once mpv has
@@ -957,6 +987,13 @@ func (c *Client) runLater() {
 	}
 }
 
+// opens gives New its answer once all it waits for is there.
+func (c *Client) opens() {
+	if c.observed && !c.opening && c.script != "" {
+		c.open(nil)
+	}
+}
+
 // open gives New its answer, once.
 func (c *Client) open(err error) {
 	select {
@@ -1034,9 +1071,7 @@ func (c *Client) hear(e IncomingMessage) {
 // one transport message, so what comes meanwhile waits.
 func (c *Client) join() {
 	c.opening = false
-	if c.observed {
-		c.open(nil)
-	}
+	c.opens()
 	c.busy++
 	defer func() { c.busy-- }()
 	if c.resumeAt > 0 {
@@ -1706,6 +1741,16 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		events = append(events, playlistPos)
 	}
 	client.later = append(client.later, func() {
+		// mpv makes a script's client before it runs any command (ORDER.md), so one sent to
+		// the script's name fails only if there is none: mpv couldn't load it, as it has no Lua
+		if err := client.do("script-message-to", scriptName, "watchparty-check"); err != nil {
+			client.open(fmt.Errorf("%w (%v)", ErrNoScript, err))
+			return
+		}
+		if err := client.do("script-message", "watchparty-hello"); err != nil {
+			client.open(err)
+			return
+		}
 		for i, event := range events {
 			if err := client.do("observe_property_string", i+1, event); err != nil {
 				client.open(err)
@@ -1713,9 +1758,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 			}
 		}
 		client.observed = true
-		if !client.opening {
-			client.open(nil)
-		}
+		client.opens()
 	})
 	go func() {
 		err := client.watch()

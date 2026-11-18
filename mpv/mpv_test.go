@@ -476,6 +476,21 @@ func TestTheLoopStopsWithTheParty(t *testing.T) {
 	}
 }
 
+// scriptAnswers answers New's first two commands as mpv and the script do, and says whether
+// req was one: the fakes count only the rest.
+func scriptAnswers(conn net.Conn, req Request) bool {
+	switch req.Command[0] {
+	case "script-message-to":
+		fmt.Fprintf(conn, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+	case "script-message":
+		fmt.Fprintf(conn, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		fmt.Fprint(conn, `{"event":"client-message","args":["watchparty","hello","watchparty"]}`+"\n")
+	default:
+		return false
+	}
+	return true
+}
+
 // fakeMpv answers every request on conn with success and then sends events; with
 // closeAfter > 0 it hangs up after that many requests instead.
 func fakeMpv(conn net.Conn, closeAfter int, events ...string) {
@@ -483,6 +498,10 @@ func fakeMpv(conn net.Conn, closeAfter int, events ...string) {
 	for n := 1; sc.Scan(); n++ {
 		req := Request{}
 		json.Unmarshal(sc.Bytes(), &req)
+		if scriptAnswers(conn, req) {
+			n--
+			continue
+		}
 		if n == closeAfter {
 			conn.Close()
 			return
@@ -664,6 +683,10 @@ func TestNewReturnsWhenMpvGoesAwayBeforeTheFileLoads(t *testing.T) {
 			for n := 1; n <= 5 && sc.Scan(); n++ {
 				req := Request{}
 				json.Unmarshal(sc.Bytes(), &req)
+				if scriptAnswers(theirs, req) {
+					n--
+					continue
+				}
 				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 			}
 			theirs.Close()
@@ -673,6 +696,57 @@ func TestNewReturnsWhenMpvGoesAwayBeforeTheFileLoads(t *testing.T) {
 		start := time.Now()
 		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
+		}
+	})
+}
+
+// An mpv built without Lua can't run the script, and every rule goes through it: the party
+// never starts, and says why.
+func TestAnMpvWithoutTheScriptIsRefused(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		if _, err := start(t, setup{noScript: true}); !errors.Is(err, ErrNoScript) {
+			t.Fatalf("got %v, want ErrNoScript", err)
+		}
+	})
+}
+
+// New returns only once the script has said its name, which the node needs to reach it:
+// a user's script with the same file name would take the name the node expects.
+func TestNewWaitsForTheScriptsName(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ours, theirs := net.Pipe()
+		defer ours.Close()
+		defer theirs.Close()
+		go func() {
+			sc := bufio.NewScanner(theirs)
+			for sc.Scan() {
+				req := Request{}
+				json.Unmarshal(sc.Bytes(), &req)
+				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+				if req.Command[0] == "observe_property_string" && req.Command[2] == timePos {
+					fmt.Fprint(theirs, mpvAt(0))
+				}
+			}
+		}()
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		opened := make(chan error, 1)
+		go func() {
+			_, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0)
+			opened <- err
+		}()
+		synctest.Wait()
+		if len(opened) > 0 {
+			t.Fatalf("New returned %v before the script said its name", <-opened)
+		}
+		fmt.Fprint(theirs, `{"event":"client-message","args":["watchparty","hello","watchparty2"]}`+"\n")
+		synctest.Wait()
+		if len(opened) == 0 {
+			t.Fatal("New is still waiting once the script said its name")
+		}
+		if err := <-opened; err != nil {
+			t.Fatal(err)
 		}
 	})
 }
@@ -690,6 +764,10 @@ func TestNewSucceedsWhenMpvLoadsThenQuitsAtOnce(t *testing.T) {
 			for n := 1; n <= 5 && sc.Scan(); n++ {
 				req := Request{}
 				json.Unmarshal(sc.Bytes(), &req)
+				if scriptAnswers(theirs, req) {
+					n--
+					continue
+				}
 				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 			}
 			fmt.Fprint(theirs, mpvAt(0))
@@ -859,6 +937,10 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 		for n := 1; sc.Scan(); n++ {
 			req := Request{}
 			json.Unmarshal(sc.Bytes(), &req)
+			if scriptAnswers(theirs, req) {
+				n--
+				continue
+			}
 			fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 			if n == 2 {
 				<-load

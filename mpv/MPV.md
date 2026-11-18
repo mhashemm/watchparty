@@ -12,7 +12,7 @@ keyframe every 10s. `ipc.rst` is unchanged through v0.41.0 apart from `--input-i
 ## How `party.Run` starts mpv
 
 ```
-mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --quiet --input-ipc-server=<sock> <file>
+mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --quiet --input-ipc-server=<sock> --script=<tmp>/watchparty.lua <file>
 ```
 
 | Flag | Why |
@@ -24,6 +24,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--quiet` | **Pinned.** No status line. Into a pipe mpv prints it as a new line several times a second (`AV: 00:00:04 / 00:00:30 …`), which buried every other line of the log. Errors still print. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
+| `--script=<tmp>/watchparty.lua` | The node's way into mpv (`ORDER.md`), written from `Script` to a temp folder for the run. Loaded even under a user's `load-scripts=no`. |
 | `--no-shuffle --playlist-start=<n>` | **Pinned, playlists only.** An index only means the same file to everyone in our order, and it starts on the file that was picked. |
 | *(no `--start`)* | **Continuing a party seeks over IPC** once the first file is open. `--start` applies to every later entry, and a file-local `--{ --start=… file --}` (even undone with `file-local-options/start`) comes back on every return to it (probed on 0.37.0). |
 
@@ -196,5 +197,4 @@ for c in [b"[\"observe_property_string\",2,\"time-pos\"]", b"[\"set_property\",\
 print(s.recv(65536).decode())'
 ```
 
-`--watch-later-dir` keeps probes out of the real resume store, `-g 240` makes keyframe
-snapping visible, and observers die with the connection.
+`--watch-later-dir` keeps the real resume store clean; `-g 240` shows keyframe snapping.

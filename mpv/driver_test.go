@@ -60,11 +60,23 @@ type setup struct {
 	// opening: what mpv says once observed, instead of the file's values; it must report a
 	// time-pos with data, which is how the node knows the file loaded
 	opening []string
+	// noScript: mpv couldn't load the script, as an mpv built without Lua
+	noScript bool
 }
 
 // newNode starts a node and returns once its file has loaded: what joining said, it still
 // has to say (ready drops that).
 func newNode(t *testing.T, s setup) *node {
+	t.Helper()
+	n, err := start(t, s)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return n
+}
+
+// start is newNode, giving New's error instead of failing on it.
+func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -95,11 +107,11 @@ func newNode(t *testing.T, s setup) *node {
 	}
 	c, err := New(ctx, cancel, ours, n.out, n.in, s.names, s.start, s.at)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		return nil, err
 	}
 	n.c = c
 	synctest.Wait()
-	return n
+	return n, nil
 }
 
 // ready is a node that has joined and been answered: nothing from its start is left to read.
@@ -133,11 +145,16 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 				reply = fmt.Sprintf(`{"request_id":%d,"error":%q}`+"\n", req.RequestId, why)
 			}
 		}
+		// the script's answer to the node's first two commands, which no test reads (told)
+		handshake := name == "script-message-to" || name == "script-message" && req.Command[1] == "watchparty-hello"
+		if name == "script-message-to" && s.noScript {
+			reply = fmt.Sprintf(`{"request_id":%d,"error":"error running command"}`+"\n", req.RequestId)
+		}
 		if said == "get_property_string time-pos" && n.where != "" {
 			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", n.where, req.RequestId)
 		}
 		taken := strings.Contains(reply, `"error":"success"`)
-		if name != "observe_property_string" {
+		if name != "observe_property_string" && !handshake {
 			n.told = append(n.told, said)
 			if name == setProperty && taken {
 				n.sets = append(n.sets, req.Command[1:])
@@ -153,6 +170,9 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		n.mu.Unlock()
 		if !late {
 			n.writes <- reply
+		}
+		if name == "script-message" && handshake {
+			n.writes <- `{"event":"client-message","args":["watchparty","hello","watchparty"]}` + "\n"
 		}
 		if name == "observe_property_string" {
 			if observes--; observes == 0 {
