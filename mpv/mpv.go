@@ -140,16 +140,18 @@ func (c *Client) ask(args ...any) (string, error) {
 		go c.writer(c.out)
 	}
 	c.out.put(request{id: id, body: body})
-	return c.await(id)
+	return c.await(id, true)
 }
 
 // await waits on the loop for id's answer, taking the inputs that come meanwhile: mpv's reply
-// to a request, or the script's ack of a command (tell).
-func (c *Client) await(id int64) (string, error) {
+// to a request, or the script's ack of a go (goTo). Bounded, it gives up after 5s.
+func (c *Client) await(id int64, bounded bool) (string, error) {
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
-	expire := time.AfterFunc(5*time.Second, func() { c.post(input{expired: id}) })
-	defer expire.Stop()
+	if bounded {
+		expire := time.AfterFunc(5*time.Second, func() { c.post(input{expired: id}) })
+		defer expire.Stop()
+	}
 	for {
 		if r, ok := c.replies[id]; ok {
 			delete(c.replies, id)
@@ -1573,7 +1575,10 @@ func (c *Client) goTo(paused bool, second *float64, entry *int, still bool) erro
 	defer delete(c.waiting, id)
 	err := c.do("script-message-to", c.script, scriptName+"-go", holds(paused), at, to, strconv.FormatInt(id, 10))
 	if err == nil {
-		_, err = c.await(id)
+		// a move is acked once its file loads, which a slow stream can take far longer than 5s
+		// to do; the script acks it then, or as mpv fails to open the file, and mpv quitting
+		// ends the wait
+		_, err = c.await(id, entry == nil)
 	}
 	if err != nil {
 		c.ground(id)

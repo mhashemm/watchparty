@@ -1751,6 +1751,24 @@ func TestEntryAlreadyHeadedThereIsNotRepeated(t *testing.T) {
 	})
 }
 
+// A peer's move to a file that takes long to load, as a slow stream or a torrent can: the go
+// is acked once the file loads, so it waits for it. Given up after 5s, the node asked the
+// party again for a move that was only slow.
+func TestAMoveWaitsForASlowLoad(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.peerSays("a", move(5, 1))
+		time.Sleep(time.Minute)
+		n.mpvObeys()
+		if got := said(n.broadcasts()); len(got) != 0 {
+			t.Fatalf("broadcast %q, want nothing: the move was only slow", got)
+		}
+		if got := n.mpvWasTold(); fmt.Sprint(got) != "[set_property playlist-pos 1 show-text from e1 to e2, by a 5000]" {
+			t.Fatalf("told mpv %q, want the move, shown once loaded", got)
+		}
+	})
+}
+
 // A seek right after a move would land on the old file, which then ends and loses it.
 // A joiner hits this every time: it is told the entry, then the position.
 func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
