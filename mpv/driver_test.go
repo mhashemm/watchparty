@@ -49,9 +49,9 @@ type node struct {
 	carrying string
 	// labels: the id each seek mpvObeys reports carries, taken as mpv takes the seek: a go
 	// sent after it, before its event is written, is a seek of its own (or folds into it)
-	labels []string
-	seeking  bool
-	pos      float64
+	labels  []string
+	seeking bool
+	pos     float64
 	// waiting: the go a move waits for, applied once its file loads; loading: a move is on its
 	// way to heading (watchparty.lua)
 	waiting *fakeGo
