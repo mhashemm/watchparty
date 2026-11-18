@@ -2,7 +2,7 @@
 -- from it. Every message is a snapshot taken by the script at the moment it says, with its cause:
 --   wp <kind> <id> <pause> <time-pos> <playlist-pos> <paused-for-cache>
 -- kinds: hello (id = this script's name), ack (our pause applied), pause (pause marked changed),
--- landed (a seek ended; id = ours if it carried ours), ready (a restart with no seek: load, cache),
+-- began (a seek event; id = ours if it carries ours), landed (a seek ended; id = ours if it carried ours), ready (a restart with no seek: load, cache),
 -- loaded (file-loaded; id = ours, "eof" for mpv's own move at the end, "" for the person's),
 -- cache (paused-for-cache marked changed), end (end-file; id = its reason), held (a seek waiting
 -- on our move's load), refused (a command mpv refused).
@@ -46,6 +46,7 @@ mp.register_event("seek", function()
         carrying = replied[#replied]
         replied = {}
     end
+    snap("began", carrying)
 end)
 
 mp.register_event("playback-restart", function()

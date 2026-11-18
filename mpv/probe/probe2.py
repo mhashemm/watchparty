@@ -1,13 +1,16 @@
 """Probe the whole script design (wp2.lua) against everything the node does with mpv.
 Usage: python3 -I probe2.py <experiment> <rounds> (mpv/ORDER.md holds the results).
-Experiments: startup, pause, seekp, playing, moves, buffering, ending. Run under load as:
-./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40 ending:60"""
+Experiments: startup, pause, seekp, playing, moves, buffering, ending, mixed, began. Run under
+load as: ./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40
+ending:60, and LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280"""
 import http.server, os, socketserver, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 exec(open(os.path.join(HERE, "probe.py")).read().split('if __name__ == "__main__":')[0])
 
 NAME = "wp2"
+# what counts as where a seek went: "landed" at playback-restart, or "began" at the seek event
+LANDING = os.environ.get("LANDING", "landed")
 WP = ["--script=wp2.lua"]
 
 
@@ -176,7 +179,7 @@ def seekp(rounds):
         time.sleep(0.6)
         sp, spos = get(m, "pause"), get(m, "time-pos")
         ss = snaps(m, i)
-        land = [s for _, s in ss if s["kind"] == "landed"]
+        land = [s for _, s in ss if s["kind"] == LANDING]
         if not any(s["id"] == tag for s in land):
             errors["no-landing"].append((kind, off, ss))
             continue
@@ -219,7 +222,7 @@ def playing(rounds):
             time.sleep(0.15)
             i = m.mark()
             m.send("keypress", "RIGHT", s=p)
-            n = wsnap(m, lambda s: s["kind"] == "landed" and s["id"] == "", i)
+            n = wsnap(m, lambda s: s["kind"] == LANDING and s["id"] == "", i)
             if n is None:
                 errors["A-missed-seek"].append(off)
                 continue
@@ -239,7 +242,7 @@ def playing(rounds):
             time.sleep(0.5)
             sp, spos = get(m, "pause"), float(get(m, "time-pos"))
             ss = snaps(m, i)
-            land = [s for _, s in ss if s["kind"] == "landed"]
+            land = [s for _, s in ss if s["kind"] == LANDING]
             if not any(s["id"] == tag for s in land):
                 errors["B-no-landing"].append((second, off, ss))
                 continue
@@ -313,7 +316,7 @@ def moves(rounds):
             time.sleep(0.8)
             se, spos = get(m, "playlist-pos"), get(m, "time-pos")
             ss = snaps(m, i)
-            land = [s for _, s in ss if s["kind"] == "landed"]
+            land = [s for _, s in ss if s["kind"] == LANDING]
             ours = [s for s in land if s["id"] == tag + "s"]
             if se != str(target) or not ours or ours[0]["entry"] != str(target):
                 errors["seek-lost"].append((off, [(s["kind"], s["id"], s["entry"], s["pos"]) for _, s in ss], se, spos))
@@ -334,7 +337,7 @@ def moves(rounds):
                 errors["entry-wrong"].append(("back", off, loads, se))
             i2 = m.mark()
             to(m, "wp-seek", 3, tag + "x")
-            if wsnap(m, lambda s: s["kind"] == "landed" and s["id"] == tag + "x", i2, 2) is None:
+            if wsnap(m, lambda s: s["kind"] == LANDING and s["id"] == tag + "x", i2, 2) is None:
                 errors["stuck"].append(("back", off, [(s["kind"], s["id"], s["entry"]) for _, s in ss + snaps(m, i2)]))
             tally(shapes, ("back", f"{max(off, 0)}ms", " ".join(s["kind"] + (":" + s["id"] if s["id"] else "") for _, s in ss if s["kind"] in ("loaded", "end", "ack")), f"settled={se}"))
         else:
@@ -468,6 +471,83 @@ def ending(rounds):
         tally(shapes, (scen, " ".join(s["kind"] + (":" + s["id"] if s["id"] else "") + f"[{s['pause']} {s['pos'][:6]}]" for _, s in ss), "mpv closed" if closed else "mpv open"))
         m.stop()
     report("ending", rounds, errors, shapes)
+
+
+# 8. Two streams: pause from the script, time-pos from an IPC observe. Does a playing time-pos
+#    come after the script's stopped snapshot (it would read as a seek while paused)?
+def mixed(rounds):
+    m = M(os.path.join(HERE, "v120.mkv"), WP)
+    ready(m, ["time-pos"])
+    late, total = [], 0
+    for r in range(rounds):
+        m.wait(reply(m.send("set_property", "pause", False)))
+        time.sleep(0.03 + (r % 7) * 0.01)
+        i = m.mark()
+        tag = f"x{r}"
+        if r % 2:
+            to(m, "wp-pause", "yes", tag)
+            k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i)
+        else:
+            m.send("set_property", "pause", True)
+            k = wsnap(m, lambda s: s["kind"] == "pause" and s["pause"] == "yes", i)
+        time.sleep(0.15)
+        if k is None:
+            continue
+        stopped = W(m.lines[k]["args"])["pos"]
+        total += 1
+        after = [l["data"] for l in m.since(k + 1) if l.get("event") == "property-change" and l.get("name") == "time-pos"]
+        if any(not fnear(a, stopped, 0.0005) for a in after):
+            late.append(("ours via script" if r % 2 else "plain set", stopped, after))
+    m.stop()
+    print(f"mixed: rounds={total} playing time-pos after the script's stopped snapshot: {len(late)}")
+    for e in late[:6]:
+        print("  ", e)
+
+
+# 8. A seek and a resume at once ([R6c]): the person seeks while paused and presses space at
+#    once, or the node's seek races the space. Is the snapshot at the seek event (began) where the
+#    seek lands, and does it come before the resume's change mark?
+def began(rounds):
+    conf = os.path.join(HERE, "input.conf")
+    with open(conf, "w") as f:
+        f.write("F1 seek 7 absolute\n")
+    m = M(os.path.join(HERE, "v24.mkv"), [*WP, f"--input-conf={os.path.relpath(conf)}"])
+    ready(m, [])
+    p = person_conn(m)
+    kinds = ["rel", "abskey", "absipc", "ours"]
+    gaps = [0, 1, 5, 20]
+    errors = {"began-off": [], "no-began": [], "began-not-paused": [], "resume-first": []}
+    shapes = {}
+    for r in range(rounds):
+        kind, gap = kinds[r % len(kinds)], gaps[(r // len(kinds)) % len(gaps)]
+        stopped(m)
+        base = 20 + (r % 40) * 2
+        setpos(m, base)
+        target = {"rel": base + 5, "abskey": 7, "absipc": 9, "ours": base + 50}[kind]
+        tag = f"b{r}"
+        i = m.mark()
+        if kind == "ours":
+            to(m, "wp-seek", target, tag)
+        else:
+            race(m, p, kind, lambda: None, 0)
+        time.sleep(gap / 1000)
+        m.send("keypress", "SPACE", s=p)
+        time.sleep(0.6)
+        ss = [s for _, s in snaps(m, i)]
+        order = [s["kind"] + ("-" + s["pause"] if s["kind"] == "pause" else "") for s in ss if s["kind"] in ("began", "landed", "pause")]
+        b = [s for s in ss if s["kind"] == "began"]
+        land = [s for s in ss if s["kind"] == "landed"]
+        if land and not b:
+            errors["no-began"].append((kind, gap, order))
+        elif b and land and not fnear(b[0]["pos"], land[-1]["pos"]):
+            errors["began-off"].append((kind, gap, b[0], land[-1]))
+        if b and order.index("began") < (order.index("pause-no") if "pause-no" in order else 99) and b[0]["pause"] != "yes":
+            errors["began-not-paused"].append((kind, gap, order, b[0]))
+        if "pause-no" in order and b and order.index("pause-no") < order.index("began"):
+            errors["resume-first"].append((kind, gap, order))
+        tally(shapes, (kind, " ".join(order)))
+    m.stop()
+    report("began", rounds, errors, shapes)
 
 
 if __name__ == "__main__":
