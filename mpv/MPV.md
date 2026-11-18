@@ -180,7 +180,9 @@ Seen during a normal run:
   mpv may report only the last (0→1→0: `0` or nothing), from 10ms both. It always loads a file.
 - **A seek set just before a switch never lands on the new file** (0, 2 and 20ms apart, both
   versions): it is reported before the switch, or not at all with no `seek` event either.
-  The new file opens at 0. **A seek at a local file's `file-loaded` lands before its `playback-restart`;**
+  The new file opens at 0. **Until it starts, `time-pos` is the old file's on 0.42.0** (the seek's
+  second, with `playlist-pos` on the new: 3 of 840 rounds), unavailable on 0.37/0.40, so the
+  script says none while a set entry hasn't started. **A seek at a local file's `file-loaded` lands before its `playback-restart`;**
   on a stream slow to start 5 of 12 were dropped (acked, no `seek`, at 0), so the script waits for it.
 - **mpv gives up on a hung stream by itself** (`--network-timeout`, default 60s, which
   `stream_lavf.c` hands ffmpeg as `timeout`, for connecting and each read): a server that never

@@ -326,9 +326,10 @@ def starts(rounds):
         elif scen != "key" or dest is not None:
             if fe != str(e0):
                 errors["last"].append((scen, off, e0, target, dest, st, fe))
-        # a move's ack comes once its own file has started, when it does
+        # a move's ack comes once its own file has started, when it does; but a go that comes
+        # while one waits acks that one at once (back's first)
         idx = {s["id"]: n for n, s in snaps(m, i) if s["kind"] == "start" and s["id"] in (tag, back)}
-        for t in (tag, back):
+        for t in ((back,) if scen == "back" else (tag,)):
             k = next((n for n, s in snaps(m, i) if s["kind"] == "ack" and s["id"] == t), None)
             if t in idx and k is not None and k < idx[t]:
                 errors.setdefault("early", []).append((scen, off, t == back, st))
@@ -398,7 +399,7 @@ def away(rounds):
     m = M(files[2], [*WP, files[0], files[1]])  # M puts the file last
     ready(m, [])
     p = person_conn(m)
-    errors = {"seeked": [], "ack": [], "ack-late": []}
+    errors = {"seeked": [], "ack": [], "ack-late": [], "pos-wrong": []}
     shapes = {}
     for r in range(rounds):
         off = OFFSETS_MS[r % len(OFFSETS_MS)]
@@ -422,7 +423,8 @@ def away(rounds):
             time.sleep(off / 1000); m.send("keypress", ">", s=p)
         k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
         if k is None:
-            errors["ack-late"].append((off, e0))
+            errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s["at"]) for _, s in snaps(m, i)],
+                                       [l.get("event") for l in m.since(i) if l.get("event") not in (None, "client-message", "property-change")]))
             continue
         time.sleep(0.8)
         ack = W(m.lines[k]["args"])
@@ -431,11 +433,16 @@ def away(rounds):
         # 0, and the node reads no second from it
         ours = [s for _, s in snaps(m, i) if s["kind"] == "seek" and s["id"] == tag and s["pos"] != ""]
         moved = ack["at"] == str(e0 + 1)
+        fpos = get(m, "time-pos")
+        # where the ack says mpv stopped is where it is: the node sends that with the move
+        if moved and ack["pos"] != "" and fe == ack["at"] and (fpos is None or abs(float(fpos) - float(ack["pos"])) > 0.1):
+            errors["pos-wrong"].append((off, e0, ack["pos"], fpos))
         if moved and ours:
-            errors["seeked"].append((off, e0, ack, ours))
+            errors["seeked"].append((off, e0, ack["pos"], fpos, ours[0]["pos"]))
         if fe == str(e0 + 1) and not moved and not any(s["kind"] == "start" and s["id"] == "" for n, s in snaps(m, k + 1)):
             errors["ack"].append((off, e0, ack, fe))
-        tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "key's file at the ack" if moved else "ours at the ack", "ends on " + fe))
+        tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "key's file at the ack" if moved else "ours at the ack", "ends on " + fe,
+                       "at 30" if fpos is not None and abs(float(fpos) - 30) < 0.1 else "at 0" if fpos is not None and float(fpos) < 0.1 else "elsewhere"))
     m.stop()
     report("away", rounds, errors, shapes)
 

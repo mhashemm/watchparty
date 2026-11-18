@@ -6,6 +6,8 @@
 
 -- said: what each recent message said, by its number, so a go can tell what the node had read
 local n, said = 0, {}
+-- opened: the entry the last start opened
+local opened = nil
 
 -- entry: the one a start says it opened, else playlist-pos as mpv holds it now
 local function say(kind, id, over, entry)
@@ -15,8 +17,12 @@ local function say(kind, id, over, entry)
     local person = (id or "") == "" and (kind == "seek" or kind == "start")
     said[n] = {pause = paused, entry = entry, person = person}
     said[n - 256] = nil
+    local pos = mp.get_property("time-pos", "")
+    -- set to another entry that hasn't started: time-pos is still the old file's (0.42 keeps
+    -- it as it leaves; ORDER.md), and the new one opens at 0
+    if opened and mp.get_property("playlist-pos") ~= opened then pos = "" end
     mp.commandv("script-message", "watchparty", kind, id or "", paused,
-        mp.get_property("time-pos", ""), tostring(n), over and "over" or "", entry)
+        pos, tostring(n), over and "over" or "", entry)
 end
 
 -- hello: the node learns this script's name by asking everyone, as a user's script with the
@@ -39,8 +45,6 @@ local replied, waiting, heading, loaded = {}, nil, nil, false
 -- ended: why the last file ended, so a start after a file's end or error is mpv's own (auto);
 -- first: the file mpv opens as it starts is nobody's move
 local moves, ended, first = {}, nil, true
--- opened: the entry the last start opened
-local opened = nil
 -- over: the gos that undo a change of the person's the node hadn't read when it sent them, so
 -- its ack says so; seeking: the go whose seek mpv has queued but not answered
 local over, seeking = {}, nil
