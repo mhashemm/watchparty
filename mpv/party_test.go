@@ -35,16 +35,34 @@ type simNode struct {
 	pos     float64
 	entry   int
 	notices []string
-	seeks   []string
-	moves   []int
+	// seeks: queued in mpv's one slot, with the id of the node's (sync.lua), none for the person's
+	seeks []simSeek
+	moves []int
 	// reports: what mpv holds back until its event queue is empty (client.h), so a move's
 	// report can come after its file-loaded
 	reports []string
 	// late: mpv answers a request when the seed picks (answers), with events before it;
-	// answer is the one it holds, and it reads the next request only once that is out
+	// answer is the one it holds, and it reads the next request only once that is out. The
+	// script's go is answered at once, and the script runs it when the seed picks (act)
 	late     bool
 	answer   string
+	act      func()
 	answered chan struct{}
+	// waiting: the go a move waits for (sync.lua), while loading heads to heading
+	waiting *simGo
+	loading bool
+	heading int
+}
+
+// simGo is a go the script holds until its file loads.
+type simGo struct {
+	paused, second, id string
+	entry              int
+}
+
+type simSeek struct {
+	at string
+	id string
 }
 
 type sim struct {
@@ -105,10 +123,10 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	return s
 }
 
-// model answers requests the way mpv does (MPV.md): a no-op set says nothing, and a seek
-// reports later, ahead of a pause sent right behind it but after the reply to that pause.
-// Seeks fold into the last, which reports no second if mpv was already on it; asked where
-// it is, mpv answers with the second a seek heads to at once.
+// model answers requests the way mpv and the script do (MPV.md, ORDER.md): the script's go
+// (goLocked) acks once mpv has all of it; a seek is queued and lands later, ahead of a pause
+// change right behind it. Seeks fold into the last, which reports no second if mpv was already
+// on it, and the script says it at its seek event, with the id of the node's last.
 // A set of playlist-pos replies first and reports later, so the next set can overtake the
 // report, and two close together can report only the last (MPV.md). Late, events can come
 // before an answer, as MPV.md allows; never a later request's, as mpv's IPC thread runs one
@@ -125,31 +143,28 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 		switch {
 		case name == showText:
 			n.notices = append(n.notices, fmt.Sprint(req.Command[1]))
-		case name == setProperty && req.Command[1] == pause:
-			if len(n.seeks) > 0 {
-				n.emit(reply)
-				replied = true
+		case name == "script-message-to":
+			// mpv answers once the script has the message; the script acts on its own
+			n.writes <- reply
+			replied = true
+			arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
+			paused, second, entry, id := arg(3), arg(4), arg(5), arg(6)
+			act := func() { n.goLocked(paused, second, entry, id) }
+			if n.late {
+				n.act = act
+			} else {
+				act()
 			}
-			n.setPause(req.Command[2] == true)
-		case name == setProperty && req.Command[1] == timePos:
-			pos, _ := strconv.ParseFloat(fmt.Sprint(req.Command[2]), 64)
-			n.seek(pos)
 		case name == setProperty && req.Command[1] == playlistPos:
 			i, _ := strconv.Atoi(fmt.Sprint(req.Command[2]))
 			n.request(i)
-		case name == "get_property_string" && req.Command[1] == timePos:
-			at := fmt.Sprintf("%f", n.pos)
-			if len(n.seeks) > 0 {
-				at = n.seeks[len(n.seeks)-1]
-			}
-			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", at, req.RequestId)
 		}
 		if n.late {
 			if !replied {
 				n.answer = reply
 			}
 			n.mu.Unlock()
-			if replied {
+			if replied && n.act == nil {
 				continue
 			}
 			select {
@@ -160,6 +175,9 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 			continue
 		}
 		n.mu.Unlock()
+		if replied {
+			continue
+		}
 		select {
 		case n.writes <- reply:
 		case <-ctx.Done():
@@ -168,13 +186,24 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	}
 }
 
-// answers is mpv sending the answer it held; then it reads the next request.
+// answers is mpv sending the answer it held, or the script running what it was told; then
+// mpv reads the next request.
 func (n *simNode) answers() {
 	n.mu.Lock()
-	n.writes <- n.answer
-	n.answer = ""
+	if n.act != nil {
+		n.act()
+		n.act = nil
+	} else {
+		n.writes <- n.answer
+		n.answer = ""
+	}
 	n.mu.Unlock()
 	n.answered <- struct{}{}
+}
+
+// script is the script saying what mpv holds (sync.lua).
+func (n *simNode) script(kind, id string) string {
+	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f"]}`+"\n", kind, id, holds(n.paused), n.pos)
 }
 
 func (n *simNode) emit(line string) {
@@ -195,21 +224,102 @@ func (n *simNode) landReportsLocked() {
 	n.reports = nil
 }
 
+// setPause is the person's key: a change lands the seek queued first, and the script says its
+// change mark.
 func (n *simNode) setPause(paused bool) {
 	if n.paused == paused {
 		return
 	}
-	n.paused = paused
 	n.landSeekLocked()
-	data := "no"
-	if paused {
-		data = "yes"
+	n.paused = paused
+	n.emit(n.script("pause", ""))
+}
+
+// goLocked is the script taking a go (sync.lua): another entry opens stopped, and the rest
+// waits for its file (fileLoaded); otherwise apply.
+func (n *simNode) goLocked(paused, second, entry, id string) {
+	if n.waiting != nil {
+		n.emit(n.script("ack", n.waiting.id))
+		n.waiting = nil
 	}
-	n.emit(propertyChangeLine(pause, data, 0))
+	if entry == "-" && n.loading {
+		entry = strconv.Itoa(n.heading)
+	}
+	on := n.entry
+	if n.loading {
+		on = n.heading
+	}
+	if e, err := strconv.Atoi(entry); err == nil && (n.loading || on != e) {
+		if on != e {
+			n.setPause(true)
+			n.loading, n.heading = true, e
+			n.request(e)
+		}
+		n.waiting = &simGo{paused: paused, second: second, id: id, entry: e}
+		return
+	}
+	n.apply(paused, second, id)
+}
+
+// apply is the script's go on the file mpv is on: stopped, on the second, then playing if
+// asked, and the ack. A play lands the seek just queued first, which the script says after
+// the ack; its change mark comes once its events are out, or, late, before the ack.
+func (n *simNode) apply(paused, second, id string) {
+	if second == "-" {
+		want := paused == "yes"
+		changed := n.paused != want
+		if changed {
+			n.landSeekLocked()
+		}
+		n.paused = want
+		n.emit(n.script("ack", id))
+		if changed {
+			n.emit(n.script("pause", ""))
+		}
+		return
+	}
+	changed := !n.paused
+	if changed {
+		n.landSeekLocked()
+		n.paused = true
+	}
+	n.seeks = append(n.seeks, simSeek{second, id})
+	if paused == "no" {
+		n.paused = false
+		n.emit(n.script("ack", id))
+		n.landSeekLocked()
+		n.emit(n.script("pause", ""))
+		return
+	}
+	if changed && n.late {
+		n.emit(n.script("pause", ""))
+	}
+	n.emit(n.script("ack", id))
+	if changed && !n.late {
+		n.emit(n.script("pause", ""))
+	}
+}
+
+// fileLoaded is mpv's file-loaded, with reports mpv still holds back after it, and the
+// script's: the go the move waited for, or its ack alone on another file.
+func (n *simNode) fileLoaded(reports ...string) {
+	n.emit(`{"event":"file-loaded"}` + "\n")
+	n.reports = append(n.reports, reports...)
+	n.loading = false
+	w := n.waiting
+	if w == nil {
+		return
+	}
+	n.waiting = nil
+	if n.entry == w.entry {
+		n.apply(w.paused, w.second, w.id)
+	} else {
+		n.emit(n.script("ack", w.id))
+	}
 }
 
 func (n *simNode) seek(pos float64) {
-	n.seeks = append(n.seeks, fmt.Sprintf("%f", pos))
+	n.seeks = append(n.seeks, simSeek{at: fmt.Sprintf("%f", pos)})
 }
 
 func (n *simNode) landSeek() {
@@ -222,11 +332,17 @@ func (n *simNode) landSeekLocked() {
 	if len(n.seeks) == 0 {
 		return
 	}
-	last := n.seeks[len(n.seeks)-1]
+	last, carrying := n.seeks[len(n.seeks)-1].at, ""
+	for _, s := range n.seeks {
+		if s.id != "" {
+			carrying = s.id
+		}
+	}
 	n.seeks = nil
 	was := fmt.Sprintf("%f", n.pos)
 	n.pos, _ = strconv.ParseFloat(last, 64)
 	n.emit(`{"event":"seek"}` + "\n")
+	n.emit(n.script(seek, carrying))
 	if last != was {
 		n.emit(propertyChangeLine(timePos, last, 0))
 	}
@@ -262,7 +378,7 @@ func (n *simNode) foldMoves() {
 	n.moves = nil
 	if i == n.entry {
 		n.emit(started(i))
-		n.emit(`{"event":"file-loaded"}` + "\n")
+		n.fileLoaded()
 		return
 	}
 	n.move(i, false)
@@ -282,12 +398,11 @@ func (n *simNode) move(i int, late bool) {
 	n.emit(started(i))
 	reports := []string{propertyChangeLine(playlistPos, strconv.Itoa(i), 0), propertyChangeLine(timePos, "0.000000", 0)}
 	if late {
-		n.emit(`{"event":"file-loaded"}` + "\n")
-		n.reports = reports
+		n.fileLoaded(reports...)
 		return
 	}
 	n.emit(reports[0])
-	n.emit(`{"event":"file-loaded"}` + "\n")
+	n.fileLoaded()
 	n.emit(reports[1])
 }
 
@@ -377,7 +492,7 @@ func (s *sim) run() {
 			if len(from.reports) > 0 {
 				next = append(next, from.landReports)
 			}
-			if from.answer != "" {
+			if from.answer != "" || from.act != nil {
 				next = append(next, from.answers)
 			}
 			if len(from.moves) > 1 {
@@ -527,7 +642,7 @@ func (n *simNode) said(text string) bool {
 func play(pos float64, nodes ...*simNode) {
 	for _, n := range nodes {
 		n.paused, n.pos = false, pos
-		n.c.paused, n.c.pos, n.c.stamp = false, pos, 1
+		n.c.paused, n.c.pos, n.c.reported, n.c.stamp = false, pos, pos, 1
 		n.c.snapshot()
 	}
 }
@@ -985,7 +1100,7 @@ func joins(n *simNode) {
 // stopped starts these nodes paused together at pos, in a party someone opened.
 func stopped(pos float64, nodes ...*simNode) {
 	for _, n := range nodes {
-		n.pos, n.c.pos, n.c.stamp = pos, pos, 1
+		n.pos, n.c.pos, n.c.reported, n.c.stamp = pos, pos, pos, 1
 		n.c.snapshot()
 	}
 }

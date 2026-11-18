@@ -110,15 +110,15 @@ Seen during a normal run:
 - **An absolute seek** (`set_property time-pos`) **is exact**, even under mpv's default
   `--hr-seek` (we pin `yes`): `"77.000000"` echoed `77.000000`. Between frames it echoes the
   target, then the landed frame after `playback-restart` (`123.456` → `123.456000`, `123.458000`):
-  **an echo can come twice, a frame off**, so `seeks` matches within ±0.1s and keeps a match.
+  **an echo can come twice, a frame off**, so a landing is ours within ±0.1s (`wentTo`).
 - **Nothing of a seek comes after the next seek's report.** A seek between frames, then a
   second one sent at once, after the first's report or after its `playback-restart`: in 590
   rounds (0.37.0 and 0.40.0, 2026-11-15) no report of the first ever came after the second's.
-  So the person's own seek ends every marker before it (`positionChanged`).
+  So the person's own seek ends every mark before it (`positionChanged`).
 - **Two seeks at once can fold into the last, which reports no second if mpv was already
   there.** `set_property time-pos 40`, then at once `seek 3 absolute`, standing on 3: only `seek`
   and `playback-restart` in 59/60 rounds on 0.37.0, 6/60 on 0.40.0 (else 40, `seek`, 3;
-  2026-11-15). So a seek this node sent that played back unreported is asked about (`landed`).
+  2026-11-15). So a seek's landing is read from the script, which carries the id (`ORDER.md`).
 - **`time-pos` reports the target at once, before the data is there.** Probed
   paused on a local file: right after `set_property time-pos 50`, `get_property
   time-pos` read `50.0` while `seeking` still read `true` (it was `false` 2s later). On a slow

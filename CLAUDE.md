@@ -41,7 +41,7 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 own pause, seek or move (also while playing) the party holds seeks or moves for it (`led`); any other
 stop (a join, a leave, a file's end, buffering) is led by its first seek. Another's seek or move stays on its screen until a resume, from the resumer's screen (another file: the party stops there).
 Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
-once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply to an observe.
+once the safer. A peer's change reaches mpv as one go to the script, whose ack is weighed against it; `seen` drops mpv's first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
@@ -77,7 +77,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 ## Concurrency invariants (each caused a real bug; the package docs name where)
 
 - Never hold a lock across a blocking call that needs the same lock to finish.
-- Set `applied`/`seeks` before the IPC call, or the echo can beat the marker.
+- Hold the adopted state and a seek's mark before the IPC call, or the script's ack can beat them.
 - Exactly one relay write pump per party, spanning reconnects.
 - Synthetic notices use a non-blocking send (`Server.notify`).
 - `Shutdown` uses `context.WithoutCancel`; the party context is already cancelled.

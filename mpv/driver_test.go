@@ -38,14 +38,39 @@ type node struct {
 	held []string
 	// quitOn: mpv hangs up on a command starting with this (mpvQuitsOn)
 	quitOn string
-	// where: what mpv answers when asked where it is (mpvIsAt); held: that answer, until
-	// mpvSaysWhere, when holdsWhere
-	where      string
-	holdsWhere bool
-	whereHeld  string
-	// what mpv holds, from what it reported
-	paused bool
-	entry  int
+	// undo: the person's key undoes the pause the next go leaves, right after it
+	// (personUndoesThePause). acks: the gos whose acks the script says late, once mpv reports
+	// what they did, with what mpv holds then
+	undo bool
+	acks []lateAck
+	// the script's seeks: replied, those mpv queued; carrying, the id of the seek mpv runs;
+	// seeking, a seek mpv began that the script hasn't said; pos, where mpv is
+	replied  []string
+	carrying string
+	seeking  bool
+	pos      float64
+	// waiting: the go a move waits for, applied once its file loads; loading: a move is on its
+	// way to heading (sync.lua)
+	waiting *fakeGo
+	loading bool
+	heading int
+	// what mpv holds: paused, as the script sets it; entry, from what it reported; started,
+	// the file it opens
+	paused         bool
+	entry, started int
+}
+
+// lateAck is a go whose ack the script says late; seeks: the go seeks, so its ack comes before
+// any seek event (the script's callback).
+type lateAck struct {
+	id    string
+	seeks bool
+}
+
+// fakeGo is a go the script holds until its file loads.
+type fakeGo struct {
+	paused, second, id string
+	entry              int
 }
 
 // setup is how a node starts. The zero value opened the party, with one file, paused at 0.
@@ -80,7 +105,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, started: s.start, late: s.late}
 	t.Cleanup(func() { cancel(); ours.Close(); theirs.Close() })
 	go func() {
 		for {
@@ -94,7 +119,7 @@ func start(t *testing.T, s setup) (*node, error) {
 			}
 		}
 	}()
-	observes := 5
+	observes := 4
 	if s.names != nil {
 		observes++
 	}
@@ -133,6 +158,22 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		name := fmt.Sprint(req.Command[0])
 		said := strings.TrimSpace(fmt.Sprintln(req.Command...))
 		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		if name == "script-message-to" && len(req.Command) == 7 && req.Command[2] == "watchparty-go" && !s.noScript {
+			// the script's go is mpv being set, as tests read it (sync.lua)
+			arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
+			n.mu.Lock()
+			lines, quit := n.goLocked(arg(3), arg(4), arg(5), arg(6))
+			n.mu.Unlock()
+			if quit {
+				conn.Close()
+				return
+			}
+			n.writes <- reply
+			for _, line := range lines {
+				n.writes <- line
+			}
+			continue
+		}
 		n.mu.Lock()
 		if n.quitOn != "" && strings.HasPrefix(said, n.quitOn) {
 			n.told = append(n.told, said)
@@ -140,20 +181,19 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			conn.Close()
 			return
 		}
+		refused := false
 		for prefix, why := range n.refuse {
 			if strings.HasPrefix(said, prefix) {
+				refused = true
 				reply = fmt.Sprintf(`{"request_id":%d,"error":%q}`+"\n", req.RequestId, why)
 			}
 		}
 		// the script's answer to the node's first two commands, which no test reads (told)
-		handshake := name == "script-message-to" || name == "script-message" && req.Command[1] == "watchparty-hello"
+		handshake := name == "script-message-to" && req.Command[2] == "watchparty-check" || name == "script-message" && req.Command[1] == "watchparty-hello"
 		if name == "script-message-to" && s.noScript {
 			reply = fmt.Sprintf(`{"request_id":%d,"error":"error running command"}`+"\n", req.RequestId)
 		}
-		if said == "get_property_string time-pos" && n.where != "" {
-			reply = fmt.Sprintf(`{"data":%q,"request_id":%d,"error":"success"}`+"\n", n.where, req.RequestId)
-		}
-		taken := strings.Contains(reply, `"error":"success"`)
+		taken := !refused
 		if name != "observe_property_string" && !handshake {
 			n.told = append(n.told, said)
 			if name == setProperty && taken {
@@ -164,15 +204,12 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		if late {
 			n.held = append(n.held, reply)
 		}
-		if said == "get_property_string time-pos" && n.holdsWhere {
-			n.whereHeld, late = reply, true
-		}
 		n.mu.Unlock()
 		if !late {
 			n.writes <- reply
 		}
 		if name == "script-message" && handshake {
-			n.writes <- `{"event":"client-message","args":["watchparty","hello","watchparty"]}` + "\n"
+			n.writes <- n.scriptSays("hello", "watchparty")
 		}
 		if name == "observe_property_string" {
 			if observes--; observes == 0 {
@@ -180,6 +217,102 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			}
 		}
 	}
+}
+
+// goLocked is the script taking a go (sync.lua): another entry opens stopped, and the rest
+// waits for its file; otherwise stopped, on the second, then playing if asked, and acked. It
+// gives what the script says at once.
+func (n *node) goLocked(paused, second, entry, id string) (lines []string, quit bool) {
+	if n.waiting != nil {
+		lines = append(lines, n.ackLocked(n.waiting.id, false)...)
+		n.waiting = nil
+	}
+	if entry == "-" && n.loading {
+		entry = strconv.Itoa(n.heading)
+	}
+	on := n.started
+	if n.loading {
+		on = n.heading
+	}
+	if e, err := strconv.Atoi(entry); err == nil && (n.loading || on != e) {
+		if on != e {
+			steps := [][]any{{playlistPos, e}}
+			if !n.paused {
+				steps = [][]any{{pause, true}, {playlistPos, e}}
+			}
+			if refused, quit := n.stepsLocked(steps); quit || refused {
+				return n.refusedLocked(id, refused), quit
+			}
+			n.loading, n.heading = true, e
+		}
+		n.paused, n.waiting = true, &fakeGo{paused: paused, second: second, id: id, entry: e}
+		return lines, false
+	}
+	more, quit := n.applyLocked(paused, second, id)
+	return append(lines, more...), quit
+}
+
+// applyLocked is the script's go on the file mpv is on.
+func (n *node) applyLocked(paused, second, id string) (lines []string, quit bool) {
+	var steps [][]any
+	if second == "-" {
+		if holds(n.paused) != paused {
+			steps = append(steps, []any{pause, paused == "yes"})
+		}
+	} else {
+		if !n.paused {
+			steps = append(steps, []any{pause, true})
+		}
+		steps = append(steps, []any{timePos, second})
+		if paused == "no" {
+			steps = append(steps, []any{pause, false})
+		}
+	}
+	refused, quit := n.stepsLocked(steps)
+	if quit || refused {
+		return n.refusedLocked(id, refused), quit
+	}
+	if second != "-" {
+		n.replied = append(n.replied, id)
+	}
+	n.paused = paused == "yes"
+	lines = n.ackLocked(id, second != "-")
+	if n.undo {
+		// the person's key, right after the go: the script says its change mark
+		n.undo, n.paused = false, !n.paused
+		lines = append(lines, n.scriptLocked("pause", ""))
+	}
+	return lines, false
+}
+
+// stepsLocked tells mpv the sets of a go, in order, as told and as sets mpvObeys reports;
+// refused: mpv refused one, and the rest weren't made; quit: mpv hung up on one.
+func (n *node) stepsLocked(steps [][]any) (refused, quit bool) {
+	for _, set := range steps {
+		said := strings.TrimSpace(fmt.Sprintln(setProperty, set[0], set[1]))
+		n.told = append(n.told, said)
+		if n.quitOn != "" && strings.HasPrefix(said, n.quitOn) {
+			return false, true
+		}
+		for prefix := range n.refuse {
+			if strings.HasPrefix(said, prefix) {
+				return true, false
+			}
+		}
+		n.sets = append(n.sets, set)
+		if set[0] == pause {
+			n.paused = set[1] == true
+		}
+	}
+	return false, false
+}
+
+// refusedLocked is the script saying mpv refused the go, with what mpv holds.
+func (n *node) refusedLocked(id string, refused bool) []string {
+	if !refused {
+		return nil
+	}
+	return []string{n.scriptLocked("refused", id)}
 }
 
 // opens is mpv's answer to the observes, for the file it opened.
@@ -199,7 +332,6 @@ func (n *node) opens(s setup) {
 		n.writes <- propertyChangeLine(playlistPos, strconv.Itoa(s.start), 0)
 	}
 	n.writes <- propertyChangeLine(filename, "video.mkv", 0)
-	n.writes <- propertyChangeLine(pause, "yes", 0)
 	n.writes <- propertyChangeLine(pausedForCache, "no", 0)
 	n.writes <- propertyChangeLine(duration, "120.000000", 0)
 	n.writes <- propertyChangeLine(timePos, "0.000000", 0)
@@ -220,14 +352,62 @@ func (n *node) write(lines ...string) {
 		e := Event{}
 		json.Unmarshal([]byte(line), &e)
 		n.mu.Lock()
+		// what the script says after the line, as it hears the same event
+		var after []string
 		switch {
+		case e.EventType == "seek":
+			// the script's ack of a go that seeks comes before any seek event (sync.lua)
+			for len(n.acks) > 0 && n.acks[0].seeks {
+				n.writes <- n.scriptLocked("ack", n.acks[0].id)
+				n.acks = n.acks[1:]
+			}
+			// the script says where it goes at the seek event: here, once the second is known
+			n.seeking, n.carrying = true, ""
+			if len(n.replied) > 0 {
+				n.carrying, n.replied = n.replied[len(n.replied)-1], nil
+			}
+		case e.EventType == "playback-restart" && n.seeking:
+			after = []string{n.scriptLocked(seek, n.carrying)}
+			n.seeking = false
+		case e.EventType == "start-file":
+			n.replied, n.carrying, n.seeking, n.pos = nil, "", false, 0
+			n.started = e.EntryID - 1
+		case e.EventType == "file-loaded" && n.waiting == nil:
+			n.loading = false
+		case e.EventType == "file-loaded":
+			// the go the move waited for, or its ack alone on another file
+			n.loading = false
+			w := n.waiting
+			n.waiting = nil
+			if n.started == w.entry {
+				after, _ = n.applyLocked(w.paused, w.second, w.id)
+			} else {
+				after = n.ackLocked(w.id, false)
+			}
+		case e.Name == timePos && e.Data != "":
+			pos, _ := strconv.ParseFloat(e.Data, 64)
+			// stopped, another second with no seek begun is the person's seek, as tests say it
+			if n.seeking || n.paused && pos != n.pos {
+				n.pos = pos
+				after = []string{n.scriptLocked(seek, n.carrying)}
+				n.seeking, n.carrying = false, ""
+			}
+			n.pos = pos
 		case e.Name == pause && e.Data != "":
+			// mpv's pause reaches the node from the script
 			n.paused = e.paused()
+			line = n.scriptLocked("pause", "")
 		case e.Name == playlistPos && e.Data != "":
-			n.entry, _ = strconv.Atoi(e.Data)
+			if entry, _ := strconv.Atoi(e.Data); entry != n.entry {
+				// another file: the script reads its second
+				n.entry, n.pos = entry, 0
+			}
 		}
 		n.mu.Unlock()
 		n.writes <- line
+		for _, a := range after {
+			n.writes <- a
+		}
 	}
 }
 
@@ -242,34 +422,50 @@ func (n *node) mpvObeys(then ...string) {
 		n.mu.Lock()
 		sets, held := n.sets, n.held
 		n.sets, n.held = nil, nil
+		pending := len(n.acks) > 0
 		n.mu.Unlock()
-		if len(sets) == 0 && len(held) == 0 {
+		if len(sets) == 0 && len(held) == 0 && !pending {
 			return
 		}
-		for _, set := range sets {
-			n.write(n.reports(set)...)
+		// seeks mpv queued before it ran one share its one slot: only the last lands (ORDER.md)
+		last := -1
+		for i, set := range sets {
+			if set[0] == timePos {
+				last = i
+			}
+		}
+		for i, set := range sets {
+			if set[0] != timePos || i == last {
+				n.write(n.reports(set)...)
+			}
 		}
 		n.write(then...)
 		then = nil
 		for _, reply := range held {
 			n.writes <- reply
 		}
+		n.mu.Lock()
+		acks := n.lateAcksLocked()
+		n.mu.Unlock()
+		for _, ack := range acks {
+			n.writes <- ack
+		}
 	}
 }
 
-// reports is what mpv says once it has taken a set.
+// reports is what mpv says once it has taken a set: the script's change mark of a pause, a
+// seek with its events (the ack held before it, as the script's callback comes first), a
+// move opening the entry at 0.
 func (n *node) reports(set []any) []string {
 	value := fmt.Sprint(set[1])
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	switch set[0] {
 	case pause:
-		if paused := set[1] == true; paused != n.paused {
-			return []string{propertyChangeLine(pause, map[bool]string{true: "yes", false: "no"}[paused], 0)}
-		}
+		return []string{n.scriptLocked("pause", "")}
 	case timePos:
 		pos, _ := strconv.ParseFloat(value, 64)
-		return []string{`{"event":"seek"}`, mpvAt(pos), `{"event":"playback-restart"}`}
+		return append(n.lateAcksLocked(), `{"event":"seek"}`, mpvAt(pos), `{"event":"playback-restart"}`)
 	case playlistPos:
 		if i, _ := strconv.Atoi(value); i != n.entry {
 			return []string{started(i), propertyChangeLine(playlistPos, value, 0), `{"event":"file-loaded"}`, mpvAt(0)}
@@ -278,13 +474,14 @@ func (n *node) reports(set []any) []string {
 	return nil
 }
 
-// mpvAnswers is mpv answering every set it holds, reporting nothing, until none is left.
+// mpvAnswers is mpv answering every set it holds, reporting nothing, until none is left, and
+// the script acking every go.
 func (n *node) mpvAnswers() {
 	n.t.Helper()
 	for {
 		synctest.Wait()
 		n.mu.Lock()
-		held := n.held
+		held := append(n.held, n.lateAcksLocked()...)
 		n.held, n.sets = nil, nil
 		n.mu.Unlock()
 		if len(held) == 0 {
@@ -294,6 +491,46 @@ func (n *node) mpvAnswers() {
 			n.writes <- reply
 		}
 	}
+}
+
+// ackLocked is the script's ack of a go, or nothing yet while mpv answers late: it comes once
+// mpv reports what the go did (mpvObeys).
+func (n *node) ackLocked(id string, seeks bool) []string {
+	if n.late {
+		n.acks = append(n.acks, lateAck{id, seeks})
+		return nil
+	}
+	return []string{n.scriptLocked("ack", id)}
+}
+
+// lateAcksLocked is every ack held, said now.
+func (n *node) lateAcksLocked() []string {
+	var out []string
+	for _, a := range n.acks {
+		out = append(out, n.scriptLocked("ack", a.id))
+	}
+	n.acks = nil
+	return out
+}
+
+// scriptLocked is the script saying what mpv holds, as sync.lua does.
+func (n *node) scriptLocked(kind, id string) string {
+	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f"]}`+"\n", kind, id, holds(n.paused), n.pos)
+}
+
+// scriptSays is scriptLocked, for a caller that doesn't hold the lock.
+func (n *node) scriptSays(kind, id string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.scriptLocked(kind, id)
+}
+
+// personUndoesThePause is the person's key undoing the pause the next go leaves, right after
+// its ack: the script says the change mark.
+func (n *node) personUndoesThePause() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.undo = true
 }
 
 // mpvAnswersLate makes mpv answer each set only after reporting it, in mpvObeys: what the
@@ -310,36 +547,6 @@ func (n *node) mpvRefuses(prefix, why string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.refuse[prefix] = why
-}
-
-// mpvIsAt makes mpv answer get_property_string time-pos with pos, as it does with a seek's
-// second at once, before it reports it.
-func (n *node) mpvIsAt(pos float64) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.where = fmt.Sprintf("%f", pos)
-}
-
-// mpvHoldsWhere makes mpv hold its answer to where it is until mpvSaysWhere, so what the
-// test says first comes before it.
-func (n *node) mpvHoldsWhere() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.holdsWhere = true
-}
-
-// mpvSaysWhere sends the answer mpv held.
-func (n *node) mpvSaysWhere() {
-	n.t.Helper()
-	synctest.Wait()
-	n.mu.Lock()
-	reply := n.whereHeld
-	n.whereHeld = ""
-	n.mu.Unlock()
-	if reply == "" {
-		n.t.Fatal("mpv was not asked where it is")
-	}
-	n.mpvSays(reply)
 }
 
 // mpvTakesAgain lifts every refusal.

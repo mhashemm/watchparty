@@ -83,6 +83,7 @@ only from it: each message is a snapshot read when it is sent,
 | `hello` | a broadcast `wp-hello` | the script's name |
 | `ack` | right after our pause set | ours |
 | `pause`, `cache` | every change mark of `pause`, `paused-for-cache` | |
+| `began` | every `seek` event | ours if that seek carries ours |
 | `landed` | `playback-restart` after a `seek` | ours if that seek carried ours |
 | `ready` | `playback-restart` with no `seek` (a load) | |
 | `loaded` | `file-loaded` | ours if the load carried our move, `eof` for mpv's own move at a file's end |
@@ -92,6 +93,13 @@ only from it: each message is a snapshot read when it is sent,
 Rules the probes checked: the last snapshot is mpv's state; a `landed` or `loaded` with our id
 at our target is ours, any other is the person's; a stopped snapshot's position is exactly where
 mpv stopped (the gap was 0.000000s in every round, so it is what a pause carries).
+
+**`sync.lua` says a seek at its `seek` event (`began`), not at `landed`:** the person's seek
+while stopped, then space at once (`[R6c]`), reports the space before the landing, so a landing
+reads as a seek made while playing. `began`'s position is where the seek lands (0 off in 80
+rounds each); `seekp` and `playing` counted at `began` (`LANDING=began`) gave 0 errors in 420 and
+280 rounds on each version. Its `pause` can already hold a space pressed right after it (28 of
+80): the node reads the order of messages, never that value.
 
 | What the node does | Rounds each | Errors | Raced against |
 |---|---|---|---|
@@ -111,12 +119,32 @@ Seen along the way:
 - Not probed: Windows, an mpv built without Lua (`--script` then fails to load it), a real
   remote stream.
 
+### One message per state (`probe/wp3.lua`, built as `sync.lua`'s go)
+
+The node sends the whole state it adopts, `wp-go <yes|no> <second|-> <entry|-> <id>`; the script
+stops, moves (the rest waits for that file's `file-loaded`), seeks, plays if asked, and acks once,
+so a person's key lands before or after it, never inside it. Errors counted: mpv ending away from
+what was sent with no snapshot after the ack saying so, and a snapshot after the ack that differs
+when the person did nothing. 0 of either on both versions, and no late ack:
+
+| Raced against | Rounds each |
+|---|---|
+| no key, space, a relative and an absolute seek key, ±20ms, from stopped or playing, with and without a seek | 420 |
+| next and prev keys (the node heading elsewhere), a seek right after the move, playing into the entry's end | 280 |
+| a throttled stream stalled while playing: a stop or a resume while stalled, with or without space | 40 |
+
+A key just before the handler is overwritten by it (mpv ends as sent): heard before the ack in
+156 and 163 rounds, never heard in 59 and 59. Unheard, it left no effect anywhere: a seek key
+folds into ours, and space's change mark reads the state after the handler.
+
 ## Re-running
 
 ```sh
 cd mpv/probe && ./videos.sh                      # ffmpeg; the videos stay untracked
 ./run.sh 0 probe.py echo:150 r6c:150 pause:140 check:420 repause:280
 ./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40 ending:60
+LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
+./run.sh 0 probe3.py go:420 moves:280 buffering:40
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
