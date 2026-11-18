@@ -81,8 +81,14 @@ def tally(d, k):
     d[k] = d.get(k, 0) + 1
 
 
+# errors counted but harmless: printed, never a failure
+HARMLESS = {"spare"}
+FAILED = []
+
+
 def report(title, rounds, errors, shapes, legend=""):
     print(f"{title}: rounds={rounds} " + " ".join(f"{k}={len(v)}" for k, v in errors.items()))
+    FAILED.extend(k for k, v in errors.items() if v and k not in HARMLESS)
     for k, v in errors.items():
         for e in v[:4]:
             print(f"  {k}: {e}")

@@ -1,0 +1,40 @@
+name: probe
+# The sync script leans on how mpv orders its events and replies: measured, not promised
+# (mpv/ORDER.md). This re-measures it on the shipped script against Ubuntu's mpv and the
+# newest release (Arch's, as the installers fetch the latest). Weekly too: a new mpv lands
+# with no PR here.
+on:
+  pull_request:
+    paths: ["mpv/**", ".github/workflows/probe.yml"]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mpv: [ubuntu, arch]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Probe the script
+        timeout-minutes: 40
+        env:
+          # go and over cycle 112 cases, starts 49, moves 35, away and buffering 28: each runs
+          # its cycle twice, buffering once; the full counts are in ORDER.md's re-run commands
+          EXPERIMENTS: go:224 over:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:4 broken:4 brokenlast:4
+        run: |
+          probe='./videos.sh && ./run.sh 1 probe4.py $EXPERIMENTS'
+          if [ "${{ matrix.mpv }}" = arch ]; then
+            docker run --rm -e EXPERIMENTS -v "$PWD:/w" -w /w/mpv/probe archlinux:latest sh -c \
+              "pacman -Syu --noconfirm --needed mpv ffmpeg python util-linux >/dev/null && $probe"
+          else
+            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mpv ffmpeg
+            cd mpv/probe && sh -c "$probe"
+          fi

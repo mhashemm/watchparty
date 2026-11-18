@@ -195,4 +195,6 @@ playing also pauses the party with a reason: nobody starts the next one until so
   answering and the script ack late: without it, breaking a guard passed every test.
 - **What nodes must agree on: `party_test.go`**, whole parties through every order a seed
   picks. A new message or rule gets a check there.
+- **The script's rules live three times:** `watchparty.lua`, `node`'s go handler and `simNode`'s.
+  Change all three in one commit: only the probes (`ORDER.md`, CI's `probe` job) run the script.
 - Never a real socket. mpv emits nothing for a no-op set, so a test counting events alternates values.

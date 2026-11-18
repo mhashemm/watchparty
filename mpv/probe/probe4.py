@@ -502,3 +502,5 @@ if __name__ == "__main__":
     os.chdir(HERE)
     exp, n = sys.argv[1], int(sys.argv[2])
     globals()[exp](n)
+    # for CI: an error but a harmless one fails the run
+    sys.exit(1 if FAILED else 0)
