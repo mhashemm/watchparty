@@ -3,7 +3,7 @@ pause and time-pos, and the node hears the entry and the cache from mpv's own re
 snapshot here is the script's message with the entry and cache mpv last reported, and mpv's
 reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
 entry and to one mpv can't open.
-Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast> <rounds>. Under load:
+Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang> <rounds>. Under load:
 ./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
 import http.server, os, socketserver, sys, threading, time
 
@@ -153,6 +153,57 @@ def broken(rounds, last=False):
     finally:
         os.remove(bad)
     report("brokenlast" if last else "broken", rounds, errors, shapes)
+
+
+class Hang(http.server.BaseHTTPRequestHandler):
+    """A stream that hangs: never answers, answers headers only, or sends the file's start."""
+    how = "never"
+
+    def do_GET(self):
+        if self.how == "never":
+            time.sleep(600)
+            return
+        body = open(os.path.join(HERE, "p1.mkv"), "rb").read()
+        self.send_response(200)
+        self.send_header("Content-Type", "video/x-matroska")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.how == "start":
+            self.wfile.write(body[:len(body) // 20])
+            self.wfile.flush()
+        time.sleep(600)
+
+    def log_message(self, *a):
+        pass
+
+
+# A move to a stream that hangs in each way: how long until the go is acked, and by what.
+def hang(rounds):
+    errors = {"never-acked": []}
+    shapes = {}
+    for how in ("never", "headers", "start"):
+        handler = type("H", (Hang,), {"how": how})
+        srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/p1.mkv"
+        for r in range(rounds):
+            # last, under --idle, so mpv stays open once it gives up on the stream
+            m = M(url, [*WP, "--idle=yes", os.path.join(HERE, "p0.mkv")])  # M puts the file last
+            ready(m, [])
+            tag = f"h{how}{r}"
+            i, t0 = m.mark(), time.time()
+            to(m, "wp-go", "yes", "-", 1, tag)
+            k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 200)
+            took = time.time() - t0
+            seen = [l.get("event") + (":" + l["reason"] if l.get("reason") else "") for l in m.since(i)
+                    if l.get("event") in ("start-file", "file-loaded", "playback-restart", "end-file")]
+            if k is None:
+                errors["never-acked"].append((how, seen))
+            tally(shapes, (how, "never acked" if k is None else f"acked after {int(took)}s", " ".join(seen)[:70], "entry " + str(get(m, "playlist-pos"))))
+            m.stop()
+        srv.shutdown()
+    report("hang", rounds, errors, shapes)
 
 
 if __name__ == "__main__":

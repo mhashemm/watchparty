@@ -108,7 +108,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   goes in the commit body, where the next session will look for it.
 - **Each fact lives in one place**, cross-package here, the rest in its package's doc.
 - **Update a doc only when a change makes something in it wrong.** Budget: this file
-  ≤150 lines, every other doc ≤200. Trim before adding.
+  ≤150 lines, `mpv/MPV.md` ≤300, every other doc ≤200. Trim before adding.
 
 ## How we work
 

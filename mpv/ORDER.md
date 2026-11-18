@@ -38,8 +38,9 @@ with three busy loops, the person's action fired -20 to +20ms around ours (2026-
   reports; there is no format `none`, and the `pause`/`unpause` events are gone. **No other
   protocol exists:** the only endpoints are `--input-ipc-server` and `--input-ipc-client=fd://N`,
   both this JSON.
-- `[R6c]` (a playing `time-pos` after our `pause=yes`) was never reproduced: 0 of 340 rounds on
-  0.37.0 in either observe order, then 0 of 300 on each version.
+- `[R6c]` (a playing `time-pos` after our `pause=yes`, seen once in CI) was never reproduced:
+  about 1,400 rounds on both versions with e2e's video and the node's flags (2026-11-15), 0 of
+  340 on 0.37.0 in either observe order, then 0 of 300 on each version.
 
 ### The IPC seek fence (probed, not used)
 
@@ -144,7 +145,8 @@ that starts 8s late and to a file mpv can't open: acked once the file started, o
 `end-file` of the broken one (mpv moved on to the next entry; as the last, under `--idle`, it
 stays on none, `-1`), 12, 20 and 20 rounds, 0 errors. A seek
 at that stream's `file-loaded` was dropped in 5 of 12 rounds (acked, no `seek`, at 0), so a move's
-go waits for its first `playback-restart`.
+go waits for its first `playback-restart`. A stream that hangs (`hang`: never answers, headers
+only, or its start then a stall) never held a go past 81s: mpv gives up on it (`MPV.md`).
 
 ## Re-running
 
@@ -155,6 +157,7 @@ cd mpv/probe && ./videos.sh                      # ffmpeg; the videos stay untra
 LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
 ./run.sh 0 probe3.py go:420 moves:280 buffering:40
 ./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20  # the shipped script
+python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own timeout
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
