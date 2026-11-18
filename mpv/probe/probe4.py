@@ -36,7 +36,7 @@ def enrich(m):
             a = l["args"]
             st["pause"], st["pos"] = a[3], a[4]
             d = dict(kind=a[1], id=a[2], pause=a[3], pos=a[4], entry=st["entry"], cache=st["cache"],
-                     n=a[5] if len(a) > 5 else "", over=len(a) > 6 and a[6] == "over")
+                     n=a[5] if len(a) > 5 else "", over=len(a) > 6 and a[6] == "over", at=a[7] if len(a) > 7 else "")
             l["_wp"], _VIEW[id(a)] = d, d
     st["done"] = start + len(lines)
 
@@ -238,6 +238,150 @@ def over(rounds):
         tally(shapes, (kind, "lost" if lost else "heard" if heard else "-", "flagged" if flag else "not flagged"))
     m.stop()
     report("over", rounds, errors, shapes)
+
+
+# Whose file each start is: the script says "start" with a go's id (ours), "auto" (mpv's own,
+# after a file's end or error) or nothing (the person's), and the entry it opened. Raced: next
+# and prev keys -20..+20ms around our move, a seek after it, playing into the entry's end, a
+# move there and straight back (a second go while the first loads), and a key alone. Errors:
+#   wrong: a start labelled with a cause that didn't open that entry
+#   last: mpv's final entry isn't the one the last start labelled for its cause
+#   ack-late: a go never acked
+def starts(rounds):
+    files = [os.path.join(HERE, f"p{k}.mkv") for k in range(3)]
+    m = M(files[2], [*WP, files[0], files[1]])  # M puts the file last
+    ready(m, [])
+    p = person_conn(m)
+    errors = {"wrong": [], "last": [], "ack-late": [], "missed": [], "false": []}
+    shapes = {}
+
+    def on(entry):
+        stopped(m)
+        if get(m, "playlist-pos") != str(entry):
+            i = m.mark()
+            m.send("set_property", "playlist-pos", entry)
+            m.wait(lambda l: l.get("event") == "playback-restart", i, 5)
+            time.sleep(0.15)
+
+    scens = ["none", ">", "<", "seek", "eof", "back", "key"]
+    for r in range(rounds):
+        scen = scens[r % len(scens)]
+        off = OFFSETS_MS[(r // len(scens)) % len(OFFSETS_MS)]
+        e0 = r % 3
+        on(e0)
+        want = ["yes", "no"][(r // 2) % 2]
+        target = (e0 + 2) % 3 if scen in (">", "eof") else (e0 + 1) % 3
+        dest = {">": e0 + 1 if e0 < 2 else None, "<": e0 - 1 if e0 > 0 else None, "key": e0 + 1 if e0 < 2 else None}.get(scen)
+        tag, back = f"s{r}", f"b{r}"
+        if scen == "eof":
+            setpos(m, float(get(m, "duration")) - 0.3)
+            m.wait(reply(m.send("set_property", "pause", False)))
+            time.sleep(0.3 + off / 1000)
+        i = m.mark()
+        send = lambda: to(m, "wp-go", want, "-", target, tag)
+        if scen in (">", "<"):
+            if off < 0:
+                m.send("keypress", scen, s=p); time.sleep(-off / 1000)
+            send()
+            if off >= 0:
+                time.sleep(off / 1000); m.send("keypress", scen, s=p)
+        elif scen == "seek":
+            send()
+            time.sleep(0.05 + max(off, 0) / 1000)
+            m.send("keypress", "RIGHT", s=p)
+        elif scen == "back":
+            send()
+            time.sleep(abs(off) / 1000)
+            to(m, "wp-go", want, "-", e0, back)
+        elif scen == "key":
+            m.send("keypress", ">", s=p)
+        else:
+            send()
+        last_id = back if scen == "back" else tag
+        if scen == "key":
+            time.sleep(1.5)
+        elif wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == last_id, i, 8) is None:
+            errors["ack-late"].append((scen, off))
+            continue
+        time.sleep(1.0)
+        st = [(s["id"], s["at"]) for _, s in snaps(m, i) if s["kind"] == "start"]
+        over = any(s["kind"] == "ack" and s["over"] for _, s in snaps(m, i))
+        fe = get(m, "playlist-pos")
+        for label, entry in st:
+            ok = {tag: str(target), back: str(e0)}.get(label)
+            if label in (tag, back):
+                good = entry == ok
+            elif label == "auto":
+                good = scen == "eof" and entry == str(e0 + 1)
+            else:
+                # the key ran from where the round began, or from where our move took mpv
+                step = 1 if scen in (">", "key") else -1
+                good = scen in (">", "<", "key") and entry in {str(e + step) for e in (e0, target) if 0 <= e + step <= 2}
+            if not good:
+                errors["wrong"].append((scen, off, e0, target, dest, st))
+        if st:
+            label, entry = st[-1]
+            if entry != fe:
+                errors["last"].append((scen, off, e0, target, dest, st, fe))
+        elif scen != "key" or dest is not None:
+            if fe != str(e0):
+                errors["last"].append((scen, off, e0, target, dest, st, fe))
+        kinds = " ".join("ours" if l in (tag, back) else "auto" if l == "auto" else "person" for l, _ in st)
+        # the person's key undone by our move, unread when we sent it: their start then ours, or
+        # ours alone though their key had somewhere to go (it ran first and lost to our set)
+        sent = m.sent
+        heard = any(s["kind"] == "start" and s["id"] == "" for n, s in snaps(m, i) if n < sent)
+        # ours alone is the key's loss only if, run after our move, it would have gone somewhere
+        after = scen in (">", "<") and 0 <= target + (1 if scen == ">" else -1) <= 2
+        undone = scen in (">", "<") and dest is not None and fe == str(target) and (kinds == "person ours" or kinds == "ours" and after)
+        if undone and not heard and not over:
+            errors["missed"].append((scen, off, e0, target, dest, st))
+        if scen in ("none", "seek", "eof", "back") and over:
+            errors["false"].append((scen, off, e0, target, st))
+        tally(shapes, (scen, kinds, "over" if over else "", "heard" if heard else ""))
+    m.stop()
+    report("starts", rounds, errors, shapes)
+
+
+# mpv's own moves: playing into an entry's end with no go, and a go to an entry mpv can't
+# open, after which mpv opens the next by itself. Each such start must say "auto".
+def autos(rounds):
+    fd, bad = tempfile.mkstemp(suffix=".mkv", prefix="tmp_broken", dir=HERE)
+    with os.fdopen(fd, "wb") as f:
+        f.write(b"not a video" * 100)
+    errors = {"wrong": [], "none": []}
+    shapes = {}
+    try:
+        files = [os.path.join(HERE, "p0.mkv"), bad, os.path.join(HERE, "p1.mkv")]
+        m = M(files[2], [*WP, files[0], files[1]])  # M puts the file last
+        ready(m, [])
+        for r in range(rounds):
+            scen = ["end", "broken"][r % 2]
+            stopped(m)
+            if get(m, "playlist-pos") != "0":
+                i = m.mark()
+                m.send("set_property", "playlist-pos", 0)
+                m.wait(lambda l: l.get("event") == "playback-restart", i, 5)
+                time.sleep(0.15)
+            i, tag = m.mark(), f"a{r}"
+            if scen == "end":
+                setpos(m, float(get(m, "duration")) - 0.3)
+                m.wait(reply(m.send("set_property", "pause", False)))
+                want = [("auto", "1"), ("auto", "2")]  # mpv's own past p0, then past the broken one
+            else:
+                to(m, "wp-go", "yes", "-", 1, tag)
+                want = [(tag, "1"), ("auto", "2")]
+            time.sleep(2.5)
+            st = [(s["id"], s["at"]) for _, s in snaps(m, i) if s["kind"] == "start"]
+            if not st:
+                errors["none"].append((scen, r))
+            elif st != want:
+                errors["wrong"].append((scen, st, want))
+            tally(shapes, (scen, str(st).replace(tag, "ours")))
+        m.stop()
+    finally:
+        os.remove(bad)
+    report("autos", rounds, errors, shapes)
 
 
 class Hang(http.server.BaseHTTPRequestHandler):

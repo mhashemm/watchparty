@@ -157,6 +157,16 @@ missed in 6 and 4 rounds before it was checked. Then on 0.37.0 and 0.40.0: every
 flagged (50, 83), none flagged with no key (212 each). 2 and 8 flags on a key not lost were all
 a seek just before a go that doesn't seek, from stopped, which the ack already sends as theirs.
 
+**Whose file each start is** (`starts`, 490 rounds each; `autos`, 40): the script labels every
+`start-file` with the go's id when it opens the entry a go set (a go's set lost to a later one
+never opens; one set after the start is still to come), `auto` after an `end-file` `eof` or
+`error` and for mpv's first file, else the person's. Raced: next and prev keys -20..+20ms around
+our move (the key runs from either entry), a seek after it, a file's end, there and back (a
+second go while the first loads), a key alone, playing into an end, a broken entry. 0 wrong
+labels, 0 wrong final entries on both versions. A person's start the go then undid is flagged
+`over` (0 missed, 0 false). The start's entry is its `playlist_entry_id` - 1: `playlist-pos` can
+already name a later set.
+
 ## Re-running
 
 ```sh
@@ -168,6 +178,7 @@ LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
 ./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20  # the shipped script
 python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own timeout
 ./run.sh 0 probe4.py over:840                       # the ack's over flag against lost keys
+./run.sh 0 probe4.py starts:490 autos:40            # whose file each start is
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
