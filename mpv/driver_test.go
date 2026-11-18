@@ -47,6 +47,9 @@ type node struct {
 	// seeking, a seek mpv began that the script hasn't said; pos, where mpv is
 	replied  []string
 	carrying string
+	// labels: the id each seek mpvObeys reports carries, taken as mpv takes the seek: a go
+	// sent after it, before its event is written, is a seek of its own (or folds into it)
+	labels []string
 	seeking  bool
 	pos      float64
 	// waiting: the go a move waits for, applied once its file loads; loading: a move is on its
@@ -359,6 +362,19 @@ func (n *node) write(lines ...string) {
 		switch {
 		case e.EventType == "seek":
 			// the script's ack of a go that seeks comes before any seek event (watchparty.lua)
+			// of its seek: of a seek reported, the acks up to its own, none sent after it
+			if len(n.labels) > 0 {
+				label := n.labels[0]
+				n.labels = n.labels[1:]
+				if i := slices.IndexFunc(n.acks, func(a lateAck) bool { return a.id == label }); i >= 0 {
+					for _, a := range n.acks[:i+1] {
+						n.writes <- n.scriptLocked("ack", a.id)
+					}
+					n.acks = n.acks[i+1:]
+				}
+				n.seeking, n.carrying = true, label
+				break
+			}
 			for len(n.acks) > 0 && n.acks[0].seeks {
 				n.writes <- n.scriptLocked("ack", n.acks[0].id)
 				n.acks = n.acks[1:]
@@ -372,7 +388,7 @@ func (n *node) write(lines ...string) {
 			after = []string{n.scriptLocked(seek, n.carrying)}
 			n.seeking = false
 		case e.EventType == "start-file":
-			n.replied, n.carrying, n.seeking, n.pos = nil, "", false, 0
+			n.replied, n.carrying, n.seeking, n.pos, n.labels = nil, "", false, 0, nil
 			n.started = e.EntryID - 1
 		case e.EventType == "end-file" && end.Reason == "error" && n.loading:
 			// a file mpv couldn't open: the go waiting for it, acked alone (watchparty.lua)
@@ -474,6 +490,11 @@ func (n *node) reports(set []any) []string {
 		return []string{n.scriptLocked("pause", "")}
 	case timePos:
 		pos, _ := strconv.ParseFloat(value, 64)
+		label := ""
+		if len(n.replied) > 0 {
+			label, n.replied = n.replied[len(n.replied)-1], nil
+		}
+		n.labels = append(n.labels, label)
 		return append(n.lateAcksLocked(), `{"event":"seek"}`, mpvAt(pos), `{"event":"playback-restart"}`)
 	case playlistPos:
 		if i, _ := strconv.Atoi(value); i != n.entry {
