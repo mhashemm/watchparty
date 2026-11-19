@@ -189,12 +189,12 @@ python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own tim
 python3 run.py 0 probe4.py over:840                       # the ack's over flag against lost keys
 python3 run.py 0 probe4.py starts:490 autos:40            # whose file each start is
 python3 run.py 0 probe4.py away:840                       # a go for the file a key is leaving
+python3 -I slowswarm.py 30                                # two CLI nodes over a capped torrent, ~15 minutes
 ```
 
-`run.py` pins mpv to the core given, beside three busy loops (macOS can't pin a process: a busy
-loop on every core instead); its header says how to run the same on 0.40.0 in the e2e image.
-CI's `probe` job (`.github/workflows/probe.yml`, weekly and by hand) runs it on Ubuntu's mpv,
-Arch's (the newest release), Homebrew's on macOS and mpv's own Windows build, the last two as
-the installers fetch them: Windows talks over a named pipe, not a socket. Each
-experiment prints its error counts, then every shape it saw; an error but `spare` exits 1.
-Never on the user's screen: mpv runs `--vo=null --ao=null`.
+`run.py` pins mpv to the core given, beside three busy loops (macOS: one on every core; Windows:
+none, its header says why), and says how to run the same on 0.40.0 in the e2e image. CI's
+`probe` job (`.github/workflows/probe.yml`, weekly and by hand) runs it on Ubuntu's mpv, Arch's
+(the newest release), and Homebrew's on macOS and mpv's own Windows build (over a named pipe),
+as the installers fetch them. Each experiment prints its error counts, then every shape it saw;
+an error but `spare` exits 1. Never on the user's screen: mpv runs `--vo=null --ao=null`.
