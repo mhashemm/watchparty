@@ -190,6 +190,7 @@ python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own tim
 ./run.sh 0 probe4.py over:840                       # the ack's over flag against lost keys
 ./run.sh 0 probe4.py starts:490 autos:40            # whose file each start is
 ./run.sh 0 probe4.py away:840                       # a go for the file a key is leaving
+python3 -I slowswarm.py 30                          # two CLI nodes over a capped torrent, ~15 minutes
 ```
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
