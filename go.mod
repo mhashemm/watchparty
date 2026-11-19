@@ -8,6 +8,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/mhashemm/upnp v0.6.0
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/sys v0.50.0
 	modernc.org/sqlite v1.62.0
 )

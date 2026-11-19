@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+
+	lua "github.com/yuin/gopher-lua"
 )
 
 // A whole party in one bubble: real Clients, a small model of mpv under each, and a
@@ -35,8 +37,8 @@ type simNode struct {
 	pos     float64
 	entry   int
 	notices []string
-	// seeks: queued in mpv's one slot, with the id of the node's (watchparty.lua), none for the person's
-	seeks []simSeek
+	// seeks: queued in mpv's one slot, the node's (the script's) and the person's alike
+	seeks []string
 	moves []int
 	// reports: what mpv holds back until its event queue is empty (client.h), so a move's
 	// report can come after its file-loaded
@@ -48,26 +50,10 @@ type simNode struct {
 	answer   string
 	act      func()
 	answered chan struct{}
-	// waiting: the go a move waits for (watchparty.lua), while loading heads to heading
-	waiting *simGo
-	loading bool
-	heading int
-	// sets: the entries gos set, with their ids, until a start opens one; sent: the script's
-	// messages so far; over: the gos whose ack says they undid the person's move (watchparty.lua)
-	sets []simSet
-	sent int
-	over map[string]bool
-}
-
-// simGo is a go the script holds until its file loads.
-type simGo struct {
-	paused, second, id string
-	entry              int
-}
-
-type simSeek struct {
-	at string
-	id string
+	// script: watchparty.lua, which hears mpv's events as mpv has them; listening: the node
+	// hears what it says, which it doesn't before the sim runs (run)
+	script    *script
+	listening bool
 }
 
 type sim struct {
@@ -103,7 +89,8 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	for _, name := range names {
 		ours, theirs := net.Pipe()
 		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true,
-			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{}), over: map[string]bool{}}
+			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{})}
+		n.script = newScript(n)
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
 		n.c.ctx, n.c.conn.conn, n.c.paused, n.c.names = ctx, ours, true, slices.Repeat([]string{"e"}, entries)
 		n.c.seen[pause], n.c.seen[timePos], n.c.seen[playlistPos] = true, true, true
@@ -128,14 +115,13 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	return s
 }
 
-// model answers requests the way mpv and the script do (MPV.md, ORDER.md): the script's go
-// (goLocked) acks once mpv has all of it; a seek is queued and lands later, ahead of a pause
-// change right behind it. Seeks fold into the last, which reports no second if mpv was already
-// on it, and the script says it at its seek event, with the id of the node's last.
-// A set of playlist-pos replies first and reports later, so the next set can overtake the
-// report, and two close together can report only the last (MPV.md). Late, events can come
-// before an answer, as MPV.md allows; never a later request's, as mpv's IPC thread runs one
-// request at a time and answers it before it reads the next.
+// model answers requests the way mpv does (MPV.md, ORDER.md), and hands a script message to
+// the script (watchparty.lua). A seek is queued and lands later, ahead of a pause change right
+// behind it; seeks fold into the last, which reports no second if mpv was already on it. A set
+// of playlist-pos replies first and reports later, so the next set can overtake the report,
+// and two close together can report only the last (MPV.md). Late, events can come before an
+// answer, as MPV.md allows; never a later request's, as mpv's IPC thread runs one request at a
+// time and answers it before it reads the next.
 func (n *simNode) model(ctx context.Context, conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
@@ -152,23 +138,12 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 			// mpv answers once the script has the message; the script acts on its own
 			n.writes <- reply
 			replied = true
-			arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
-			paused, second, entry, id, on := arg(3), arg(4), arg(5), arg(6), arg(8)
-			act := func() {
-				now := n.entry
-				if len(n.moves) > 0 {
-					now = n.moves[len(n.moves)-1]
-				}
-				if entry == "-" && !n.loading && on != "-" && on != strconv.Itoa(now) {
-					// for a file mpv has left (watchparty.lua): only stopped, and acked
-					if paused == "yes" {
-						n.setPause(true)
-					}
-					n.emit(n.script("ack", id))
-					return
-				}
-				n.goLocked(paused, second, entry, id)
+			args := make([]string, len(req.Command)-3)
+			for i := range args {
+				args[i] = fmt.Sprint(req.Command[i+3])
 			}
+			message := fmt.Sprint(req.Command[2])
+			act := func() { n.script.message(message, args...) }
 			if n.late {
 				n.act = act
 			} else {
@@ -203,6 +178,7 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+	scanned(sc)
 }
 
 // answers is mpv sending the answer it held, or the script running what it was told; then
@@ -220,46 +196,56 @@ func (n *simNode) answers() {
 	n.answered <- struct{}{}
 }
 
-// simSet is an entry a go set, by the go's id.
-type simSet struct {
-	entry int
-	id    string
-}
-
-// script is the script saying what mpv holds (watchparty.lua).
-func (n *simNode) script(kind, id string) string {
-	return n.scriptAt(kind, id, n.entry)
-}
-
-// scriptAt is script saying entry as the one mpv is on, or opened (start).
-func (n *simNode) scriptAt(kind, id string, entry int) string {
-	n.sent++
-	over := ""
-	if kind == "ack" && n.over[id] {
-		over = "over"
-		delete(n.over, id)
+// get is a property as the script reads it (scriptMpv): playlist-pos is the entry mpv was last
+// set to or a key took it to, which it opens next.
+func (n *simNode) get(name string) (string, bool) {
+	switch name {
+	case pause:
+		return holds(n.paused), true
+	case timePos:
+		return fmt.Sprintf("%f", n.pos), true
+	case playlistPos:
+		return strconv.Itoa(n.heading()), true
 	}
-	return fmt.Sprintf(`{"event":"client-message","args":["watchparty",%q,%q,%q,"%f","%d",%q,"%d"]}`+"\n", kind, id, holds(n.paused), n.pos, n.sent, over, entry)
+	return "", false
 }
 
-// start is the script saying whose file entry is: the go's that set it; else the person's,
-// which a go set after it undoes. A go's set before it lost to it, and never opens.
-func (n *simNode) start(entry int) string {
-	label := ""
-	if i := slices.IndexFunc(n.sets, func(s simSet) bool { return s.entry == entry }); i >= 0 {
-		label = n.sets[i].id
-		n.sets = n.sets[i+1:]
-	} else {
-		now := entry
-		if len(n.moves) > 0 {
-			now = n.moves[len(n.moves)-1]
-		}
-		n.sets = slices.DeleteFunc(n.sets, func(s simSet) bool { return s.entry != now })
-		if n.loading && n.waiting != nil && len(n.sets) > 0 {
-			n.over[n.waiting.id] = true
+// set is the script setting a property, as mpv takes it: a pause at once, a move in the
+// queue of moves. Its pause's change mark reaches the script once what it hears now is done,
+// or, late, at once.
+func (n *simNode) set(name, value string) {
+	switch name {
+	case pause:
+		n.setPause(value == "yes", !n.late)
+	case playlistPos:
+		i, _ := strconv.Atoi(value)
+		if i != n.heading() {
+			n.request(i)
 		}
 	}
-	return n.scriptAt("start", label, entry)
+}
+
+// seek is the script's async seek: queued in mpv's slot, and answered at once.
+func (n *simNode) seek(second string, reply int) {
+	n.seeks = append(n.seeks, second)
+	n.script.replied(reply, true)
+}
+
+// say is what the script says, after what mpv holds back.
+func (n *simNode) say(args []string) {
+	if !n.listening {
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"event": "client-message", "args": args})
+	n.emit(string(b) + "\n")
+}
+
+// heading is the entry mpv opens next: the last it was set or moved to, else the one it is on.
+func (n *simNode) heading() int {
+	if len(n.moves) > 0 {
+		return n.moves[len(n.moves)-1]
+	}
+	return n.entry
 }
 
 func (n *simNode) emit(line string) {
@@ -280,109 +266,34 @@ func (n *simNode) landReportsLocked() {
 	n.reports = nil
 }
 
-// setPause is the person's key: a change lands the seek queued first, and the script says its
-// change mark.
-func (n *simNode) setPause(paused bool) {
+// setPause is the person's key or the script's set: a change lands the seek queued first, and
+// the script hears its change mark, at once or (later) once it is idle.
+func (n *simNode) setPause(paused, later bool) {
 	if n.paused == paused {
 		return
 	}
 	n.landSeekLocked()
 	n.paused = paused
-	n.emit(n.script("pause", ""))
-}
-
-// goLocked is the script taking a go (watchparty.lua): another entry opens stopped, and the rest
-// waits for its file (fileLoaded); otherwise apply.
-func (n *simNode) goLocked(paused, second, entry, id string) {
-	if n.waiting != nil {
-		n.emit(n.script("ack", n.waiting.id))
-		n.waiting = nil
-	}
-	if entry == "-" && n.loading {
-		entry = strconv.Itoa(n.heading)
-	}
-	on := n.entry
-	if n.loading {
-		on = n.heading
-	}
-	if e, err := strconv.Atoi(entry); err == nil && (n.loading || on != e) {
-		if on != e {
-			n.setPause(true)
-			n.loading, n.heading = true, e
-			n.sets = append(n.sets, simSet{e, id})
-			n.request(e)
-		}
-		n.waiting = &simGo{paused: paused, second: second, id: id, entry: e}
+	if later {
+		n.script.whenIdle(n.script.pauseMarked)
 		return
 	}
-	n.apply(paused, second, id)
+	n.script.pauseMarked()
 }
 
-// apply is the script's go on the file mpv is on: stopped, on the second, then playing if
-// asked, and the ack. A play lands the seek just queued first, which the script says after
-// the ack; its change mark comes once its events are out, or, late, before the ack.
-func (n *simNode) apply(paused, second, id string) {
-	if second == "-" {
-		want := paused == "yes"
-		changed := n.paused != want
-		if changed {
-			n.landSeekLocked()
-		}
-		n.paused = want
-		n.emit(n.script("ack", id))
-		if changed {
-			n.emit(n.script("pause", ""))
-		}
-		return
-	}
-	changed := !n.paused
-	if changed {
-		n.landSeekLocked()
-		n.paused = true
-	}
-	n.seeks = append(n.seeks, simSeek{second, id})
-	if paused == "no" {
-		n.paused = false
-		n.emit(n.script("ack", id))
-		n.landSeekLocked()
-		n.emit(n.script("pause", ""))
-		return
-	}
-	if changed && n.late {
-		n.emit(n.script("pause", ""))
-	}
-	n.emit(n.script("ack", id))
-	if changed && !n.late {
-		n.emit(n.script("pause", ""))
-	}
-}
-
-// fileLoaded is mpv's file-loaded, with reports mpv still holds back after it, and the
-// script's: the go the move waited for, or its ack alone on another file.
+// fileLoaded is mpv's file-loaded, with reports mpv still holds back after it, and the first
+// frame ready.
 func (n *simNode) fileLoaded(reports ...string) {
 	n.emit(`{"event":"file-loaded"}` + "\n")
+	n.script.event("file-loaded", nil)
 	n.reports = append(n.reports, reports...)
-	n.loading = false
-	w := n.waiting
-	if w == nil {
-		return
-	}
-	if n.entry != w.entry {
-		// another file: the go waits on while mpv is still on its way to its own
-		if len(n.moves) > 0 && n.moves[len(n.moves)-1] == w.entry {
-			n.loading = true
-			return
-		}
-		n.waiting = nil
-		n.emit(n.script("ack", w.id))
-		return
-	}
-	n.waiting = nil
-	n.apply(w.paused, w.second, w.id)
+	n.emit(`{"event":"playback-restart"}` + "\n")
+	n.script.event("playback-restart", nil)
 }
 
-func (n *simNode) seek(pos float64) {
-	n.seeks = append(n.seeks, simSeek{at: fmt.Sprintf("%f", pos)})
+// queueSeek is the person's seek, queued in mpv's slot.
+func (n *simNode) queueSeek(pos float64) {
+	n.seeks = append(n.seeks, fmt.Sprintf("%f", pos))
 }
 
 func (n *simNode) landSeek() {
@@ -391,25 +302,23 @@ func (n *simNode) landSeek() {
 	n.landSeekLocked()
 }
 
+// landSeekLocked is mpv running the seek in its slot: the script hears where it goes at its
+// seek event, with the node's id if it carries the node's (watchparty.lua).
 func (n *simNode) landSeekLocked() {
 	if len(n.seeks) == 0 {
 		return
 	}
-	last, carrying := n.seeks[len(n.seeks)-1].at, ""
-	for _, s := range n.seeks {
-		if s.id != "" {
-			carrying = s.id
-		}
-	}
+	last := n.seeks[len(n.seeks)-1]
 	n.seeks = nil
 	was := fmt.Sprintf("%f", n.pos)
 	n.pos, _ = strconv.ParseFloat(last, 64)
 	n.emit(`{"event":"seek"}` + "\n")
-	n.emit(n.script(seek, carrying))
+	n.script.event(seek, nil)
 	if last != was {
 		n.emit(propertyChangeLine(timePos, last, 0))
 	}
 	n.emit(`{"event":"playback-restart"}` + "\n")
+	n.script.event("playback-restart", nil)
 }
 
 // request is a set or a key press: mpv takes them in the order they came.
@@ -440,8 +349,7 @@ func (n *simNode) foldMoves() {
 	i := n.moves[len(n.moves)-1]
 	n.moves = nil
 	if i == n.entry {
-		n.emit(started(i))
-		n.emit(n.start(i))
+		n.starts(i)
 		n.fileLoaded()
 		return
 	}
@@ -452,6 +360,12 @@ func started(i int) string {
 	return fmt.Sprintf(`{"event":"start-file","playlist_entry_id":%d}`+"\n", i+1)
 }
 
+// starts is mpv's start-file for entry i, which the script hears.
+func (n *simNode) starts(i int) {
+	n.emit(started(i))
+	n.script.event("start-file", map[string]lua.LValue{"playlist_entry_id": lua.LNumber(i + 1)})
+}
+
 // move drops a seek that hasn't landed: mpv reports one sent just before a switch ahead
 // of it or not at all, never on the new file, which always opens at 0 (MPV.md).
 func (n *simNode) move(i int, late bool) {
@@ -459,8 +373,7 @@ func (n *simNode) move(i int, late bool) {
 		return
 	}
 	n.entry, n.pos, n.seeks = i, 0, nil
-	n.emit(started(i))
-	n.emit(n.start(i))
+	n.starts(i)
 	reports := []string{propertyChangeLine(playlistPos, strconv.Itoa(i), 0), propertyChangeLine(timePos, "0.000000", 0)}
 	if late {
 		n.fileLoaded(reports...)
@@ -473,6 +386,15 @@ func (n *simNode) move(i int, late bool) {
 
 // run goes until nothing is left to happen, picking at random among what could happen next.
 func (s *sim) run() {
+	for _, n := range s.nodes {
+		n.mu.Lock()
+		if !n.listening {
+			// mpv opened its file before the party: the script heard it, the node didn't
+			n.script.event("start-file", map[string]lua.LValue{"playlist_entry_id": lua.LNumber(n.entry + 1)})
+			n.listening = true
+		}
+		n.mu.Unlock()
+	}
 	for {
 		synctest.Wait()
 		for i := 0; i < len(s.replies); i++ {
@@ -632,7 +554,7 @@ func (s *sim) drop(from, to *simNode, name string) {
 func seeks(n *simNode, pos float64) func() {
 	return func() {
 		n.mu.Lock()
-		n.seek(pos)
+		n.queueSeek(pos)
 		n.mu.Unlock()
 		n.landSeek()
 	}
@@ -652,7 +574,7 @@ func sets(n *simNode, paused bool) func() {
 	return func() {
 		n.mu.Lock()
 		defer n.mu.Unlock()
-		n.setPause(paused)
+		n.setPause(paused, false)
 	}
 }
 
@@ -845,7 +767,7 @@ func TestPartySettlesAfterAMemberLosesTheRelay(t *testing.T) {
 		}, func() {
 			a.mu.Lock()
 			defer a.mu.Unlock()
-			a.setPause(false)
+			a.setPause(false, false)
 		}}
 		s.run()
 		// only once the move and the resume have reached everyone still there. c ends on the
@@ -1111,12 +1033,12 @@ func TestSeekAndResumeAtOnceDoesNotPauseAnyone(t *testing.T) {
 		s.ticks = 5
 		s.script = []func(){func() {
 			a.mu.Lock()
-			a.seek(40)
+			a.queueSeek(40)
 			a.mu.Unlock()
 			a.landSeek()
 			a.mu.Lock()
 			defer a.mu.Unlock()
-			a.setPause(false)
+			a.setPause(false, false)
 		}}
 		s.run()
 		for _, n := range s.nodes {
