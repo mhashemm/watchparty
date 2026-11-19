@@ -1,11 +1,10 @@
 name: probe
 # The sync script leans on how mpv orders its events and replies: measured, not promised
 # (mpv/ORDER.md). This re-measures it on the shipped script against Ubuntu's mpv and the
-# newest release (Arch's, as the installers fetch the latest). Weekly too: a new mpv lands
-# with no PR here.
+# newest release (Arch's, as the installers fetch the latest). Weekly, as a new mpv lands with
+# no PR here, and by hand (Actions → probe → Run workflow) before merging a change to mpv/: it
+# takes 15 to 35 minutes, too slow for every PR.
 on:
-  pull_request:
-    paths: ["mpv/**", ".github/workflows/probe.yml"]
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:

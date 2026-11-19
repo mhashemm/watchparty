@@ -194,6 +194,6 @@ python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own tim
 
 `run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
 same on 0.40.0 in the e2e image, and the newest mpv is Arch's, as CI's `probe` job runs it
-(`.github/workflows/probe.yml`, on PRs touching `mpv/` and weekly, Ubuntu's mpv too). Each
+(`.github/workflows/probe.yml`, weekly and by hand, Ubuntu's mpv too). Each
 experiment prints its error counts, then every shape it saw; an error but `spare` exits 1.
 Never on the user's screen: mpv runs `--vo=null --ao=null`.
