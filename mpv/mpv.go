@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,21 +21,23 @@ import (
 )
 
 const (
-	pause           = "pause"
-	timePos         = "time-pos"
-	pausedForCache  = "paused-for-cache"
-	playlistPos     = "playlist-pos"
-	filename        = "filename"
-	startFile       = "start-file"
-	fileLoaded      = "file-loaded"
-	duration        = "duration"
-	propertyChange  = "property-change"
-	seek            = "seek"
-	playbackRestart = "playback-restart"
-	setProperty     = "set_property"
-	showText        = "show-text"
-	pauseReason     = "pause-reason"
-	joined          = "joined"
+	pause          = "pause"
+	timePos        = "time-pos"
+	pausedForCache = "paused-for-cache"
+	playlistPos    = "playlist-pos"
+	filename       = "filename"
+	duration       = "duration"
+	propertyChange = "property-change"
+	seek           = "seek"
+	setProperty    = "set_property"
+	showText       = "show-text"
+	pauseReason    = "pause-reason"
+	joined         = "joined"
+	clientMessage  = "client-message"
+
+	// scriptName is what mpv names the script, from ScriptFile; another script with that
+	// file name takes it, and this one gets a number after it (ORDER.md)
+	scriptName = "watchparty"
 
 	lostRelay = "lost the relay, reconnecting"
 	// unheard is the stamp of a node that hasn't heard the party yet: so far below any the
@@ -54,6 +57,17 @@ const (
 	maxSeeks                = 16
 )
 
+// How long the node waits on mpv before it gives up (errTimeout): replyLimit for a reply or a
+// go's ack, moveLimit for a move's go, acked once its file starts, which mpv gives up on after
+// its --network-timeout (60s; 81s seen, ORDER.md).
+const (
+	replyLimit = 5 * time.Second
+	moveLimit  = 3 * time.Minute
+)
+
+// overruled is shown when a go undid the person's key, pressed as the party changed.
+const overruled = "your key came as the party changed: press it again"
+
 // The notices both transports show, around a member's name. apply reads HasLeft to pause
 // the party, and gui/store.go reads the other two; e2e spells them again.
 const (
@@ -65,11 +79,20 @@ const (
 var (
 	errNoChange  = errors.New("no change")
 	errDoNotSend = errors.New("do not send")
-	errEcho      = errors.New("echo")
-	errTimeout   = errors.New("mpv did not answer within 5s")
+	errTimeout   = errors.New("mpv did not answer in time")
 
 	ErrClosed = errors.New("mpv closed the IPC connection")
+	// ErrNoScript: mpv didn't load Script, as it was built without Lua
+	ErrNoScript = errors.New("this mpv can't run the sync script: install an mpv built with Lua")
 )
+
+// Script is the node's way into mpv, which party.Run hands mpv as ScriptFile with --script.
+//
+//go:embed watchparty.lua
+var Script []byte
+
+// ScriptFile is the file name Script is written as: mpv names a script after it.
+const ScriptFile = scriptName + ".lua"
 
 type IncomingMessage struct {
 	// HostName is who sent it, as people know them; From tells members apart, which their
@@ -125,9 +148,15 @@ func (c *Client) ask(args ...any) (string, error) {
 		go c.writer(c.out)
 	}
 	c.out.put(request{id: id, body: body})
+	return c.await(id, replyLimit)
+}
+
+// await waits on the loop for id's answer, taking the inputs that come meanwhile: mpv's reply
+// to a request, or the script's ack of a go (goTo), for at most limit.
+func (c *Client) await(id int64, limit time.Duration) (string, error) {
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
-	expire := time.AfterFunc(5*time.Second, func() { c.post(input{expired: id}) })
+	expire := time.AfterFunc(limit, func() { c.post(input{expired: id}) })
 	defer expire.Stop()
 	for {
 		if r, ok := c.replies[id]; ok {
@@ -139,7 +168,7 @@ func (c *Client) ask(args ...any) (string, error) {
 				log.Printf("do: response timeout: [requestId=%d]\n", id)
 				return "", errTimeout
 			}
-			log.Printf("do: received response: [requestId=%d] [error=%s]\n", r.RequestId, r.Error)
+			log.Printf("do: received response: [requestId=%d] [error=%s]\n", id, r.Error)
 			if r.Error != "success" {
 				return "", errors.New(r.Error)
 			}
@@ -253,8 +282,12 @@ type Event struct {
 	// Free: a stop nobody chose (answering a join, catching up, a leave): it has no leader,
 	// and the first seek leads
 	Free bool `json:"free,omitempty"`
-	// EntryID: the playlist entry a start-file opens, counted from 1
-	EntryID int `json:"playlist_entry_id,omitempty"`
+	// Args: what a script said, in a client-message
+	Args []string `json:"args,omitempty"`
+	// fromScript: a report made from what the script said (scriptSaid), never sent as is.
+	// stoppedAt: for a move the ack found, where mpv stopped on the new file
+	fromScript bool
+	stoppedAt  *float64
 	Response
 }
 
@@ -298,12 +331,16 @@ type Client struct {
 	early   *IncomingMessage
 	best    state
 	notices []IncomingMessage
-	// snap is what Position and Finished read from another goroutine
-	snap atomic.Pointer[snapshot]
-	// opened is New's one answer: nil once the first file loaded and mpv took every
-	// observe (observed), or why it never will
+	// snap is what Position and Finished read from another goroutine. reported: the last
+	// second mpv reported, where it is as it closes, as the script's last messages are lost
+	// then (ORDER.md)
+	snap     atomic.Pointer[snapshot]
+	reported float64
+	// opened is New's one answer: nil once the first file loaded, mpv took every observe
+	// (observed) and the script said its name (script), or why it never will
 	opened   chan error
 	observed bool
+	script   string
 
 	// what mpv last reported
 	paused   bool
@@ -312,25 +349,14 @@ type Client struct {
 	stalled  bool
 	seen     map[string]bool
 
-	// echo: what this node set itself, so mpv's report of it isn't broadcast, and what
-	// it is about to pause the party for
-	applied  map[string]string
-	seeks    []float64
-	peerSeek bool
-	// sent: the last seek this node sent mpv; began: mpv started a seek since
-	sent  float64
-	began bool
-	// stopAt: the second of a stop this node took while playing on it, until mpv reports
-	// the stop (stopping)
-	stopAt   float64
-	stopping bool
-	// playedLate: mpv will report a play it ran after this node's own newer change, which is
-	// undone (converge), not taken. mine: the state that change said.
-	playedLate bool
-	mine       state
-	// landing: mpv hasn't reported the last seek this node applied, so it is not yet on
-	// the second it is heading to. Not peerSeek: a playback-restart ends that, and one from
-	// a slow load can arrive after the first seek was sent.
+	// marked: the seeks this node sent that mpv hasn't landed, oldest first (wentTo).
+	// flying: the go the script hasn't acked (goTo), one at a time. read: the number of the
+	// last script message taken, which a go says, so the script can tell what it undoes
+	marked []ourSeek
+	flying *flight
+	read   string
+	// landing: mpv hasn't landed the last seek this node marked, so it is not yet on the
+	// second it is heading to (target). seeking: the person's seek went while playing
 	landing bool
 	seeking bool
 	reason  string
@@ -358,64 +384,30 @@ type Client struct {
 	ranOut     bool
 
 	// playlist
-	names     []string
-	current   int
-	following []string
-	loading   bool
-	heldSeek  string
-	// started, loaded: the entry mpv opens and the one it has loaded, by start-file and
-	// file-loaded, counted from 1 as mpv does; 0 for none. cleared: what this node had
-	// marked for the last file is gone, for the one started
-	started, loaded int
-	cleared         bool
-	// stray: mpv opened a file this node isn't on or heading to, and hasn't reported its
-	// entry: a key press, which goes out once it does
-	stray bool
+	names []string
+	// current: the entry mpv opened last, as the script says it (start); toward: the one this
+	// node's move is heading to, until the script says it opened it, -1 for none. auto: the last
+	// start was mpv's own, after a file's end or error
+	current int
+	toward  int
+	auto    bool
 }
 
-func (c *Client) isEcho(event Event) bool {
-	if event.Name == timePos {
-		got, err := strconv.ParseFloat(event.Data, 64)
-		if err != nil {
-			return false
-		}
-		for i, want := range c.seeks {
-			if math.Abs(got-want) <= timePosTolerance {
-				// landed once mpv reports the second of the last one, whichever it matched
-				c.landing = c.landing && math.Abs(got-c.seeks[len(c.seeks)-1]) > timePosTolerance
-				c.seeks = c.seeks[i:]
-				c.seeks[0] = got
-				return true
-			}
-		}
-		return false
-	}
-	if event.Name == playlistPos {
-		i := slices.Index(c.following, event.Data)
-		if i < 0 {
-			// someone pressed a key before our set reached mpv, so the party must hear
-			// every report from here to where it ends up. mpv's first report isn't that.
-			if c.seen[playlistPos] {
-				c.following = nil
-			}
-			return false
-		}
-		c.following = c.following[i+1:]
-		return true
-	}
-	if event.Name == pause && c.playedLate {
-		c.playedLate = false
-		if event.Data == "no" {
-			c.later = append(c.later, c.converge)
-			return true
-		}
-	}
-	applied, ok := c.applied[event.Name]
-	if !ok {
-		return false
-	}
-	delete(c.applied, event.Name)
-	return applied == event.Data
+// ourSeek is a seek this node sent, by the id of its go, which the script says with it
+// (wentTo), on the entry it is for.
+type ourSeek struct {
+	id    int64
+	at    float64
+	entry int
+}
+
+// flight is a go the script hasn't acked, and what the ack is weighed against (landed): the
+// stamp and the second this node held as it sent it; seek: it seeks, so the ack's second is
+// from before mpv lands; still: mpv was stopped, so the ack's second is where it was.
+type flight struct {
+	id          int64
+	at          float64
+	seek, still bool
 }
 
 // handleEvent returns what goes out for one line from mpv: the line itself when it is
@@ -444,90 +436,192 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	for i, b := range out {
 		out[i] = c.tag(b)
 	}
-	if len(out) > 0 {
-		c.mine = c.held()
-	}
 	return out
 }
 
 func (c *Client) react(event Event) ([][]byte, error) {
 	switch event.EventType {
-	case seek:
-		if !c.paused && !c.peerSeek {
-			c.seeking = true
-		}
-		c.began = true
-	case playbackRestart:
-		c.peerSeek = false
-		if c.landing && c.began && len(c.seeks) > 0 && c.seeks[len(c.seeks)-1] == c.sent {
-			c.later = append(c.later, c.landed)
-		}
-	case startFile:
-		c.started, c.loaded, c.cleared = event.EntryID, 0, false
-		c.stray = event.EntryID != c.heading()+1
-	case fileLoaded:
-		c.loaded = c.started
-		c.fileLoaded()
 	case propertyChange:
 		if event.Data != "" {
-			out, err := c.propertyChanged(event)
-			if event.Name == playlistPos {
-				c.fileLoaded()
-			}
-			return out, err
+			return c.propertyChanged(event)
 		}
 	}
 	return nil, errDoNotSend
 }
 
-// fileLoaded lets go of the seek held for the entry this node was heading to, once mpv has
-// loaded it and said so. mpv reports a property only once its event queue is empty
-// (client.h), so its report of the entry can come before file-loaded or after it; events
-// keep their order, and start-file names the entry.
-func (c *Client) fileLoaded() {
-	// a file on the way to where this node is headed: a seek let go here lands on it
-	if c.loaded == 0 || c.loaded != c.heading()+1 {
-		return
+// scriptSaid is a message from the script (watchparty.lua): its name, once, or what mpv holds when
+// it was sent, as reports to read as mpv's: the pause it holds, and the person's seek. While a
+// go is on its way, what the script says is from before it, which the go overwrites, or from
+// the go itself: none is the person's, and the ack says where mpv ended (landed).
+func (c *Client) scriptSaid(args []string) []Event {
+	if len(args) < 5 || args[0] != scriptName {
+		return nil
 	}
-	c.loading = false
-	if c.current+1 == c.loaded {
-		// whatever else it was heading to, mpv never reported (MPV.md)
-		c.following = nil
-	} else {
-		// the report is still to come: a seek let go now must survive it
-		c.clear()
+	if len(args) > 5 {
+		c.read = args[5]
 	}
-	if held := c.heldSeek; held != "" {
-		// still on its way until seekTo has marked the seek, or target sees neither
-		pos, _ := strconv.ParseFloat(held, 64)
-		c.heldSeek, c.landing, c.seeks = "", true, append(c.seeks, pos)
-		c.later = append(c.later, func() {
-			if err := c.seekTo(held); err != nil {
-				log.Println("seek after loading:", err)
-			}
-		})
+	kind, said := args[1], args[2]
+	if kind == "hello" {
+		if c.script != "" {
+			return nil
+		}
+		c.script = said
+		// where mpv starts: every later entry it opens, the script says (start)
+		if e, err := strconv.Atoi(entryOf(args)); err == nil && e >= 0 {
+			c.current = e
+		}
+		c.seen[playlistPos] = true
+		c.opens()
+		// what mpv holds: the first pause this node hears, which only marks where it starts
+		return []Event{{EventType: propertyChange, Name: pause, Data: args[3], fromScript: true}}
 	}
+	id, _ := strconv.ParseInt(said, 10, 64)
+	paused, pos := args[3], args[4]
+	at, err := strconv.ParseFloat(pos, 64)
+	known := err == nil
+	switch kind {
+	case "refused":
+		c.answered(id, outcome{Response: Response{Error: "mpv refused it"}})
+		if c.ground(id) {
+			c.paused = paused == "yes"
+			// a key that moved mpv while the go was on its way, as at an ack
+			return c.wentElsewhere(paused, at, known, entryOf(args))
+		}
+	case "ack":
+		c.answered(id, outcome{Response: Response{Error: "success"}})
+		return c.landed(id, paused, at, known, len(args) > 6 && args[6] == "over", entryOf(args))
+	case "start":
+		return c.started(said, entryOf(args))
+	case "pause":
+		if c.flying != nil {
+			return nil
+		}
+		var out []Event
+		// stopped, and still: a frame-step, which moves mpv without a seek (ORDER.md)
+		if known && paused == "yes" && c.paused && len(c.marked) == 0 && !c.on(at) {
+			out = c.wentTo(0, at)
+		}
+		if known && paused == "yes" {
+			c.pos = at
+		}
+		return append([]Event{{EventType: propertyChange, Name: pause, Data: paused, fromScript: true}}, out...)
+	case seek:
+		if known {
+			return c.wentTo(id, at)
+		}
+	}
+	return nil
+}
+
+// entryOf is the entry a script message says mpv is on, or opened (start); "" if it says none.
+func entryOf(args []string) string {
+	if len(args) > 7 {
+		return args[7]
+	}
+	return ""
+}
+
+// started is the script saying whose file mpv opened (watchparty.lua): this node's move, by its
+// go's id; mpv's own (auto), after a file's end or error; or the person's. While a go is on its
+// way, a start that isn't its own is weighed at its ack, which says the entry mpv ended on.
+func (c *Client) started(label, entry string) []Event {
+	n, err := strconv.Atoi(entry)
+	if err != nil || n < 0 {
+		return nil
+	}
+	c.auto = label == "auto"
+	if _, err := strconv.ParseInt(label, 10, 64); err == nil {
+		// this node's own move
+		if c.toward == n {
+			c.toward = -1
+		}
+		if n != c.current {
+			c.current = n
+			c.clear(n)
+		}
+		return nil
+	}
+	if c.flying != nil {
+		return nil
+	}
+	return []Event{{EventType: propertyChange, Name: playlistPos, Data: entry, fromScript: true}}
+}
+
+// answered gives the script's answer to the goTo waiting on it.
+func (c *Client) answered(id int64, o outcome) {
+	if c.waiting[id] {
+		c.replies[id] = o
+	}
+}
+
+// ground forgets the go on its way once the script answered it or it failed, and whether id
+// was that go.
+func (c *Client) ground(id int64) bool {
+	if c.flying == nil || c.flying.id != id {
+		return false
+	}
+	c.flying = nil
+	return true
+}
+
+// landed is the script's ack of the go on its way: what mpv holds once it has all of it. What
+// differs from what this node holds is the person's, made while the go was on its way and not
+// overwritten by it, and goes out as their report: nothing else of this node's goes out while
+// a go is on its way, so the ack is always weighed against the state it was sent from. over: the go undid a key of the
+// person's this node never read; made as the party changed, it would lose to that change
+// anyway (stopped over playing), so it stays undone, and the person is told.
+func (c *Client) landed(id int64, paused string, at float64, known, over bool, entry string) []Event {
+	f := c.flying
+	if !c.ground(id) {
+		return nil
+	}
+	// it goes out first, as a move does
+	out := c.wentElsewhere(paused, at, known, entry)
+	if paused != holds(c.paused) {
+		out = append(out, Event{EventType: propertyChange, Name: pause, Data: paused, fromScript: true})
+	}
+	// mpv stood where this node held it, with no seek of its own: anywhere else, the person's
+	// seek ran just before the go, or folded into a seek of this node's landing meanwhile
+	if known && f.still && !f.seek && len(c.marked) == 0 && math.Abs(at-f.at) > timePosTolerance {
+		c.seeking = paused == "no"
+		out = append(out, Event{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(at, 'f', 6, 64), fromScript: true})
+	} else if known && paused == "yes" && !f.seek {
+		c.pos = at
+	}
+	if over && len(out) == 0 {
+		c.later = append(c.later, func() { c.showText(overruled) })
+	}
+	return out
+}
+
+// wentElsewhere is the entry the script says mpv ended a go on, if it isn't the one this node
+// heads to: the person's move, or mpv's own, while the go was on its way, from where mpv stopped.
+func (c *Client) wentElsewhere(paused string, at float64, known bool, entry string) []Event {
+	n, err := strconv.Atoi(entry)
+	if err != nil || n < 0 || n == c.heading() {
+		return nil
+	}
+	c.toward = -1
+	move := Event{EventType: propertyChange, Name: playlistPos, Data: entry, fromScript: true}
+	if known && paused == "yes" {
+		// it may have played a moment there before the go stopped it
+		move.stoppedAt = &at
+	}
+	return []Event{move}
+}
+
+// holds is a pause as mpv and the script say it.
+func holds(paused bool) string {
+	if paused {
+		return "yes"
+	}
+	return "no"
 }
 
 // propertyChanged is what a property-change with data means for the party: what to
 // broadcast after it, or instead of it, and nil only if the event itself goes out.
 func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 	extra, moved := c.record(event)
-	if c.isEcho(event) {
-		if event.Name == pause {
-			// from here mpv plays, or doesn't: its next time-pos can come before the reply
-			// that tells the one applying it, and while stopped that would read as a seek
-			c.paused = event.paused()
-			if !c.paused {
-				// a resume taken from a peer ends the seeks applied before it, as one's own does
-				c.seeks, c.landing = nil, false
-			}
-			if c.paused && c.stopping {
-				c.stoppedOff()
-			}
-		}
-		return extra, errEcho
-	}
 	first := !c.seen[event.Name]
 	c.seen[event.Name] = true
 	if first && event.Name == timePos {
@@ -538,6 +632,10 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 	case pause:
 		extra, err = c.pauseChanged(event.paused(), extra)
 	case timePos:
+		if !event.fromScript {
+			// how far mpv has played; where it stops and lands, the script says
+			return nil, errDoNotSend
+		}
 		err = c.positionChanged()
 	case pausedForCache:
 		c.stalled = event.paused()
@@ -546,7 +644,10 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 		}
 		return nil, errDoNotSend
 	case playlistPos:
-		err = c.entryChanged(moved && !first)
+		if !event.fromScript {
+			return nil, errDoNotSend
+		}
+		err = c.entryChanged(moved)
 	default:
 		return nil, errDoNotSend
 	}
@@ -561,8 +662,14 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 	switch event.Name {
 	case timePos:
+		// stopped, mpv is where the script last said: a playing second it reported before
+		// the stop can come after (MPV.md, [R6c]); and while a go is on its way, mpv may not
+		// play yet, wherever the person took it
 		if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
-			c.pos = pos
+			c.reported = pos
+			if event.fromScript || !c.paused && c.flying == nil {
+				c.pos = pos
+			}
 		}
 	case duration:
 		if d, err := strconv.ParseFloat(event.Data, 64); err == nil {
@@ -576,27 +683,26 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 		name, _ := json.Marshal(event.Data)
 		log.Printf("now playing: %s\n", name)
 	case playlistPos:
-		c.stray = false
-		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current {
-			// before clear forgets the second it left
-			c.ranOut = !c.paused && c.ending()
+		if n, err := strconv.Atoi(event.Data); err == nil && n >= 0 && n != c.current && event.fromScript {
+			c.ranOut = c.auto
 			c.current = n
 			moved = c.seen[timePos]
-			if !c.cleared || c.started != n+1 {
-				c.clear()
+			c.clear(n)
+			if event.stoppedAt != nil {
+				c.pos = *event.stoppedAt
 			}
 		}
 	}
 	return extra, moved
 }
 
-// clear forgets the second this node was on and the seeks it marked, as mpv opens another
-// file: the old second would go out with a pause, and the new file's 0 as a seek.
-func (c *Client) clear() {
-	c.pos, c.seeking, c.landing, c.cleared = 0, false, false, true
-	if c.seen[timePos] {
-		c.seeks = []float64{0}
-	}
+// clear forgets the second this node was on and the seeks it sent for other files, as mpv
+// opens entry: the old second would go out with a pause, and a seek queued for the old file
+// never lands.
+func (c *Client) clear(entry int) {
+	c.pos, c.seeking = 0, false
+	c.marked = slices.DeleteFunc(c.marked, func(s ourSeek) bool { return s.entry != entry })
+	c.landing = c.landing && len(c.marked) > 0
 }
 
 // pauseChanged is the user's own pause or resume.
@@ -618,40 +724,24 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 	}
 	c.paused = paused
 	if !paused {
-		// it plays from where it is heading: a seek sent that mpv hasn't run runs after this.
-		// Not one only planned, which never reaches mpv, as the step sending it stops
-		// (moved); nor one mpv has run (peerSeek ends), which may have folded the person's
-		// own into it, and mpv plays from where it is.
-		if n := len(c.seeks); c.landing && c.peerSeek && n > 0 && c.seeks[n-1] == c.sent {
-			c.seeks = c.seeks[n-1:]
-		} else {
-			c.seeks, c.landing = nil, false
-		}
 		c.seeking, c.since = false, c.target()
-		return extra, nil
 	}
-	// stopped from playing: where it is now, whatever seek was on its way
-	c.landing = false
 	return extra, nil
 }
 
-// positionChanged is a seek while paused, which goes out, or playback moving on, which
-// doesn't, unless it is where a seek while playing landed: that pauses the party.
+// positionChanged is the person's seek, as the script said where it went (wentTo): stopped, it
+// goes out; playing, it pauses the party.
 func (c *Client) positionChanged() error {
-	// a stop this node applied that mpv hasn't reported: mpv answers the set first, and
-	// plays until it reports it (MPV.md), so this is playback moving on
-	if c.paused && c.applied[pause] == "yes" {
+	if c.paused && c.led() {
+		// the step taking the leader's state goes on: its seek overrides this one
+		c.keepOnScreen()
 		return errDoNotSend
 	}
+	// the person's seek goes out, or stops the party, newer: wherever this node was being
+	// sent, this is where it is now. mpv lands nothing of a seek queued before it, and one
+	// sent after it lands as the person's, newer, which is where mpv then is.
+	c.marked, c.landing = nil, false
 	if c.paused {
-		// its own seek: wherever it was being sent, this is where it is now, and mpv reports
-		// nothing of a seek applied before it (MPV.md), so their markers would only swallow
-		// the person's way back to one of them
-		c.seeks, c.landing = nil, false
-		if c.led() {
-			c.keepOnScreen()
-			return errDoNotSend
-		}
 		return nil
 	}
 	if c.seeking {
@@ -785,19 +875,15 @@ func (c *Client) stateOf(e Event) (state, error) {
 	return s, nil
 }
 
-// on is whether pos is the second this node is on, or on its way to. Not at: that also
-// matches every seek it has applied since the last resume, to know mpv's echo of one, and
-// a second it has since left is not where it is.
+// on is whether pos is the second this node is on, or on its way to.
 func (c *Client) on(pos float64) bool {
 	return math.Abs(pos-c.target()) <= timePosTolerance
 }
 
 // heading is the entry this node is on, or on its way to.
 func (c *Client) heading() int {
-	if n := len(c.following); n > 0 {
-		if i, err := strconv.Atoi(c.following[n-1]); err == nil {
-			return i
-		}
+	if c.toward >= 0 {
+		return c.toward
 	}
 	return c.current
 }
@@ -806,7 +892,6 @@ func (c *Client) pauseExtras() [][]byte {
 	if c.reason == "" {
 		return nil
 	}
-	c.seeks = append(c.seeks, c.pos)
 	reason, _ := json.Marshal(Event{Name: pauseReason, Data: c.reason})
 	c.reason = ""
 	return [][]byte{position(timePos, c.pos), reason}
@@ -934,26 +1019,33 @@ func (c *Client) handle(in input) {
 		c.mpvSaid(in.line)
 	}
 	c.runLater()
-	if c.opening && c.seen[timePos] {
+	// the party's state is applied through the script, so it waits for its name too
+	if c.opening && c.seen[timePos] && c.script != "" {
 		c.join()
 	}
 	for c.busy == 0 && len(c.queue) > 0 {
+		c.busy++
 		m := c.queue[0]
 		c.queue = c.queue[1:]
-		c.busy++
 		c.apply(m)
 		c.busy--
-		// what applying it started (converge)
 		c.runLater()
 	}
 	c.snapshot()
 }
 
 func (c *Client) runLater() {
-	for len(c.later) > 0 {
+	for len(c.later) > 0 && c.flying == nil {
 		f := c.later[0]
 		c.later = c.later[1:]
 		f()
+	}
+}
+
+// opens gives New its answer once all it waits for is there.
+func (c *Client) opens() {
+	if c.observed && !c.opening && c.script != "" {
+		c.open(nil)
 	}
 }
 
@@ -972,7 +1064,7 @@ type snapshot struct {
 }
 
 func (c *Client) snapshot() {
-	current, pos := c.current, c.pos
+	current, pos := c.current, c.reported
 	if c.onAStop() {
 		// the party's entry and second, wherever the person took this node's screen
 		current, pos = c.partyEntry, c.since
@@ -994,6 +1086,14 @@ func (c *Client) mpvSaid(line []byte) {
 		} else {
 			log.Println("Watch: dropped response:", string(line))
 		}
+	}
+	if event.EventType == clientMessage {
+		log.Printf("Watch: mpv said: %s\n", line)
+		for _, report := range c.scriptSaid(event.Args) {
+			line, _ := json.Marshal(report)
+			c.broadcast(c.handleEvent(report, line))
+		}
+		return
 	}
 	if event.EventType == "" {
 		return
@@ -1034,13 +1134,11 @@ func (c *Client) hear(e IncomingMessage) {
 // one transport message, so what comes meanwhile waits.
 func (c *Client) join() {
 	c.opening = false
-	if c.observed {
-		c.open(nil)
-	}
+	c.opens()
 	c.busy++
 	defer func() { c.busy-- }()
 	if c.resumeAt > 0 {
-		if err := c.seekTo(strconv.FormatFloat(c.resumeAt, 'f', 6, 64)); err != nil {
+		if err := c.goTo(c.paused, &c.resumeAt, nil, c.paused); err != nil {
 			log.Println("continuing where it stopped:", err)
 		}
 	}
@@ -1211,9 +1309,11 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 type adoption struct {
 	state
 	from string
-	// seek: not on its second yet; now: mpv is told at once, or it waits for the file;
-	// quiet: mpv is brought back to this node's own state, which shows nothing
-	stop, moving, seek, now, quiet bool
+	// stop: mpv plays and must stop; seek: it goes to the second, as it isn't on it, or stops
+	// from playing, a moment past it; still: it stays stopped, as the
+	// state plays on another entry, or mpv waits on its cache; tell: mpv is told any of it;
+	// was: mpv was stopped before; there: it was on the second already
+	stop, moving, seek, still, tell, was, there bool
 }
 
 // commit takes a newer state in the step that weighed it: the stamp with the entry, the
@@ -1221,158 +1321,96 @@ type adoption struct {
 // would hold the party's stamp on its own entry or second, a tie it could win; and whatever
 // it says meanwhile already names where it is going.
 func (c *Client) commit(s state, from string) adoption {
-	a := adoption{state: s, moving: s.entry != c.heading(), from: c.entryName(c.heading())}
-	// a file opens stopped, and a seek is made stopped: one that plays on stays where it is
+	a := adoption{state: s, moving: s.entry != c.heading(), from: c.entryName(c.heading()), was: c.paused}
 	a.stop = (a.moving || s.paused) && !c.paused
-	there := a.moving && s.at <= timePosTolerance || !a.moving && c.on(s.at)
-	// a seek now would land on a file mpv opened by itself, and go out as this node's own
-	// once mpv reports it; that move goes out newer than s, from the file's start
-	away := !a.moving && c.stray && c.started != c.heading()+1
-	a.seek = !there && !away && (a.stop || c.paused)
-	// on its second as far as this node has read, but mpv plays on until the stop lands
-	c.stopAt, c.stopping = s.at, a.stop && there && !a.moving
-	c.stamp, c.by, c.since, c.toPlay, c.free, c.partyEntry = s.stamp, from, s.at, !s.paused, s.free, s.entry
-	if a.stop {
-		c.applied[pause] = "yes"
-	}
 	if a.moving {
-		// a seek held for the entry it was heading to is not for this one
-		c.loading, c.heldSeek = true, ""
-		c.following = append(c.following, strconv.Itoa(s.entry))
+		// another file opens at its start: the second and the seeks of this one are gone
+		c.pos, c.marked, c.landing = 0, nil, false
 	}
-	if a.seek {
-		a.now = c.mark(s.at)
+	a.there = c.on(s.at)
+	a.seek = a.stop && !a.moving || !a.there && (a.moving || c.paused)
+	a.still = !s.paused && (a.moving || c.stalled)
+	paused := s.paused || a.still
+	a.tell = a.seek || a.moving || paused != c.paused
+	c.stamp, c.by, c.since, c.toPlay, c.free, c.partyEntry = s.stamp, from, s.at, !s.paused, s.free, s.entry
+	if a.moving {
+		c.toward = s.entry
+	}
+	if a.tell {
+		c.paused = paused
 	}
 	return a
 }
 
-// adopt tells mpv to go where commit took this node: stopped, on the entry, on the second,
-// then playing if the state is. One that plays on another entry stops the party instead:
-// loading it, this node can't be in step. It stops once this node has moved (moved).
+// adopt tells mpv to go where commit took this node, in one go: stopped, on the entry, on
+// the second, then playing if the state is. One that plays on another entry stops the party
+// instead: loading it, this node can't be in step. If this node moved while mpv took it, the
+// person's change is newer and stands (moved), and the rest is left.
 func (c *Client) adopt(a adoption, name, hostname string) (err error) {
-	// what mpv never did, as it refused a step
-	left := a
-	overtaken := func() bool {
-		if !c.moved(a.stamp) {
-			return false
-		}
-		c.release(left)
-		return true
-	}
 	defer func() {
 		if err == nil {
 			return
 		}
-		c.release(left)
+		c.release(a)
 		// it holds the party's stamp where mpv isn't: asked again, the party says where.
 		// Not once mpv is gone: this node is leaving.
 		if !errors.Is(err, ErrClosed) {
 			c.announce()
 		}
 	}()
-	show := func(text string) {
-		if !a.quiet {
-			c.showText(text)
-		}
+	from, plays := c.stamp, !a.paused && !a.still
+	show := func(text string) bool {
+		c.showText(text)
+		return c.moved(from)
 	}
-	if a.stop {
-		if err = c.pauseReq(true); err != nil {
+	if a.tell {
+		var second *float64
+		var entry *int
+		if a.seek {
+			second = &a.at
+		}
+		if a.moving {
+			entry = &a.entry
+		}
+		if err = c.goTo(c.paused, second, entry, a.was); err != nil {
 			return err
 		}
-		left.stop = false
-		if overtaken() {
-			return nil
-		}
-		c.paused = true
-		if show(fmt.Sprintf("paused by %s", hostname)); overtaken() {
+		if c.moved(from) {
 			return nil
 		}
 	}
-	if a.moving {
-		if err = c.do(setProperty, playlistPos, a.entry); err != nil {
-			return err
-		}
-		left.moving = false
-		if show(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname)); overtaken() {
-			return nil
-		}
-	}
-	if a.now {
-		if err = c.seekReq(a.at); err != nil {
-			return err
-		}
-		left.now = false
-		if overtaken() {
-			return nil
-		}
-	}
-	if a.seek && name != pause {
-		if show(fmt.Sprintf("synced by %s", hostname)); overtaken() {
-			return nil
-		}
-	}
-	if a.paused {
+	if a.stop && show(fmt.Sprintf("paused by %s", hostname)) {
 		return nil
 	}
-	if a.moving && !a.quiet {
+	if a.moving && show(fmt.Sprintf("from %s to %s, by %s", a.from, c.names[a.entry], hostname)) {
+		return nil
+	}
+	if a.seek && !a.there && name != pause && show(fmt.Sprintf("synced by %s", hostname)) {
+		return nil
+	}
+	switch {
+	case a.paused:
+		return nil
+	case a.moving:
 		return c.answer(hostname, "")
+	case a.still:
+		return c.refuseResume()
+	case plays && a.tell:
+		return c.showText(fmt.Sprintf("resumed by %s", hostname))
 	}
-	return c.resume(hostname)
+	return nil
 }
 
-// release lets go of what commit marked for the steps mpv refused, as it does while it
-// quits or between files: a pause marker would swallow the user's next pause, loading
-// would hold every later seek, and a seek marker would put this node on a second it never
-// reached, and take the user's own seek there for mpv's echo. One held for a file mpv never
-// opens is refused with the move.
+// release lets go of what commit marked once mpv refused the go, as it does while it quits or
+// between files: toward would head for a move mpv never makes, and a seek mark would put
+// this node on a second it never reached (target).
 func (c *Client) release(a adoption) {
-	if a.stop {
-		delete(c.applied, pause)
+	if a.moving && c.toward == a.entry {
+		c.toward = -1
 	}
-	if a.moving {
-		c.loading, c.heldSeek = false, ""
-		if n := slices.Index(c.following, strconv.Itoa(a.entry)); n >= 0 {
-			c.following = slices.Delete(c.following, n, n+1)
-		}
-	}
-	if a.now || a.moving && a.seek {
-		c.seeks = slices.DeleteFunc(c.seeks, func(pos float64) bool { return pos == a.at })
-	}
-	if a.now {
-		c.peerSeek, c.landing = false, false
-	}
-}
-
-// playLate is a play mpv answered after this node's own newer change was reported, so
-// mpv ran it after that change: replies keep the order of requests, and a set's reply comes
-// before its report (MPV.md). The party holds that change, by its stamp, so the play is
-// undone (converge) once mpv reports it, or now if it has. The other late steps are not
-// undone, as none leaves this node apart: a stop's echo carries the person's seek
-// (pauseExtras), the person's resume speaks for the seek still landing (pauseChanged), a
-// seek or move of the person's own clears the markers, so a late one goes out as newer, and
-// a move speaks for the entry it heads to.
-func (c *Client) playLate(from int) {
-	if !c.moved(from) {
-		return
-	}
-	if c.applied[pause] == "no" {
-		delete(c.applied, pause)
-		c.playedLate = true
-		return
-	}
-	c.later = append(c.later, c.converge)
-}
-
-// converge brings mpv back to the state this node last said as its own, quietly: the party
-// holds it already. Not once it has taken a newer one, whose steps put mpv there.
-func (c *Client) converge() {
-	if c.by != "" || c.mine.stamp != c.stamp {
-		return
-	}
-	a := c.commit(c.mine, "")
-	a.quiet = true
-	if err := c.adopt(a, "", ""); err != nil {
-		log.Println("back to what this node said:", err)
+	if a.seek {
+		c.marked = slices.DeleteFunc(c.marked, func(s ourSeek) bool { return s.at == a.at })
+		c.landing = c.landing && len(c.marked) > 0
 	}
 }
 
@@ -1486,155 +1524,114 @@ func (c *Client) entryName(i int) string {
 	return c.names[i]
 }
 
+// pauseReq stops or plays mpv where it is.
 func (c *Client) pauseReq(paused bool) error {
-	return c.do(setProperty, pause, paused)
+	return c.goTo(paused, nil, nil, c.paused)
 }
 
-// resume applies a peer's resume. One that reaches a node still waiting on its cache never
+// goTo has the script take mpv to a state in one message (watchparty.lua), and returns once mpv has
+// all of it (landed): stopped or playing, on the entry if one is given, on the second if one
+// is. still: mpv was stopped before. The person's key can only land before it, which it
+// overwrites, or after it, which is theirs (ORDER.md).
+func (c *Client) goTo(paused bool, second *float64, entry *int, still bool) error {
+	id, at, to := rand.Int63(), "-", "-"
+	if second != nil {
+		at = strconv.FormatFloat(*second, 'f', 6, 64)
+		c.marked = append(c.marked, ourSeek{id: id, at: *second, entry: c.heading()})
+		c.marked = c.marked[max(0, len(c.marked)-maxSeeks):]
+		c.landing = true
+	}
+	on := "-"
+	if entry != nil {
+		to = strconv.Itoa(*entry)
+	} else if len(c.names) > 0 {
+		// the entry it is for: if a key took mpv to another before this node heard it, the
+		// script only stops it there, and the ack's entry sends that move out, newer. A seek
+		// there would go out as this node's second on it, with the move from 0.
+		on = strconv.Itoa(c.heading())
+	}
+	c.flying = &flight{id: id, at: c.target(), seek: second != nil, still: still}
+	// one go at a time: a message, or a command a line starts (later), waits for its ack, so
+	// the ack is always weighed against the state it was sent from. The ack can come while mpv
+	// answers the command itself.
+	c.busy++
+	defer func() { c.busy-- }()
+	c.waiting[id] = true
+	defer delete(c.waiting, id)
+	err := c.do("script-message-to", c.script, scriptName+"-go", holds(paused), at, to, strconv.FormatInt(id, 10), c.read, on)
+	if err == nil {
+		// a move is acked once its file starts, which a slow stream can take far longer than
+		// 5s to do; the script acks it then, or as mpv gives up on the file (its
+		// --network-timeout, 60s), and mpv quitting ends the wait. moveLimit only backs that up,
+		// for a --network-timeout=0
+		limit := replyLimit
+		if entry != nil {
+			limit = moveLimit
+		}
+		_, err = c.await(id, limit)
+	}
+	if err != nil {
+		c.ground(id)
+	}
+	return err
+}
+
+// refuseResume is a peer's resume reaching a node still waiting on its cache, which never
 // reaches mpv: the node stops the party again, with where and why.
-func (c *Client) resume(hostname string) error {
-	if !c.paused {
+func (c *Client) refuseResume() error {
+	c.reason = "still buffering"
+	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
+	out := append([][]byte{again}, c.pauseExtras()...)
+	// this node's own pause, newer than the resume it refuses, a stop nobody chose
+	c.stamp, c.by, c.free = c.stamp+1, "", true
+	for i, b := range out {
+		out[i] = c.tag(b)
+	}
+	for _, b := range out {
+		select {
+		case c.outgoing <- b:
+		case <-c.ctx.Done():
+			return nil
+		}
+	}
+	return c.showText("paused for everyone: still buffering")
+}
+
+// wentTo is a seek mpv runs to pos, as the script says at mpv's seek event (watchparty.lua), which
+// is where it lands (ORDER.md). This node's own if it carries this node's id and is on its
+// second; mpv runs seeks in order, so those marked before it were folded into it. Any other
+// is the person's: their seek alone, or folded into this node's (a key's step added to it, or
+// their second replacing it). It goes out as mpv's report of where it is, as a seek always did
+// (positionChanged), unless it is where this node already is or heads.
+func (c *Client) wentTo(id int64, pos float64) []Event {
+	where := c.target()
+	if i := slices.IndexFunc(c.marked, func(s ourSeek) bool { return s.id == id }); i >= 0 {
+		at := c.marked[i].at
+		c.marked = c.marked[i+1:]
+		if math.Abs(pos-at) <= timePosTolerance {
+			c.pos = pos
+			c.landing = c.landing && len(c.marked) > 0
+			return nil
+		}
+	}
+	if c.flying != nil {
+		// from before a go on its way, which overwrites it, or the ack says where it went
 		return nil
 	}
-	if c.stalled {
-		c.reason = "still buffering"
-		again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
-		out := append([][]byte{again}, c.pauseExtras()...)
-		// this node's own pause, newer than the resume it refuses, a stop nobody chose
-		c.stamp, c.by, c.free = c.stamp+1, "", true
-		for i, b := range out {
-			out[i] = c.tag(b)
-		}
-		for _, b := range out {
-			select {
-			case c.outgoing <- b:
-			case <-c.ctx.Done():
-				return nil
-			}
-		}
-		return c.showText("paused for everyone: still buffering")
-	}
-	c.applied[pause] = "no"
-
-	from := c.stamp
-	err := c.pauseReq(false)
-	if err != nil {
-		// no echo is coming for a set mpv refused; if it only answered late, its report
-		// goes out as this node's own, which peers already in that state ignore
-		delete(c.applied, pause)
-		return err
-	}
-	if c.moved(from) {
-		c.playLate(from)
+	if c.paused && math.Abs(pos-where) <= timePosTolerance {
+		c.pos = pos
 		return nil
 	}
-	c.paused, c.landing = false, false
-
-	// none: mpv is brought back to this node's own state (converge)
-	if hostname != "" {
-		c.showText(fmt.Sprintf("resumed by %s", hostname))
-	}
-	return nil
+	c.seeking = !c.paused
+	return []Event{{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(pos, 'f', 6, 64), fromScript: true}}
 }
 
-func (c *Client) seekTo(data string) error {
-	pos, err := strconv.ParseFloat(data, 64)
-	if err != nil {
-		return err
-	}
-	now := c.mark(pos)
-	if !now {
-		return nil
-	}
-	if err := c.seekReq(pos); err != nil {
-		c.release(adoption{state: state{at: pos}, now: true})
-		return err
-	}
-	return nil
-}
-
-// mark makes a seek this node applies its own before mpv is told: where it is heading, and
-// not to be broadcast when mpv reports it. While a move loads it is held for the file it
-// opens (false: not for mpv yet).
-func (c *Client) mark(pos float64) bool {
-	c.seeks = append(c.seeks, pos)
-	c.seeks = c.seeks[max(0, len(c.seeks)-maxSeeks):]
-	if c.loading {
-		c.heldSeek = strconv.FormatFloat(pos, 'f', 6, 64)
-		return false
-	}
-	c.landing = true
-	return true
-}
-
-// seekReq sends mpv a seek this node applies. From now until mpv's playback-restart, a seek
-// event is this one (peerSeek): set when it is planned, it swallowed the person's own seek
-// made while mpv still answered an earlier step.
-func (c *Client) seekReq(pos float64) error {
-	c.peerSeek, c.sent, c.began = true, pos, false
-	return c.do(setProperty, timePos, strconv.FormatFloat(pos, 'f', 6, 64))
-}
-
-// stoppedOff seeks back to the second of a stop this node took while playing, if mpv
-// stopped elsewhere: every position mpv reported before its stop has been read, and the
-// last is where it stopped (MPV.md), but the stop was weighed on what had been read then.
-func (c *Client) stoppedOff() {
-	c.stopping = false
-	if math.Abs(c.pos-c.stopAt) <= timePosTolerance {
-		return
-	}
-	// run right after this line, before anything else comes in
-	at := strconv.FormatFloat(c.stopAt, 'f', 6, 64)
-	c.later = append(c.later, func() {
-		if err := c.seekTo(at); err != nil {
-			log.Println("seek back to the stop:", err)
-		}
-	})
-}
-
-// landed asks mpv where it is, as mpv began a seek after this node sent its own, played
-// back, and hasn't reported that second. mpv folds seeks: the person's own made right
-// behind it is all that lands, and on the second mpv was already on, nothing is reported
-// (MPV.md). mpv answers with a seek's second at once, so anywhere else is the person's
-// seek, and goes out. Playing (a resume made while the seek landed), it is a seek while
-// playing: it pauses the party, and the pause says where mpv stopped, as the second read
-// here is already behind.
-func (c *Client) landed() {
-	want, from := c.sent, c.stamp
-	data, err := c.ask("get_property_string", timePos)
-	if err != nil {
-		log.Println("where mpv landed:", err)
-		return
-	}
-	pos, err := strconv.ParseFloat(data, 64)
-	// meanwhile the person moved, or this node took a newer state, or sent another seek
-	if err != nil || c.moved(from) || c.sent != want || math.Abs(pos-want) <= timePosTolerance {
-		return
-	}
-	// no marker may swallow it: they are all for seeks that came before it
-	c.seeks, c.landing = nil, false
-	if !c.paused {
-		c.pauseParty("seek", true)
-		return
-	}
-	line, _ := json.Marshal(Event{EventType: propertyChange, Name: timePos, Data: data})
-	c.broadcast(c.handleEvent(Event{EventType: propertyChange, Name: timePos, Data: data}, line))
-}
-
-// target is where this node is, or where a seek it applied will land: a member that
-// just arrived is still on its way, and answering another joiner with the old spot
-// would drag the party back to it. A file still loading opens at its start, unless a seek
-// waits for it: the second it left, read as where it is, makes a seek there look done.
+// target is where this node is, or where a seek it sent will land: a member that just arrived
+// is still on its way, and answering another joiner with the old spot would drag the party
+// back to it.
 func (c *Client) target() float64 {
-	held := c.heldSeek
-	if held == "" && c.loading {
-		return 0
-	}
-	if held == "" && c.landing && len(c.seeks) > 0 {
-		return c.seeks[len(c.seeks)-1]
-	}
-	if pos, err := strconv.ParseFloat(held, 64); err == nil {
-		return pos
+	if c.landing && len(c.marked) > 0 {
+		return c.marked[len(c.marked)-1].at
 	}
 	return c.pos
 }
@@ -1684,11 +1681,11 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		conn:     conn,
 		outgoing: outgoing,
 		paused:   true,
-		applied:  map[string]string{},
 		seen:     map[string]bool{},
 		missed:   map[string]bool{},
 		names:    names,
 		current:  start,
+		toward:   -1,
 		resumeAt: at,
 		stamp:    unheard,
 		incoming: incoming,
@@ -1701,11 +1698,19 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 	client.snapshot()
 
 	// the loop's first step, once the reader runs: observing makes mpv say what it holds
-	events := []string{filename, pause, timePos, pausedForCache, duration}
-	if len(names) > 0 {
-		events = append(events, playlistPos)
-	}
+	// pause comes from the script (acked), with every change mark
+	events := []string{filename, timePos, pausedForCache, duration}
 	client.later = append(client.later, func() {
+		// mpv makes a script's client before it runs any command (ORDER.md), so one sent to
+		// the script's name fails only if there is none: mpv couldn't load it, as it has no Lua
+		if err := client.do("script-message-to", scriptName, "watchparty-check"); err != nil {
+			client.open(fmt.Errorf("%w (%v)", ErrNoScript, err))
+			return
+		}
+		if err := client.do("script-message", "watchparty-hello"); err != nil {
+			client.open(err)
+			return
+		}
 		for i, event := range events {
 			if err := client.do("observe_property_string", i+1, event); err != nil {
 				client.open(err)
@@ -1713,9 +1718,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 			}
 		}
 		client.observed = true
-		if !client.opening {
-			client.open(nil)
-		}
+		client.opens()
 	})
 	go func() {
 		err := client.watch()

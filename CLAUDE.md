@@ -8,7 +8,7 @@ rule or contract that spans packages.
 | What | Where |
 |---|---|
 | A package's rules and traps | `<pkg>/CLAUDE.md`, loaded when you work in that package |
-| How mpv really behaves; why each mpv flag is pinned | `mpv/MPV.md`. Read it before touching anything that reacts to mpv's events |
+| How mpv really behaves; why each mpv flag is pinned | `mpv/MPV.md`. Read it before touching anything that reacts to mpv's events; what mpv orders, and the script route, in `mpv/ORDER.md` (`mpv/probe/` re-runs it) |
 | The GUI's look | `gui/DESIGN.md`. Read it before any visual change |
 | Writing and running `e2e.py` cases | `E2E.md` |
 | Why something is the way it is | the commit that did it: `git log -S'<identifier>'`, `git log -L`, `git log -- <file>`. Bodies hold the incident, the rejected alternatives and what was tested |
@@ -41,7 +41,7 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 own pause, seek or move (also while playing) the party holds seeks or moves for it (`led`); any other
 stop (a join, a leave, a file's end, buffering) is led by its first seek. Another's seek or move stays on its screen until a resume, from the resumer's screen (another file: the party stops there).
 Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
-once the safer. `applied`/`seeks` drop mpv's echo of a peer's change, `seen` its first reply to an observe.
+once the safer. A peer's change reaches mpv as one go to the script, whose ack is weighed against it; `seen` drops mpv's first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
@@ -77,7 +77,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 ## Concurrency invariants (each caused a real bug; the package docs name where)
 
 - Never hold a lock across a blocking call that needs the same lock to finish.
-- Set `applied`/`seeks` before the IPC call, or the echo can beat the marker.
+- Hold the adopted state and a seek's mark before the IPC call, or the script's ack can beat them.
 - Exactly one relay write pump per party, spanning reconnects.
 - Synthetic notices use a non-blocking send (`Server.notify`).
 - `Shutdown` uses `context.WithoutCancel`; the party context is already cancelled.
@@ -108,7 +108,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   goes in the commit body, where the next session will look for it.
 - **Each fact lives in one place**, cross-package here, the rest in its package's doc.
 - **Update a doc only when a change makes something in it wrong.** Budget: this file
-  ≤150 lines, every other doc ≤200. Trim before adding.
+  ≤150 lines, `mpv/MPV.md` ≤300, every other doc ≤200. Trim before adding.
 
 ## How we work
 

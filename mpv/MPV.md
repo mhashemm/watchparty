@@ -6,13 +6,15 @@ upstream manual is <https://mpv.io/manual/master/> (sections "JSON IPC",
 
 **Where this comes from.** The manual and real mpv 0.37.0 (the dev machine's) driven
 over the socket on 2026-10-30, `--vo=null --ao=null --pause`, a 24fps H.264 file with a
-keyframe every 10s. `ipc.rst` is unchanged through v0.41.0 apart from `--input-ipc-client`.
-"Observed" means seen in those runs; re-probe after an mpv upgrade (recipe at the end).
+keyframe every 10s; later probes also on 0.40.0 (the e2e image), and mpv's own source (the
+v0.37.0 tag, "mpv's loop" below). `ipc.rst` is unchanged through v0.41.0 apart from
+`--input-ipc-client`. "Observed" means seen in those runs; re-probe after an mpv upgrade
+(recipe at the end). What mpv orders, and what scripts can do, is in `ORDER.md`.
 
 ## How `party.Run` starts mpv
 
 ```
-mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --quiet --input-ipc-server=<sock> <file>
+mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-resume-playback --quiet --input-ipc-server=<sock> --script=<tmp>/watchparty.lua <file>
 ```
 
 | Flag | Why |
@@ -24,6 +26,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |
 | `--quiet` | **Pinned.** No status line. Into a pipe mpv prints it as a new line several times a second (`AV: 00:00:04 / 00:00:30 …`), which buried every other line of the log. Errors still print. |
 | `--input-ipc-server=<sock>` | The JSON IPC endpoint. Unix: a socket path (`/tmp/mpv<random>`). Windows: a named pipe (`\\.\pipe\mpv<random>`); mpv adds the `\\.\pipe\` prefix itself if it's missing. |
+| `--script=<tmp>/watchparty.lua` | The node's way into mpv (`ORDER.md`), written from `Script` to a temp folder for the run. Loaded even under a user's `load-scripts=no`. |
 | `--no-shuffle --playlist-start=<n>` | **Pinned, playlists only.** An index only means the same file to everyone in our order, and it starts on the file that was picked. |
 | *(no `--start`)* | **Continuing a party seeks over IPC** once the first file is open. `--start` applies to every later entry, and a file-local `--{ --start=… file --}` (even undone with `file-local-options/start`) comes back on every return to it (probed on 0.37.0). |
 
@@ -43,6 +46,13 @@ config still applies, for example `keep-open` (see "Ending").
 - Each connection is its own client. **Observers belong to the connection:** close
   it and they are gone, and mpv keeps running.
 - It is local-only and can run arbitrary commands. Never expose it.
+- **At startup mpv can drop the socket while it keeps running, or hang** when its drivers fall
+  through: 0.40.0 in the e2e container, under load, 300 startups each (2026-11-04). With no
+  `--vo`/`--ao` flags, 11 dropped the socket; with `--ao=null`, 2; with `--vo=null`, 4 hung right
+  after `[ao/alsa] Playback open error` (threads in futex or poll, a fresh connection unanswered,
+  SIGTERM ignored); with both, none. mpv logs nothing about the drop, even at `ipc=trace`. Neither
+  showed in 1500 startups on 0.37.0 here, broken audio included. Hence `errHungUp`'s bounded wait;
+  the hang is ended only by the party's SIGKILL.
 
 ## Wire protocol
 
@@ -109,15 +119,15 @@ Seen during a normal run:
 - **An absolute seek** (`set_property time-pos`) **is exact**, even under mpv's default
   `--hr-seek` (we pin `yes`): `"77.000000"` echoed `77.000000`. Between frames it echoes the
   target, then the landed frame after `playback-restart` (`123.456` → `123.456000`, `123.458000`):
-  **an echo can come twice, a frame off**, so `seeks` matches within ±0.1s and keeps a match.
+  **an echo can come twice, a frame off**, so a landing is ours within ±0.1s (`wentTo`).
 - **Nothing of a seek comes after the next seek's report.** A seek between frames, then a
   second one sent at once, after the first's report or after its `playback-restart`: in 590
   rounds (0.37.0 and 0.40.0, 2026-11-15) no report of the first ever came after the second's.
-  So the person's own seek ends every marker before it (`positionChanged`).
+  So the person's own seek ends every mark before it (`positionChanged`).
 - **Two seeks at once can fold into the last, which reports no second if mpv was already
   there.** `set_property time-pos 40`, then at once `seek 3 absolute`, standing on 3: only `seek`
   and `playback-restart` in 59/60 rounds on 0.37.0, 6/60 on 0.40.0 (else 40, `seek`, 3;
-  2026-11-15). So a seek this node sent that played back unreported is asked about (`landed`).
+  2026-11-15). So a seek's landing is read from the script, which carries the id (`ORDER.md`).
 - **`time-pos` reports the target at once, before the data is there.** Probed
   paused on a local file: right after `set_property time-pos 50`, `get_property
   time-pos` read `50.0` while `seeking` still read `true` (it was `false` 2s later). On a slow
@@ -170,8 +180,15 @@ Seen during a normal run:
   mpv may report only the last (0→1→0: `0` or nothing), from 10ms both. It always loads a file.
 - **A seek set just before a switch never lands on the new file** (0, 2 and 20ms apart, both
   versions): it is reported before the switch, or not at all with no `seek` event either.
-  The new file opens at 0. **A seek set at `file-loaded` lands before the file's one
-  `playback-restart`:** `time-pos` 0, `seek`, the position, then `playback-restart`.
+  The new file opens at 0. **Until it starts, `time-pos` is the old file's on 0.42.0** (the seek's
+  second, with `playlist-pos` on the new: 3 of 840 rounds), unavailable on 0.37/0.40, so the
+  script says none while a set entry hasn't started. **A seek at a local file's `file-loaded` lands before its `playback-restart`;**
+  on a stream slow to start 5 of 12 were dropped (acked, no `seek`, at 0), so the script waits for it.
+- **mpv gives up on a hung stream by itself** (`--network-timeout`, default 60s, which
+  `stream_lavf.c` hands ffmpeg as `timeout`, for connecting and each read): a server that never
+  answers, or sends headers and nothing, ended in `end-file` `error` after 60s (81s once on
+  0.37.0), with no `file-loaded`. One that sends the file's start, then stalls, starts at once:
+  the stall is then `paused-for-cache`. Probed 2026-11-18, 2 rounds each on both versions.
 - A seek past the end while paused stops on the last frame. Resuming there moves on at
   once. After the last file: `end-file` `eof`, then exit 0.
 
@@ -181,6 +198,27 @@ Seen during a normal run:
   (`~/.local/state/mpv/watch_later` on Linux), and plain mpv reopens there.
   **`--no-resume-playback` skips that**, so every node opens at 0: a rejoiner opening at
   its saved spot had that swallowed by `seen` and then didn't follow the party.
+
+## mpv's loop (source, v0.37.0)
+
+One pass of `run_playloop` (`player/playloop.c`) ends with `execute_queued_seek`, which runs
+the seek slot (`mp_seek` sends `seek`), then `mp_wait_events`: it first hands out property
+reports (`mp_client_send_property_changes`, each only once that client's queue is empty), then
+runs what clients and scripts sent meanwhile (`mp_dispatch_queue_process`), then keys
+(`mp_process_input`). What follows from that order:
+
+- **A `seek` command only fills the slot** (`queue_seek`), and its reply is queued as it runs:
+  `seek` is neither `spawn_thread` nor `exec_async`, so even a script's async seek
+  (`command_native_async`) is answered at once (`async_cmd_complete`, `client.c`). **So the
+  script's ack of a go comes before its seek's `seek` event**, which waits for the next pass.
+- **A pause change leaves a queued seek alone** (`set_pause_state` never touches the slot): the
+  seek runs at the next pass, and its `seek` comes before the pause's change mark, which waits
+  for the next `mp_wait_events`. Except within 0.3s of the last seek's start: every `seek`
+  command carries `MPSEEK_FLAG_DELAY`, which holds the next one until a frame is shown, so the
+  mark can come first.
+- **`keypress` over IPC takes the person's own path** (`mp_process_input`, the same as a real
+  key), which is why the probes use it for the person. Racing our absolute seek, a person's
+  `RIGHT` from another connection folded into ours, ours + 5 with one `seek`, 8 of 8 (0.37.0).
 
 ## Re-probing
 
@@ -196,5 +234,4 @@ for c in [b"[\"observe_property_string\",2,\"time-pos\"]", b"[\"set_property\",\
 print(s.recv(65536).decode())'
 ```
 
-`--watch-later-dir` keeps probes out of the real resume store, `-g 240` makes keyframe
-snapping visible, and observers die with the connection.
+`--watch-later-dir` keeps the real resume store clean; `-g 240` shows keyframe snapping.
