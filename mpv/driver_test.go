@@ -222,6 +222,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			}
 		}
 	}
+	scanned(sc)
 }
 
 // goes hands the script a go, with the person's keys around it.

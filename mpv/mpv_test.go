@@ -442,6 +442,7 @@ func TestConcurrentRequestsGetTheirOwnResponse(t *testing.T) {
 							fmt.Fprint(theirs, `{"event":"seek"}`+"\n")
 						}
 					}
+					scanned(sc)
 					if reversed {
 						slices.Reverse(ids)
 					}
@@ -519,6 +520,14 @@ func scriptAcks(conn net.Conn, req Request) (said string, ok bool) {
 	return said, true
 }
 
+// scanned ends a fake's read loop: the pipe closed, as every test ends it, or a line the fake
+// couldn't read, which would leave the node waiting on a fake that stopped.
+func scanned(sc *bufio.Scanner) {
+	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		panic(fmt.Sprintf("the fake stopped reading: %v", err))
+	}
+}
+
 // fakeMpv answers every request on conn with success and then sends events; with
 // closeAfter > 0 it hangs up after that many requests instead.
 func fakeMpv(conn net.Conn, closeAfter int, events ...string) {
@@ -541,6 +550,7 @@ func fakeMpv(conn net.Conn, closeAfter int, events ...string) {
 			}
 		}
 	}
+	scanned(sc)
 }
 
 // New returns only once the file is loaded, which is the first time-pos that has
@@ -647,6 +657,7 @@ func TestWhatTheTransportHandedOverComesBeforeMpvsNextLine(t *testing.T) {
 				told <- strings.TrimSpace(fmt.Sprintln(req.Command...))
 				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 			}
+			scanned(sc)
 		}()
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -694,6 +705,7 @@ func TestNewFailsWhenAnObserveIsRefusedAfterTheFileLoaded(t *testing.T) {
 					fmt.Fprint(theirs, mpvAt(0))
 				}
 			}
+			scanned(sc)
 		}()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -721,6 +733,7 @@ func TestNewReturnsWhenMpvGoesAwayBeforeTheFileLoads(t *testing.T) {
 				}
 				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 			}
+			scanned(sc)
 			theirs.Close()
 		}()
 		c, cancel := context.WithCancel(context.Background())
@@ -760,6 +773,7 @@ func TestNewWaitsForTheScriptsName(t *testing.T) {
 					fmt.Fprint(theirs, mpvAt(0))
 				}
 			}
+			scanned(sc)
 		}()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -802,6 +816,7 @@ func TestNewSucceedsWhenMpvLoadsThenQuitsAtOnce(t *testing.T) {
 				}
 				fmt.Fprintf(theirs, `{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
 			}
+			scanned(sc)
 			fmt.Fprint(theirs, mpvAt(0))
 			theirs.Close()
 		}()
@@ -985,6 +1000,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 				sent <- strings.TrimSpace(fmt.Sprintln(req.Command...))
 			}
 		}
+		scanned(sc)
 	}()
 
 	incoming := make(chan IncomingMessage)

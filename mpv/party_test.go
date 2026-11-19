@@ -178,6 +178,7 @@ func (n *simNode) model(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+	scanned(sc)
 }
 
 // answers is mpv sending the answer it held, or the script running what it was told; then
