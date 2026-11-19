@@ -1,21 +1,67 @@
 """Probe what mpv's core guarantees over JSON IPC (mpv/ORDER.md holds the results).
-Usage: python3 -I probe.py <experiment> <rounds>, after ./videos.sh; ./run.sh runs them under load.
+Usage: python3 -I probe.py <experiment> <rounds>, after ./videos.sh; run.py runs them under load.
 Experiments: echo, r6c, fence, pause, check, repause, lua, luaseek."""
 import json, os, socket, subprocess, sys, tempfile, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MPV = os.environ.get("MPV", "mpv")
+WINDOWS = sys.platform == "win32"
+
+
+def pin(p, core):
+    """Keeps process p on one core, on Windows; Linux starts it under taskset, and macOS has no
+    way to pin (run.py loads every core there instead)."""
+    if WINDOWS:
+        import ctypes
+        if not ctypes.windll.kernel32.SetProcessAffinityMask(ctypes.c_void_p(int(p._handle)), ctypes.c_size_t(1 << int(core))):
+            raise OSError(ctypes.get_last_error(), "SetProcessAffinityMask")
+
+
+class Pipe:
+    """mpv's IPC on Windows, a named pipe, as the probes use a socket (recv, sendall).
+    Overlapped: on a plain handle a read blocked in one thread holds up every write from another."""
+
+    def __init__(self, name):
+        import _winapi
+        self.w = _winapi
+        for _ in range(100):
+            try:
+                self.h = _winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
+                                            _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+                return
+            except OSError as e:
+                # every instance taken: mpv makes the next one once it has a client on this one
+                if e.winerror != _winapi.ERROR_PIPE_BUSY:
+                    raise
+                time.sleep(0.01)
+        raise OSError(f"{name}: busy")
+
+    def recv(self, n):
+        try:
+            ov, _ = self.w.ReadFile(self.h, n, overlapped=True)
+            ov.GetOverlappedResult(True)
+        except (BrokenPipeError, OSError):
+            return b""
+        return ov.getbuffer()
+
+    def sendall(self, b):
+        ov, _ = self.w.WriteFile(self.h, b, overlapped=True)
+        ov.GetOverlappedResult(True)
 
 
 class Mpv:
     def __init__(self, video, extra=()):
         self.dir = tempfile.mkdtemp(dir=HERE)
-        self.sock = os.path.relpath(os.path.join(self.dir, "s"))
+        # Windows: a named pipe, mpv's IPC there
+        self.sock = rf"\\.\pipe\{os.path.basename(self.dir)}" if WINDOWS else os.path.relpath(os.path.join(self.dir, "s"))
+        load = os.environ.get("LOAD")
         self.p = subprocess.Popen(
-            [*(["taskset", "-c", os.environ["LOAD"]] if os.environ.get("LOAD") else []), MPV, "--no-config", "--vo=null", "--ao=null", "--pause", "--speed=1", "--hr-seek=yes",
+            [*(["taskset", "-c", load] if load and sys.platform == "linux" else []), MPV, "--no-config", "--vo=null", "--ao=null", "--pause", "--speed=1", "--hr-seek=yes",
              "--cache-pause=yes", "--no-resume-playback", "--quiet", "--keep-open=yes",
              f"--input-ipc-server={self.sock}", *extra, video],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if load:
+            pin(self.p, load)
         for _ in range(200):
             try:
                 self.s = self.conn()
@@ -27,6 +73,8 @@ class Mpv:
         self.rid = 0
 
     def conn(self):
+        if WINDOWS:
+            return Pipe(self.sock)
         s = socket.socket(socket.AF_UNIX)
         s.connect(self.sock)
         return s
