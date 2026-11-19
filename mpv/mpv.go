@@ -481,14 +481,14 @@ func (c *Client) scriptSaid(args []string) []Event {
 	known := err == nil
 	switch kind {
 	case "refused":
-		c.answered(id, outcome{Response: Response{Error: "mpv refused it"}})
+		c.answered(id, outcome{Error: "mpv refused it"})
 		if c.ground(id) {
 			c.paused = paused == "yes"
 			// a key that moved mpv while the go was on its way, as at an ack
 			return c.wentElsewhere(paused, at, known, entryOf(args))
 		}
 	case "ack":
-		c.answered(id, outcome{Response: Response{Error: "success"}})
+		c.answered(id, outcome{Error: "success"})
 		return c.landed(id, paused, at, known, len(args) > 6 && args[6] == "over", entryOf(args))
 	case "start":
 		return c.started(said, entryOf(args))
