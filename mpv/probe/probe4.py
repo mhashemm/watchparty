@@ -88,7 +88,10 @@ class Late(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-# A move to an entry that takes 8s to start: the ack comes once its file loads, on it.
+# A move to an entry that takes 8s to start: the ack comes once its file loads, on it. A round
+# with an error keeps mpv's log in logs/ (CI uploads it): a seek mpv answered and never ran
+# (dropped) came once in 176 rounds on 0.42, and never here. The log stays off elsewhere, as
+# writing it slows mpv inside the races the other experiments time.
 def slow(rounds):
     srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), lambda *a, **k: Late(*a, directory=HERE, **k))
     srv.daemon_threads = True
@@ -96,17 +99,20 @@ def slow(rounds):
     url = f"http://127.0.0.1:{srv.server_address[1]}/p1.mkv"
     errors = {"ack-late": [], "early": [], "away": [], "dropped": []}
     shapes = {}
+    os.makedirs(os.path.join(HERE, "logs"), exist_ok=True)
     for r in range(rounds):
-        m = M(url, [*WP, os.path.join(HERE, "p0.mkv")])  # M puts the file last
+        log = os.path.join(HERE, "logs", f"slow-{r}.txt")
+        m = M(url, [*WP, f"--log-file={log}", os.path.join(HERE, "p0.mkv")])  # M puts the file last
         ready(m, [])
         want, second = ["yes", "no"][r % 2], [None, 3.5][(r // 2) % 2]
+        failed = sum(map(len, errors.values()))
         tag = f"s{r}"
         i, t0 = m.mark(), time.time()
         to(m, "wp-go", want, second if second else "-", 1, tag)
         k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 20)
         took = time.time() - t0
         if k is None:
-            errors["ack-late"].append((want, second))
+            errors["ack-late"].append((want, second, log))
             m.stop()
             continue
         loaded = m.wait(lambda l: l.get("event") == "file-loaded", i, 0)
@@ -123,6 +129,10 @@ def slow(rounds):
             errors["dropped"].append((want, fpos, after))
         tally(shapes, (want, "seek" if second else "-", f"acked after {int(took)}s", str(after)[:80]))
         m.stop()
+        if sum(map(len, errors.values())) == failed:
+            os.remove(log)
+        else:
+            print(f"  mpv's log: {os.path.relpath(log, HERE)}", flush=True)
     srv.shutdown()
     report("slow", rounds, errors, shapes)
 

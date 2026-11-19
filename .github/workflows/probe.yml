@@ -29,8 +29,9 @@ jobs:
         shell: bash
     env:
       # go and over cycle 112 cases, starts 49, moves 35, away and buffering 28: each runs
-      # its cycle twice, buffering once; the full counts are in ORDER.md's re-run commands
-      EXPERIMENTS: go:224 over:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:4 broken:4 brokenlast:4
+      # its cycle twice, buffering once; the full counts are in ORDER.md's re-run commands.
+      # slow: 20, ~4 minutes, to catch its rare dropped seek with mpv's log
+      EXPERIMENTS: go:224 over:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:20 broken:4 brokenlast:4
     steps:
       - uses: actions/checkout@v7
 
@@ -60,3 +61,11 @@ jobs:
           else
             ./videos.sh && ${{ runner.os == 'Windows' && 'python' || 'python3' }} run.py 1 probe4.py $EXPERIMENTS
           fi
+
+      - name: Upload mpv's logs of failed rounds
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mpv-logs-${{ matrix.mpv }}
+          path: mpv/probe/logs/
+          if-no-files-found: ignore
