@@ -118,8 +118,7 @@ Seen along the way:
   one file, so their seconds never pass its end.
 - Moving away and straight back reloads the file at 0 (`end` `stop`, `loaded` with our id).
 - Playing into the last entry's end with `keep-open` pauses on its last frame; nothing loads.
-- Not probed: Windows, an mpv built without Lua (`--script` then fails to load it), a real
-  remote stream.
+- Not probed: an mpv built without Lua (`--script` then fails to load it), a real remote stream.
 
 ### One message per state (`probe/wp3.lua`, built as `watchparty.lua`'s go)
 
