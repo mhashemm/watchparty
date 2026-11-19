@@ -423,7 +423,7 @@ def away(rounds):
             time.sleep(off / 1000); m.send("keypress", ">", s=p)
         k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
         if k is None:
-            errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s["at"]) for _, s in snaps(m, i)],
+            errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s.get("at")) for _, s in snaps(m, i)],
                                        [l.get("event") for l in m.since(i) if l.get("event") not in (None, "client-message", "property-change")]))
             continue
         time.sleep(0.8)
