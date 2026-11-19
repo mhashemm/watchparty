@@ -1147,12 +1147,13 @@ func TestRemoteResumeWhileBufferingIsRefused(t *testing.T) {
 
 // mpv can refuse a set (the property is unavailable while it quits or between files).
 // The echo marker for a pause that never happened matched the user's own next pause,
-// which then never went out.
+// which then never went out. The script hears only its seek refused (a stop from playing
+// seeks its second), so mpv refuses both.
 func TestARefusedPauseLeavesNoMarker(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
 		n.plays()
-		n.mpvRefuses("set_property pause", "property unavailable")
+		n.mpvRefuses(setProperty, "property unavailable")
 		n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"yes","at":0}`))
 		if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
 			t.Fatalf("broadcast %q, want it to ask the party where it is", got)
@@ -2070,6 +2071,9 @@ func TestARefusedSeekLeavesNoMarker(t *testing.T) {
 			n.takes(7, true, 0)
 			n.mpvRefuses("set_property playlist-pos", "property unavailable")
 			n.peerSays("a", `{"stamp":8,"at":20,"entry":1,"event":"property-change","name":"time-pos","data":"20.000000"}`)
+			// the script never reads a set's result: the go waits for a file that never opens,
+			// until the node gives up on it
+			time.Sleep(moveLimit)
 			n.broadcasts()
 			userSeeks(n, 20)
 		})
@@ -2282,16 +2286,17 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Parallel()
 	// mpv moving on from the entry's end by itself: the script says that start is mpv's own
 	ended, started := `{"event":"end-file","reason":"eof"}`, strings.TrimSpace(started(2))
-	loaded := `{"event":"file-loaded"}`
+	// loaded: its first frame is ready too, which is when the script applies the rest of a go
+	loaded, restarted := `{"event":"file-loaded"}`, `{"event":"playback-restart"}`
 	reported := strings.TrimSpace(propertyChangeLine(playlistPos, "2", 0))
 	for _, tc := range []struct {
 		name                            string
 		before, pausing, after, seeking []string
 	}{
-		{"reported, then loaded", nil, []string{ended, started, reported, loaded}, nil, nil},
-		{"loaded, then reported", nil, []string{ended, started, loaded, reported}, nil, nil},
-		{"loaded before the move came", []string{ended, started, loaded}, []string{reported}, nil, nil},
-		{"loaded with a seek held, then reported", nil, nil, []string{ended, started, loaded}, []string{reported}},
+		{"reported, then loaded", nil, []string{ended, started, reported, loaded, restarted}, nil, nil},
+		{"loaded, then reported", nil, []string{ended, started, loaded, restarted, reported}, nil, nil},
+		{"loaded before the move came", []string{ended, started, loaded, restarted}, []string{reported}, nil, nil},
+		{"loaded with a seek held, then reported", nil, nil, []string{ended, started, loaded, restarted}, []string{reported}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nodeTest(t, func(t *testing.T) {
@@ -2335,7 +2340,7 @@ func TestAnEarlierPositionDoesNotUseUpTheMarker(t *testing.T) {
 		if got := n.mpvWasTold(); len(got) == 0 || got[0] != "set_property playlist-pos 1" {
 			t.Fatalf("told mpv %q", got)
 		}
-		n.mpvSays(propertyChangeLine(playlistPos, "0", 0), propertyChangeLine(playlistPos, "1", 0), started(1), `{"event":"file-loaded"}`)
+		n.mpvSays(propertyChangeLine(playlistPos, "0", 0), propertyChangeLine(playlistPos, "1", 0), started(1), `{"event":"file-loaded"}`, `{"event":"playback-restart"}`)
 		if got := said(n.broadcasts()); len(got) != 0 {
 			t.Fatalf("broadcast %q, want nothing before the resume", got)
 		}
@@ -2606,7 +2611,7 @@ func TestAnAnswerWhileAMoveLoadsIsAboutTheNewEntry(t *testing.T) {
 		n.broadcasts()
 		n.peerSays("a", move(3, 1))
 		n.peerSays("j", `{"name":"joined"}`)
-		n.mpvSays(started(1), `{"event":"file-loaded"}`)
+		n.mpvSays(started(1), `{"event":"file-loaded"}`, `{"event":"playback-restart"}`)
 		if got := n.broadcasts(); len(got) != 1 || got[0].Name != timePos || got[0].Data != "0.000000" || got[0].Entry == nil || *got[0].Entry != 1 || got[0].Stamp != 3 {
 			t.Fatalf("answered %+v, want entry 1 at its start, with the move's stamp", got)
 		}
@@ -2674,7 +2679,7 @@ func TestOwnChangeWhileAMoveLoadsIsAboutTheNewEntry(t *testing.T) {
 		n.mpvSays(mpvAt(30))
 		n.broadcasts()
 		n.peerSays("a", move(3, 1))
-		n.mpvSays(started(1), `{"event":"file-loaded"}`)
+		n.mpvSays(started(1), `{"event":"file-loaded"}`, `{"event":"playback-restart"}`)
 		n.mpvSays(propertyChangeLine(pause, "no", 0))
 		if got := n.broadcasts(); len(got) != 1 || got[0].Name != pause || got[0].Entry == nil || *got[0].Entry != 1 || got[0].At == nil || *got[0].At != 0 || got[0].Stamp != 4 {
 			t.Fatalf("resumed with %+v, want entry 1 from its start, newer than the move", got)
@@ -3026,31 +3031,12 @@ func TestAMemberThatMissedSomethingIsForgottenOnceItSendsNews(t *testing.T) {
 	}
 }
 
-// mpv refuses a set while it quits or between files. commit marked every step before mpv
-// was told, so whatever mpv never did is let go of: a pause marker would swallow the
-// user's next pause, loading would hold every later seek, a seek marker would say this
-// node is on a second it never reached. It holds the party's stamp where mpv isn't, so it
-// asks the party where it is; not once mpv is gone.
+// mpv refuses a step while it quits or between files, and the script hears its seek refused.
+// commit marked every step before mpv was told, so whatever mpv never did is let go of: a seek
+// marker would say this node is on a second it never reached. It holds the party's stamp
+// where mpv isn't, so it asks the party where it is; not once mpv is gone.
 func TestARefusedStepLeavesNoMarker(t *testing.T) {
 	t.Parallel()
-	t.Run("the pause before a move", func(t *testing.T) {
-		nodeTest(t, func(t *testing.T) {
-			n := ready(t, setup{names: threeVideos})
-			n.plays()
-			n.mpvSays(mpvAt(5))
-			n.mpvRefuses(setProperty, "property unavailable")
-			n.peerSays("a", `{"stamp":3,"paused":true,"at":30,"entry":2,"name":"time-pos","data":"30.000000"}`)
-			if got := said(n.broadcasts()); fmt.Sprint(got) != "[joined=]" {
-				t.Fatalf("broadcast %q, want it to ask the party where it is", got)
-			}
-			n.mpvTakesAgain()
-			// no pause marker: the person's own pause goes out; no move on its way: nor does a seek
-			n.mpvSays(propertyChangeLine(pause, "yes", 0), mpvAt(12))
-			if got := n.broadcasts(); len(got) != 2 || got[0].Name != pause || got[1].Name != timePos || got[1].Entry == nil || *got[1].Entry != 0 {
-				t.Fatalf("broadcast %+v, want the person's pause and seek, on entry 0", got)
-			}
-		})
-	})
 	t.Run("a seek", func(t *testing.T) {
 		nodeTest(t, func(t *testing.T) {
 			n := ready(t, setup{names: threeVideos})
