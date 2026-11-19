@@ -1,11 +1,11 @@
 name: probe
 # The sync script leans on how mpv orders its events and replies: measured, not promised
-# (mpv/ORDER.md). This re-measures it on the shipped script against Ubuntu's mpv and the
-# newest release (Arch's, as the installers fetch the latest). Weekly too: a new mpv lands
-# with no PR here.
+# (mpv/ORDER.md). This re-measures it on the shipped script against Ubuntu's mpv, the newest
+# release (Arch's), and the mpv macOS and Windows users get: Homebrew's, and mpv's own Windows
+# build, as setup.nsi fetches it. Windows talks over a named pipe. Weekly, as a new mpv lands with
+# no PR here, and by hand (Actions → probe → Run workflow) before merging a change to mpv/: it
+# takes 15 to 35 minutes, too slow for every PR.
 on:
-  pull_request:
-    paths: ["mpv/**", ".github/workflows/probe.yml"]
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
@@ -15,26 +15,48 @@ permissions:
 
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        mpv: [ubuntu, arch]
+        include:
+          - { mpv: ubuntu, os: ubuntu-latest }
+          - { mpv: arch, os: ubuntu-latest }
+          - { mpv: macos, os: macos-latest }
+          - { mpv: windows, os: windows-latest }
+    defaults:
+      run:
+        shell: bash
+    env:
+      # go and over cycle 112 cases, starts 49, moves 35, away and buffering 28: each runs
+      # its cycle twice, buffering once; the full counts are in ORDER.md's re-run commands
+      EXPERIMENTS: go:224 over:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:4 broken:4 brokenlast:4
     steps:
       - uses: actions/checkout@v7
 
-      - name: Probe the script
-        timeout-minutes: 40
+      - name: Install mpv and ffmpeg
+        if: matrix.mpv != 'arch'
         env:
-          # go and over cycle 112 cases, starts 49, moves 35, away and buffering 28: each runs
-          # its cycle twice, buffering once; the full counts are in ORDER.md's re-run commands
-          EXPERIMENTS: go:224 over:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:4 broken:4 brokenlast:4
+          GH_TOKEN: ${{ github.token }}
         run: |
-          probe='./videos.sh && ./run.sh 1 probe4.py $EXPERIMENTS'
+          case "${{ matrix.mpv }}" in
+          ubuntu) sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mpv ffmpeg ;;
+          macos) brew install mpv ffmpeg ;;
+          windows)
+            choco install -y --no-progress ffmpeg
+            tag=$(gh release view --repo mpv-player/mpv --json tagName -q .tagName)
+            gh release download "$tag" --repo mpv-player/mpv --pattern "mpv-$tag-x86_64-w64-mingw32-full.zip" --dir "$RUNNER_TEMP"
+            7z x -o"$RUNNER_TEMP/mpv" "$RUNNER_TEMP/mpv-$tag-x86_64-w64-mingw32-full.zip" >/dev/null
+            echo "MPV=$RUNNER_TEMP/mpv/mpv.exe" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Probe the script
+        timeout-minutes: 60
+        working-directory: mpv/probe
+        run: |
           if [ "${{ matrix.mpv }}" = arch ]; then
-            docker run --rm -e EXPERIMENTS -v "$PWD:/w" -w /w/mpv/probe archlinux:latest sh -c \
-              "pacman -Syu --noconfirm --needed mpv ffmpeg python util-linux >/dev/null && $probe"
+            docker run --rm -e EXPERIMENTS -v "$GITHUB_WORKSPACE:/w" -w /w/mpv/probe archlinux:latest sh -c \
+              'pacman -Syu --noconfirm --needed mpv ffmpeg python util-linux >/dev/null && ./videos.sh && python3 run.py 1 probe4.py $EXPERIMENTS'
           else
-            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mpv ffmpeg
-            cd mpv/probe && sh -c "$probe"
+            ./videos.sh && ${{ runner.os == 'Windows' && 'python' || 'python3' }} run.py 1 probe4.py $EXPERIMENTS
           fi

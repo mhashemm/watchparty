@@ -118,8 +118,7 @@ Seen along the way:
   one file, so their seconds never pass its end.
 - Moving away and straight back reloads the file at 0 (`end` `stop`, `loaded` with our id).
 - Playing into the last entry's end with `keep-open` pauses on its last frame; nothing loads.
-- Not probed: Windows, an mpv built without Lua (`--script` then fails to load it), a real
-  remote stream.
+- Not probed: an mpv built without Lua (`--script` then fails to load it), a real remote stream.
 
 ### One message per state (`probe/wp3.lua`, built as `watchparty.lua`'s go)
 
@@ -181,20 +180,21 @@ go's seek begun just before such a key is `refused` instead (once in `moves` on 
 
 ```sh
 cd mpv/probe && ./videos.sh                      # ffmpeg; the videos stay untracked
-./run.sh 0 probe.py echo:150 r6c:150 pause:140 check:420 repause:280
-./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40 ending:60
-LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280
-./run.sh 0 probe3.py go:420 moves:280 buffering:40
-./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20  # the shipped script
+python3 run.py 0 probe.py echo:150 r6c:150 pause:140 check:420 repause:280
+python3 run.py 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40 ending:60
+LANDING=began python3 run.py 0 probe2.py began:80 seekp:420 playing:280
+python3 run.py 0 probe3.py go:420 moves:280 buffering:40
+python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20  # the shipped script
 python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own timeout
-./run.sh 0 probe4.py over:840                       # the ack's over flag against lost keys
-./run.sh 0 probe4.py starts:490 autos:40            # whose file each start is
-./run.sh 0 probe4.py away:840                       # a go for the file a key is leaving
-python3 -I slowswarm.py 30                          # two CLI nodes over a capped torrent, ~15 minutes
+python3 run.py 0 probe4.py over:840                       # the ack's over flag against lost keys
+python3 run.py 0 probe4.py starts:490 autos:40            # whose file each start is
+python3 run.py 0 probe4.py away:840                       # a go for the file a key is leaving
+python3 -I slowswarm.py 30                                # two CLI nodes over a capped torrent, ~15 minutes
 ```
 
-`run.sh` pins mpv to the core given, beside three busy loops; its header says how to run the
-same on 0.40.0 in the e2e image, and the newest mpv is Arch's, as CI's `probe` job runs it
-(`.github/workflows/probe.yml`, on PRs touching `mpv/` and weekly, Ubuntu's mpv too). Each
-experiment prints its error counts, then every shape it saw; an error but `spare` exits 1.
-Never on the user's screen: mpv runs `--vo=null --ao=null`.
+`run.py` pins mpv to the core given, beside three busy loops (macOS: one on every core; Windows:
+none, its header says why), and says how to run the same on 0.40.0 in the e2e image. CI's
+`probe` job (`.github/workflows/probe.yml`, weekly and by hand) runs it on Ubuntu's mpv, Arch's
+(the newest release), and Homebrew's on macOS and mpv's own Windows build (over a named pipe),
+as the installers fetch them. Each experiment prints its error counts, then every shape it saw;
+an error but `spare` exits 1. Never on the user's screen: mpv runs `--vo=null --ao=null`.
