@@ -1843,6 +1843,24 @@ func TestSeekAfterFollowingAnEntryWaitsForTheFile(t *testing.T) {
 	})
 }
 
+// The seek a move waits for is made once the new file has started, at its first
+// playback-restart: one made at its file-loaded, a slow stream can drop (ORDER.md).
+func TestAMovesSeekWaitsForTheFileToStart(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.peerSays("a", stamped(5, tagged(1, seekEvent(40))))
+		n.mpvWasTold()
+		n.mpvSays(started(1), `{"event":"file-loaded"}`)
+		if got := seeksIn(n.mpvWasTold()); len(got) != 0 {
+			t.Fatalf("seeks %q at file-loaded, want none before the file starts", got)
+		}
+		n.mpvSays(`{"event":"playback-restart"}`)
+		if got := seeksIn(n.mpvWasTold()); fmt.Sprint(got) != "[set_property time-pos 40.000000]" {
+			t.Fatalf("seeks %q, want the seek once the file started", got)
+		}
+	})
+}
+
 // While a move loads, this node is at the new file's start, not on the second it left: a
 // seek there on the new file is still to make. Seed 436890989886 of
 // TestAJoinCrossingAMoveEndsOnThePartysEntry found it.
@@ -3406,6 +3424,25 @@ func TestAKeyAGoUndoesIsShown(t *testing.T) {
 		n.peerSays("a", `{"stamp":5,"at":30,"name":"time-pos","data":"30.000000","paused":true}`)
 		if got := n.broadcasts(); len(got) != 0 {
 			t.Fatalf("broadcast %q, want the undone resume kept from the party", said(got))
+		}
+		if got := n.mpvWasTold(); !slices.Contains(got, "show-text "+overruled+" 5000") {
+			t.Fatalf("told mpv %q, want the person told", got)
+		}
+	})
+}
+
+// The person presses space while a peer's resume from 30 is on its way, after the go's stop
+// and before mpv answers its seek: mpv plays before the go plays it, so the key is lost in the
+// go, and the ack says so (over, ORDER.md). The person is told why it did nothing.
+func TestASpaceBetweenAGosStopAndItsPlayIsShown(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvAnswersLate()
+		n.peerSays("a", `{"stamp":5,"at":30,"name":"pause","data":"no","paused":false}`)
+		n.mpvSays(propertyChangeLine(pause, "no", 0))
+		n.mpvObeys()
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %q, want nothing: mpv plays, as the party does", said(got))
 		}
 		if got := n.mpvWasTold(); !slices.Contains(got, "show-text "+overruled+" 5000") {
 			t.Fatalf("told mpv %q, want the person told", got)
