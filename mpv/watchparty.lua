@@ -15,7 +15,7 @@ local function say(kind, id, over, entry)
     local paused = mp.get_property("pause", "")
     entry = entry or mp.get_property("playlist-pos", "")
     local person = (id or "") == "" and (kind == "seek" or kind == "start")
-    said[n] = {pause = paused, entry = entry, person = person}
+    said[n] = {pause = paused, entry = entry, person = person, auto = kind == "start" and id == "auto"}
     said[n - 256] = nil
     local pos = mp.get_property("time-pos", "")
     -- set to another entry that hasn't started: time-pos is still the old file's (0.42 keeps
@@ -50,18 +50,22 @@ local moves, ended, first = {}, nil, true
 local over, seeking = {}, nil
 
 -- overrules: what mpv holds now, against what the node had read (seen), undone by a go that
--- ends on paused: the person's pause or seek the node never had
+-- ends on paused: the person's pause or seek the node never had. Another entry is the
+-- person's key, unless mpv moved there itself at a file's end: its start said auto, or it is
+-- still to come after that file's end.
 local function overrules(seen, paused, entry)
     seen = tonumber(seen)
     local last = seen and said[seen]
     if not last then return false end
     local now = mp.get_property("pause")
     if now ~= last.pause and now ~= paused then return true end
-    local on = mp.get_property("playlist-pos")
-    if entry ~= "-" and on ~= last.entry and on ~= entry and on ~= heading then return true end
+    local own = ended == "eof" or ended == "error"
     for k = seen + 1, n do
         if said[k] and said[k].person then return true end
+        if said[k] and said[k].auto then own = true end
     end
+    local on = mp.get_property("playlist-pos")
+    if entry ~= "-" and not own and on ~= last.entry and on ~= entry and on ~= heading then return true end
     return false
 end
 
@@ -120,9 +124,10 @@ mp.register_script_message("watchparty-go", function(paused, second, entry, id, 
         ack(id)
         return
     end
-    local on = heading or mp.get_property("playlist-pos")
-    if entry ~= "-" and (heading or on ~= entry) then
-        if on ~= entry then
+    -- toward: the entry mpv is on, or already heading to
+    local toward = heading or mp.get_property("playlist-pos")
+    if entry ~= "-" and (heading or toward ~= entry) then
+        if toward ~= entry then
             mp.set_property("pause", "yes")
             heading, loaded = entry, false
             table.insert(moves, {entry = entry, id = id})

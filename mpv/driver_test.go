@@ -50,12 +50,14 @@ type node struct {
 	quit   bool
 	// the person's keys around the next go: first, a space just before it, which the node
 	// hasn't read; seekTo and moveTo, a seek or a move just before it; moveDuring, a move once
-	// it has begun, before its seek; undo, a space right after it
+	// it has begun, before its seek; undo, a space right after it. ranOutTo: mpv's own move
+	// there at the file's end, just before it.
 	first      bool
 	seekTo     float64
 	moveTo     int
 	moveDuring int
 	undo       bool
+	ranOutTo   int
 	// what mpv holds: paused, pos, and entry, its playlist-pos; opened, the entry of the last
 	// start-file. seeking: a seek event the script hears once its second is known.
 	paused  bool
@@ -238,6 +240,11 @@ func (n *node) goes(args []string) {
 	if n.moveTo != 0 {
 		n.opensLocked(n.moveTo)
 		n.moveTo = 0
+	}
+	if n.ranOutTo != 0 {
+		n.script.event("end-file", map[string]lua.LValue{"reason": lua.LString("eof")})
+		n.opensLocked(n.ranOutTo)
+		n.ranOutTo = 0
 	}
 	n.script.message("watchparty-go", args...)
 	if n.undo {
@@ -573,6 +580,14 @@ func (n *node) personMovesFirst(entry int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.moveTo = entry
+}
+
+// mpvRunsOutFirst is mpv reaching the file's end and opening entry by itself just before the
+// next go, which the node hasn't read when it sends it.
+func (n *node) mpvRunsOutFirst(entry int) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.ranOutTo = entry
 }
 
 // personMovesDuring is the person's key opening entry once the next go has begun, so mpv
