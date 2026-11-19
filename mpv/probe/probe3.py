@@ -1,6 +1,6 @@
 """Probe the one-message design (wp3.lua): the node sends the whole state it adopts at once.
 Usage: python3 -I probe3.py <go|moves|buffering> <rounds>. Under load:
-./run.sh 0 probe3.py go:420 moves:280 buffering:40"""
+python3 run.py 0 probe3.py go:420 moves:280 buffering:40"""
 import os, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))

@@ -4,7 +4,7 @@ snapshot here is the script's message with the entry and cache mpv last reported
 reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
 entry and to one mpv can't open.
 Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang> <rounds>. Under load:
-./run.sh 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
+python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
 import http.server, os, socketserver, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -423,7 +423,7 @@ def away(rounds):
             time.sleep(off / 1000); m.send("keypress", ">", s=p)
         k = wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
         if k is None:
-            errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s["at"]) for _, s in snaps(m, i)],
+            errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s.get("at")) for _, s in snaps(m, i)],
                                        [l.get("event") for l in m.since(i) if l.get("event") not in (None, "client-message", "property-change")]))
             continue
         time.sleep(0.8)

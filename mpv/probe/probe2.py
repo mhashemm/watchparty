@@ -1,8 +1,8 @@
 """Probe the whole script design (wp2.lua) against everything the node does with mpv.
 Usage: python3 -I probe2.py <experiment> <rounds> (mpv/ORDER.md holds the results).
 Experiments: startup, pause, seekp, playing, moves, buffering, ending, mixed, began. Run under
-load as: ./run.sh 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40
-ending:60, and LANDING=began ./run.sh 0 probe2.py began:80 seekp:420 playing:280"""
+load as: python3 run.py 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40
+ending:60, and LANDING=began python3 run.py 0 probe2.py began:80 seekp:420 playing:280"""
 import http.server, os, socketserver, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
