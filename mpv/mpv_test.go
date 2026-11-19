@@ -3447,6 +3447,22 @@ func TestAKeyAGoUndoesIsShown(t *testing.T) {
 	})
 }
 
+// mpv reaches a file's end and opens the next by itself just before a peer's move reaches it,
+// before this node has read it: the go undoes mpv's move, which was nobody's key, so the
+// person isn't told to press anything again (macOS's probe found it).
+func TestMpvsOwnMoveAGoUndoesIsNoKey(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{names: threeVideos})
+		n.plays()
+		n.mpvRunsOutFirst(1)
+		n.peerSays("a", move(5, 2))
+		n.mpvObeys()
+		if got := n.mpvWasTold(); slices.Contains(got, "show-text "+overruled+" 5000") {
+			t.Fatalf("told mpv %q, want no key reported lost", got)
+		}
+	})
+}
+
 // The person presses space while a peer's resume from 30 is on its way, after the go's stop
 // and before mpv answers its seek: mpv plays before the go plays it, so the key is lost in the
 // go, and the ack says so (over, ORDER.md). The person is told why it did nothing.
