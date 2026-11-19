@@ -367,8 +367,8 @@ func fingerprint(path string) (string, error) {
 func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file string) (func(), error) {
 	cleanup := []func(){}
 	runCleanup := func() {
-		for i := len(cleanup) - 1; i >= 0; i-- {
-			cleanup[i]()
+		for _, f := range slices.Backward(cleanup) {
+			f()
 		}
 	}
 	address := ""
@@ -450,7 +450,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	go ser.BroadcastEvents(outgoing)
 
 	asked, answered := false, false
-	for _, addr := range strings.Split(cfg.Addrs, ",") {
+	for addr := range strings.SplitSeq(cfg.Addrs, ",") {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			continue

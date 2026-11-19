@@ -189,9 +189,7 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	if f.Continue != "" && f.Mode == "relay" {
 		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
 	}
-	g.wg.Add(1)
-	go func() {
-		defer g.wg.Done()
+	g.wg.Go(func() {
 		err := party.Run(c, cfg)
 		cancel()
 		g.mu.Lock()
@@ -201,7 +199,7 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			g.exitErr = err.Error()
 		}
-	}()
+	})
 }
 
 func (g *gui) Write(p []byte) (int, error) {
