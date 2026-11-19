@@ -124,9 +124,10 @@ mp.register_script_message("watchparty-go", function(paused, second, entry, id, 
         ack(id)
         return
     end
-    local on = heading or mp.get_property("playlist-pos")
-    if entry ~= "-" and (heading or on ~= entry) then
-        if on ~= entry then
+    -- toward: the entry mpv is on, or already heading to
+    local toward = heading or mp.get_property("playlist-pos")
+    if entry ~= "-" and (heading or toward ~= entry) then
+        if toward ~= entry then
             mp.set_property("pause", "yes")
             heading, loaded = entry, false
             table.insert(moves, {entry = entry, id = id})
