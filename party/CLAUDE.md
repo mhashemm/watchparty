@@ -31,7 +31,8 @@ takes a moment before mpv opens.
 ## Torrents (`torrent.go`)
 
 `-file` as a magnet link or a local `.torrent` starts a client, waits for the metadata
-with no time limit (Stop ends it, the GUI says it is looking), and serves each file it
+(the GUI says it is looking) up to `findFor`, 5 minutes: it is tiny, so none by then means
+nobody shares it, and the party ends with `errNoPeers`. Then it serves each file it
 plays to mpv over HTTP on loopback, at a path with a random token. **Nothing asks to download
 but mpv's own range requests**, so only the playing video buffers, what's already played
 stays on disk until the party ends, and a slow swarm reaches the party as

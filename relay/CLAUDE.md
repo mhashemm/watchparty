@@ -88,13 +88,14 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
      could be added first and say `joined` to an empty room, and nobody answered it.
    - The remembered row is read **before** `r.mu`, since keyless retries are free and
      shouldn't hold every room up on the disk; written after `admit` and on reaping.
-4. `websocket.Accept`. On failure, `leave(name, nil)` reaps a room `admit` just made,
+4. `websocket.Accept`. On failure, `leave(name, rm, nil)` reaps a room `admit` just made,
    announcing nothing.
 5. **`add`** registers the member only once `m.conn` is set, or `broadcast` could reach
    a nil conn.
-   - Room gone (its last member left between this `admit` and `add`): close with
-     `StatusTryAgainLater`, and the node redials through `admit`. Before, the joiner
-     stayed connected to nothing.
+   - **Not the room `admit` returned** (its last member left between this `admit` and `add`):
+     close with `StatusTryAgainLater`, and the node redials through `admit`. `add` and `leave`
+     compare the room, not the name: a slow handler joined a newer room of that name, never
+     checked against its secret, and its leave reaped it before the key holder was in.
    - **Same `session` already there:** swap it in and `CloseNow` the old one,
      with no "has joined", and the old one's `leave` sends no "has left". Keyed on
      session, not hostname: two machines with one hostname kicked each other out.

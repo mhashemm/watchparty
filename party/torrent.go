@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log"
 	"log/slog"
@@ -29,6 +30,14 @@ func isTorrent(target string) bool {
 	lower := strings.ToLower(target)
 	return strings.HasPrefix(lower, "magnet:") || (strings.HasSuffix(lower, ".torrent") && !strings.Contains(lower, "://"))
 }
+
+// findFor is how long a torrent may take to get its metadata: it is tiny, so any peer sends
+// it within seconds, and none in this long means nobody is sharing it.
+const findFor = 5 * time.Minute
+
+// errNoPeers is a torrent nobody sent the metadata of within findFor. The GUI shows it as
+// the diagnosis, so it says findFor in words.
+var errNoPeers = errors.New("no peer sent this torrent's details within 5 minutes, so nobody seems to be sharing it")
 
 func torrentConfig() *torrent.ClientConfig {
 	cfg := torrent.NewDefaultClientConfig()
@@ -91,10 +100,10 @@ func torrentCache(chosen string) (string, error) {
 	return chosen, os.MkdirAll(chosen, 0o700)
 }
 
-// openTorrent waits for the torrent's metadata, then serves what it plays to mpv on
-// loopback. Nothing downloads but what mpv reads, so only the video playing buffers. It
+// openTorrent waits up to find for the torrent's metadata, then serves what it plays to mpv
+// on loopback. Nothing downloads but what mpv reads, so only the video playing buffers. It
 // downloads into a new folder in cache, which close removes.
-func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig) (*torrentStream, error) {
+func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig, find time.Duration) (*torrentStream, error) {
 	dir, err := os.MkdirTemp(cache, "torrent-*")
 	if err != nil {
 		return nil, err
@@ -123,8 +132,13 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 		return nil, err
 	}
 	log.Println("torrent: finding peers")
+	timer := time.NewTimer(find)
+	defer timer.Stop()
 	select {
 	case <-t.GotInfo():
+	case <-timer.C:
+		closeAll()
+		return nil, errNoPeers
 	case <-c.Done():
 		closeAll()
 		return nil, c.Err()
