@@ -3,3 +3,4 @@ tmp*/
 other/
 input.conf
 out*.txt
+logs/
