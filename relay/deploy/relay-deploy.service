@@ -1,0 +1,16 @@
+[Unit]
+Description=webhook that deploys the watchparty relay
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=@USER@
+Group=@USER@
+WorkingDirectory=@REPO@
+# RELAY_DEPLOY_SECRET=..., readable by root only
+EnvironmentFile=/etc/relay-deploy.env
+ExecStart=/usr/bin/webhook -hooks @REPO@/relay/deploy/hooks.json -template -ip 127.0.0.1 -port 9001 -verbose
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -18,7 +18,7 @@ CREATE_KEY=k [ADDR=:8080] [DB=relay.db] [TRUST_PROXY=true] [ROOMS_PER_HOUR=10] [
 
 **Env vars only, no flags.** An empty value means the default; one that doesn't parse
 is fatal at startup. The `Dockerfile` lists every one in its `ENV`, so a new variable
-goes there too. Not in the release; deployed by hand or as the image.
+goes there too. Not in the release; deployed by the `deploy-relay` workflow (`deploy/README.md`).
 
 ## Why this shape
 
