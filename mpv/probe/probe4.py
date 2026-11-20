@@ -88,6 +88,20 @@ class Late(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+# A key within GAP_MS of the go can run between the script's read of mpv and its set, which no
+# script can order (ORDER.md): its miss counts as gap, which fails only above GAP_RATE of the
+# rounds (Windows, with free cores, saw 2.7%). A miss further off is a bug, and fails.
+GAP_MS, GAP_RATE = 5, 0.05
+HARMLESS.add("gap")
+
+
+def gaps(errors, rounds, off):
+    gap = [e for e in errors["missed"] if abs(off(e)) <= GAP_MS]
+    if len(gap) <= GAP_RATE * rounds:
+        errors["missed"] = [e for e in errors["missed"] if abs(off(e)) > GAP_MS]
+        errors["gap"] = gap
+
+
 # A move to an entry that takes 8s to start: the ack comes once its file loads, on it. A round
 # with an error keeps mpv's log in logs/ (CI uploads it): a seek mpv answered and never ran
 # (dropped) came once in 176 rounds on 0.42, and never here. The log stays off elsewhere, as
@@ -247,6 +261,7 @@ def over(rounds):
             errors.setdefault("spare", []).append((want, seek, kind, off, pre, "heard" if heard else "-", [(s["kind"], s["id"], s["pause"], s["pos"]) for n, s in msgs if n <= k][-4:]))
         tally(shapes, (kind, "lost" if lost else "heard" if heard else "-", "flagged" if flag else "not flagged"))
     m.stop()
+    gaps(errors, rounds, lambda e: e[3])
     report("over", rounds, errors, shapes)
 
 
@@ -357,6 +372,7 @@ def starts(rounds):
             errors["false"].append((scen, off, e0, target, st))
         tally(shapes, (scen, kinds, "over" if over else "", "heard" if heard else ""))
     m.stop()
+    gaps(errors, rounds, lambda e: e[1])
     report("starts", rounds, errors, shapes)
 
 

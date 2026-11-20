@@ -138,24 +138,24 @@ A key just before the handler is overwritten by it (mpv ends as sent): heard bef
 156 and 163 rounds, never heard in 59 and 59. Unheard, it left no effect anywhere: a seek key
 folds into ours, and space's change mark reads the state after the handler.
 
-**The shipped script, as the node sees it** (`probe4.py`: `watchparty.lua` unchanged, its
-messages read with the entry and cache from mpv's own reports): the same three, 0 errors on
-both versions, overwritten keys alike (never heard in 59 and 54 of 420). Then a move to a stream
-that starts 8s late and to a file mpv can't open: acked once the file started, or at the
-`end-file` of the broken one (mpv moved on to the next entry; as the last, under `--idle`, it
-stays on none, `-1`), 12, 20 and 20 rounds, 0 errors. A seek
-at that stream's `file-loaded` was dropped in 5 of 12 rounds (acked, no `seek`, at 0), so a move's
-go waits for its first `playback-restart`. A stream that hangs (`hang`: never answers, headers
-only, or its start then a stall) never held a go past 81s: mpv gives up on it (`MPV.md`).
+**The shipped script, as the node sees it** (`probe4.py`: `watchparty.lua` unchanged, its messages
+read with the entry and cache from mpv's own reports): the same three, 0 errors on both versions,
+overwritten keys alike (never heard in 59 and 54 of 420). Then a move to a stream that starts 8s
+late and to a file mpv can't open: acked once the file started, or at the `end-file` of the broken
+one (mpv moves on to the next entry; the last, under `--idle`, leaves it on none, `-1`), 12, 20 and
+20 rounds, 0 errors. A seek at that stream's `file-loaded` was dropped in 5 of 12 rounds (acked, no
+`seek`, at 0), so a move's go waits for its first `playback-restart`. A hung stream (`hang`: no
+answer, headers only, or a stall after its start) never held a go past 81s: mpv gives up (`MPV.md`).
 
-**A key the go undoes, flagged** (`over`, 840 rounds each, keys -20..+20ms around the go): the
-script numbers its messages, each go says the last one the node read, and the ack says `over` when
-mpv's pause had changed since then, a person's seek came since, a seek ran while the go's seek
-was queued, or mpv already played when the go was to play it. That last one matters: a go that
-seeks isn't one step (stop, seek, then play at the seek's answer), and a space in between was
-missed in 6 and 4 rounds before it was checked. Then on 0.37.0 and 0.40.0: every lost key
-flagged (50, 83), none flagged with no key (212 each). 2 and 8 flags on a key not lost were all
-a seek just before a go that doesn't seek, from stopped, which the ack already sends as theirs.
+**A key the go undoes, flagged** (`over`, 840 rounds each, keys -20..+20ms around the go): each go
+says the last script message the node read; its ack says `over` when mpv's pause changed since, a
+person's seek came since, a seek ran while the go's was queued, or mpv already played when the go
+was to play (a seeking go is stop, seek, then play at its answer, and a space can land in between).
+On 0.37.0 and 0.40.0: every lost key flagged (50, 83), none with no key (212 each); 2 and 8 flags on
+a key not lost, all a seek just before a go that doesn't seek (the ack sends it as theirs). **Not
+flaggable:** mpv runs keys between the script's calls and has no read-and-set, so a key between the
+go's read and its set is undone unseen (free cores: 6 of 224 on Windows, 1 here, all within 5ms).
+The party stays in step, only the notice is lost; `probe4.py` counts these `gap`, failing above 5%.
 
 **Whose file each start is** (`starts`, 490 rounds each; `autos`, 40): the script labels every
 `start-file` with the go's id when it opens the entry a go set (a go's set lost to a later one
