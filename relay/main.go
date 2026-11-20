@@ -192,7 +192,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 // it was remembered: a keyless member of it that can wait gets a channel that closes
 // when a key holder opens it, since only a key holder creates a room. Whoever gets one
 // must call stopWaiting.
-func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known, canWait bool) (bool, <-chan struct{}, int, error) {
+func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known) (bool, <-chan struct{}, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -214,7 +214,7 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 	if len(key) == 0 {
 		// no key for a room never opened is a member early for the party, not a
 		// guess, so it costs no quota and the node keeps retrying
-		if old == nil || !canWait {
+		if old == nil {
 			return false, nil, http.StatusUnauthorized, fmt.Errorf("room not open yet")
 		}
 		sum := sha256.Sum256(secret)
@@ -490,7 +490,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	created, open, code, err := r.admit(name, secret, key, file, ip, old, req.URL.Query().Get(wire.WaitParam) == "1")
+	created, open, code, err := r.admit(name, secret, key, file, ip, old)
 	if err != nil {
 		refuse(res, l, code, err.Error())
 		return

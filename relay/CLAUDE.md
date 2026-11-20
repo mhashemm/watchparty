@@ -46,13 +46,13 @@ goes there too. Not in the release; deployed by hand or as the image.
 
 ## Protocol
 
-- `GET /ws?room=&hostname=&id=&session=&file=&wait=1` upgrades. The secret is in the
+- `GET /ws?room=&hostname=&id=&session=&file=` upgrades. The secret is in the
   **`room-secret`** header, never the query (proxies log it); the create key, needed
   only to open a room, in **`create-key`**. `file` isn't secret.
 - The 101 carries **`room-opened: yes`** for the node that created the room with the key:
   its position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
-- **Held** (`hold`): a 101 with **`room-waiting: yes`**, only for a node that sent `wait=1`
-  (older ones get 401 and retry, as before). Nothing is relayed and no room exists. It is
+- **Held** (`hold`): a keyless member of a remembered room gets a 101 with
+  **`room-waiting: yes`**. Nothing is relayed and no room exists. It is
   pinged like a member, and closed with **4001** when a key holder creates the room (the
   node dials again at once and joins) or **4002** after `waitFor`, 30 minutes (it gives up).
   `opening` counts who waits per room and goes when the last stops. **`MAX_WAITING`** (20)

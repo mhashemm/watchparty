@@ -390,7 +390,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	if _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); err != nil {
+	if _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil); err != nil {
 		t.Fatal(err)
 	}
 	r.leave("room", nil, true)
@@ -409,11 +409,11 @@ func TestHeldMembersJoinAfterTheOpener(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 100, 100, 100)
 	old := &known{secret: sha256.Sum256([]byte("s")), file: "f"}
-	_, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old, true)
+	_, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old)
 	if err != nil || open == nil {
 		t.Fatalf("got %v, want to be held", err)
 	}
-	if created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); !created || err != nil {
+	if created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil); !created || err != nil {
 		t.Fatalf("the key holder got %v, want the room created", err)
 	}
 	select {
@@ -649,12 +649,12 @@ func TestHostnameIsSanitizedInNotices(t *testing.T) {
 	}
 }
 
-// dial connects like a node: wait=1, and the relay's answer. A held member's conn is
+// dial connects like a node, and returns the relay's answer. A held member's conn is
 // returned open; anyone else's is closed.
 func dial(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, *http.Response, int) {
 	t.Helper()
 	conn, res, err := websocket.Dial(context.Background(),
-		url+wire.Path+"?wait=1&room="+roomName+"&hostname="+hostname,
+		url+wire.Path+"?room="+roomName+"&hostname="+hostname,
 		&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {secret}, wire.CreateKeyHeader: createKey}})
 	if err != nil {
 		if res != nil {
@@ -746,9 +746,6 @@ func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 		if _, _, code := dial(t, url, "room", c.secret, "b&file="+c.file); code != c.want {
 			t.Fatalf("keyless with secret %q file %q got %d, want %d", c.secret, c.file, code, c.want)
 		}
-	}
-	if _, code := join(t, url, "room", "s", "old&file=f"); code != http.StatusUnauthorized {
-		t.Fatalf("a node that can't wait got %d, want 401 as before", code)
 	}
 	b, c := held(t, url, "room", "s", "b&file=f"), held(t, url, "room", "s", "c&file=f")
 	r.mu.Lock()
