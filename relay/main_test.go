@@ -353,14 +353,15 @@ func queued(m *member) []string {
 func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	r.rooms["room"] = &room{members: map[*member]struct{}{}, away: map[string]*member{}}
+	rm := &room{members: map[*member]struct{}{}, away: map[string]*member{}}
+	r.rooms["room"] = rm
 	mk := func(hostname, session string) *member {
 		return &member{hostname: hostname, session: session, ch: make(chan []byte, sendBuffer)}
 	}
 	b, a, c := mk("b", ""), mk("a", "x"), mk("c", "")
-	r.add("room", b)
-	r.add("room", a)
-	r.add("room", c)
+	r.add("room", rm, b)
+	r.add("room", rm, a)
+	r.add("room", rm, c)
 	if got := queued(b); !slices.Equal(got, []string{"a has joined", "c has joined"}) {
 		t.Fatalf("b got %v", got)
 	}
@@ -372,7 +373,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	}
 
 	fresh := mk("a", "x")
-	if stale, _ := r.add("room", fresh); stale != a {
+	if stale, _ := r.add("room", rm, fresh); stale != a {
 		t.Fatal("the reconnect did not replace the stale member")
 	}
 	if got := queued(fresh); !slices.Equal(got, []string{"connected to b", "connected to c"}) {
@@ -390,15 +391,45 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	if _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); err != nil {
+	rm, _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	r.leave("room", nil, true)
-	if _, ok := r.add("room", &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
+	r.leave("room", rm, nil, true)
+	if _, ok := r.add("room", rm, &member{hostname: "a", ch: make(chan []byte, 1)}); ok {
 		t.Fatal("add succeeded on a reaped room")
 	}
 	if _, exists := r.rooms["room"]; exists {
 		t.Fatal("add recreated the room behind admit's back")
+	}
+}
+
+// A joiner's handler can be slow between admit and add, long enough for its room to close
+// and a key holder to open a newer one of that name. The joiner was checked against the
+// old room's secret and file, so it must not join the newer one, nor reap it while its
+// key holder isn't in yet (the held members it frees would never be sent to join).
+func TestAJoinNeverLandsInANewerRoom(t *testing.T) {
+	t.Parallel()
+	r := newRelay(t, 10, 10, 10)
+	old, _, _, _, err := r.admit("room", []byte("old secret"), []byte("k"), "f", "ip", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.leave("room", old, nil, true)
+	newer, _, _, _, err := r.admit("room", []byte("new secret"), []byte("k"), "other", "ip", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late := &member{hostname: "b", session: "x", ch: make(chan []byte, sendBuffer)}
+	if _, ok := r.add("room", old, late); ok {
+		t.Fatal("a member admitted to the old room joined the newer one")
+	}
+	r.leave("room", old, late, false)
+	if r.rooms["room"] != newer {
+		t.Fatal("a late leave from the old room reaped the newer one before its key holder was in")
+	}
+	if _, ok := r.add("room", newer, &member{hostname: "a", session: "y", ch: make(chan []byte, sendBuffer)}); !ok {
+		t.Fatal("the key holder couldn't join the room it opened")
 	}
 }
 
@@ -409,11 +440,12 @@ func TestHeldMembersJoinAfterTheOpener(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 100, 100, 100)
 	old := &known{secret: sha256.Sum256([]byte("s")), file: "f"}
-	_, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old, true)
+	_, _, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old, true)
 	if err != nil || open == nil {
 		t.Fatalf("got %v, want to be held", err)
 	}
-	if created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false); !created || err != nil {
+	rm, created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false)
+	if !created || err != nil {
 		t.Fatalf("the key holder got %v, want the room created", err)
 	}
 	select {
@@ -421,7 +453,7 @@ func TestHeldMembersJoinAfterTheOpener(t *testing.T) {
 		t.Fatal("the held member was sent to join before the key holder was in the room")
 	default:
 	}
-	r.add("room", &member{hostname: "a", ch: make(chan []byte, sendBuffer)})
+	r.add("room", rm, &member{hostname: "a", ch: make(chan []byte, sendBuffer)})
 	r.opened("room")
 	select {
 	case <-open:

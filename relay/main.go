@@ -191,8 +191,11 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 // before the upgrade so a refused caller never becomes a websocket. old is the room as
 // it was remembered: a keyless member of it that can wait gets a channel that closes
 // when a key holder opens it, since only a key holder creates a room. Whoever gets one
-// must call stopWaiting.
-func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known, canWait bool) (bool, <-chan struct{}, int, error) {
+// must call stopWaiting. Anyone else gets the room it was checked against, which add and
+// leave act on only while it is still the room of that name: a handler slow to add could
+// otherwise join a newer room of that name, whose secret and file it was never checked
+// against.
+func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known, canWait bool) (*room, bool, <-chan struct{}, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -202,30 +205,30 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 			// a wrong secret is the only lock on the door, so grind attempts cost
 			// quota and eventually stop being answered at all
 			if !r.limiter.allow(ip, r.perHour) {
-				return false, nil, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
+				return nil, false, nil, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
 			}
-			return false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
+			return nil, false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if rm.file != file {
-			return false, nil, http.StatusConflict, fmt.Errorf("not the same file")
+			return nil, false, nil, http.StatusConflict, fmt.Errorf("not the same file")
 		}
-		return false, nil, 0, nil
+		return rm, false, nil, 0, nil
 	}
 	if len(key) == 0 {
 		// no key for a room never opened is a member early for the party, not a
 		// guess, so it costs no quota and the node keeps retrying
 		if old == nil || !canWait {
-			return false, nil, http.StatusUnauthorized, fmt.Errorf("room not open yet")
+			return nil, false, nil, http.StatusUnauthorized, fmt.Errorf("room not open yet")
 		}
 		sum := sha256.Sum256(secret)
 		if subtle.ConstantTimeCompare(old.secret[:], sum[:]) != 1 {
 			if !r.limiter.allow(ip, r.perHour) {
-				return false, nil, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
+				return nil, false, nil, http.StatusTooManyRequests, fmt.Errorf("too many failed attempts")
 			}
-			return false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
+			return nil, false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if old.file != file {
-			return false, nil, http.StatusConflict, fmt.Errorf("not the same file")
+			return nil, false, nil, http.StatusConflict, fmt.Errorf("not the same file")
 		}
 		o, ok := r.opening[name]
 		if !ok {
@@ -234,22 +237,23 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 		}
 		// anyone with the secret could otherwise hold MAX_CONNS connections for 30 minutes each
 		if o.waiting >= r.maxWaiting {
-			return false, nil, http.StatusServiceUnavailable, fmt.Errorf("too many waiting for this room")
+			return nil, false, nil, http.StatusServiceUnavailable, fmt.Errorf("too many waiting for this room")
 		}
 		o.waiting++
-		return false, o.open, 0, nil
+		return nil, false, o.open, 0, nil
 	}
 	if !r.limiter.allow(ip, r.perHour) {
-		return false, nil, http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
+		return nil, false, nil, http.StatusTooManyRequests, fmt.Errorf("room creation rate limit")
 	}
 	if subtle.ConstantTimeCompare(r.createKey, key) != 1 {
-		return false, nil, http.StatusForbidden, fmt.Errorf("bad create key")
+		return nil, false, nil, http.StatusForbidden, fmt.Errorf("bad create key")
 	}
 	if len(r.rooms) >= r.maxRooms {
-		return false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
+		return nil, false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
-	r.rooms[name] = &room{secret: secret, file: file, members: map[*member]struct{}{}, away: map[string]*member{}}
-	return true, nil, 0, nil
+	rm = &room{secret: secret, file: file, members: map[*member]struct{}{}, away: map[string]*member{}}
+	r.rooms[name] = rm
+	return rm, true, nil, 0, nil
 }
 
 // opened sends anyone held for the room to join, once its key holder is in it: sent
@@ -310,15 +314,14 @@ func (r *relay) hold(c context.Context, conn *websocket.Conn, open <-chan struct
 
 // add registers the member only once its conn is set, so broadcast can never
 // reach a member whose conn is still nil. It returns the stale member m replaced
-// if this is the same node reconnecting, and false if the room was reaped after
-// m's admit. The notices are queued under the same
+// if this is the same node reconnecting, and false if rm, the room m was admitted to,
+// was reaped after m's admit. The notices are queued under the same
 // lock, so "has joined" reaches exactly the members m found, and they are the
 // ones m is told it is connected to.
-func (r *relay) add(name string, m *member) (*member, bool) {
+func (r *relay) add(name string, rm *room, m *member) (*member, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	rm, ok := r.rooms[name]
-	if !ok {
+	if r.rooms[name] != rm {
 		return nil, false
 	}
 	var stale *member
@@ -353,15 +356,15 @@ func queue(m *member, b []byte) {
 	}
 }
 
-// leave removes m and reaps the room once it is empty. A nil m only reaps, and so
-// does an m that add already replaced: the room was never told it left. A member that
+// leave removes m from rm and reaps rm once it is empty, never a newer room of that name.
+// A nil m only reaps, and so does an m that add already replaced: the room was never told
+// it left. A member that
 // dropped without saying goodbye is away: the room is told it left only if it isn't back
 // within the grace, as most drops are back in a second and a leave stops the party. It
 // says what became of m: "left", "away" or "replaced by its reconnect".
-func (r *relay) leave(name string, m *member, bye bool) string {
+func (r *relay) leave(name string, rm *room, m *member, bye bool) string {
 	r.mu.Lock()
-	rm, ok := r.rooms[name]
-	if !ok {
+	if r.rooms[name] != rm {
 		r.mu.Unlock()
 		return replaced
 	}
@@ -490,7 +493,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	created, open, code, err := r.admit(name, secret, key, file, ip, old, req.URL.Query().Get(wire.WaitParam) == "1")
+	rm, created, open, code, err := r.admit(name, secret, key, file, ip, old, req.URL.Query().Get(wire.WaitParam) == "1")
 	if err != nil {
 		refuse(res, l, code, err.Error())
 		return
@@ -522,13 +525,13 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
-		r.leave(name, nil, true)
+		r.leave(name, rm, nil, true)
 		l.Info("upgrade failed", "err", err)
 		return
 	}
 	conn.SetReadLimit(readLimit)
 	m.conn = conn
-	stale, ok := r.add(name, m)
+	stale, ok := r.add(name, rm, m)
 	if !ok {
 		// the redial goes through admit again, which recreates the room or waits
 		l.Info("room closed before the join landed, sent back to redial")
@@ -551,7 +554,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		cancel()
 		conn.CloseNow()
 		// a node that ends its party says goodbye; a connection that just died doesn't
-		msg := r.leave(name, m, websocket.CloseStatus(readErr) == websocket.StatusNormalClosure)
+		msg := r.leave(name, rm, m, websocket.CloseStatus(readErr) == websocket.StatusNormalClosure)
 		members, rooms := r.counts(name)
 		l.Info(msg, "seconds", int(time.Since(start).Seconds()), "frames", frames, "reason", readErr, "members", members, "rooms", rooms)
 	}()
