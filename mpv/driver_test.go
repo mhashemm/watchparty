@@ -30,7 +30,12 @@ type node struct {
 	out chan []byte
 
 	writes chan string
-	mu     sync.Mutex
+	// batch is held while one mpvSays (or mpvObeys step) writes its lines, and while mpv takes
+	// each request: what the node asks in answer to those lines, mpv reads after all of
+	// them, as it had said them before reading it. Taken mid-batch, the node's pause let mpv
+	// report a playing frame after it had paused, which mpv doesn't do (MPV.md).
+	batch sync.Mutex
+	mu    sync.Mutex
 	// told: what it told mpv since the last mpvWasTold, the script's steps as the sets they
 	// are. sets: what mpv was set and hasn't reported yet (mpvObeys). refuse: commands mpv
 	// answers with an error.
@@ -153,6 +158,7 @@ func ready(t *testing.T, s setup) *node {
 func (n *node) mpv(conn net.Conn, observes int, s setup) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
+		n.batch.Lock()
 		req := Request{}
 		json.Unmarshal(sc.Bytes(), &req)
 		name := fmt.Sprint(req.Command[0])
@@ -179,17 +185,20 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			n.pending = nil
 			n.mu.Unlock()
 			if quit {
+				n.batch.Unlock()
 				conn.Close()
 				return
 			}
 			for _, line := range lines {
 				n.writes <- line
 			}
+			n.batch.Unlock()
 			continue
 		}
 		if n.quitOn != "" && strings.HasPrefix(said, n.quitOn) {
 			n.told = append(n.told, said)
 			n.mu.Unlock()
+			n.batch.Unlock()
 			conn.Close()
 			return
 		}
@@ -223,6 +232,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 				n.opens(s)
 			}
 		}
+		n.batch.Unlock()
 	}
 	scanned(sc)
 }
@@ -360,11 +370,11 @@ func (n *node) opens(s setup) {
 		n.writes <- line
 	}
 	if s.opening != nil {
-		n.write(s.opening...)
+		n.writeLines(s.opening...)
 		return
 	}
 	if s.names != nil {
-		n.write(started(s.start), `{"event":"file-loaded"}`, propertyChangeLine(playlistPos, strconv.Itoa(s.start), 0))
+		n.writeLines(started(s.start), `{"event":"file-loaded"}`, propertyChangeLine(playlistPos, strconv.Itoa(s.start), 0))
 	}
 	n.writes <- propertyChangeLine(filename, "video.mkv", 0)
 	n.writes <- propertyChangeLine(pausedForCache, "no", 0)
@@ -379,10 +389,17 @@ func (n *node) mpvSays(lines ...string) {
 	synctest.Wait()
 }
 
-// write is mpv saying each line, and the script hearing the same event: a pause line is the
-// person's key, which the node hears from the script alone; a time-pos while stopped with no
-// seek event is the person's seek, as tests say it.
+// write is mpv saying lines as one batch: the node's requests wait until all are out.
 func (n *node) write(lines ...string) {
+	n.batch.Lock()
+	defer n.batch.Unlock()
+	n.writeLines(lines...)
+}
+
+// writeLines is mpv saying each line, and the script hearing the same event: a pause line is the
+// person's key, which the node hears from the script alone; a time-pos while stopped with no
+// seek event is the person's seek, as tests say it. The caller holds batch.
+func (n *node) writeLines(lines ...string) {
 	for _, line := range lines {
 		if !strings.HasSuffix(line, "\n") {
 			line += "\n"
