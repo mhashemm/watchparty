@@ -17,8 +17,7 @@ a renamed or moved copy matches, a 20GB file is instant, a different encode, cut
 release doesn't. An edit that keeps the size and misses every sample slips through,
 accepted. A `-file` containing `://` is a URL, fingerprinted by its text, so nothing is
 fetched. A joiner that differs gets 409 from the peer it bootstraps off (`/hi`) or from
-the relay (against the room creator's) and its party ends. Older versions send no
-fingerprint and can't join.
+the relay (against the room creator's) and its party ends.
 
 **`Config.Playlist` loads the file's folder (`media`):** its videos, not its subfolders, in
 natural order (`v2` before `v10`), starting on the file. Its identity is the hash of its
