@@ -92,7 +92,7 @@ func defaultBrowser(getenv func(string) string, home string, data []string) stri
 		dirs = append(dirs, filepath.Join(d, "applications"))
 	}
 	var names []string
-	for _, desktop := range strings.Split(strings.ToLower(getenv("XDG_CURRENT_DESKTOP")), ":") {
+	for desktop := range strings.SplitSeq(strings.ToLower(getenv("XDG_CURRENT_DESKTOP")), ":") {
 		if desktop != "" {
 			names = append(names, desktop+"-mimeapps.list")
 		}
@@ -169,11 +169,11 @@ func openURL(url string) *exec.Cmd {
 
 func pickFile() (string, error) {
 	if runtime.GOOS == "darwin" {
-		types := `"public.movie"`
+		types := []string{`"public.movie"`}
 		for _, ext := range pickExts {
-			types += `, "` + ext[1:] + `"`
+			types = append(types, `"`+ext[1:]+`"`)
 		}
-		return dialog("osascript", "-e", "POSIX path of (choose file of type {"+types+"})")
+		return dialog("osascript", "-e", "POSIX path of (choose file of type {"+strings.Join(types, ", ")+"})")
 	}
 	return portalPick("Pick a video", map[string]dbus.Variant{"filters": dbus.MakeVariant([]portalFilter{videoFilter()})})
 }
