@@ -117,7 +117,7 @@ func openOrFail(t *testing.T, target string) *torrentStream {
 	t.Helper()
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	stream, err := openTorrent(c, target, t.TempDir(), testConfig(t))
+	stream, err := openTorrent(c, target, t.TempDir(), testConfig(t), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,36 +215,49 @@ func TestStreamNeedsItsToken(t *testing.T) {
 	}
 }
 
-// A dead magnet can wait forever. Stop has to end it, and nothing stays on disk.
-func TestStopWhileFindingPeersLeavesNothingBehind(t *testing.T) {
+// A dead magnet ends with Stop, or once nobody sent its metadata in time, and either way
+// nothing stays on disk.
+func TestADeadMagnetEndsAndLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
-	cfg, cache := testConfig(t), t.TempDir()
-	c, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := openTorrent(c, "magnet:?xt=urn:btih:"+strings.Repeat("ab", 20), cache, cfg)
-		done <- err
-	}()
-	dirs := filepath.Join(cache, "torrent-*")
-	for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		if found, _ := filepath.Glob(dirs); len(found) == 1 {
-			break
-		}
-		if time.Now().After(end) {
-			t.Fatal("no download folder appeared")
-		}
-	}
-	cancel()
-	select {
-	case err := <-done:
-		if err != context.Canceled {
-			t.Fatalf("got %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("kept waiting after Stop")
-	}
-	if found, _ := filepath.Glob(dirs); len(found) != 0 {
-		t.Fatalf("left %q behind", found)
+	for name, stop := range map[string]bool{"Stop": true, "the time limit": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg, cache := testConfig(t), t.TempDir()
+			c, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			find, want := time.Minute, context.Canceled
+			if !stop {
+				find, want = 100*time.Millisecond, errNoPeers
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := openTorrent(c, "magnet:?xt=urn:btih:"+strings.Repeat("ab", 20), cache, cfg, find)
+				done <- err
+			}()
+			dirs := filepath.Join(cache, "torrent-*")
+			if stop {
+				for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+					if found, _ := filepath.Glob(dirs); len(found) == 1 {
+						break
+					}
+					if time.Now().After(end) {
+						t.Fatal("no download folder appeared")
+					}
+				}
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if err != want {
+					t.Fatalf("got %v, want %v", err, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("kept waiting")
+			}
+			if found, _ := filepath.Glob(dirs); len(found) != 0 {
+				t.Fatalf("left %q behind", found)
+			}
+		})
 	}
 }
 
@@ -254,7 +267,7 @@ func TestClosingAStreamRemovesItsDownload(t *testing.T) {
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cache := t.TempDir()
-	stream, err := openTorrent(c, magnet, cache, testConfig(t))
+	stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +291,7 @@ func TestTheDownloadTakesNoNamesFromTheTorrent(t *testing.T) {
 	cache := t.TempDir()
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	stream, err := openTorrent(c, magnet, cache, testConfig(t))
+	stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +380,7 @@ func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
 	for range 5 {
 		cache := t.TempDir()
 		c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		stream, err := openTorrent(c, magnet, cache, testConfig(t))
+		stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute)
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -403,7 +416,7 @@ func TestDeeplyNestedMetadataDoesNotCrash(t *testing.T) {
 	}
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if stream, err := openTorrent(c, file, t.TempDir(), testConfig(t)); err == nil {
+	if stream, err := openTorrent(c, file, t.TempDir(), testConfig(t), time.Minute); err == nil {
 		stream.close()
 		t.Fatal("opened a crafted torrent")
 	}
