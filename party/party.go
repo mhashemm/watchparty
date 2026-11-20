@@ -90,7 +90,7 @@ func Run(parent context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		stream, err := openTorrent(c, target, cache, torrentConfig())
+		stream, err := openTorrent(c, target, cache, torrentConfig(), findFor)
 		if err != nil && parent.Err() != nil {
 			return nil
 		}
