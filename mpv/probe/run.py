@@ -10,7 +10,8 @@ python3 run.py 2 ... (the e2e image)."""
 import os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-exec(open(os.path.join(HERE, "probe.py")).read().partition("\nclass Pipe")[0])
+sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
+from probe import MPV, WINDOWS
 
 core, probe = sys.argv[1], sys.argv[2]
 mac = sys.platform == "darwin"
