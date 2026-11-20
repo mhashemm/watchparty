@@ -2308,9 +2308,9 @@ def caps_suite():
                 code = conn.getresponse().status
                 conn.close()
                 return code
-            code = ws_get("room=inj%0aFORGED1&hostname=h&file=f", {"create-key": "wrong"})
+            code = ws_get("room=inj%0aFORGED1&hostname=h&id=i&session=s&file=f", {"create-key": "wrong"})
             ok("a bad create key is refused", code == 403, f"HTTP {code}")
-            code = ws_get("room=inj%0aFORGED2&hostname=evil%0aFORGED3&session=s&file=f",
+            code = ws_get("room=inj%0aFORGED2&hostname=evil%0aFORGED3&id=i&session=s&file=f",
                           {"create-key": "k", "room-secret": "s", "Connection": "Upgrade", "Upgrade": "websocket",
                            "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="})
             ok("the key holder gets in", code == 101, f"HTTP {code}")
@@ -2371,13 +2371,13 @@ def caps_suite():
             launch(A, room="deafroom", tag="d1", relay=url)
             until(lambda: connected("d1"), BOOT)
             deaf = socket.create_connection(("127.0.0.1", port))
-            deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf&file={fingerprint('d1')} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf&id=deaf&session=deaf&file={fingerprint('d1')} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                           f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                           f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nroom-secret: {SECRET}\r\n\r\n").encode())
             ok("the deaf client got in", deaf.recv(4096).startswith(b"HTTP/1.1 101"))
             until(lambda: "deaf has joined" in osd("d1"))
             ok(f"{A} was told deaf joined", "deaf has joined" in osd("d1"))
-            until(lambda: "deaf has left" in osd("d1"), 50)  # one 30s ping interval plus the 10s pong wait
+            until(lambda: "deaf has left" in osd("d1"), 60)  # one 30s ping interval, the 10s pong wait and the 10s grace
             ok(f"{A} was told deaf left", "deaf has left" in osd("d1"), "the relay kept a member that never answers pings")
             deaf.close()
             stop("d1")

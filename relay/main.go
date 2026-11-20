@@ -323,12 +323,12 @@ func (r *relay) add(name string, m *member) (*member, bool) {
 	}
 	var stale *member
 	for other := range rm.members {
-		if m.session != "" && other.session == m.session {
+		if other.session == m.session {
 			delete(rm.members, other)
 			stale = other
 		}
 	}
-	if away, ok := rm.away[m.session]; ok && m.session != "" && stale == nil {
+	if away, ok := rm.away[m.session]; ok && stale == nil {
 		away.gone.Stop()
 		delete(rm.away, m.session)
 		stale = away
@@ -368,7 +368,7 @@ func (r *relay) leave(name string, m *member, bye bool) string {
 	_, present := rm.members[m]
 	delete(rm.members, m)
 	reaped := len(rm.members) == 0
-	away := present && !reaped && !bye && m.session != ""
+	away := present && !reaped && !bye
 	if reaped {
 		delete(r.rooms, name)
 		for _, a := range rm.away {
@@ -470,16 +470,17 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	}
 	defer r.conns.Add(-1)
 
-	name := req.URL.Query().Get(wire.RoomParam)
-	hostname := clean(req.URL.Query().Get(wire.HostnameParam))
+	q := req.URL.Query()
+	name, from, session := q.Get(wire.RoomParam), q.Get(wire.IDParam), q.Get(wire.SessionParam)
+	hostname := clean(q.Get(wire.HostnameParam))
 	ip := r.ip(req)
 	l := slog.With("conn", id, "ip", ip, "room", clean(name), "hostname", hostname)
-	if name == "" || hostname == "" {
-		refuse(res, l, http.StatusBadRequest, "room and hostname are required")
+	if name == "" || hostname == "" || from == "" || session == "" {
+		refuse(res, l, http.StatusBadRequest, "room, hostname, id and session are required")
 		return
 	}
 
-	secret, key, file := []byte(req.Header.Get(wire.SecretHeader)), []byte(req.Header.Get(wire.CreateKeyHeader)), req.URL.Query().Get(wire.FileParam)
+	secret, key, file := []byte(req.Header.Get(wire.SecretHeader)), []byte(req.Header.Get(wire.CreateKeyHeader)), q.Get(wire.FileParam)
 	var old *known
 	if len(key) == 0 {
 		// read before admit takes r.mu, so a free keyless retry never holds every room up on the disk
@@ -518,7 +519,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		res.Header().Set(wire.OpenedHeader, "yes")
 	}
 
-	m := &member{id: id, hostname: hostname, from: req.URL.Query().Get(wire.IDParam), session: req.URL.Query().Get(wire.SessionParam), ch: make(chan []byte, sendBuffer), log: l}
+	m := &member{id: id, hostname: hostname, from: from, session: session, ch: make(chan []byte, sendBuffer), log: l}
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty

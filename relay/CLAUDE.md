@@ -64,8 +64,7 @@ goes there too. Not in the release; deployed by hand or as the image.
 - **A member whose connection drops is away for `grace` (10s) before the room is told it
   left** (`leave`, `notBack`): a leave stops the party, and most drops are back in a second.
   Back with its session, it is swapped in like a reconnect, with no notice. A close with
-  `StatusNormalClosure` is a party's goodbye, and one without a session can't come back:
-  both are told at once. The room closing stops the timers.
+  `StatusNormalClosure` is a party's goodbye, told at once. The room closing stops the timers.
 
 ## Request handling, cheapest rejection first
 
@@ -73,7 +72,7 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
 
 1. **Connection cap** → 503. `conns.Add(1)` then check: a `Load()` check let a whole
    burst pass before any incremented.
-2. Missing `room` or `hostname` → 400.
+2. Missing `room`, `hostname`, `id` or `session` → 400.
 3. **`admit`**, under `r.mu`:
    - Existing room: constant-time secret compare. Wrong → 403, and it costs rate-limit
      quota (429 once over). Right secret but another `file` → 409, free, and only after
@@ -96,7 +95,7 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
    - Room gone (its last member left between this `admit` and `add`): close with
      `StatusTryAgainLater`, and the node redials through `admit`. Before, the joiner
      stayed connected to nothing.
-   - **Same non-empty `session` already there:** swap it in and `CloseNow` the old one,
+   - **Same `session` already there:** swap it in and `CloseNow` the old one,
      with no "has joined", and the old one's `leave` sends no "has left". Keyed on
      session, not hostname: two machines with one hostname kicked each other out.
    - **Notices are queued inside `add`, under the same `r.mu`**, non-blocking, so
