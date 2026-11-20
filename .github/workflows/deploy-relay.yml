@@ -1,0 +1,28 @@
+name: deploy-relay
+# Run by hand from the Actions tab, on master. Re-running an older run deploys its
+# commit again, which is how to roll back. The VPS side is relay/deploy/README.md.
+on: workflow_dispatch
+
+permissions: {}
+
+concurrency:
+  group: deploy-relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy
+        shell: bash
+        env:
+          URL: ${{ vars.RELAY_DEPLOY_URL }}
+          SECRET: ${{ secrets.RELAY_DEPLOY_SECRET }}
+          SHA: ${{ github.sha }}
+        run: |
+          body=$(printf '{"sha":"%s"}' "$SHA")
+          sig=$(printf %s "$body" | openssl dgst -sha256 -hmac "$SECRET" -r | cut -d' ' -f1)
+          curl -sS --fail-with-body --max-time 600 -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: sha256=$sig" -d "$body" "$URL" | tee out
+          [ "$(tail -n 1 out)" = "deployed $SHA" ]
