@@ -9,8 +9,8 @@ and Chrome or Chromium on PATH and a `-local`-reachable interface.
 The six phases run at once as copies of the script, `--port-base` + 20 apart, which works
 because relay-mode nodes open no ports; they share binaries the parent builds once
 (`--bin`). CI runs each phase as a job of its own. The slowest phase sets the total, so a new slow case
-goes in whichever phase is shortest. `caps` can't go below about 45s: `[R20]` waits out the
-real 30s ping and 10s pong timeout.
+goes in whichever phase is shortest. `caps` can't go below about 55s: `[R20]` waits out the
+real 30s ping, the 10s pong timeout and the 10s grace.
 
 - **`p2p`** nodes run with `-evictAfter 1ms` so strike cases don't wait; `[13b]` runs
   one on the 5-minute default.

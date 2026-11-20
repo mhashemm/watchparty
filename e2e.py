@@ -2308,9 +2308,9 @@ def caps_suite():
                 code = conn.getresponse().status
                 conn.close()
                 return code
-            code = ws_get("room=inj%0aFORGED1&hostname=h&file=f", {"create-key": "wrong"})
+            code = ws_get("room=inj%0aFORGED1&hostname=h&id=i&session=s&file=f", {"create-key": "wrong"})
             ok("a bad create key is refused", code == 403, f"HTTP {code}")
-            code = ws_get("room=inj%0aFORGED2&hostname=evil%0aFORGED3&session=s&file=f",
+            code = ws_get("room=inj%0aFORGED2&hostname=evil%0aFORGED3&id=i&session=s&file=f",
                           {"create-key": "k", "room-secret": "s", "Connection": "Upgrade", "Upgrade": "websocket",
                            "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="})
             ok("the key holder gets in", code == 101, f"HTTP {code}")
@@ -2371,13 +2371,13 @@ def caps_suite():
             launch(A, room="deafroom", tag="d1", relay=url)
             until(lambda: connected("d1"), BOOT)
             deaf = socket.create_connection(("127.0.0.1", port))
-            deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf&file={fingerprint('d1')} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            deaf.sendall((f"GET /ws?room=deafroom&hostname=deaf&id=deaf&session=deaf&file={fingerprint('d1')} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                           f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                           f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nroom-secret: {SECRET}\r\n\r\n").encode())
             ok("the deaf client got in", deaf.recv(4096).startswith(b"HTTP/1.1 101"))
             until(lambda: "deaf has joined" in osd("d1"))
             ok(f"{A} was told deaf joined", "deaf has joined" in osd("d1"))
-            until(lambda: "deaf has left" in osd("d1"), 50)  # one 30s ping interval plus the 10s pong wait
+            until(lambda: "deaf has left" in osd("d1"), 60)  # one 30s ping interval, the 10s pong wait and the 10s grace
             ok(f"{A} was told deaf left", "deaf has left" in osd("d1"), "the relay kept a member that never answers pings")
             deaf.close()
             stop("d1")
@@ -3025,23 +3025,6 @@ def gui_suite():
         ok(f"{G2} exited", until(lambda: nodes[G2]["proc"].poll() is not None, 10))
         ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
         ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
-
-    @case("[G27b] a history saved by an older version moves to its own file, and is kept")
-    def _():
-        G = gui("g27b")
-        kill_gui(G)
-        folder = f"{nodes[G]['home']}/config/watchparty"
-        if os.path.exists(f"{folder}/history.json"):
-            os.remove(f"{folder}/history.json")
-        saved = json.load(open(f"{folder}/gui.json"))
-        saved["history"] = [{"started": "2026-01-02T03:04:05Z", "ended": "2026-01-02T04:04:05Z", "file": "/m/from-before.mkv", "mode": "direct", "people": ["Sam"]}]
-        json.dump(saved, open(f"{folder}/gui.json", "w"))
-        G3 = launch_gui(G, tag=f"{G}3", portal=False)
-        on_end(lambda: kill_gui(G3))
-        tab(G3, "history")
-        ok("the page shows it", until(lambda: "from-before.mkv" in js(G3, '$("history-list").textContent')))
-        ok("it moved", "from-before.mkv" in open(f"{folder}/history.json").read() and "history" not in open(f"{folder}/gui.json").read())
-        ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
 
     @case("[G28] self-update: offered, refused on a bad digest, installed on a good one")
     def _():

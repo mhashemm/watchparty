@@ -79,7 +79,7 @@ type store struct {
 
 	mu       sync.Mutex
 	Settings settings  `json:"settings"`
-	History  []session `json:"history"`
+	History  []session `json:"-"`
 }
 
 func storePath() string {
@@ -92,37 +92,15 @@ func storePath() string {
 
 func openStore(path string) *store {
 	s := &store{path: path, historyPath: filepath.Join(filepath.Dir(path), "history.json"), Settings: settings{Local: true}}
-	b, err := os.ReadFile(path)
-	if err == nil {
+	if b, err := os.ReadFile(path); err == nil {
 		json.Unmarshal(b, s)
 	}
-	inSettings := len(s.History) > 0
-	b, err = os.ReadFile(s.historyPath)
-	if err == nil {
-		var history []session
-		if json.Unmarshal(b, &history) == nil {
-			s.History = mergeHistory(history, s.History)
-		}
+	var history []session
+	if b, err := os.ReadFile(s.historyPath); err == nil && json.Unmarshal(b, &history) == nil {
+		s.History = history
 	}
 	s.trimHistory()
-	if inSettings && s.saveHistory() == nil {
-		s.saveSettings()
-	}
 	return s
-}
-
-func mergeHistory(history, others []session) []session {
-	if len(others) == 0 {
-		// a continued party moved to the end; sorting by start would bury it again
-		return history
-	}
-	for _, o := range others {
-		if !slices.ContainsFunc(history, func(h session) bool { return h.Started.Equal(o.Started) && h.File == o.File }) {
-			history = append(history, o)
-		}
-	}
-	slices.SortStableFunc(history, func(a, b session) int { return a.Started.Compare(b.Started) })
-	return history
 }
 
 func (s *store) trimHistory() {

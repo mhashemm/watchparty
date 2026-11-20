@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"maps"
@@ -68,13 +69,23 @@ func members(r *relay, roomName string) []*member {
 
 // join returns once the relay has registered the member, not just once the
 // handshake is done: add runs after Accept, so a frame sent in between misses it.
+// asNode adds what every node sends, a random id and session, unless the test names them.
+func asNode(hostname string) string {
+	for _, p := range []string{wire.IDParam, wire.SessionParam} {
+		if !strings.Contains(hostname, "&"+p+"=") {
+			hostname += "&" + p + "=" + rand.Text()
+		}
+	}
+	return hostname
+}
+
 func join(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, int) {
 	t.Helper()
 	v, _ := relays.Load(url)
 	r := v.(*relay)
 	before := members(r, roomName)
 	conn, res, err := websocket.Dial(context.Background(),
-		url+wire.Path+"?room="+roomName+"&hostname="+hostname,
+		url+wire.Path+"?room="+roomName+"&hostname="+asNode(hostname),
 		&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {secret}, wire.CreateKeyHeader: createKey}})
 	if err != nil {
 		if res != nil {
@@ -358,7 +369,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 	mk := func(hostname, session string) *member {
 		return &member{hostname: hostname, session: session, ch: make(chan []byte, sendBuffer)}
 	}
-	b, a, c := mk("b", ""), mk("a", "x"), mk("c", "")
+	b, a, c := mk("b", "y"), mk("a", "x"), mk("c", "z")
 	r.add("room", rm, b)
 	r.add("room", rm, a)
 	r.add("room", rm, c)
@@ -391,7 +402,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	rm, _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false)
+	rm, _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,12 +422,12 @@ func TestAddToAReapedRoomFails(t *testing.T) {
 func TestAJoinNeverLandsInANewerRoom(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	old, _, _, _, err := r.admit("room", []byte("old secret"), []byte("k"), "f", "ip", nil, false)
+	old, _, _, _, err := r.admit("room", []byte("old secret"), []byte("k"), "f", "ip", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.leave("room", old, nil, true)
-	newer, _, _, _, err := r.admit("room", []byte("new secret"), []byte("k"), "other", "ip", nil, false)
+	newer, _, _, _, err := r.admit("room", []byte("new secret"), []byte("k"), "other", "ip", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,11 +451,11 @@ func TestHeldMembersJoinAfterTheOpener(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 100, 100, 100)
 	old := &known{secret: sha256.Sum256([]byte("s")), file: "f"}
-	_, _, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old, true)
+	_, _, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old)
 	if err != nil || open == nil {
 		t.Fatalf("got %v, want to be held", err)
 	}
-	rm, created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil, false)
+	rm, created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil)
 	if !created || err != nil {
 		t.Fatalf("the key holder got %v, want the room created", err)
 	}
@@ -681,12 +692,27 @@ func TestHostnameIsSanitizedInNotices(t *testing.T) {
 	}
 }
 
-// dial connects like a node: wait=1, and the relay's answer. A held member's conn is
+// Every node sends a room, a hostname, an id and a session. A request missing one is
+// refused before it costs anything: an empty session would make every such member one
+// another's reconnect.
+func TestRelayRefusesARequestMissingAField(t *testing.T) {
+	t.Parallel()
+	url := serve(t, newRelay(t, 10, 10, 10))
+	for _, q := range []string{"hostname=a&id=i&session=s", "room=r&id=i&session=s", "room=r&hostname=a&session=s", "room=r&hostname=a&id=i"} {
+		_, res, err := websocket.Dial(context.Background(), url+wire.Path+"?"+q,
+			&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {"s"}, wire.CreateKeyHeader: {"k"}}})
+		if err == nil || res == nil || res.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: got %v, want 400", q, err)
+		}
+	}
+}
+
+// dial connects like a node, and returns the relay's answer. A held member's conn is
 // returned open; anyone else's is closed.
 func dial(t *testing.T, url, roomName, secret, hostname string, createKey ...string) (*websocket.Conn, *http.Response, int) {
 	t.Helper()
 	conn, res, err := websocket.Dial(context.Background(),
-		url+wire.Path+"?wait=1&room="+roomName+"&hostname="+hostname,
+		url+wire.Path+"?room="+roomName+"&hostname="+asNode(hostname),
 		&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {secret}, wire.CreateKeyHeader: createKey}})
 	if err != nil {
 		if res != nil {
@@ -778,9 +804,6 @@ func TestKeylessMemberIsHeldUntilAKeyHolderOpens(t *testing.T) {
 		if _, _, code := dial(t, url, "room", c.secret, "b&file="+c.file); code != c.want {
 			t.Fatalf("keyless with secret %q file %q got %d, want %d", c.secret, c.file, code, c.want)
 		}
-	}
-	if _, code := join(t, url, "room", "s", "old&file=f"); code != http.StatusUnauthorized {
-		t.Fatalf("a node that can't wait got %d, want 401 as before", code)
 	}
 	b, c := held(t, url, "room", "s", "b&file=f"), held(t, url, "room", "s", "c&file=f")
 	r.mu.Lock()

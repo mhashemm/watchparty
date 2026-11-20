@@ -83,7 +83,7 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 }
 
 func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
-	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.IDParam: {r.id}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}, wire.WaitParam: {"1"}}
+	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.IDParam: {r.id}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}}
 	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+wire.Path+"?"+q.Encode(), &websocket.DialOptions{
 		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}},
 	})

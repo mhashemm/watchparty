@@ -131,45 +131,18 @@ func TestStoreKeepsHistoryOutOfTheSettingsFile(t *testing.T) {
 	}
 }
 
-func TestStoreMovesAnOldHistoryToItsOwnFile(t *testing.T) {
+func TestStoreOpensABrokenHistoryEmpty(t *testing.T) {
 	t.Parallel()
-	old := `{"settings":{"hostname":"Sam","local":true},"history":[{"started":"2026-01-02T00:00:00Z","file":"/m/old.mkv","mode":"direct","people":[]}]}`
-	for name, existing := range map[string]string{
-		"first start":                 "",
-		"a broken history file":       "not json",
-		"stopped halfway through it":  `[{"started":"2026-01-02T00:00:00Z","file":"/m/old.mkv","mode":"direct","people":[]},{"started":"2026-01-03T00:00:00Z","file":"/m/newer.mkv","mode":"direct","people":[]}]`,
-		"a party on an older version": `[{"started":"2026-01-01T00:00:00Z","file":"/m/first.mkv","mode":"direct","people":[]}]`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			path := filepath.Join(dir, "gui.json")
-			if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			want := 1
-			if existing != "" {
-				if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(existing), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if existing != "not json" {
-					want = 2
-				}
-			}
-			for range 2 {
-				s := openStore(path)
-				if s.Settings.Hostname != "Sam" || len(s.History) != want || !slices.ContainsFunc(s.History, func(h session) bool { return h.File == "/m/old.mkv" }) || !slices.IsSortedFunc(s.History, func(a, b session) int { return a.Started.Compare(b.Started) }) {
-					t.Fatalf("opened %+v", s)
-				}
-			}
-			b, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(b), "history") {
-				t.Fatalf("gui.json still holds it: %s", b)
-			}
-		})
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gui.json")
+	if err := os.WriteFile(path, []byte(`{"settings":{"hostname":"Sam"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(`[{"file":"/m/a.mkv"},{"file":3}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s := openStore(path); s.Settings.Hostname != "Sam" || len(s.History) != 0 {
+		t.Fatalf("opened %+v", s)
 	}
 }
 

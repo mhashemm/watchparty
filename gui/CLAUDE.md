@@ -73,8 +73,6 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 - **Two files in `os.UserConfigDir()/watchparty/`,** `gui.json` and `history.json`, written
   atomically, 0600 in a 0700 directory: they hold the create key and room secrets. Saving needs
   `store.mu`; lock order is always `g.mu` → `store.mu`.
-- **Versions before `history.json` kept the history in `gui.json`.** `openStore` moves it, writing
-  the new file first, so stopping in between loses nothing; `history.json` wins if both exist.
 - **Not `localStorage`:** the random port makes the page a new origin every launch; it loads everything from `GET /state`.
 - **Settings:** name, and `local`/`port` from the last peer-to-peer party, are remembered automatically,
   the rest by the Settings page's button. The first relay used becomes the default if none is set.
@@ -83,7 +81,7 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 - **Continue** posts the form plus `continue`, the party's `started`. Same room and secret, so
   the same party: `begin` moves its entry to the end, open again, and `Run` starts at `stopped`,
   which the node chose (with keep-open=always, the file after one it finished). So the slice
-  order is the truth; `mergeHistory` sorts only when it merges. Hidden (`continuable`) for
+  order is the truth: never sort it. Hidden (`continuable`) for
   peer-to-peer (a guest's saved address can change; Watch again only fills the form), a
   `finished` party, or 30 days after it ended, when the relay has forgotten the room.
 

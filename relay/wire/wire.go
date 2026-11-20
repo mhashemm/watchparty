@@ -18,9 +18,6 @@ const (
 	IDParam       = "id"
 	SessionParam  = "session"
 	FileParam     = "file"
-	// WaitParam set to "1" says the node can be held until a key holder opens the room;
-	// a node that doesn't send it gets 401 and retries, as it always did.
-	WaitParam = "wait"
 
 	SecretHeader    = "room-secret"
 	CreateKeyHeader = "create-key"

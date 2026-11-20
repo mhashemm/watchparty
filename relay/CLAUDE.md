@@ -46,13 +46,13 @@ goes there too. Not in the release; deployed by hand or as the image.
 
 ## Protocol
 
-- `GET /ws?room=&hostname=&id=&session=&file=&wait=1` upgrades. The secret is in the
+- `GET /ws?room=&hostname=&id=&session=&file=` upgrades. The secret is in the
   **`room-secret`** header, never the query (proxies log it); the create key, needed
   only to open a room, in **`create-key`**. `file` isn't secret.
 - The 101 carries **`room-opened: yes`** for the node that created the room with the key:
   its position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
-- **Held** (`hold`): a 101 with **`room-waiting: yes`**, only for a node that sent `wait=1`
-  (older ones get 401 and retry, as before). Nothing is relayed and no room exists. It is
+- **Held** (`hold`): a keyless member of a remembered room gets a 101 with
+  **`room-waiting: yes`**. Nothing is relayed and no room exists. It is
   pinged like a member, and closed with **4001** when a key holder creates the room (the
   node dials again at once and joins) or **4002** after `waitFor`, 30 minutes (it gives up).
   `opening` counts who waits per room and goes when the last stops. **`MAX_WAITING`** (20)
@@ -64,8 +64,7 @@ goes there too. Not in the release; deployed by hand or as the image.
 - **A member whose connection drops is away for `grace` (10s) before the room is told it
   left** (`leave`, `notBack`): a leave stops the party, and most drops are back in a second.
   Back with its session, it is swapped in like a reconnect, with no notice. A close with
-  `StatusNormalClosure` is a party's goodbye, and one without a session can't come back:
-  both are told at once. The room closing stops the timers.
+  `StatusNormalClosure` is a party's goodbye, told at once. The room closing stops the timers.
 
 ## Request handling, cheapest rejection first
 
@@ -73,7 +72,7 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
 
 1. **Connection cap** → 503. `conns.Add(1)` then check: a `Load()` check let a whole
    burst pass before any incremented.
-2. Missing `room` or `hostname` → 400.
+2. Missing `room`, `hostname`, `id` or `session` → 400.
 3. **`admit`**, under `r.mu`:
    - Existing room: constant-time secret compare. Wrong → 403, and it costs rate-limit
      quota (429 once over). Right secret but another `file` → 409, free, and only after
@@ -97,7 +96,7 @@ So a flood is refused before anything is allocated, and nobody who fails is upgr
      close with `StatusTryAgainLater`, and the node redials through `admit`. `add` and `leave`
      compare the room, not the name: a slow handler joined a newer room of that name, never
      checked against its secret, and its leave reaped it before the key holder was in.
-   - **Same non-empty `session` already there:** swap it in and `CloseNow` the old one,
+   - **Same `session` already there:** swap it in and `CloseNow` the old one,
      with no "has joined", and the old one's `leave` sends no "has left". Keyed on
      session, not hostname: two machines with one hostname kicked each other out.
    - **Notices are queued inside `add`, under the same `r.mu`**, non-blocking, so
