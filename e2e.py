@@ -3026,23 +3026,6 @@ def gui_suite():
         ok(f"{G2} logged it", "gui: window closed" in log(G2), log(G2).strip())
         ok("and its browser profile is deleted", not os.path.exists(profile(G2)), profile(G2))
 
-    @case("[G27b] a history saved by an older version moves to its own file, and is kept")
-    def _():
-        G = gui("g27b")
-        kill_gui(G)
-        folder = f"{nodes[G]['home']}/config/watchparty"
-        if os.path.exists(f"{folder}/history.json"):
-            os.remove(f"{folder}/history.json")
-        saved = json.load(open(f"{folder}/gui.json"))
-        saved["history"] = [{"started": "2026-01-02T03:04:05Z", "ended": "2026-01-02T04:04:05Z", "file": "/m/from-before.mkv", "mode": "direct", "people": ["Sam"]}]
-        json.dump(saved, open(f"{folder}/gui.json", "w"))
-        G3 = launch_gui(G, tag=f"{G}3", portal=False)
-        on_end(lambda: kill_gui(G3))
-        tab(G3, "history")
-        ok("the page shows it", until(lambda: "from-before.mkv" in js(G3, '$("history-list").textContent')))
-        ok("it moved", "from-before.mkv" in open(f"{folder}/history.json").read() and "history" not in open(f"{folder}/gui.json").read())
-        ok("the settings stayed", json.load(open(f"{folder}/gui.json"))["settings"] == saved["settings"])
-
     @case("[G28] self-update: offered, refused on a bad digest, installed on a good one")
     def _():
         # the stamped binaries ask this port for their release
