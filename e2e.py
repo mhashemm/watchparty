@@ -87,7 +87,7 @@ def run_stub(addr, peer, register):
             self.send_response(204)
             self.end_headers()
 
-        def log_message(self, *a):
+        def log_message(self, format, *args):
             pass
 
     srv = http.server.ThreadingHTTPServer(("0.0.0.0", port), H)
@@ -139,8 +139,8 @@ def build(dest, gui):
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
 if args.mode == "all":
     flags = ["--nodes", str(args.nodes)] + (["--file", args.file] if args.file else []) + (["--audio"] if args.audio else []) + (["--jitter", args.jitter] if args.jitter else [])
-    if not args.bin:
-        bins = tempfile.mkdtemp(prefix="watchparty-e2e-bin-")
+    bins = None if args.bin else tempfile.mkdtemp(prefix="watchparty-e2e-bin-")
+    if bins:
         print("building every phase's binaries once")
         build(bins, True)
         flags += ["--bin", bins]
@@ -154,7 +154,7 @@ if args.mode == "all":
         took += [f"{m:6} {line}" for line in out.splitlines() if line.startswith(("took:", "slowest:"))]
     print("\n" + "\n".join(took))
     bad = [m for m, p in procs if p.returncode]
-    if not args.bin:
+    if bins:
         shutil.rmtree(bins)
     print("\n" + ("ALL PASS" if not bad else "FAILED: " + ", ".join(bad)))
     sys.exit(1 if bad else 0)
@@ -194,7 +194,7 @@ relays = []
 stubs = []
 
 
-def ok(name, cond, detail=""):
+def ok(name, cond, detail: object = ""):
     if not cond:
         now = getattr(running, "id", None)
         fails.append(f"{now} {name}" if now else name)
@@ -238,6 +238,15 @@ def get(n, prop):
     return r.get("data") if r else None
 
 
+def num(n, prop):
+    """A number mpv must hold: none ends the case, as must() does."""
+    v = get(n, prop)
+    if v is None:
+        ok(f"{n} holds {prop}", False)
+        raise Stop(f"{n} holds {prop}")
+    return float(v)
+
+
 def setp(n, prop, val):
     ipc(nodes[n]["sock"], "set_property", prop, val)
 
@@ -246,7 +255,7 @@ class Stop(Exception):
     """A setup step failed: every case after it would fail for the same reason."""
 
 
-def must(name, cond, detail=""):
+def must(name, cond, detail: object = ""):
     """ok(), but a failure ends the case here instead of cascading into its later checks."""
     ok(name, cond, detail)
     if not cond:
@@ -721,6 +730,7 @@ def stub(peer, of, addr, register=True, events=""):
     stubs.append(p)
     # blocks until the stub is listening and registered; a stale stub left on the
     # port would answer for it and the strike loops in [13] would never end
+    assert p.stdout  # stdout=PIPE
     if p.stdout.readline() != "ready\n":
         sys.exit(f"the stub peer could not start on {addr}; is the port taken?")
     return p
@@ -752,7 +762,7 @@ def children(pid):
     return out
 
 
-def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
+def launch_gui(name, tag=None, exe=None, browser: str | None = "headless", portal=True):
     """A real GUI in its own HOME, XDG folders and TMPDIR, with a PATH of only mpv and
     an xdg-open that fails. browser="headless" gives it one browser, a desktop entry
     for a wrapper that runs headless Chromium, so the GUI's own launch path opens the
@@ -763,7 +773,7 @@ def launch_gui(name, tag=None, exe=None, browser="headless", portal=True):
     if not os.path.exists(home):
         for d in ("bin", "config", "data/applications", "tmp", "downloads"):
             os.makedirs(f"{home}/{d}")
-        os.symlink(shutil.which("mpv"), f"{home}/bin/mpv")
+        os.symlink(shutil.which("mpv") or sys.exit("e2e needs mpv on PATH"), f"{home}/bin/mpv")
         script(f"{home}/bin/xdg-open", f'echo "$@" >> {home}/xdg-open.args\nexit 1')
         script(f"{home}/slow-mpv", f'{shutil.which("sleep")} 3\nexec {shutil.which("mpv")} "$@"')
         if browser:
@@ -918,6 +928,7 @@ def private_bus():
     until(lambda: os.path.exists(path))
     p = subprocess.Popen([PORTAL_BIN, MEDIA], env={"DBUS_SESSION_BUS_ADDRESS": f"unix:path={path}"}, stdout=subprocess.PIPE, text=True)
     relays.append(p)
+    assert p.stdout  # stdout=PIPE
     if p.stdout.readline() != "ready\n":
         sys.exit("the fake portal could not start")
     return f"unix:path={path}"
@@ -1102,6 +1113,7 @@ def seeder(path):
     """Seeds path until the phase ends, and returns its magnet link."""
     p = subprocess.Popen([FAKESEED_BIN, path], stdout=subprocess.PIPE, text=True)
     nodes[f"seed{len(nodes)}"] = {"proc": p, "log": os.devnull, "sock": None, "addr": None}
+    assert p.stdout  # stdout=PIPE
     return p.stdout.readline().strip()
 
 
@@ -1345,7 +1357,7 @@ def p2p_suite():
             resolve(mid)
             for n in P:
                 ok(f"{n} told why", until(lambda: f"paused for {mid}: joining" in osd(n)), str(osd(n)))
-            ok("everyone stopped in step with it, past 30s", until(lambda: in_step(P + [mid], tol=0.3)) and get(a, "time-pos") > 30, where(P + [mid]))
+            ok("everyone stopped in step with it, past 30s", until(lambda: in_step(P + [mid], tol=0.3)) and (get(a, "time-pos") or 0) > 30, where(P + [mid]))
 
     @case("[12] SIGKILL a member: every survivor evicts it after 3 strikes and stays in step")
     def _():
@@ -1429,7 +1441,7 @@ def p2p_suite():
             ok(f"{a} stopped nobody for it: the state lands where it is behind", get(a, "pause") is False and
                not any("out of sync" in t for t in osd(a)), osd(a)[-3:])
             # the stub plays out of step now, and resumes: newer than anything a holds
-            resume = {"stamp": 1 << 20, "paused": False, "at": max(get(a, "time-pos") - 10, 0), "event": "property-change",
+            resume = {"stamp": 1 << 20, "paused": False, "at": max(num(a, "time-pos") - 10, 0), "event": "property-change",
                       "name": "pause", "data": "no"}
             code = raw(nodes[a]["addr"], "/event", {"hit-me-up": at, "counter": "999999", "hostname": STUB_HOST, "secret": SECRET},
                        json.dumps(resume).encode())
@@ -1473,7 +1485,7 @@ def p2p_suite():
                 os.kill(nodes[X]["proc"].pid, signal.SIGCONT)
             ok(f"{Y}'s resume timed out on {X}", stalled, log(Y)[-300:])
             quiet(P, 30)
-            end = {n: (get(n, "pause"), get(n, "time-pos")) for n in P}
+            end = {n: (get(n, "pause"), num(n, "time-pos")) for n in P}
             spread = max(t for _, t in end.values()) - min(t for _, t in end.values())
             states = {p for p, _ in end.values()}
             ok("the party ends in step", len(states) == 1 and spread < (0.5 if True in states else 1.5),
@@ -1653,7 +1665,7 @@ def relay_suite():
             resolve(mid)
             for n in P:
                 ok(f"{n} told why", until(lambda: f"paused for {mid}: joining" in osd(n)), str(osd(n)))
-            ok("everyone stopped in step with it, past 30s", until(lambda: in_step(P + [mid], tol=0.3)) and get(P[0], "time-pos") > 30, where(P + [mid]))
+            ok("everyone stopped in step with it, past 30s", until(lambda: in_step(P + [mid], tol=0.3)) and (get(P[0], "time-pos") or 0) > 30, where(P + [mid]))
 
     @case("[R10c] a joiner whose relay connects only after mpv has loaded still pauses the party, and starts where it stopped")
     def _():
@@ -1673,7 +1685,7 @@ def relay_suite():
                 must("then it connects", until(lambda: connected(far)), log(far))
                 resolve(far)
                 ok("the party paused for it", until(lambda: all(f"paused for {far}: joining" in osd(n) for n in P)), str([osd(n)[-2:] for n in P]))
-                ok("everyone stopped in step with it, past 30s", until(lambda: in_step(P + [far], tol=0.3)) and get(P[0], "time-pos") > 30, where(P + [far]))
+                ok("everyone stopped in step with it, past 30s", until(lambda: in_step(P + [far], tol=0.3)) and (get(P[0], "time-pos") or 0) > 30, where(P + [far]))
             finally:
                 stop(far)
                 hop.close()
@@ -1713,7 +1725,7 @@ def relay_suite():
         held = {}  # seconds each request waits
         rate = {}  # bytes/s
 
-        def log_message(self, *a):
+        def log_message(self, format, *args):
             pass
 
         # Range support: without it mpv calls the stream unseekable and refuses
@@ -1797,7 +1809,7 @@ def relay_suite():
                 Quiet.held.pop(late)
             resolve(late)
             ok("then it paused the party", until(lambda: f"paused for {late}: joining" in osd(P[0])), str(osd(P[0])))
-            ok("and everyone stopped in step with it, past 30s", until(lambda: in_step(P + [late], tol=0.3)) and get(P[0], "time-pos") > 30, where(P + [late]))
+            ok("and everyone stopped in step with it, past 30s", until(lambda: in_step(P + [late], tol=0.3)) and (get(P[0], "time-pos") or 0) > 30, where(P + [late]))
 
 
     @case("[R11f] a node that runs out of cache pauses the party, and so does a resume while it waits")
@@ -2083,7 +2095,7 @@ def media_suite():
         must("back on the middle one", until(on("video3.mkv", "a2.mkv")))
         # the filename is mpv's from start-file, the duration only once the file has loaded
         must("its length is known", until(lambda: get(host, "duration") is not None))
-        must("near its end", seek(get(host, "duration") - 1))
+        must("near its end", seek(num(host, "duration") - 1))
         setp(host, "pause", False)
         ok("reaching the end moves everyone on", until(on("video10.mkv", "a10.mkv"), 15), str([get(n, "filename") for n in (host, guest)]))
         ok("and stops them at the start", until(lambda: stopped() and near(get(host, "time-pos"), 0, 2) and near(get(guest, "time-pos"), 0, 2)),
@@ -2111,7 +2123,7 @@ def media_suite():
         n = launch("epAlone", room="playlistroom", media=f"{folder}/video2.mkv")
         ok("so is someone who didn't ask for the playlist", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
 
-        must("near the end of the last", seek(get(host, "duration") - 1))
+        must("near the end of the last", seek(num(host, "duration") - 1))
         setp(host, "pause", False)
         for n in (host, guest, late):
             ok(f"{n}'s party ends with the last entry", until(lambda: nodes[n]["proc"].poll() == 0, 20), log(n)[-200:])
@@ -2163,7 +2175,7 @@ def media_suite():
         for n in ("nodeEnd1", "nodeEnd2"):
             resolve(n)
         must("the join is over", quiet(("nodeEnd1", "nodeEnd2")))
-        target = get("nodeEnd1", "duration") - 3
+        target = num("nodeEnd1", "duration") - 3
         setp("nodeEnd1", "time-pos", target)
         must("the seek reached the other", until(lambda: near(get("nodeEnd2", "time-pos"), target, 0.1)), log("nodeEnd1")[-300:])
         setp("nodeEnd1", "pause", False)
@@ -2183,7 +2195,7 @@ def media_suite():
         for n in ("nodeEnd3", "nodeEnd4"):
             resolve(n)
         must("the join is over", quiet(("nodeEnd3", "nodeEnd4")))
-        target = get("nodeEnd3", "duration") - 4
+        target = num("nodeEnd3", "duration") - 4
         setp("nodeEnd3", "time-pos", target)
         must("the seek reached the other", until(lambda: near(get("nodeEnd4", "time-pos"), target, 0.1)), log("nodeEnd3")[-300:])
         setp("nodeEnd3", "pause", False)
@@ -2639,7 +2651,7 @@ def gui_suite():
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
-            def log_message(self, *a):
+            def log_message(self, format, *args):
                 pass
         refusing = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Busy)
         threading.Thread(target=refusing.serve_forever, daemon=True).start()

@@ -152,7 +152,7 @@ class Release:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def log_message(self, *a):
+            def log_message(self, format, *args):
                 pass
         threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever, daemon=True).start()
 
@@ -195,7 +195,7 @@ class Gateway:
                 self.end_headers()
                 self.wfile.write(text.encode())
 
-            def log_message(self, *a):
+            def log_message(self, format, *args):
                 pass
         threading.Thread(target=http.server.ThreadingHTTPServer((local, port), H).serve_forever, daemon=True).start()
 

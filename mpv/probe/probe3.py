@@ -6,7 +6,7 @@ import os, socketserver, sys, threading, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
 from probe import OFFSETS_MS, race, ready, reply
-from probe2 import Slow, Wp2, fnear, get, person_conn, report, setpos, stopped, tally
+from probe2 import Slow, Wp2, fnear, get, num, person_conn, report, setpos, stopped, tally
 
 
 class Wp3(Wp2):
@@ -111,7 +111,7 @@ class Wp3(Wp2):
             target = (e0 + 2) % 3 if scen in (">", "eof") else (e0 + 1) % 3
             tag = f"m{r}"
             if scen == "eof":
-                setpos(m, float(get(m, "duration")) - 0.3)
+                setpos(m, num(m, "duration") - 0.3)
                 m.wait(reply(m.send("set_property", "pause", False)))
                 time.sleep(0.3 + off / 1000)
             i = m.mark()

@@ -4,6 +4,7 @@ Experiments: startup, pause, seekp, playing, moves, buffering, ending, mixed, be
 load as: python3 run.py 0 probe2.py startup:60 pause:280 seekp:420 playing:280 moves:280 buffering:40
 ending:60, and LANDING=began python3 run.py 0 probe2.py began:80 seekp:420 playing:280"""
 import http.server, os, socketserver, sys, threading, time
+from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
@@ -27,6 +28,14 @@ def get(m, name):
     i = m.mark()
     j = m.wait(reply(m.send("get_property_string", name)), i)
     return None if j is None else m.lines[j].get("data")
+
+
+def num(m, name):
+    """A property mpv must hold a number for: none stops the probe, saying which."""
+    v = get(m, name)
+    if v is None:
+        raise RuntimeError(f"mpv holds no {name}")
+    return float(v)
 
 
 def person_conn(m):
@@ -80,16 +89,16 @@ def report(title, rounds, errors, shapes, legend=""):
 class Slow(http.server.SimpleHTTPRequestHandler):
     rate = 70_000  # bytes/s, below the file's ~126 KB/s
 
-    def log_message(self, *a):
+    def log_message(self, format, *args):
         pass
 
-    def copyfile(self, src, dst):
+    def copyfile(self, source, outputfile):
         while True:
-            b = src.read(self.rate // 20)
+            b = source.read(self.rate // 20)
             if not b:
                 return
             try:
-                dst.write(b)
+                outputfile.write(b)
             except OSError:
                 return
             time.sleep(0.05)
@@ -124,7 +133,7 @@ class Wp2:
     NAME = "wp2"
     WP = ["--script=wp2.lua"]
 
-    def W(self, a):
+    def W(self, a) -> dict[str, Any]:
         return dict(kind=a[1], id=a[2], pause=a[3], pos=a[4], entry=a[5], cache=a[6])
 
     def is_snap(self, l):
@@ -136,8 +145,8 @@ class Wp2:
     def wsnap(self, m, pred, i, timeout=3):
         return m.wait(lambda l: self.is_snap(l) and pred(self.W(l["args"])), i, timeout)
 
-    def to(self, m, *args):
-        return m.send("script-message-to", self.NAME, *[str(a) for a in args])
+    def to(self, m, cmd, *args):
+        return m.send("script-message-to", self.NAME, str(cmd), *[str(a) for a in args])
 
     # 1. Startup: is the script there for the first message, and does a name clash hide it?
     def startup(self, rounds):
@@ -153,7 +162,7 @@ class Wp2:
             i = m.mark()
             rid = m.send("script-message-to", self.NAME, "wp-hello")
             rid2 = m.send("script-message", "wp-hello")
-            rto = m.lines[m.wait(reply(rid), i)].get("error")
+            rto = m.lines[m.need(reply(rid), i)].get("error")
             h = self.wsnap(m, lambda s: s["kind"] == "hello", i, 5)
             names = sorted({s["id"] for _, s in self.snaps(m, i) if s["kind"] == "hello"}) if h is not None else []
             restart = m.wait(lambda l: l.get("event") == "playback-restart", i, 5)
@@ -192,6 +201,8 @@ class Wp2:
             if last["pause"] != sp:
                 errors["pause-wrong"].append((want, off, [(s["kind"], s["pause"]) for _, s in self.snaps(m, i)], sp))
             if sp == "yes" and last["pause"] == "yes":
+                if spos is None:
+                    raise RuntimeError("mpv holds no time-pos")
                 d = abs(float(last["pos"]) - float(spos))
                 worst = max(worst, d)
                 if d > 0.001:
@@ -284,7 +295,7 @@ class Wp2:
                 race(m, p, second, lambda: (self.to(m, "wp-seek", target, tag), self.to(m, "wp-pause", "no", tag + "r")), off)
                 t0 = time.time()
                 time.sleep(0.5)
-                sp, spos = get(m, "pause"), float(get(m, "time-pos"))
+                sp, spos = get(m, "pause"), num(m, "time-pos")
                 ss = self.snaps(m, i)
                 land = [s for _, s in ss if s["kind"] == LANDING]
                 if not any(s["id"] == tag for s in land):
@@ -384,7 +395,7 @@ class Wp2:
                     errors["stuck"].append(("back", off, [(s["kind"], s["id"], s["entry"]) for _, s in ss + self.snaps(m, i2)]))
                 tally(shapes, ("back", f"{max(off, 0)}ms", " ".join(s["kind"] + (":" + s["id"] if s["id"] else "") for _, s in ss if s["kind"] in ("loaded", "end", "ack")), f"settled={se}"))
             else:
-                setpos(m, float(get(m, "duration")) - 0.4)
+                setpos(m, num(m, "duration") - 0.4)
                 i = m.mark()
                 m.send("set_property", "pause", False)
                 if off >= 0:

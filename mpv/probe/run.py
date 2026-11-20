@@ -16,7 +16,7 @@ from probe import MPV, WINDOWS
 core, probe = sys.argv[1], sys.argv[2]
 mac = sys.platform == "darwin"
 busy = []
-for _ in range(0 if WINDOWS else os.cpu_count() if mac else 3):
+for _ in range(0 if WINDOWS else (os.cpu_count() or 1) if mac else 3):
     p = subprocess.Popen([sys.executable, "-c", "while 1: pass"])
     if sys.platform == "linux":
         os.sched_setaffinity(p.pid, {int(core)})

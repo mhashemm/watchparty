@@ -6,16 +6,19 @@ entry and to one mpv can't open.
 Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang> <rounds>. Under load:
 python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
 import http.server, os, socketserver, sys, tempfile, threading, time
+from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
 from probe import OFFSETS_MS, race, ready, reply
-from probe2 import FAILED, HARMLESS, M, fnear, get, person_conn, report, setpos, stopped, tally
+from probe2 import FAILED, HARMLESS, M, fnear, get, num, person_conn, report, setpos, stopped, tally
 from probe3 import Wp3
 _VIEW = {}
 
 
 class NodeMpv(M):
+    sent = 0  # how many lines had come when the last go was sent (to)
+
     def __init__(self, video, extra=()):
         super().__init__(video, extra)
         # what the node observes over IPC besides the script
@@ -47,7 +50,7 @@ class Late(http.server.SimpleHTTPRequestHandler):
         time.sleep(8)
         return super().send_head()
 
-    def log_message(self, *a):
+    def log_message(self, format, *args):
         pass
 
 
@@ -83,7 +86,7 @@ class Hang(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
         time.sleep(600)
 
-    def log_message(self, *a):
+    def log_message(self, format, *args):
         pass
 
 
@@ -94,7 +97,7 @@ class Shipped(Wp3):
     NAME = "watchparty"
     WP = ["--script=../watchparty.lua"]
 
-    def W(self, a):
+    def W(self, a) -> dict[str, Any]:
         return _VIEW[id(a)]
 
     def is_snap(self, l):
@@ -319,7 +322,7 @@ class Shipped(Wp3):
             dest = {">": e0 + 1 if e0 < 2 else None, "<": e0 - 1 if e0 > 0 else None, "key": e0 + 1 if e0 < 2 else None}.get(scen)
             tag, back = f"s{r}", f"b{r}"
             if scen == "eof":
-                setpos(m, float(get(m, "duration")) - 0.3)
+                setpos(m, num(m, "duration") - 0.3)
                 m.wait(reply(m.send("set_property", "pause", False)))
                 time.sleep(0.3 + off / 1000)
             i = m.mark()
@@ -417,7 +420,7 @@ class Shipped(Wp3):
                     time.sleep(0.15)
                 i, tag = m.mark(), f"a{r}"
                 if scen == "end":
-                    setpos(m, float(get(m, "duration")) - 0.3)
+                    setpos(m, num(m, "duration") - 0.3)
                     m.wait(reply(m.send("set_property", "pause", False)))
                     want = [("auto", "1"), ("auto", "2")]  # mpv's own past p0, then past the broken one
                 else:
@@ -485,7 +488,7 @@ class Shipped(Wp3):
                 errors["seeked"].append((off, e0, ack["pos"], fpos, ours[0]["pos"]))
             if fe == str(e0 + 1) and not moved and not any(s["kind"] == "start" and s["id"] == "" for n, s in self.snaps(m, k + 1)):
                 errors["ack"].append((off, e0, ack, fe))
-            tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "key's file at the ack" if moved else "ours at the ack", "ends on " + fe,
+            tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "key's file at the ack" if moved else "ours at the ack", "ends on " + str(fe),
                            "at 30" if fpos is not None and abs(float(fpos) - 30) < 0.1 else "at 0" if fpos is not None and float(fpos) < 0.1 else "elsewhere"))
         m.stop()
         report("away", rounds, errors, shapes)
