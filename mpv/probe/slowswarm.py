@@ -19,7 +19,7 @@ procs = []
 
 # isolated: no desktop, bus or browser (CLAUDE.md, "Verifying without touching the user's machine")
 os.makedirs(f"{T}/bin")
-os.symlink(shutil.which("mpv"), f"{T}/bin/mpv")
+os.symlink(shutil.which("mpv") or sys.exit("slowswarm.py needs mpv on PATH"), f"{T}/bin/mpv")
 with open(f"{T}/bin/xdg-open", "w") as f:
     f.write("#!/bin/sh\nexit 0\n")
 os.chmod(f"{T}/bin/xdg-open", 0o755)
@@ -100,6 +100,7 @@ for k, src in enumerate(("testsrc", "testsrc2", "smptebars")):
                     "-t", "15", "-c:v", "libx264", "-b:v", "1.2M", "-g", "48", "-pix_fmt", "yuv420p", f"{pack}/v{k + 1}.mkv"], check=True)
 seeder = subprocess.Popen([SEED, pack, str(RATE)], stdout=subprocess.PIPE, text=True, env=ENV)
 procs.append(seeder)
+assert seeder.stdout  # stdout=PIPE
 magnet = seeder.stdout.readline().strip()
 port = random.randint(30000, 40000)
 start([RELAY], "relay", {"ADDR": f"127.0.0.1:{port}", "DB": f"{T}/relay.db", "CREATE_KEY": "k", "ROOMS_PER_HOUR": "1000"})

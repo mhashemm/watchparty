@@ -10,12 +10,13 @@ python3 run.py 2 ... (the e2e image)."""
 import os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-exec(open(os.path.join(HERE, "probe.py")).read().partition("\nclass Pipe")[0])
+sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
+from probe import MPV, WINDOWS
 
 core, probe = sys.argv[1], sys.argv[2]
 mac = sys.platform == "darwin"
 busy = []
-for _ in range(0 if WINDOWS else os.cpu_count() if mac else 3):
+for _ in range(0 if WINDOWS else (os.cpu_count() or 1) if mac else 3):
     p = subprocess.Popen([sys.executable, "-c", "while 1: pass"])
     if sys.platform == "linux":
         os.sched_setaffinity(p.pid, {int(core)})

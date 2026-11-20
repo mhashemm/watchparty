@@ -14,7 +14,10 @@ real Chrome headless with a debugging port. Exits non-zero if any assertion fail
 the run directory with every log is printed at the end.
 """
 import argparse, json, os, re, shutil, signal, subprocess
-import sys, tempfile, threading, time, winreg
+import sys, tempfile, threading, time
+
+assert sys.platform == "win32", "e2e_windows.py runs on Windows; elsewhere, make e2e"
+import winreg
 
 sys.dont_write_bytecode = True
 import e2e_lib
@@ -38,7 +41,7 @@ CHROME = os.path.join(os.environ.get("ProgramFiles", ""), r"Google\Chrome\Applic
 fails, nodes, others_procs = [], {}, []
 
 
-def ok(name, cond, detail=""):
+def ok(name, cond, detail: object = ""):
     if not cond:
         fails.append(name)
     print(("  PASS  " if cond else "  FAIL  ") + name + (f"  [{detail}]" if detail else ""), flush=True)
@@ -48,7 +51,7 @@ class Stop(Exception):
     """A setup step failed: every case after it would fail for the same reason."""
 
 
-def must(name, cond, detail=""):
+def must(name, cond, detail: object = ""):
     """ok(), but a failure ends the phase here instead of cascading into later cases."""
     ok(name, cond, detail)
     if not cond:
@@ -359,7 +362,7 @@ def cli_suite():
         ok(f"{n} exited 0", nodes[n]["proc"].wait(20) == 0)
 
     print("\n[W8] given mpv.com, the party runs mpv.exe and can still end it")
-    com = os.path.join(os.path.dirname(shutil.which("mpv")), "mpv.com")
+    com = os.path.join(os.path.dirname(shutil.which("mpv") or sys.exit("e2e needs mpv on PATH")), "mpv.com")
     if not os.path.exists(com):
         print(f"  SKIP  no mpv.com next to {shutil.which('mpv')}")
     else:

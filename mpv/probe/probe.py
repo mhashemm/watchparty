@@ -11,42 +11,44 @@ WINDOWS = sys.platform == "win32"
 def pin(p, core):
     """Keeps process p on one core, on Windows; Linux starts it under taskset, and macOS has no
     way to pin (run.py loads every core there instead)."""
-    if WINDOWS:
+    if sys.platform == "win32":
         import ctypes
         if not ctypes.windll.kernel32.SetProcessAffinityMask(ctypes.c_void_p(int(p._handle)), ctypes.c_size_t(1 << int(core))):
             raise OSError(ctypes.get_last_error(), "SetProcessAffinityMask")
 
 
-class Pipe:
-    """mpv's IPC on Windows, a named pipe, as the probes use a socket (recv, sendall).
-    Overlapped: on a plain handle a read blocked in one thread holds up every write from another."""
+# sys.platform, not WINDOWS: pyright reads the platform only from the check itself
+if sys.platform == "win32":
+    class Pipe:
+        """mpv's IPC on Windows, a named pipe, as the probes use a socket (recv, sendall).
+        Overlapped: on a plain handle a read blocked in one thread holds up every write from another."""
 
-    def __init__(self, name):
-        import _winapi
-        self.w = _winapi
-        for _ in range(100):
+        def __init__(self, name):
+            import _winapi
+            self.w = _winapi
+            for _ in range(100):
+                try:
+                    self.h = _winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
+                                                _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+                    return
+                except OSError as e:
+                    # every instance taken: mpv makes the next one once it has a client on this one
+                    if e.winerror != _winapi.ERROR_PIPE_BUSY:
+                        raise
+                    time.sleep(0.01)
+            raise OSError(f"{name}: busy")
+
+        def recv(self, n):
             try:
-                self.h = _winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
-                                            _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
-                return
-            except OSError as e:
-                # every instance taken: mpv makes the next one once it has a client on this one
-                if e.winerror != _winapi.ERROR_PIPE_BUSY:
-                    raise
-                time.sleep(0.01)
-        raise OSError(f"{name}: busy")
+                ov, _ = self.w.ReadFile(self.h, n, overlapped=True)
+                ov.GetOverlappedResult(True)
+            except (BrokenPipeError, OSError):
+                return b""
+            return ov.getbuffer()
 
-    def recv(self, n):
-        try:
-            ov, _ = self.w.ReadFile(self.h, n, overlapped=True)
+        def sendall(self, b):
+            ov, _ = self.w.WriteFile(self.h, b, overlapped=True)
             ov.GetOverlappedResult(True)
-        except (BrokenPipeError, OSError):
-            return b""
-        return ov.getbuffer()
-
-    def sendall(self, b):
-        ov, _ = self.w.WriteFile(self.h, b, overlapped=True)
-        ov.GetOverlappedResult(True)
 
 
 class Mpv:
@@ -73,7 +75,7 @@ class Mpv:
         self.rid = 0
 
     def conn(self):
-        if WINDOWS:
+        if sys.platform == "win32":
             return Pipe(self.sock)
         s = socket.socket(socket.AF_UNIX)
         s.connect(self.sock)
@@ -116,6 +118,13 @@ class Mpv:
                     return None
                 self.cv.wait(left)
 
+    def need(self, pred, start=0, timeout=3):
+        """wait for what must come: a timeout stops the probe, saying what it waited for."""
+        i = self.wait(pred, start, timeout)
+        if i is None:
+            raise TimeoutError(f"no line within {timeout}s after line {start}; the last: {self.since(max(start, len(self.lines) - 3))}")
+        return i
+
     def since(self, i):
         with self.cv:
             return list(self.lines[i:])
@@ -151,7 +160,7 @@ def own_echo_before_reply(rounds):
         for want in ("no", "yes"):
             i = m.mark()
             rid = m.send("set_property", "pause", want == "yes")
-            j = m.wait(reply(rid), i)
+            j = m.need(reply(rid), i)
             k = m.wait(prop("pause", want), i)
             if k is None:
                 missing += 1
@@ -162,7 +171,7 @@ def own_echo_before_reply(rounds):
         t = f"{10 + (r % 50) * 1.5:.6f}"
         i = m.mark()
         rid = m.send("set_property", "time-pos", t)
-        j = m.wait(reply(rid), i)
+        j = m.need(reply(rid), i)
         k = m.wait(lambda l: l.get("event") == "seek", i)
         if k is not None and k < j:
             early["seek"] += 1
@@ -182,14 +191,14 @@ def pause_then_position(rounds, order):
         time.sleep(0.03 + (r % 7) * 0.01)
         i = m.mark()
         rid = m.send("set_property", "pause", True)
-        k = m.wait(prop("pause", "yes"), i)
+        k = m.need(prop("pause", "yes"), i)
         time.sleep(0.1)
         tail = [l for l in m.since(k + 1) if l.get("event") == "property-change" and l.get("name") == "time-pos"]
         total += 1
         if tail:
             after += 1
             # is the late time-pos where mpv stopped? ask now that it is quiet
-            now = m.wait(reply(m.send("get_property_string", "time-pos")), i)
+            now = m.need(reply(m.send("get_property_string", "time-pos")), i)
             if m.lines[now]["data"] != tail[-1]["data"]:
                 moved += 1
     m.stop()
@@ -217,9 +226,9 @@ def async_fence(rounds):
         rid = m.send("seek", target, "absolute+exact", asyn=True)
         if when == 1:
             m.send("keypress", "RIGHT", s=person)
-        j = m.wait(reply(rid), i)
+        j = m.need(reply(rid), i)
         time.sleep(0.4)
-        got = m.wait(reply(m.send("get_property", "time-pos")), i)
+        got = m.need(reply(m.send("get_property", "time-pos")), i)
         landed = round(m.lines[got]["data"], 2)
         seq = [l.get("event") or ("reply" if l.get("request_id") == rid else None) for l in m.since(i)]
         seq = [s for s in seq if s in ("seek", "playback-restart", "reply")]
@@ -275,10 +284,10 @@ def pause_partition(rounds):
         i = m.mark()
         off = OFFSETS_MS[r % len(OFFSETS_MS)]
         rid = race(m, person, "space", lambda: m.send("set_property", "pause", True), off)
-        j = m.wait(reply(rid), i)
-        asked = m.lines[m.wait(reply(m.send("get_property_string", "pause")), j)]["data"]
+        j = m.need(reply(rid), i)
+        asked = m.lines[m.need(reply(m.send("get_property_string", "pause")), j)]["data"]
         time.sleep(0.3)
-        settled = m.lines[m.wait(reply(m.send("get_property_string", "pause")), i)]["data"]
+        settled = m.lines[m.need(reply(m.send("get_property_string", "pause")), i)]["data"]
         after = [l["data"] for l in m.since(j + 1) if l.get("event") == "property-change" and l.get("name") == "pause"]
         # a report after the reply showing what held before our set breaks the partition
         ok = ("no" not in after) if settled == "yes" else (after in ([], ["no"], ["yes", "no"]))
@@ -321,16 +330,16 @@ def seek_check(rounds):
             m.send("set_property", "time-pos", str(target), s=person)
         else:
             rid = race(m, person, kind, lambda: m.send("seek", target, "absolute+exact", asyn=True), off)
-        j = m.wait(reply(rid), i)
+        j = m.need(reply(rid), i)
         sk = m.wait(lambda l: l.get("event") == "seek", j + 1)
         k = None if sk is None else m.wait(lambda l: l.get("event") == "playback-restart", sk + 1)
         if k is None:
             errors["no-restart"].append((kind, off))
             continue
-        at = m.lines[m.wait(reply(m.send("get_property_string", "time-pos")), k)]["data"]
+        at = m.lines[m.need(reply(m.send("get_property_string", "time-pos")), k)]["data"]
         sent = [] if near(at, target) else [at]
         time.sleep(0.5)
-        settled = m.lines[m.wait(reply(m.send("get_property_string", "time-pos")), k)]["data"]
+        settled = m.lines[m.need(reply(m.send("get_property_string", "time-pos")), k)]["data"]
         evs = m.since(i)
         later = [l for l in m.since(k + 1) if l.get("event") == "seek"]
         if later:
@@ -372,8 +381,8 @@ def pause_reobserve(rounds):
         off = OFFSETS_MS[r % len(OFFSETS_MS)]
         rid = race(m, person, "space", lambda: m.send("set_property", "pause", True), off)
         m.wait(reply(rid), i)
-        u = m.wait(reply(m.send("unobserve_property", 2)), i)
-        o = m.wait(reply(m.send("observe_property_string", 2, "pause")), u)
+        u = m.need(reply(m.send("unobserve_property", 2)), i)
+        o = m.need(reply(m.send("observe_property_string", 2, "pause")), u)
         pauses = lambda a, b=None: [(n, l["data"]) for n, l in enumerate(m.lines[a:b], a) if l.get("event") == "property-change" and l.get("name") == "pause"]
         if pauses(u + 1, o):
             errors["old-after-unobserve"].append((off, pauses(u + 1, o)))
@@ -382,7 +391,7 @@ def pause_reobserve(rounds):
             errors["no-fresh"].append(off)
             continue
         time.sleep(0.3)
-        settled = m.lines[m.wait(reply(m.send("get_property_string", "pause")), f)]["data"]
+        settled = m.lines[m.need(reply(m.send("get_property_string", "pause")), f)]["data"]
         seen = [d for _, d in pauses(f)]
         verdict = "ours" if seen[0] == "yes" else "person's"
         if seen[-1] != settled:
@@ -424,7 +433,7 @@ def lua_pause(rounds):
             errors["no-ack"].append(off)
             continue
         time.sleep(0.3)
-        settled = m.lines[m.wait(reply(m.send("get_property_string", "pause")), a)]["data"]
+        settled = m.lines[m.need(reply(m.send("get_property_string", "pause")), a)]["data"]
         after = [m.lines[a]["args"][2]] + [l["args"][1] for l in m.since(a + 1) if msg("wp-pause")(l)]
         if after[-1] != settled:
             errors["ends-wrong"].append((off, after, settled))
@@ -470,7 +479,7 @@ def lua_seek(rounds):
         else:
             race(m, person, kind, ours, off)
         time.sleep(0.6)
-        settled = m.lines[m.wait(reply(m.send("get_property_string", "time-pos")), i)]["data"]
+        settled = m.lines[m.need(reply(m.send("get_property_string", "time-pos")), i)]["data"]
         landings = [(l["args"][1], l["args"][2]) for l in m.since(i) if msg("wp-landed")(l)]
         mine = [n for n, (_, id) in enumerate(landings) if id == tag]
         if not mine:
