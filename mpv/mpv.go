@@ -54,7 +54,7 @@ const (
 )
 
 // How long the node waits on mpv before it gives up (errTimeout): replyLimit for a reply or a
-// go's ack, moveLimit for a move's go, acked once its file starts, which mpv gives up on after
+// set's ack, moveLimit for a move's set, acked once its file starts, which mpv gives up on after
 // its --network-timeout (60s; 81s seen, ORDER.md).
 const (
 	replyLimit = 5 * time.Second
@@ -150,27 +150,22 @@ type Client struct {
 	outgoing chan<- []byte
 	conn     *connection
 
-	// the loop: the only goroutine that reads or writes what follows. It takes the
-	// transport's messages from incoming, everything else from inbox, in the order it came;
-	// a transport message waits in queue while another's change is still being applied
-	// (busy); later is what an input started that sends mpv a command, run once it is
-	// handled; replies are answers kept for the do() waiting on them
+	// The loop: the only goroutine that reads or writes what follows. It takes the
+	// transport's messages from incoming, everything else from inbox, in the order they came.
 	incoming <-chan IncomingMessage
 	inbox    *mailbox[input]
 	out      *mailbox[request]
+	// queue: transport messages waiting while another's change is applied (applying)
 	queue    []IncomingMessage
-	busy     int
-	later    []func()
-	replies  map[int64]outcome
-	waiting  map[int64]bool
+	applying int
+	// later: commands an input started, run once it is handled
+	later []func()
+	// replies: answers kept for the do() waiting on them
+	replies map[int64]outcome
+	waiting map[int64]bool
 	// gone: mpv's socket closed
 	gone bool
-	// opening: the first file hasn't loaded yet. early is the newest state heard meanwhile,
-	// by stamp, and notices the rest, in order
-	opening bool
-	early   *IncomingMessage
-	best    state
-	notices []IncomingMessage
+	startup
 	// snap is what Position and Finished read from another goroutine. reported: the last
 	// second mpv reported, where it is as it closes, as the script's last messages are lost
 	// then (ORDER.md)
@@ -182,65 +177,87 @@ type Client struct {
 	observed bool
 	script   string
 
-	// what mpv last reported
-	paused   bool
-	pos      float64
-	duration float64
-	stalled  bool
-	seen     map[string]bool
-	// slow: mpv ran out of cache on a stream (network) since this node last played, so while
-	// paused it tells the party how many seconds it has ready (readySaid), next at reportAt
-	network   bool
-	slow      bool
-	readySaid int
-	reportAt  time.Time
-	// the seconds ready last shown on mpv's screen, this node's (-1: none yet) and each
-	// peer's by its From, until the party plays (louder)
-	readyShown int
-	shownOf    map[string]int
+	// What mpv last reported.
+	paused         bool
+	pos            float64
+	duration       float64
+	waitingOnCache bool
+	seen           map[string]bool
+	slowReport
 
-	// marked: the seeks this node sent that mpv hasn't landed, oldest first (wentTo).
-	// flying: the go the script hasn't acked (goTo), one at a time. read: the number of the
-	// last script message taken, which a go says, so the script can tell what it undoes
-	marked []ourSeek
-	flying *flight
-	read   string
-	// landing: mpv hasn't landed the last seek this node marked, so it is not yet on the
-	// second it is heading to (target). seeking: the person's seek went while playing
-	landing bool
-	seeking bool
-	reason  string
+	// This node's seeks and sets.
+	// ourSeeks: seeks this node sent that mpv hasn't landed, oldest first (wentTo)
+	ourSeeks []ourSeek
+	// seekPending: mpv hasn't landed the last of ourSeeks, so it isn't yet on the second it
+	// heads to (target)
+	seekPending bool
+	// pending: the set the script hasn't acked (setState), one at a time
+	pending *pendingSet
+	// lastScriptMsg: the number of the last script message read, which a set says, so the
+	// script can tell what it undoes
+	lastScriptMsg string
+	// seekWhilePlaying: the person's seek went while playing
+	seekWhilePlaying bool
+	// stopReason: why this node is stopping the party (pauseParty)
+	stopReason string
 
-	// stamp orders what the party shares (a Lamport clock): the highest this node has
-	// made or followed. A joiner starts at unheard.
+	// The party.
+	// stamp orders what the party shares (a Lamport clock): the highest this node has made
+	// or followed. A joiner starts at unheard.
 	stamp int
-	// since: the second the resume this node plays went from, its own or one it took
-	since float64
+	// resumedFrom: the second the resume this node plays went from, its own or one it took
+	resumedFrom float64
 	// missed: members (From) that something this node sent failed to reach
 	missed map[string]bool
-
+	// resumeAt: where a continued party starts (join)
 	resumeAt float64
-	// by: the member (From) whose state this node last adopted; leader: its name. told: the
-	// person here has been told who holds the seek, for that state
-	by, leader string
-	told       bool
-	// toPlay: the state this node last took from a member plays: it is no follower of a pause.
-	// free: the stop this node holds has no leader, as nobody chose it; asked: this node
-	// paused mpv itself, for a reason other than the person's seek (answer, left, pauseParty)
-	toPlay, free, asked bool
-	// partyEntry: the entry of the stop this node took, wherever the person has moved it since.
-	// ranOut: mpv moved on from the end of the entry it played, by itself
+	// leaderID: the member (From) whose state this node last took; leaderName: its name
+	leaderID, leaderName string
+	// toldWhoLeads: the person was told who holds the seek, for that state
+	toldWhoLeads bool
+	// tookResume: the state this node last took from a member plays: it follows no pause
+	tookResume bool
+	// leaderless: the stop this node holds has no leader, as nobody chose it
+	leaderless bool
+	// pausedByNode: this node paused mpv itself, for a reason other than the person's seek
+	// (answer, left, pauseParty)
+	pausedByNode bool
+	// partyEntry: the entry of the stop this node took, wherever the person has moved since
 	partyEntry int
-	ranOut     bool
 
-	// playlist
+	// The playlist.
 	names []string
-	// current: the entry mpv opened last, as the script says it (start); toward: the one this
-	// node's move is heading to, until the script says it opened it, -1 for none. auto: the last
-	// start was mpv's own, after a file's end or error
+	// current: the entry mpv opened last, as the script says it (start)
 	current int
-	toward  int
-	auto    bool
+	// headingTo: the entry this node's move heads to until the script says it opened it, -1
+	// for none
+	headingTo int
+	// lastStartAuto: the last start was mpv's own, after a file's end or error
+	lastStartAuto bool
+	// advancedAtEnd: mpv moved on from the end of the entry it played, by itself
+	advancedAtEnd bool
+}
+
+// startup is what a node keeps while its first file loads (opening): the newest state heard, by
+// stamp, and the notices, in order (hear, join).
+type startup struct {
+	opening     bool
+	newestHeard *IncomingMessage
+	newestState state
+	notices     []IncomingMessage
+}
+
+// slowReport is a stalled stream's seconds ready (ahead): after mpv ran out of cache on a
+// stream (onNetwork), until this node plays, it tells the party how many seconds it has
+// ready (readySent), next at reportAt. readyOnScreen and peerReadyOnScreen are the last
+// shown on mpv's screen, this node's (-1: none yet) and each peer's by From (louder).
+type slowReport struct {
+	onNetwork         bool
+	slowStream        bool
+	readySent         int
+	reportAt          time.Time
+	readyOnScreen     int
+	peerReadyOnScreen map[string]int
 }
 
 // opens gives New its answer once all it waits for is there.
@@ -269,9 +286,9 @@ func (c *Client) snapshot() {
 	current, pos := c.current, c.reported
 	if c.onAStop() {
 		// the party's entry and second, wherever the person took this node's screen
-		current, pos = c.partyEntry, c.since
+		current, pos = c.partyEntry, c.resumedFrom
 	}
-	c.snap.Store(&snapshot{current: current, entries: len(c.names), pos: pos, duration: c.duration, buffering: c.stalled})
+	c.snap.Store(&snapshot{current: current, entries: len(c.names), pos: pos, duration: c.duration, buffering: c.waitingOnCache})
 }
 
 // Position is the entry and the second to continue the party from. Within
@@ -322,25 +339,25 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		closed:  make(chan struct{}),
 	}
 	client := &Client{
-		ctx:      c,
-		ready:    make(chan struct{}),
-		conn:     conn,
-		outgoing: outgoing,
-		paused:   true,
-		seen:     map[string]bool{},
-		missed:   map[string]bool{},
-		shownOf:  map[string]int{},
-		names:    names,
-		current:  start,
-		toward:   -1,
-		resumeAt: at,
-		stamp:    unheard,
-		incoming: incoming,
-		inbox:    newMailbox[input](),
-		replies:  map[int64]outcome{},
-		waiting:  map[int64]bool{},
-		opening:  true,
-		opened:   make(chan error, 1),
+		ctx:        c,
+		ready:      make(chan struct{}),
+		conn:       conn,
+		outgoing:   outgoing,
+		paused:     true,
+		seen:       map[string]bool{},
+		missed:     map[string]bool{},
+		slowReport: slowReport{peerReadyOnScreen: map[string]int{}},
+		names:      names,
+		current:    start,
+		headingTo:  -1,
+		resumeAt:   at,
+		stamp:      unheard,
+		incoming:   incoming,
+		inbox:      newMailbox[input](),
+		replies:    map[int64]outcome{},
+		waiting:    map[int64]bool{},
+		startup:    startup{opening: true},
+		opened:     make(chan error, 1),
 	}
 	client.snapshot()
 

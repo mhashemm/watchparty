@@ -41,7 +41,7 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 own pause, seek or move (also while playing) the party holds seeks or moves for it (`led`); any other
 stop (a join, a leave, a file's end, buffering) is led by its first seek. Another's seek or move stays on its screen until a resume, from the resumer's screen (another file: the party stops there).
 Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
-once the safer. A peer's change reaches mpv as one go to the script, whose ack is weighed against it; `seen` drops mpv's first reply to an observe.
+once the safer. A peer's change reaches mpv as one set to the script, whose ack is weighed against it; `seen` drops mpv's first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
 the playlist entry go over the wire, besides a stalled stream's seconds ready, for people to judge. Anything that would put nodes out of step (a seek while

@@ -45,7 +45,7 @@ type simNode struct {
 	reports []string
 	// late: mpv answers a request when the seed picks (answers), with events before it;
 	// answer is the one it holds, and it reads the next request only once that is out. The
-	// script's go is answered at once, and the script runs it when the seed picks (act)
+	// script's set is answered at once, and the script runs it when the seed picks (act)
 	late     bool
 	answer   string
 	act      func()
