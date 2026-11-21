@@ -391,7 +391,9 @@ class Shipped(Wp3):
             undone = scen in (">", "<") and dest is not None and fe == str(target) and (kinds == "person ours" or kinds == "ours" and after)
             if undone and not heard and not over:
                 errors["missed"].append((scen, off, e0, target, dest, st))
-            if scen in ("none", "seek", "eof", "back") and over:
+            # eof's go that plays reaches an mpv the node read playing, which it never sends (a resume
+            # then stops the party): mpv's own pause at the end (keep-open) racing it reads as undone
+            if scen in ("none", "seek", "eof", "back") and over and not (scen == "eof" and want == "no"):
                 errors["false"].append((scen, off, e0, target, st))
             tally(shapes, (scen, kinds, "over" if over else "", "heard" if heard else ""))
         m.stop()
