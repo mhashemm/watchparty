@@ -91,7 +91,8 @@ that.
     mushroom per step, labelled Torrent or File(s), Relay or Router, mpv, Video. Done ones
     are porcini on a solid moss path, the current one berry and larger, the rest pale on a
     dashed path. Under the status, a detail line (numbers bold) and a striped moss bar when
-    there is a fraction. The trail goes once the node is in; buffering reuses detail and bar.
+    there is a fraction. The trail shows only once a step has taken half a second (a quick
+    start would flash it), and goes once the node is in; buffering reuses detail and bar.
   - **"In the party, N"**, a closed `details` (expanding the chosen row list): a row per
     member with a turtle shell in rotating colours, "since 9:08 PM", or "already here" for
     those who were in before you, whose join time the app never learns.

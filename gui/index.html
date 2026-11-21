@@ -1046,7 +1046,7 @@ let run = 0, from = 0, state = {}, plan = null;
 function reset() {
   state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, leftPause: false, stopping: null,
     shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
-    myAhead: null, aheadOf: {} };
+    myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false };
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -1221,10 +1221,19 @@ function stepText(k) {
   }
 }
 const LABELS = { torrent: "Torrent", file: "File", files: "Files", relay: "Relay", router: "Router", mpv: "mpv", video: "Video" };
+// the trail shows once a step has taken half a second, then stays until the node is in: a
+// quick start would only flash it
+const TRAIL_AFTER = 500;
+let trailTimer = 0;
 function renderTrail(list, now) {
   const trail = $("trail");
-  trail.hidden = !now;
-  if (!now) return;
+  if (now !== state.trailStep) Object.assign(state, { trailStep: now, trailAt: performance.now() });
+  const wait = TRAIL_AFTER - (performance.now() - state.trailAt);
+  clearTimeout(trailTimer);
+  if (now && !state.trailShown && wait > 0) trailTimer = setTimeout(poll, wait);
+  else if (now) state.trailShown = true;
+  trail.hidden = !now || !state.trailShown;
+  if (trail.hidden) return;
   trail.replaceChildren(...list.map(k => {
     const st = document.createElement("div");
     st.className = "st " + (k === now ? "now-step" : stepDone(k) ? "done" : "");
