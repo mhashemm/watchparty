@@ -203,7 +203,7 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 	if e.Lost {
 		if err := c.lost(); err != nil {
-			log.Println("ProcessIncomingEvents: lost the relay:", err)
+			log.Println("apply: lost the relay:", err)
 		}
 		return
 	}
@@ -213,7 +213,7 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 	if e.Missed || e.Resend {
 		if err := c.chase(e); err != nil {
-			log.Println("ProcessIncomingEvents: a member missed something:", err)
+			log.Println("apply: a member missed something:", err)
 		}
 		return
 	}
@@ -253,7 +253,7 @@ func (c *Client) apply(e IncomingMessage) {
 		}
 	}
 	if err != nil {
-		log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
+		log.Printf("apply: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 	}
 }
 
