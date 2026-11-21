@@ -1331,7 +1331,18 @@ function render(exitErr) {
   document.querySelectorAll("#history-list button").forEach(b => b.disabled = running);
 }
 
+// one poll at a time: every second, and at once when /alive says there are new lines (soon,
+// 100ms later, so a burst of lines is read in one go); news during a poll polls again after it
+let polling = false, again = false, next = 0;
+function soon() {
+  if (polling) { again = true; return; }
+  clearTimeout(next);
+  next = setTimeout(poll, 100);
+}
 async function poll() {
+  if (polling) { again = true; return; }
+  polling = true;
+  clearTimeout(next);
   try {
     const res = await api(`/log?from=${from}&run=${run}`);
     const j = await res.json();
@@ -1346,11 +1357,14 @@ async function poll() {
       render(j.exitErr);
     }
   } catch {
+    polling = false;
     if (updated) return;
     showError("The app closed in the background. Close this window and open it again.");
     document.body.dataset.mood = "sleep";
   }
-  setTimeout(poll, 1000);
+  polling = false;
+  next = setTimeout(poll, again ? 0 : 1000);
+  again = false;
 }
 
 $("copy").addEventListener("click", async () => {
@@ -1484,7 +1498,10 @@ async function alive() {
   const res = await api("/alive").catch(() => null);
   if (!res?.ok) return;
   try {
-    for (const r = res.body.getReader(); !(await r.read()).done;);
+    const r = res.body.getReader(), text = new TextDecoder();
+    for (let chunk; !(chunk = await r.read()).done;) {
+      if (text.decode(chunk.value, { stream: true }).includes("data:")) soon();
+    }
   } catch {}
   alive();
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -222,6 +223,37 @@ func TestTheGUIStaysWhileAPageIsConnected(t *testing.T) {
 	g.checkPages()
 	if quits != 1 {
 		t.Fatal("didn't quit with no page back after the grace")
+	}
+}
+
+// A page holding /alive hears of new log lines at once, so it reads them without waiting for
+// its next poll; the heartbeat stays a comment, which the page doesn't answer.
+func TestAPageHearsOfNewLinesAtOnce(t *testing.T) {
+	t.Parallel()
+	g := newGUI(t.Context(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	g.quit = func() {}
+	srv := httptest.NewServer(http.HandlerFunc(g.alive))
+	defer srv.Close()
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	stream := bufio.NewReader(res.Body)
+	read := func() string {
+		line, err := stream.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream.ReadString('\n') // the blank line ending the event
+		return line
+	}
+	if got := read(); got != ":\n" {
+		t.Fatalf("first said %q, want the heartbeat", got)
+	}
+	g.Write([]byte("2026/11/21 00:00:00 init done\n"))
+	if got := read(); got != "data: lines\n" {
+		t.Fatalf("after a line said %q, want the news", got)
 	}
 }
 

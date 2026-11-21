@@ -110,7 +110,8 @@ The download, SHA-256 check and binary swap live in the `update` package
   can't say: macOS keeps it running without windows, and Edge's startup boost hands the
   window to another process. The page reconnects the moment its stream is cut, never on a
   timer, because a hidden window's timers run once a minute; so a browser cutting a long
-  request costs nothing. It stops when the request itself fails, the GUI being gone.
+  request costs nothing. It stops when the request itself fails, the GUI being gone. New log
+  lines send it `data: lines`; the page then polls at once, one poll at a time, 1s as a fallback.
 - **The browser runs as its own instance** with a fresh temporary profile per launch; a
   shared profile would hand a second GUI's window to the first. On exit the GUI kills it,
   on Unix with its whole process group (`ownGroup`), and again after it exits on its own:
@@ -177,10 +178,8 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 - **One syntax error kills every button** while the server still answers.
   `TestPageScriptParses` parses the script with Node's `vm.Script`.
-- `[hidden] { display: none !important; }` is required, or `.grid`'s `display:grid`
-  shows hidden fields.
-- `render()` writes the button text to `#go-label`, not `#go`, which holds the paw
-  icon.
+- `[hidden] { display: none !important; }` is required, or `.grid`'s `display:grid` shows hidden fields.
+- `render()` writes the button text to `#go-label`, not `#go`, which holds the paw icon.
 - **Save chart** re-fetches `/log?from=0`, since the `<pre>` is trimmed to 150k
   characters. **Copy invite** uses `navigator.clipboard` (127.0.0.1 is a secure
   context) and selects the text if that fails.

@@ -116,6 +116,8 @@ type gui struct {
 	lastPoll   time.Time
 	idleAfter  time.Duration
 	pages      int
+	// news: one per connected page, told there are new lines, so it reads them at once
+	news       map[chan struct{}]bool
 	heartbeat  time.Duration
 	closeGrace time.Duration
 }
@@ -209,6 +211,13 @@ func (g *gui) Write(p []byte) (int, error) {
 		g.lines = append(g.lines, line)
 		if g.session >= 0 && g.store.note(g.session, line) {
 			dirty = true
+		}
+	}
+	for news := range g.news {
+		// one waiting is enough: the page reads every line since its last
+		select {
+		case news <- struct{}{}:
+		default:
 		}
 	}
 	g.mu.Unlock()
@@ -309,14 +318,26 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	rc := http.NewResponseController(w)
+	news := make(chan struct{}, 1)
 	g.mu.Lock()
 	g.pages++
+	if g.news == nil {
+		g.news = map[chan struct{}]bool{}
+	}
+	g.news[news] = true
 	g.mu.Unlock()
-	defer g.pageGone()
+	defer func() {
+		g.mu.Lock()
+		delete(g.news, news)
+		g.mu.Unlock()
+		g.pageGone()
+	}()
 	tick := time.NewTicker(g.heartbeat)
 	defer tick.Stop()
+	// a heartbeat is a comment; new lines are an event, which the page answers with a poll
+	beat := ":\n\n"
 	for {
-		_, err := io.WriteString(w, ":\n\n")
+		_, err := io.WriteString(w, beat)
 		if err == nil {
 			err = rc.Flush()
 		}
@@ -329,6 +350,9 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 		case <-g.ctx.Done():
 			return
 		case <-tick.C:
+			beat = ":\n\n"
+		case <-news:
+			beat = "data: lines\n\n"
 		}
 	}
 }
