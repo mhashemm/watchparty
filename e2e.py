@@ -2484,7 +2484,7 @@ def gui_suite():
         click(H, "#tip-button")
         ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
         sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
-        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
         tip = js(H, '$("tip").textContent')
         ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
         click(H, "#tip h2")
@@ -2687,6 +2687,8 @@ def gui_suite():
         start(G, hostname=G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="g17d", secret="g17dsecret")
         until(lambda: status(G).startswith("Looking"), BOOT)
         ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
+        # the trail shows once the step has taken half a second
+        until(lambda: js(G, '!$("trail").hidden'), BOOT)
         trail = js(G, '[...$("trail").children].map(s => (s.classList.contains("now-step") ? "*" : "") + s.textContent)')
         ok("its trail is on the torrent, the steps after it to come", trail == ["*Torrent", "Relay", "mpv", "Video"], str(trail))
         ok("and started no mpv", not mpv_of(G))
