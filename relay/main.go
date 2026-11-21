@@ -505,15 +505,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if open != nil {
-		defer r.stopWaiting(name, open)
-		res.Header().Set(wire.WaitingHeader, "yes")
-		conn, err := websocket.Accept(res, req, nil)
-		if err != nil {
-			l.Info("upgrade failed", "err", err)
-			return
-		}
-		l.Info("waiting for a key holder")
-		r.hold(req.Context(), conn, open, l)
+		r.wait(res, req, name, open, l)
 		return
 	}
 	// a node told it opened the room answers joiners with its position: only a key
@@ -521,8 +513,27 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 	if created {
 		res.Header().Set(wire.OpenedHeader, "yes")
 	}
-
 	m := &member{id: id, hostname: hostname, from: from, session: session, ch: make(chan []byte, sendBuffer), log: l}
+	r.serve(res, req, name, rm, m, created)
+}
+
+// wait holds a keyless joiner of a room nobody has opened yet, until a key holder opens it.
+func (r *relay) wait(res http.ResponseWriter, req *http.Request, name string, open <-chan struct{}, l *slog.Logger) {
+	defer r.stopWaiting(name, open)
+	res.Header().Set(wire.WaitingHeader, "yes")
+	conn, err := websocket.Accept(res, req, nil)
+	if err != nil {
+		l.Info("upgrade failed", "err", err)
+		return
+	}
+	l.Info("waiting for a key holder")
+	r.hold(req.Context(), conn, open, l)
+}
+
+// serve runs an admitted member's connection: it joins the room, and every frame it reads
+// goes to the others until it leaves.
+func (r *relay) serve(res http.ResponseWriter, req *http.Request, name string, rm *room, m *member, created bool) {
+	l := m.log
 	conn, err := websocket.Accept(res, req, nil)
 	if err != nil {
 		// admit may have just created the room; drop it again if it is still empty
