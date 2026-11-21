@@ -2563,6 +2563,9 @@ def gui_suite():
         until(lambda: f"{G} has joined" in feed(H) and f"connected to {H}" in feed(G))
         ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
         ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
+        members = lambda n: js(n, '[...$("member-list").children].map(li => li.querySelector(".name").textContent + " " + li.querySelector(".since").textContent)')
+        ok(f"{H}'s members name {G} since it joined", [m.split(" since ")[0] for m in members(H)] == ["You", G] and js(H, '$("member-count").textContent') == "2", str(members(H)))
+        ok(f"{G}'s name {H} as already here", members(G)[1:] == [f"{H} already here"], str(members(G)))
 
         part(f"[G10] a resume in {G}'s mpv: the feeds say who did it")
         must("the join is over", quiet((H, G)))
@@ -2681,6 +2684,8 @@ def gui_suite():
         start(G, hostname=G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="g17d", secret="g17dsecret")
         until(lambda: status(G).startswith("Looking"), BOOT)
         ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
+        trail = js(G, '[...$("trail").children].map(s => (s.classList.contains("now-step") ? "*" : "") + s.textContent)')
+        ok("its trail is on the torrent, the steps after it to come", trail == ["*Torrent", "Relay", "mpv", "Video"], str(trail))
         ok("and started no mpv", not mpv_of(G))
         end(G)
         ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))
