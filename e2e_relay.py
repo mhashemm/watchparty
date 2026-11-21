@@ -175,6 +175,7 @@ def relay_suite():
             nodes[bad]["proc"].wait(timeout=30)
             ok("the bad-secret node exited", nodes[bad]["proc"].poll() is not None)
             ok("it was told 403", "403" in log(bad), "a wrong secret must not upgrade")
+            ok("once", log(bad).count("rejected by relay") == 1, log(bad)[-300:])
             ok("it did not retry forever", log(bad).count("relay: dial") <= 1, "403 is permanent")
             ok("nobody in the room saw it join", not any(bad in known(n) for n in P))
 
@@ -193,7 +194,8 @@ def relay_suite():
             nodes[other]["sock"] = child_mpv_socket(nodes[other]["proc"].pid)  # only if it wrongly got in
             ok("the different file's node exited with an error", nodes[other]["proc"].poll() not in (None, 0),
                f"rc={nodes[other]['proc'].returncode}")
-            ok("it was told 409 and why", "409" in log(other) and "not the same file as the party's" in log(other))
+            ok("it was told why", "not the same file as the party's" in log(other))
+            ok("and what each plays", "the party's: " in log(other) and "yours: " in log(other), log(other)[-400:])
             ok("it did not retry", log(other).count("relay: dial") == 0, "409 is permanent")
             ok("nobody in the room saw it join", not any(other in known(n) for n in P))
 
@@ -243,7 +245,7 @@ def relay_suite():
             launch(other, room="r11c", media=url + "?other")
             until(lambda: nodes[other]["proc"].poll() is not None, BOOT)
             nodes[other]["sock"] = child_mpv_socket(nodes[other]["proc"].pid)  # only if it wrongly got in
-            ok("another URL was refused", "409" in log(other) and "not the same file" in log(other), log(other)[-300:])
+            ok("another URL was refused", "not the same file" in log(other), log(other)[-300:])
             ok("nobody saw it join", not any(other in known(n) for n in P))
 
     @case("[R11d] a joiner still loading a slow stream applies only the last of what it missed")

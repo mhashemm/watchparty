@@ -10,8 +10,11 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mhashemm/watchparty/mpv"
 )
 
 // Only the content counts: a copy under another name and folder, with another
@@ -37,7 +40,7 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 	}
 	sum := func(path string) string {
 		t.Helper()
-		s, err := fingerprint(path)
+		s, _, err := fingerprint(path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +65,7 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 			t.Errorf("%d bytes: a longer file kept the fingerprint", size)
 		}
 	}
-	if _, err := fingerprint(dir); err == nil {
+	if _, _, err := fingerprint(dir); err == nil {
 		t.Error("a folder got a fingerprint")
 	}
 }
@@ -70,12 +73,12 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 // mpv plays URLs too. Nothing is fetched: the same URL is the same video.
 func TestFingerprintOfAURLIsTheURL(t *testing.T) {
 	t.Parallel()
-	a, err := fingerprint("https://example.com/video.mkv")
+	a, _, err := fingerprint("https://example.com/video.mkv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := fingerprint("https://example.com/video.mkv")
-	c, _ := fingerprint("https://example.com/other.mkv")
+	b, _, _ := fingerprint("https://example.com/video.mkv")
+	c, _, _ := fingerprint("https://example.com/other.mkv")
 	if a != b || a == c {
 		t.Errorf("same URL matched: %v, different URL matched: %v", a == b, a == c)
 	}
@@ -141,6 +144,9 @@ func TestOutcomeFollowsTheFactsInOrder(t *testing.T) {
 	exited := errors.New("mpv exited before the video was ready: signal: killed")
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
+	rejected := errors.New("rejected by relay: 403 Forbidden")
+	refused, refuse := context.WithCancelCause(context.Background())
+	refuse(rejected)
 	live := context.Background()
 	for _, c := range []struct {
 		name      string
@@ -151,12 +157,28 @@ func TestOutcomeFollowsTheFactsInOrder(t *testing.T) {
 		{"the caller stopped it, and mpv was killed for it", stopped, stopped, false, exited, nil},
 		{"the user quit mpv", live, stopped, true, exited, nil},
 		{"something inside stopped it", live, stopped, false, exited, errStopped},
+		{"the relay rejected it, and said why", live, refused, false, exited, rejected},
 		{"mpv's own reason", live, live, false, exited, exited},
 		{"a normal end", live, live, false, nil, nil},
 	} {
 		if got := outcome(c.parent, c.c, c.quit, c.err); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A relay can refuse before mpv has started. exec then says only "context canceled"; Run
+// must say why the party stopped.
+func TestAStopBeforeMpvStartsSaysWhy(t *testing.T) {
+	t.Parallel()
+	rejected := errors.New("rejected by relay: 409 Conflict")
+	c, stop := context.WithCancelCause(context.Background())
+	stop(rejected)
+	var playing atomic.Pointer[mpv.Client]
+	v := video{entries: []entry{{file: "video.mkv", name: "video.mkv"}}}
+	err := runMpv(context.Background(), c, func() {}, Config{Mpv: os.Args[0]}, v, 0, make(chan mpv.IncomingMessage), make(chan []byte), &playing)
+	if err != rejected {
+		t.Fatalf("got %v, want %v", err, rejected)
 	}
 }
 

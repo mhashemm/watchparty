@@ -95,8 +95,10 @@ type member struct {
 }
 
 type room struct {
-	secret  []byte
-	file    string
+	secret []byte
+	file   string
+	// video is the opener's, for a refused joiner (wire.VideoHeader)
+	video   string
 	members map[*member]struct{}
 	// away: members whose connection dropped, by session, until they come back or the
 	// room is told they left
@@ -196,7 +198,7 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 // against. add and leave act on it only while it is still the room of that name: otherwise
 // a handler slow to add could join a newer room of that name, whose secret and file it was
 // never checked against.
-func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known) (*room, bool, <-chan struct{}, int, error) {
+func (r *relay) admit(name string, secret, key []byte, file, video, ip string, old *known) (*room, bool, <-chan struct{}, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -211,7 +213,7 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 			return nil, false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if rm.file != file {
-			return nil, false, nil, http.StatusConflict, fmt.Errorf("not the same file")
+			return nil, false, nil, http.StatusConflict, otherFile{rm.video}
 		}
 		return rm, false, nil, 0, nil
 	}
@@ -229,7 +231,8 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 			return nil, false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if old.file != file {
-			return nil, false, nil, http.StatusConflict, fmt.Errorf("not the same file")
+			// a remembered room keeps no video: names stay off the disk
+			return nil, false, nil, http.StatusConflict, otherFile{}
 		}
 		o, ok := r.opening[name]
 		if !ok {
@@ -252,10 +255,15 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 	if len(r.rooms) >= r.maxRooms {
 		return nil, false, nil, http.StatusServiceUnavailable, fmt.Errorf("relay is full")
 	}
-	rm = &room{secret: secret, file: file, members: map[*member]struct{}{}, away: map[string]*member{}}
+	rm = &room{secret: secret, file: file, video: video, members: map[*member]struct{}{}, away: map[string]*member{}}
 	r.rooms[name] = rm
 	return rm, true, nil, 0, nil
 }
+
+// otherFile is a 409, with the room's video for the joiner.
+type otherFile struct{ video string }
+
+func (otherFile) Error() string { return "not the same file" }
 
 // opened tells everyone held for the room to join, once its key holder is in it. Sooner,
 // one could be added first and announce itself to an empty room.
@@ -482,6 +490,11 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		refuse(res, l, http.StatusBadRequest, "room, hostname, id and session are required")
 		return
 	}
+	video := req.Header.Get(wire.VideoHeader)
+	if len(video) > wire.MaxVideo {
+		refuse(res, l, http.StatusBadRequest, "video too long")
+		return
+	}
 
 	secret, key, file := []byte(req.Header.Get(wire.SecretHeader)), []byte(req.Header.Get(wire.CreateKeyHeader)), q.Get(wire.FileParam)
 	var old *known
@@ -494,8 +507,11 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	rm, created, open, code, err := r.admit(name, secret, key, file, ip, old)
+	rm, created, open, code, err := r.admit(name, secret, key, file, video, ip, old)
 	if err != nil {
+		if o, ok := err.(otherFile); ok {
+			res.Header().Set(wire.VideoHeader, o.video)
+		}
 		refuse(res, l, code, err.Error())
 		return
 	}

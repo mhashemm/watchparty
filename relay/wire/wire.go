@@ -25,7 +25,14 @@ const (
 	OpenedHeader = "room-opened"
 	// WaitingHeader is "yes" on the 101 for a node held until a key holder opens the room.
 	WaitingHeader = "room-waiting"
+	// VideoHeader is the node's video as the party describes it to a refused joiner. The
+	// relay keeps the opener's in memory and sends it back on a 409, unread.
+	VideoHeader = "room-video"
 )
+
+// MaxVideo caps VideoHeader: the relay keeps one per open room, and nginx and Cloudflare
+// in front of it refuse a header over 8KB.
+const MaxVideo = 2048
 
 // How the relay closes a held node: join now, or give up.
 const (

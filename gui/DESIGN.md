@@ -99,6 +99,11 @@ that.
   - **A slow member** (option B of three): the status says whose network is slow and to stay
     paused, the detail how many seconds each has ready, and their row a porcini bar, full
     at a minute. Gone on the next resume.
+  - **A refused file** (rows, chosen over two cards and detail lines): under the Diagnosis,
+    a row per fact both sides have (video, size, checksum, a playlist's count and checksum),
+    the party's beside yours, what differs on your side in berry. Never an empty cell (chosen
+    over filler words and sending more): what only one side has, like which of your videos
+    differs, is the detail line above the rows.
 - **Voice:** plain, active, sentence case. The title is "Hahas and Hehes Watch Party"
   with a small mushroom. The medical theme lives in names only: "Vitals", "Patient
   chart" (the raw log), and every error starts with "Diagnosis:" then what happened

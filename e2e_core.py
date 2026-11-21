@@ -1084,9 +1084,9 @@ def seeder(path):
     return p.stdout.readline().strip()
 
 
-NOT_THE_SAME_VIDEO = ("Diagnosis: your video is not the same file as the party's. Pick the same video and start again. "
-                      "If the party is watching a whole folder, tick the box under File.")
-NOT_THE_SAME_FOLDER = "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
+# once the party has said what it plays (party.NotTheSameFile); before, the relay's 409 alone
+NOT_THE_SAME_VIDEO = "Diagnosis: your video is not the same file as the party's. Pick the same video and start again."
+NOT_THE_SAME_FOLDER = "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order."
 
 
 def videos_in(path, names):

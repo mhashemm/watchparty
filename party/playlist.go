@@ -18,25 +18,31 @@ var VideoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv"
 // media resolves -file. With siblings, a file brings the other videos in its folder too,
 // starting on it. The list's identity is its videos in order, so everyone's next entry is
 // the same. A URL, or a file the list wouldn't hold, plays alone.
-func media(path string, siblings bool) (files []string, start int, playlist bool, id string, err error) {
+func media(path string, siblings bool) (video, error) {
+	var v video
+	var files []string
 	if siblings {
-		files, start = neighbours(path)
+		files, v.start = neighbours(path)
 	}
-	if files == nil {
-		checking(1, 1, path)
-		id, err = fingerprint(path)
-		return []string{path}, 0, false, id, err
+	v.playlist = files != nil
+	if !v.playlist {
+		files = []string{path}
 	}
 	h := sha256.New()
 	for i, f := range files {
 		checking(i+1, len(files), f)
-		sum, err := fingerprint(f)
+		sum, size, err := fingerprint(f)
 		if err != nil {
-			return nil, 0, false, "", err
+			return video{}, err
 		}
+		v.entries = append(v.entries, entry{file: f, name: filepath.Base(f), sum: sum, size: size})
 		h.Write([]byte(sum))
 	}
-	return files, start, true, hex.EncodeToString(h.Sum(nil)), nil
+	v.id = v.entries[0].sum
+	if v.playlist {
+		v.id = hex.EncodeToString(h.Sum(nil))
+	}
+	return v, nil
 }
 
 // checking logs which file is being fingerprinted, as a big folder on a slow disk takes a

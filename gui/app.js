@@ -240,7 +240,7 @@ async function startParty(extra) {
 
 let run = 0, from = 0, state = {}, plan = null;
 function reset() {
-  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, leftPause: false, stopping: null,
+  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", unreachable: false, leftPause: false, stopping: null,
     shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
     myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false };
   $("log").textContent = "";
@@ -313,7 +313,6 @@ function handle(line) {
     state.waiting = /is not open yet/.test(msg);
     state.busy = /^relay: dial: 429 /.test(msg) ? "limited" : /^relay: dial: 503 /.test(msg) ? "full" : "";
   }
-  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) Object.assign(state, { ready: true, inAt: at, swarm: null });
   if (/^torrent: finding /.test(msg)) state.torrent = true;
   if (/^torrent: found /.test(msg)) state.found = true;
@@ -474,20 +473,49 @@ function renderMembers(show) {
   $("member-list").replaceChildren(row(0, "You", state.inAt, state.myAhead), ...state.members.map((p, i) => row(i + 1, p.name, p.since, state.aheadOf[p.id]?.secs)));
 }
 
+// a refusal that says what differs (party.NotTheSameFile): the diagnosis from it, and its
+// rows as party gives them, what differs on your side in berry
+function refusedFor(r) {
+  if (r.box === "tick") return `Diagnosis: the party plays a playlist of ${r.videos} videos, and you picked one file. Tick the box under File and start again.`;
+  if (r.box === "untick") return "Diagnosis: the party plays one file, and you picked a whole folder. Untick the box under File and start again.";
+  return r.playlist
+    ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order."
+    : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.";
+}
+
+function renderCompare(r) {
+  $("compare").hidden = !r;
+  if (!r) return;
+  const cell = (text, mono, cls) => {
+    const s = document.createElement("span");
+    if (cls) s.className = cls;
+    if (mono && text) { const c = document.createElement("code"); c.textContent = text; s.append(c); } else s.textContent = text;
+    return s;
+  };
+  const li = (...cells) => { const l = document.createElement("li"); l.append(...cells); return l; };
+  $("compare").replaceChildren(
+    li(cell(""), cell("The party's", false, "h"), cell("Yours", false, "h")),
+    ...r.rows.map(x => li(cell(x.label, false, "k"), cell(x.party, x.mono), cell(x.yours, x.mono, x.differs ? "x" : ""))));
+}
+
 const notSameFile = () => $("playlist").checked
   ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
   : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again. If the party is watching a whole folder, tick the box under File.";
 
-function render(exitErr) {
+function render(exitErr, refusal) {
   let text, bad = false, mood = "awake", walking = false, detail = null, pct = null;
-  const list = steps(), now = running && !state.rejected ? list.find(k => !stepDone(k)) : undefined;
-  if (state.rejected === "file") {
+  const list = steps(), now = running ? list.find(k => !stepDone(k)) : undefined;
+  // the relay's rejection, as Run returned it
+  const rejected = !/^rejected by relay/.test(exitErr || "") ? "" : /not the same file/.test(exitErr) ? "file" : /did not open/.test(exitErr) ? "unopened" : /-createKey/.test(exitErr) ? "key" : "secret";
+  if (refusal) {
+    text = refusedFor(refusal); bad = true;
+  } else if (rejected === "file") {
     text = notSameFile(); bad = true;
-  } else if (state.rejected === "unopened") {
+  } else if (rejected === "unopened") {
     text = "Diagnosis: nobody opened this room for 30 minutes. Start again once someone with the create key is in."; bad = true;
-  } else if (state.rejected === "key") {
+  } else if (rejected === "key") {
     text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
-  } else if (state.rejected) {
+  } else if (rejected) {
     text = "Diagnosis: the relay rejected this room or secret. Check the invite and start again."; bad = true;
   } else if (running && state.waiting) {
     text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;
@@ -531,7 +559,8 @@ function render(exitErr) {
   if ($("status").textContent !== text) $("status").textContent = text;
   $("status").classList.toggle("bad", bad);
   renderTrail(list, now);
-  renderDetail(detail, pct);
+  renderDetail(refusal?.detail || detail, pct);
+  renderCompare(refusal);
   renderMembers(running && state.ready && !now);
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
@@ -569,7 +598,7 @@ async function poll() {
     running = j.running;
     if (run > 0) {
       $("vitals").hidden = false;
-      render(j.exitErr);
+      render(j.exitErr, j.refusal);
     }
   } catch {
     polling = false;

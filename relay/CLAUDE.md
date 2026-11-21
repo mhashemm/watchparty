@@ -48,7 +48,9 @@ goes there too. Not in the release; deployed by the `deploy-relay` workflow (`de
 
 - `GET /ws?room=&hostname=&id=&session=&file=` upgrades. The secret is in the
   **`room-secret`** header, never the query (proxies log it); the create key, needed
-  only to open a room, in **`create-key`**. `file` isn't secret.
+  only to open a room, in **`create-key`**. `file` isn't secret. **`room-video`**: the
+  opener's is kept with the open room, in memory only (names stay off the disk), and sent
+  back on a 409, unread; over `MaxVideo` is 400.
 - The 101 carries **`room-opened: yes`** for the node that created the room with the key:
   its position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
 - **Held** (`hold`): a keyless member of a remembered room gets a 101 with

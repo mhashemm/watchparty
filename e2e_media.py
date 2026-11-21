@@ -157,7 +157,7 @@ def media_suite():
         ok("so is one in another order", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
 
         n = launch("epAlone", room="playlistroom", media=f"{folder}/video2.mkv")
-        ok("so is someone who didn't ask for the playlist", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "not the same file" in log(n), log(n)[-200:])
+        ok("so is someone who didn't ask for the playlist, told to", until(lambda: nodes[n]["proc"].poll() is not None, BOOT) and "you picked one file: tick the box" in log(n), log(n)[-200:])
 
         must("near the end of the last", seek(num(host, "duration") - 1))
         setp(host, "pause", False)

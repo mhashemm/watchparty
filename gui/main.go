@@ -131,6 +131,8 @@ type gui struct {
 	run       int
 	lines     []string
 	exitErr   string
+	// refusal is what each side plays, when the party refused this node's file
+	refusal   *party.NotTheSameFile
 	lastPoll  time.Time
 	idleAfter time.Duration
 	pages     int
@@ -204,7 +206,7 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, cancel := context.WithCancel(g.ctx)
-	g.cancel, g.lines, g.exitErr = cancel, nil, ""
+	g.cancel, g.lines, g.exitErr, g.refusal = cancel, nil, "", nil
 	g.run++
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
@@ -220,6 +222,7 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			g.exitErr = err.Error()
 		}
+		errors.As(err, &g.refusal)
 	})
 }
 
@@ -322,12 +325,13 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 	}
 	from = min(max(from, 0), len(g.lines))
 	res := struct {
-		Run     int      `json:"run"`
-		From    int      `json:"from"`
-		Lines   []string `json:"lines"`
-		Running bool     `json:"running"`
-		ExitErr string   `json:"exitErr"`
-	}{g.run, from, slices.Clone(g.lines[from:]), g.cancel != nil, g.exitErr}
+		Run     int                   `json:"run"`
+		From    int                   `json:"from"`
+		Lines   []string              `json:"lines"`
+		Running bool                  `json:"running"`
+		ExitErr string                `json:"exitErr"`
+		Refusal *party.NotTheSameFile `json:"refusal,omitempty"`
+	}{g.run, from, slices.Clone(g.lines[from:]), g.cancel != nil, g.exitErr, g.refusal}
 	g.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)

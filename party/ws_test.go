@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/relay/wire"
+	"github.com/mhashemm/watchparty/server"
 )
 
 // stub serves /ws with handle and returns the ws:// address a relayConn dials.
@@ -68,7 +69,7 @@ func TestRejectionEndsTheParty(t *testing.T) {
 			t.Fatalf("%d: got %v, want errRejected", status, err)
 		}
 
-		c, cancel := context.WithCancel(context.Background())
+		c, cancel := context.WithCancelCause(context.Background())
 		returned := make(chan struct{})
 		go func() {
 			r.Connect(c, cancel)
@@ -78,6 +79,29 @@ func TestRejectionEndsTheParty(t *testing.T) {
 		if c.Err() == nil {
 			t.Fatalf("%d: Connect gave up without ending the party", status)
 		}
+	}
+}
+
+// A 409 stops the party with what the room plays as the cause, for Run to set beside this
+// node's video, and every dial says what this node plays, in case it opens the room.
+func TestRefusalForTheFileKeepsWhatTheRoomPlays(t *testing.T) {
+	t.Parallel()
+	sent := make(chan string, 1)
+	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		sent <- r.Header.Get(wire.VideoHeader)
+		w.Header().Set(wire.VideoHeader, "described")
+		w.WriteHeader(http.StatusConflict)
+	})
+	r := newRelayConn(addr, nil)
+	r.video = "mine"
+	c, cancel := context.WithCancelCause(context.Background())
+	r.Connect(c, cancel)
+	if got := <-sent; got != "mine" {
+		t.Fatalf("the dial said %q", got)
+	}
+	var refusal *server.DifferentFile
+	if !errors.As(context.Cause(c), &refusal) || refusal.Video != "described" {
+		t.Fatalf("stopped with %v", context.Cause(c))
 	}
 }
 
@@ -96,8 +120,8 @@ func TestNotOpenYetKeepsRetrying(t *testing.T) {
 		conn.Read(r.Context())
 	})
 	r := newRelayConn(addr, nil)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	go r.Connect(c, cancel)
 
 	waitDone(t, joined, "never redialled after 401")
@@ -128,8 +152,8 @@ func TestABusyRelayIsRetriedAndNamed(t *testing.T) {
 		if _, _, err := r.dialOnce(context.Background()); err == nil || errors.Is(err, errRejected) || !strings.HasPrefix(err.Error(), want) {
 			t.Fatalf("%d: got %v, want a retryable error starting %q", status, err, want)
 		}
-		c, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		c, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
 		go r.Connect(c, cancel)
 		waitDone(t, joined, "never redialled a busy relay")
 	}
@@ -155,8 +179,8 @@ func TestNotOpenGivesUpAfterAWhile(t *testing.T) {
 	r := newRelayConn(addr, nil)
 	r.wait = wait
 
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	returned := make(chan struct{})
 	go func() {
 		r.Connect(c, cancel)
@@ -187,8 +211,8 @@ func TestOpeningARoomWithoutTheKeyEndsTheParty(t *testing.T) {
 		t.Fatalf("got %v, want errRejected naming -createKey", err)
 	}
 
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	returned := make(chan struct{})
 	go func() {
 		r.Connect(c, cancel)
@@ -226,8 +250,8 @@ func TestReconnectKeepsSessionAndDeliversFrames(t *testing.T) {
 	})
 	incoming := make(chan mpv.IncomingMessage, 2)
 	r := newRelayConn(addr, incoming)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	go r.Connect(c, cancel)
 
 	for i := 0; i < 2; {
@@ -269,8 +293,8 @@ func TestADropIsToldToMpvAndSoIsTheReturn(t *testing.T) {
 	})
 	incoming := make(chan mpv.IncomingMessage, 4)
 	r := newRelayConn(addr, incoming)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	go r.Connect(c, cancel)
 
 	for i, want := range []mpv.IncomingMessage{{Lost: true}, {Back: true}, {HostName: "peer"}} {
@@ -296,7 +320,7 @@ func TestThePartysEndSaysGoodbye(t *testing.T) {
 		closed <- websocket.CloseStatus(err)
 	})
 	r := newRelayConn(addr, nil)
-	c, cancel := context.WithCancel(context.Background())
+	c, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	go func() { r.Connect(c, cancel); close(done) }()
 	select {
@@ -304,7 +328,7 @@ func TestThePartysEndSaysGoodbye(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("never connected")
 	}
-	cancel()
+	cancel(nil)
 	select {
 	case got := <-closed:
 		if got != websocket.StatusNormalClosure {
@@ -332,8 +356,8 @@ func TestTheOneWhoReopensTheRoomDoesNotRejoin(t *testing.T) {
 	})
 	incoming := make(chan mpv.IncomingMessage, 4)
 	r := newRelayConn(addr, incoming)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	go r.Connect(c, cancel)
 
 	for i, want := range []mpv.IncomingMessage{{Opened: true}, {Lost: true}, {Opened: true}, {HostName: "peer"}} {
@@ -369,7 +393,7 @@ func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
 	defer conn.CloseNow()
 	r.set(conn)
 
-	c, cancel := context.WithCancel(context.Background())
+	c, cancel := context.WithCancelCause(context.Background())
 	outgoing := make(chan []byte, 1)
 	returned := make(chan struct{})
 	go func() {
@@ -389,7 +413,7 @@ func TestBroadcastSendsEnvelopeAndStopsWithTheParty(t *testing.T) {
 		t.Fatal("event never reached the relay")
 	}
 
-	cancel()
+	cancel(nil)
 	waitDone(t, returned, "Broadcast outlived the party")
 }
 
@@ -409,8 +433,8 @@ func TestEventsBeforeTheFirstConnectionAreHeld(t *testing.T) {
 		conn.Read(r.Context())
 	})
 	r := newRelayConn(addr, nil)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	outgoing := make(chan []byte, 1)
 	outgoing <- []byte(`{"name":"joined"}`)
 	go r.Broadcast(c, outgoing)
@@ -463,8 +487,8 @@ func TestOpenedReachesMpvFirst(t *testing.T) {
 	})
 	incoming := make(chan mpv.IncomingMessage, 8)
 	r := newRelayConn(addr, incoming)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	go r.Connect(c, cancel)
 
 	var got []string
@@ -503,8 +527,8 @@ func TestHeldUntilTheRoomOpens(t *testing.T) {
 		conn.Read(r.Context())
 	})
 	r := newRelayConn(addr, nil)
-	c, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	go r.Connect(c, cancel)
 	waitDone(t, joined, "never joined once the room opened")
 

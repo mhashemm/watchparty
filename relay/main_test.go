@@ -402,7 +402,7 @@ func TestJoinNoticesGoToTheRoomAddSaw(t *testing.T) {
 func TestAddToAReapedRoomFails(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	rm, _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil)
+	rm, _, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "", "ip", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,12 +422,12 @@ func TestAddToAReapedRoomFails(t *testing.T) {
 func TestAJoinNeverLandsInANewerRoom(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 10, 10, 10)
-	old, _, _, _, err := r.admit("room", []byte("old secret"), []byte("k"), "f", "ip", nil)
+	old, _, _, _, err := r.admit("room", []byte("old secret"), []byte("k"), "f", "", "ip", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.leave("room", old, nil, true)
-	newer, _, _, _, err := r.admit("room", []byte("new secret"), []byte("k"), "other", "ip", nil)
+	newer, _, _, _, err := r.admit("room", []byte("new secret"), []byte("k"), "other", "", "ip", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,11 +451,11 @@ func TestHeldMembersJoinAfterTheOpener(t *testing.T) {
 	t.Parallel()
 	r := newRelay(t, 100, 100, 100)
 	old := &known{secret: sha256.Sum256([]byte("s")), file: "f"}
-	_, _, open, _, err := r.admit("room", []byte("s"), nil, "f", "ip", old)
+	_, _, open, _, err := r.admit("room", []byte("s"), nil, "f", "", "ip", old)
 	if err != nil || open == nil {
 		t.Fatalf("got %v, want to be held", err)
 	}
-	rm, created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "ip", nil)
+	rm, created, _, _, err := r.admit("room", []byte("s"), []byte("k"), "f", "", "ip", nil)
 	if !created || err != nil {
 		t.Fatalf("the key holder got %v, want the room created", err)
 	}
@@ -760,6 +760,37 @@ func gone(t *testing.T, r *relay, roomName string) {
 		_, ok := r.rooms[roomName]
 		return !ok
 	})
+}
+
+// A joiner refused for its file is told what the room plays, as its opener described it,
+// while the room is open. A remembered room is on disk, and names stay off it, so it says
+// nothing. An oversized description is refused.
+func TestRefusedJoinerHearsTheOpenersVideo(t *testing.T) {
+	t.Parallel()
+	r, url := keyed(t, t.TempDir()+"/relay.db")
+	dialWith := func(file, video string, key ...string) (*websocket.Conn, *http.Response) {
+		conn, res, _ := websocket.Dial(context.Background(), url+wire.Path+"?room=room&hostname="+asNode("a&file="+file),
+			&websocket.DialOptions{HTTPHeader: http.Header{wire.SecretHeader: {"s"}, wire.CreateKeyHeader: key, wire.VideoHeader: {video}}})
+		return conn, res
+	}
+	if _, res := dialWith("abc", strings.Repeat("v", wire.MaxVideo+1), "k"); res == nil || res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("an oversized video got %v, want 400", res)
+	}
+	host, res := dialWith("abc", "described", "k")
+	if host == nil {
+		t.Fatalf("the opener got %v", res)
+	}
+	refused := func(when, want string) {
+		t.Helper()
+		_, res := dialWith("xyz", "mine")
+		if res == nil || res.StatusCode != http.StatusConflict || res.Header.Get(wire.VideoHeader) != want {
+			t.Fatalf("%s: got %v", when, res)
+		}
+	}
+	refused("open", "described")
+	host.CloseNow()
+	gone(t, r, "room")
+	refused("remembered", "")
 }
 
 // keyed remembers rooms in db, so a second relay on it is the first one restarted.

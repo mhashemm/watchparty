@@ -34,19 +34,19 @@ func TestPlaylistHoldsTheFoldersVideosAndStartsOnTheFile(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "extras.mkv"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	files, start, playlist, _, err := media(filepath.Join(dir, "e2.MP4"), true)
-	if err != nil || !playlist {
-		t.Fatal(playlist, err)
+	v, err := media(filepath.Join(dir, "e2.MP4"), true)
+	if err != nil || !v.playlist {
+		t.Fatal(v.playlist, err)
 	}
 	names := []string{}
-	for _, f := range files {
-		names = append(names, filepath.Base(f))
+	for _, e := range v.entries {
+		names = append(names, filepath.Base(e.file))
 	}
 	if want := []string{"e1.webm", "e2.MP4", "e10.mkv"}; !slices.Equal(names, want) {
 		t.Fatalf("got %q, want %q", names, want)
 	}
-	if start != 1 {
-		t.Fatalf("starts on %d, want the file that was picked", start)
+	if v.start != 1 {
+		t.Fatalf("starts on %d, want the file that was picked", v.start)
 	}
 }
 
@@ -57,11 +57,11 @@ func TestPlaylistIdentityIsTheVideosInOrder(t *testing.T) {
 	t.Parallel()
 	id := func(pick string, files map[string]string) string {
 		t.Helper()
-		_, _, _, id, err := media(filepath.Join(writeFiles(t, files), pick), true)
+		v, err := media(filepath.Join(writeFiles(t, files), pick), true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return id
+		return v.id
 	}
 	base := id("e1.mkv", map[string]string{"e1.mkv": "a", "e2.mkv": "b"})
 	if got := id("e2.mkv", map[string]string{"e1.mkv": "a", "e2.mkv": "b"}); got != base {
@@ -90,10 +90,10 @@ func TestWhatPlaysAlone(t *testing.T) {
 		"https://example.com/m.mkv":   true,
 		filepath.Join(dir, "odd.xyz"): true,
 	} {
-		files, _, playlist, id, err := media(target, siblings)
-		want, _ := fingerprint(target)
-		if err != nil || playlist || !slices.Equal(files, []string{target}) || id != want {
-			t.Fatalf("%s: got %q %v %s %v", target, files, playlist, id, err)
+		v, err := media(target, siblings)
+		want, _, _ := fingerprint(target)
+		if err != nil || v.playlist || len(v.entries) != 1 || v.entries[0].file != target || v.id != want {
+			t.Fatalf("%s: got %+v %v %s %v", target, v.entries, v.playlist, v.id, err)
 		}
 	}
 }

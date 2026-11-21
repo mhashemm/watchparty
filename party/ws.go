@@ -37,6 +37,7 @@ type relayConn struct {
 	id        string
 	session   string
 	file      string
+	video     string
 	incoming  chan<- mpv.IncomingMessage
 	retry     time.Duration
 	wait      time.Duration
@@ -86,14 +87,14 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.IDParam: {r.id}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}}
 	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+wire.Path+"?"+q.Encode(), &websocket.DialOptions{
-		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}},
+		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}, wire.VideoHeader: {r.video}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
 		case http.StatusForbidden, http.StatusBadRequest:
 			return nil, false, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
 		case http.StatusConflict:
-			return nil, false, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
+			return nil, false, fmt.Errorf("%w: %s: %w", errRejected, res.Status, &server.DifferentFile{Video: res.Header.Get(wire.VideoHeader)})
 		case http.StatusUnauthorized:
 			if r.creating {
 				return nil, false, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
@@ -156,19 +157,19 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 }
 
 // Connect dials and redials the relay for the whole party. A dropped connection never ends
-// the party; only a rejection cancels it.
+// the party; only a rejection stops it, as the cause, which Run returns.
 //
 // mpv is told when the connection is lost (Lost), and plays on, and when it is back (Back),
 // so it tells the party where it is: what it sent meanwhile was dropped, and what the party
 // sent never arrived. Not Back if the redial opened the room: nobody is there yet, and this
 // node answers the others.
-func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
+func (r *relayConn) Connect(c context.Context, stop context.CancelCauseFunc) {
 	backoff, dropped := r.retry, false
 	for c.Err() == nil {
 		conn, err := r.dial(c)
+		// Run returns it, and the CLI prints it or the GUI diagnoses it, once
 		if errors.Is(err, errRejected) {
-			log.Printf("relay: %s\n", err)
-			cancel()
+			stop(err)
 			return
 		}
 		if err != nil {

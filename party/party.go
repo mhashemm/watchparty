@@ -74,7 +74,9 @@ const mpvExitGrace = 10 * time.Second
 // stop and returns nil; every cleanup (/bye, the UPNP mapping) has run by the time
 // it returns.
 func Run(parent context.Context, cfg Config) error {
-	c, cancel := context.WithCancel(parent)
+	// a relay's rejection says why it stopped the party (outcome)
+	c, stop := context.WithCancelCause(parent)
+	cancel := func() { stop(nil) }
 	defer cancel()
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 	// mpv's client once it has the video
@@ -95,11 +97,14 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		v = video{files: stream.urls, names: stream.names, playlist: len(stream.urls) > 1, id: stream.id}
+		v = video{playlist: len(stream.urls) > 1, id: stream.id, infohash: stream.infohash}
+		for i, u := range stream.urls {
+			v.entries = append(v.entries, entry{file: u, name: stream.names[i], size: stream.sizes[i]})
+		}
 		cfg.Playlist = false
 	} else {
 		var err error
-		if v, err = localVideo(target, cfg.Playlist); err != nil {
+		if v, err = media(target, cfg.Playlist); err != nil {
 			return err
 		}
 		cfg.Playlist = v.playlist
@@ -107,12 +112,14 @@ func Run(parent context.Context, cfg Config) error {
 	log.Printf("file fingerprint: %s\n", v.id)
 	startAt := cfg.Start
 	if v.playlist && cfg.Entry != "" {
-		if i := slices.Index(v.names, cfg.Entry); i >= 0 {
+		if i := slices.IndexFunc(v.entries, func(e entry) bool { return e.name == cfg.Entry }); i >= 0 {
 			v.start = i
 		} else {
 			startAt = 0
 		}
 	}
+	// what a joiner refused for its file is told, and sets beside its own
+	ours := v.about().header()
 	if cfg.Secret == "" {
 		cfg.Secret = rand.Text()
 	}
@@ -121,40 +128,35 @@ func Run(parent context.Context, cfg Config) error {
 	}
 
 	if strings.TrimSpace(cfg.Relay) != "" {
-		joinRelay(c, cancel, &cfg, incoming, outgoing, v.id)
+		joinRelay(c, stop, &cfg, incoming, outgoing, v.id, ours)
 	} else {
-		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id)
+		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id, ours)
 		if err != nil && parent.Err() != nil {
 			return nil
 		}
 		if err != nil {
-			return err
+			return refusedFile(err, v)
 		}
 		defer cleanup()
 	}
-	return runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing)
+	return refusedFile(runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing), v)
 }
 
-// video is what the party plays: the files mpv opens and their names, the entry it starts
-// on, and the fingerprint every member's must match (id).
+// video is what the party plays: its entries, the one it starts on, and the fingerprint
+// every member's must match (id). infohash is a torrent's, for a refused joiner (About).
 type video struct {
-	files, names []string
-	start        int
-	playlist     bool
-	id           string
+	entries  []entry
+	start    int
+	playlist bool
+	id       string
+	infohash string
 }
 
-// localVideo is a file, or with siblings its folder's playlist.
-func localVideo(target string, siblings bool) (video, error) {
-	files, start, playlist, id, err := media(target, siblings)
-	if err != nil {
-		return video{}, err
-	}
-	v := video{files: files, start: start, playlist: playlist, id: id}
-	for _, f := range files {
-		v.names = append(v.names, filepath.Base(f))
-	}
-	return v, nil
+// entry is one video mpv opens: its file or URL, its name, and for a refused joiner its
+// size (0 when unknown) and, on disk, its fingerprint.
+type entry struct {
+	file, name, sum string
+	size            int64
 }
 
 // openSwarm opens a torrent and reports its swarm while the party waits on it.
@@ -174,7 +176,7 @@ func openSwarm(c context.Context, target, cache string, playing *atomic.Pointer[
 }
 
 // joinRelay connects to the relay in the background, creating a room when cfg has none.
-func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file string) {
+func joinRelay(c context.Context, stop context.CancelCauseFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file, video string) {
 	creating := cfg.Room == ""
 	if creating {
 		cfg.Room = rand.Text()
@@ -189,12 +191,13 @@ func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incomi
 		id:        rand.Text(),
 		session:   rand.Text(),
 		file:      file,
+		video:     video,
 		incoming:  incoming,
 		retry:     minBackoff,
 		wait:      notOpenFor,
 		up:        make(chan struct{}, 1),
 	}
-	go conn.Connect(c, cancel)
+	go conn.Connect(c, stop)
 	go conn.Broadcast(c, outgoing)
 	log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
 }
@@ -215,13 +218,16 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 	}
 	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
 	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script)
-	names := v.names
+	var names []string
 	if v.playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(v.start))
-	} else {
-		names = nil
 	}
-	args = append(args, v.files...)
+	for _, e := range v.entries {
+		args = append(args, e.file)
+		if v.playlist {
+			names = append(names, e.name)
+		}
+	}
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
@@ -229,6 +235,11 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 	cmd.Stdout, cmd.Stderr = out, out
 
 	if err := cmd.Start(); err != nil {
+		// the party stopped before mpv started, as when the relay refuses at once: why it
+		// stopped, not exec's "context canceled"
+		if c.Err() != nil {
+			return outcome(parent, c, false, nil)
+		}
 		return err
 	}
 	defer cmd.Cancel()
@@ -300,6 +311,10 @@ func outcome(parent, c context.Context, mpvQuit bool, err error) error {
 	case parent.Err() != nil, mpvQuit:
 		return nil
 	case c.Err() != nil:
+		// a relay's rejection, which a cancel without a cause isn't
+		if cause := context.Cause(c); !errors.Is(cause, context.Canceled) {
+			return cause
+		}
 		return errStopped
 	}
 	return err
@@ -379,20 +394,21 @@ func (cfg Config) playlistFlag() string {
 }
 
 // fingerprint identifies a video by its content alone, so the same file under
-// another name, path or timestamp matches. A URL is identified by itself.
-func fingerprint(path string) (string, error) {
+// another name, path or timestamp matches, and says its size. A URL is identified by
+// itself, with no size.
+func fingerprint(path string) (string, int64, error) {
 	if strings.Contains(path, "://") {
 		sum := sha256.Sum256([]byte(path))
-		return hex.EncodeToString(sum[:]), nil
+		return hex.EncodeToString(sum[:]), 0, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	size := st.Size()
 	h := sha256.New()
@@ -407,20 +423,20 @@ func fingerprint(path string) (string, error) {
 		}
 	}
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), size, nil
 }
 
 // runMesh starts this node's side of the P2P mesh: an address others can reach, the
 // server, and a hello to each address given. The cleanup it returns runs in reverse: /bye
 // first, then the HTTP server, then the UPNP mapping. Callers defer it, so it runs in Run.
-func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file string) (func(), error) {
+func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, video string) (func(), error) {
 	var cleanup cleanups
 	address, err := meshAddress(c, cfg, &cleanup)
 	if err == nil {
 		var ser *server.Server
-		if ser, err = serveMesh(c, cancel, incoming, outgoing, cfg, file, address, &cleanup); err == nil {
+		if ser, err = serveMesh(c, cancel, incoming, outgoing, cfg, file, video, address, &cleanup); err == nil {
 			err = joinMesh(c, ser, cfg.Addrs, incoming)
 		}
 	}
@@ -489,8 +505,8 @@ func meshAddress(c context.Context, cfg Config, cleanup *cleanups) (string, erro
 }
 
 // serveMesh starts the HTTP server peers send to, and the broadcast to them.
-func serveMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, address string, cleanup *cleanups) (*server.Server, error) {
-	ser := server.New(c, incoming, address, cfg.Hostname, file, cfg.Secret, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
+func serveMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, video, address string, cleanup *cleanups) (*server.Server, error) {
+	ser := server.New(c, incoming, address, cfg.Hostname, file, video, cfg.Secret, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)
