@@ -446,7 +446,7 @@ class Shipped(Wp3):
         m = self.M(files[2], [*self.WP, files[0], files[1]])  # M puts the file last
         ready(m, [])
         p = person_conn(m)
-        errors = {"seeked": [], "ack": [], "ack-late": [], "pos-wrong": []}
+        errors = {"seeked": [], "ack": [], "ack-late": [], "pos-wrong": [], "refused-elsewhere": []}
         shapes = {}
         for r in range(rounds):
             off = OFFSETS_MS[r % len(OFFSETS_MS)]
@@ -468,10 +468,19 @@ class Shipped(Wp3):
             go()
             if off >= 0:
                 time.sleep(off / 1000); m.send("keypress", ">", s=p)
-            k = self.wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
+            k = self.wsnap(m, lambda s: s["kind"] in ("ack", "refused") and s["id"] == tag, i, 5)
             if k is None:
                 errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s.get("at")) for _, s in self.snaps(m, i)],
                                            [l.get("event") for l in m.since(i) if l.get("event") not in (None, "client-message", "property-change")]))
+                continue
+            if self.W(m.lines[k]["args"])["kind"] == "refused":
+                # the key opened its file as the go's seek began: no file to seek in. The node sends
+                # the refusal's entry out as the person's move, so it must be where mpv ends
+                time.sleep(0.8)
+                at, fe = self.W(m.lines[k]["args"]).get("at", ""), get(m, "playlist-pos")
+                if at != fe:
+                    errors["refused-elsewhere"].append((off, e0, at, fe))
+                tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "refused", "names " + at, "ends on " + str(fe)))
                 continue
             time.sleep(0.8)
             ack = self.W(m.lines[k]["args"])
