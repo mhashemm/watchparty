@@ -559,11 +559,11 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
     </nav>
 
     <div id="view-party">
-    <section id="vitals" hidden aria-live="polite">
+    <section id="vitals" hidden>
       <h2>Vitals <svg class="ecg" viewBox="0 0 64 20" aria-hidden="true"><path d="M0 11 H18 L22 4 L27 17 L31 2 L35 11 H64"/></svg></h2>
       <div class="trail" id="trail" hidden></div>
       <div class="now">
-        <p class="status" id="status"></p>
+        <p class="status" id="status" role="status"></p>
         <p class="detail" id="detail" hidden></p>
         <div class="bar" id="bar" hidden><i></i></div>
       </div>
@@ -577,7 +577,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
         <button type="button" id="copy">Copy invite</button>
       </div>
       <h2>Party feed</h2>
-      <div id="feed"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>
+      <div id="feed" aria-live="polite" aria-relevant="additions"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>
       <details id="chart">
         <summary>Patient chart</summary>
         <pre id="log"></pre>
@@ -1310,7 +1310,8 @@ function render(exitErr) {
   } else {
     text = "The party has ended."; mood = "sleep";
   }
-  $("status").textContent = text;
+  // a live region: rewriting the same words makes a screen reader say them again
+  if ($("status").textContent !== text) $("status").textContent = text;
   $("status").classList.toggle("bad", bad);
   renderTrail(list, now);
   renderDetail(detail, pct);
