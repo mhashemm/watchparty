@@ -27,76 +27,109 @@ type flight struct {
 	seek, still bool
 }
 
+// scriptMsg is one message from the script (watchparty.lua), sent as
+// watchparty <kind> <id> <pause> <time-pos> <n> <over|> <playlist-pos>.
+type scriptMsg struct {
+	// id: a go's id, a start's label, or hello's script name
+	kind, id string
+	// paused: mpv's pause as it says it, "yes" or "no"
+	paused string
+	// known: mpv had a time-pos, at
+	at    float64
+	known bool
+	// read: the message's number, which the next go says (c.read)
+	read  string
+	over  bool
+	entry string
+}
+
+// readScript parses a client-message's args, if it is the script's.
+func readScript(args []string) (scriptMsg, bool) {
+	if len(args) < 5 || args[0] != scriptName {
+		return scriptMsg{}, false
+	}
+	arg := func(i int) string {
+		if i < len(args) {
+			return args[i]
+		}
+		return ""
+	}
+	at, err := strconv.ParseFloat(args[4], 64)
+	return scriptMsg{
+		kind: args[1], id: args[2], paused: args[3], at: at, known: err == nil,
+		read: arg(5), over: arg(6) == "over", entry: arg(7),
+	}, true
+}
+
+// stoppedAt is whether mpv was stopped on a known second.
+func (m scriptMsg) stoppedAt() bool {
+	return m.known && m.paused == "yes"
+}
+
+// report is a property change made from what the script said, read as mpv's.
+func report(name, data string) Event {
+	return Event{EventType: propertyChange, Name: name, Data: data, fromScript: true}
+}
+
 // scriptSaid is a message from the script (watchparty.lua): its name, once, or what mpv holds when
 // it was sent, as reports to read as mpv's: the pause it holds, and the person's seek. While a
 // go is on its way, what the script says is from before it, which the go overwrites, or from
 // the go itself: none is the person's, and the ack says where mpv ended (landed).
 func (c *Client) scriptSaid(args []string) []Event {
-	if len(args) < 5 || args[0] != scriptName {
+	m, ok := readScript(args)
+	if !ok {
 		return nil
 	}
-	if len(args) > 5 {
-		c.read = args[5]
+	if m.read != "" {
+		c.read = m.read
 	}
-	kind, said := args[1], args[2]
-	if kind == "hello" {
+	if m.kind == "hello" {
 		if c.script != "" {
 			return nil
 		}
-		c.script = said
+		c.script = m.id
 		// where mpv starts: every later entry it opens, the script says (start)
-		if e, err := strconv.Atoi(entryOf(args)); err == nil && e >= 0 {
+		if e, err := strconv.Atoi(m.entry); err == nil && e >= 0 {
 			c.current = e
 		}
 		c.seen[playlistPos] = true
 		c.opens()
 		// what mpv holds: the first pause this node hears, which only marks where it starts
-		return []Event{{EventType: propertyChange, Name: pause, Data: args[3], fromScript: true}}
+		return []Event{report(pause, m.paused)}
 	}
-	id, _ := strconv.ParseInt(said, 10, 64)
-	paused, pos := args[3], args[4]
-	at, err := strconv.ParseFloat(pos, 64)
-	known := err == nil
-	switch kind {
+	id, _ := strconv.ParseInt(m.id, 10, 64)
+	switch m.kind {
 	case "refused":
 		c.answered(id, outcome{Error: "mpv refused it"})
 		if c.ground(id) {
-			c.paused = paused == "yes"
+			c.paused = m.paused == "yes"
 			// a key that moved mpv while the go was on its way, as at an ack
-			return c.wentElsewhere(paused, at, known, entryOf(args))
+			return c.wentElsewhere(m)
 		}
 	case "ack":
 		c.answered(id, outcome{Error: "success"})
-		return c.landed(id, paused, at, known, len(args) > 6 && args[6] == "over", entryOf(args))
+		return c.landed(id, m)
 	case "start":
-		return c.started(said, entryOf(args))
+		return c.started(m.id, m.entry)
 	case "pause":
 		if c.flying != nil {
 			return nil
 		}
 		var out []Event
 		// stopped, and still: a frame-step, which moves mpv without a seek (ORDER.md)
-		if known && paused == "yes" && c.paused && len(c.marked) == 0 && !c.on(at) {
-			out = c.wentTo(0, at)
+		if m.stoppedAt() && c.paused && len(c.marked) == 0 && !c.on(m.at) {
+			out = c.wentTo(0, m.at)
 		}
-		if known && paused == "yes" {
-			c.pos = at
+		if m.stoppedAt() {
+			c.pos = m.at
 		}
-		return append([]Event{{EventType: propertyChange, Name: pause, Data: paused, fromScript: true}}, out...)
+		return append([]Event{report(pause, m.paused)}, out...)
 	case seek:
-		if known {
-			return c.wentTo(id, at)
+		if m.known {
+			return c.wentTo(id, m.at)
 		}
 	}
 	return nil
-}
-
-// entryOf is the entry a script message says mpv is on, or opened (start); "" if it says none.
-func entryOf(args []string) string {
-	if len(args) > 7 {
-		return args[7]
-	}
-	return ""
 }
 
 // started is the script saying whose file mpv opened (watchparty.lua): this node's move, by its
@@ -122,7 +155,7 @@ func (c *Client) started(label, entry string) []Event {
 	if c.flying != nil {
 		return nil
 	}
-	return []Event{{EventType: propertyChange, Name: playlistPos, Data: entry, fromScript: true}}
+	return []Event{report(playlistPos, entry)}
 }
 
 // answered gives the script's answer to the goTo waiting on it.
@@ -148,25 +181,25 @@ func (c *Client) ground(id int64) bool {
 // a go is on its way, so the ack is always weighed against the state it was sent from. over: the go undid a key of the
 // person's this node never read; made as the party changed, it would lose to that change
 // anyway (stopped over playing), so it stays undone, and the person is told.
-func (c *Client) landed(id int64, paused string, at float64, known, over bool, entry string) []Event {
+func (c *Client) landed(id int64, m scriptMsg) []Event {
 	f := c.flying
 	if !c.ground(id) {
 		return nil
 	}
 	// it goes out first, as a move does
-	out := c.wentElsewhere(paused, at, known, entry)
-	if paused != holds(c.paused) {
-		out = append(out, Event{EventType: propertyChange, Name: pause, Data: paused, fromScript: true})
+	out := c.wentElsewhere(m)
+	if m.paused != holds(c.paused) {
+		out = append(out, report(pause, m.paused))
 	}
 	// mpv stood where this node held it, with no seek of its own: anywhere else, the person's
 	// seek ran just before the go, or folded into a seek of this node's landing meanwhile
-	if known && f.still && !f.seek && len(c.marked) == 0 && math.Abs(at-f.at) > timePosTolerance {
-		c.seeking = paused == "no"
-		out = append(out, Event{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(at, 'f', 6, 64), fromScript: true})
-	} else if known && paused == "yes" && !f.seek {
-		c.pos = at
+	if m.known && f.still && !f.seek && len(c.marked) == 0 && math.Abs(m.at-f.at) > timePosTolerance {
+		c.seeking = m.paused == "no"
+		out = append(out, report(timePos, seconds(m.at)))
+	} else if m.stoppedAt() && !f.seek {
+		c.pos = m.at
 	}
-	if over && len(out) == 0 {
+	if m.over && len(out) == 0 {
 		c.later = append(c.later, func() { c.showText(overruled) })
 	}
 	return out
@@ -174,15 +207,16 @@ func (c *Client) landed(id int64, paused string, at float64, known, over bool, e
 
 // wentElsewhere is the entry the script says mpv ended a go on, if it isn't the one this node
 // heads to: the person's move, or mpv's own, while the go was on its way, from where mpv stopped.
-func (c *Client) wentElsewhere(paused string, at float64, known bool, entry string) []Event {
-	n, err := strconv.Atoi(entry)
+func (c *Client) wentElsewhere(m scriptMsg) []Event {
+	n, err := strconv.Atoi(m.entry)
 	if err != nil || n < 0 || n == c.heading() {
 		return nil
 	}
 	c.toward = -1
-	move := Event{EventType: propertyChange, Name: playlistPos, Data: entry, fromScript: true}
-	if known && paused == "yes" {
+	move := report(playlistPos, m.entry)
+	if m.stoppedAt() {
 		// it may have played a moment there before the go stopped it
+		at := m.at
 		move.stoppedAt = &at
 	}
 	return []Event{move}
@@ -208,7 +242,7 @@ func (c *Client) pauseReq(paused bool) error {
 func (c *Client) goTo(paused bool, second *float64, entry *int, still bool) error {
 	id, at, to := rand.Int63(), "-", "-"
 	if second != nil {
-		at = strconv.FormatFloat(*second, 'f', 6, 64)
+		at = seconds(*second)
 		c.marked = append(c.marked, ourSeek{id: id, at: *second, entry: c.heading()})
 		c.marked = c.marked[max(0, len(c.marked)-maxSeeks):]
 		c.landing = true
@@ -274,5 +308,5 @@ func (c *Client) wentTo(id int64, pos float64) []Event {
 		return nil
 	}
 	c.seeking = !c.paused
-	return []Event{{EventType: propertyChange, Name: timePos, Data: strconv.FormatFloat(pos, 'f', 6, 64), fromScript: true}}
+	return []Event{report(timePos, seconds(pos))}
 }

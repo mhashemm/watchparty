@@ -70,9 +70,7 @@ const (
 )
 
 var (
-	errNoChange  = errors.New("no change")
-	errDoNotSend = errors.New("do not send")
-	errTimeout   = errors.New("mpv did not answer in time")
+	errTimeout = errors.New("mpv did not answer in time")
 
 	ErrClosed = errors.New("mpv closed the IPC connection")
 	// ErrNoScript: mpv didn't load Script, as it was built without Lua
