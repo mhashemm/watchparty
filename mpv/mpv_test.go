@@ -1185,7 +1185,8 @@ func stallsOnAStream(n *node, network string) {
 
 // A member that ran out of cache on a stream tells the party how many whole seconds it has
 // ready while the party waits: at once, then once it had that many seconds, 5s to a minute
-// apart, only when the number changed, and never once it plays again.
+// apart, only when the number changed, and never once it plays again. Its own mpv shows the
+// first, then only one at least twice the last shown and at least 10s.
 func TestASlowMemberSaysHowMuchItHasReady(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
@@ -1201,21 +1202,28 @@ func TestASlowMemberSaysHowMuchItHasReady(t *testing.T) {
 			t.Fatalf("told mpv %s, want the number on its screen too", got)
 		}
 		for _, step := range []struct {
-			wait       time.Duration
-			has, wants string
+			wait               time.Duration
+			has, wants, screen string
 		}{
-			{4 * time.Second, "3.2", "[]"}, // under the 5s floor
-			{time.Second, "7.0", "[buffered=7]"},
-			{6 * time.Second, "12.0", "[]"}, // its 7 seconds haven't played out
-			{time.Second, "13.0", "[buffered=13]"},
-			{13 * time.Second, "13.9", "[]"}, // due, but the same whole second
-			{0, "75.0", "[buffered=75]"},
-			{59 * time.Second, "130.0", "[]"}, // a minute at most, but a minute
-			{time.Second, "131.0", "[buffered=131]"},
+			{4 * time.Second, "3.2", "[]", ""},       // under the 5s floor
+			{time.Second, "7.0", "[buffered=7]", ""}, // under 10s: not on the screen
+			{6 * time.Second, "12.0", "[]", ""},      // its 7 seconds haven't played out
+			{time.Second, "13.0", "[buffered=13]", "13"},
+			{13 * time.Second, "13.9", "[]", ""}, // due, but the same whole second
+			{0, "75.0", "[buffered=75]", "75"},
+			{59 * time.Second, "130.0", "[]", ""},        // a minute at most, but a minute
+			{time.Second, "131.0", "[buffered=131]", ""}, // under twice 75
 		} {
 			time.Sleep(step.wait)
 			if got := has(step.has); got != step.wants {
 				t.Fatalf("with %ss ready, %v later: broadcast %s, want %s", step.has, step.wait, got, step.wants)
+			}
+			want := "[]"
+			if step.screen != "" {
+				want = "[show-text your network is slow: " + step.screen + "s ready 5000]"
+			}
+			if got := fmt.Sprint(n.mpvWasTold()); got != want {
+				t.Fatalf("with %ss ready: told mpv %s, want %s", step.has, got, want)
 			}
 		}
 		n.mpvSays(propertyChangeLine(pausedForCache, "no", 0), propertyChangeLine(pause, "no", 0))
@@ -1223,6 +1231,37 @@ func TestASlowMemberSaysHowMuchItHasReady(t *testing.T) {
 		time.Sleep(time.Minute)
 		if got := has("140.0"); got != "[]" {
 			t.Fatalf("broadcast %s while playing", got)
+		}
+	})
+}
+
+// A peer's seconds ready show on mpv's screen as the node's own do: the first, then one twice
+// the last shown, each member apart by its id (two named z here), afresh once the party plays.
+func TestAMembersSecondsReadyShowWhenTheyDouble(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		says := func(from, secs string) string {
+			n.transportSays(IncomingMessage{HostName: "z", From: from, Event: []byte(`{"name":"buffered","data":"` + secs + `"}`)})
+			return fmt.Sprint(n.mpvWasTold())
+		}
+		shown := func(secs string) string { return "[show-text z's network is slow: " + secs + "s ready 5000]" }
+		for _, step := range []struct{ from, secs, want string }{
+			{"z1", "0", shown("0")},
+			{"z1", "7", "[]"}, // under 10s
+			{"z2", "3", shown("3")},
+			{"z1", "12", shown("12")},
+			{"z1", "23", "[]"}, // under twice 12
+			{"z2", "9", "[]"},
+			{"z1", "24", shown("24")},
+		} {
+			if got := says(step.from, step.secs); got != step.want {
+				t.Fatalf("%s with %ss: told mpv %s, want %s", step.from, step.secs, got, step.want)
+			}
+		}
+		n.mpvSays(propertyChangeLine(pause, "no", 0))
+		n.broadcasts()
+		if got := says("z1", "4"); got != shown("4") {
+			t.Fatalf("after a resume: told mpv %s, want the first again", got)
 		}
 	})
 }

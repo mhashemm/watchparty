@@ -71,6 +71,10 @@ const (
 	// many seconds, never more often than reportMin nor less than reportMax
 	reportMin = 5 * time.Second
 	reportMax = time.Minute
+	// mpv's screen shows a member's seconds ready the first time, then only once they are
+	// twice the last shown, and at least twice screenFrom: every report would keep text up
+	// for most of a stall's first minute, over any other notice
+	screenFrom = 5
 )
 
 // overruled is shown when a go undid the person's key, pressed as the party changed.
@@ -364,6 +368,10 @@ type Client struct {
 	slow      bool
 	readySaid int
 	reportAt  time.Time
+	// the seconds ready last shown on mpv's screen, this node's (-1: none yet) and each
+	// peer's by its From, until the party plays (louder)
+	readyShown int
+	shownOf    map[string]int
 
 	// marked: the seeks this node sent that mpv hasn't landed, oldest first (wentTo).
 	// flying: the go the script hasn't acked (goTo), one at a time. read: the number of the
@@ -659,7 +667,7 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 		was := c.stalled
 		c.stalled = event.paused()
 		if c.stalled && c.network && !c.slow {
-			c.slow, c.readySaid, c.reportAt = true, -1, time.Time{}
+			c.slow, c.readySaid, c.readyShown, c.reportAt = true, -1, -1, time.Time{}
 		}
 		if c.stalled && !c.paused {
 			c.pauseParty("buffering", false)
@@ -763,6 +771,7 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 	if !paused {
 		c.seeking, c.since = false, c.target()
 		c.slow = false
+		clear(c.shownOf)
 	}
 	return extra, nil
 }
@@ -781,9 +790,17 @@ func (c *Client) ahead(data string) {
 	log.Printf("buffered ahead: %d\n", c.readySaid)
 	b, _ := json.Marshal(Event{Name: buffered, Data: strconv.Itoa(c.readySaid)})
 	c.say(b)
-	// on the screen too: people watch in mpv, not in the app
-	text := fmt.Sprintf("your network is slow: %ds ready", c.readySaid)
-	c.later = append(c.later, func() { c.showText(text) })
+	// on the screen too, now and then: people watch in mpv, not in the app
+	if louder(c.readySaid, c.readyShown) {
+		c.readyShown = c.readySaid
+		text := fmt.Sprintf("your network is slow: %ds ready", c.readySaid)
+		c.later = append(c.later, func() { c.showText(text) })
+	}
+}
+
+// louder says whether secs ready go on mpv's screen, the last shown being shown (-1: none).
+func louder(secs, shown int) bool {
+	return shown < 0 || secs >= 2*max(shown, screenFrom)
 }
 
 // positionChanged is the person's seek, as the script said where it went (wentTo): stopped, it
@@ -1295,7 +1312,14 @@ func (c *Client) apply(e IncomingMessage) {
 			var secs int
 			if secs, err = strconv.Atoi(event.Data); err == nil {
 				log.Printf("buffered ahead: %d for %s\n", secs, memberOf(e))
-				err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
+				shown, ok := c.shownOf[e.From]
+				if !ok {
+					shown = -1
+				}
+				if louder(secs, shown) {
+					c.shownOf[e.From] = secs
+					err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
+				}
 			}
 		case joined:
 			delete(c.missed, e.From)
@@ -1786,6 +1810,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		paused:   true,
 		seen:     map[string]bool{},
 		missed:   map[string]bool{},
+		shownOf:  map[string]int{},
 		names:    names,
 		current:  start,
 		toward:   -1,
