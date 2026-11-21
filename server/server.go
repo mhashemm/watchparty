@@ -419,7 +419,7 @@ func (s *Server) record(p *peer, err error) {
 	}
 	s.mu.Unlock()
 	if evicted {
-		s.notify(p.Hostname, p.address, fmt.Sprintf("dropped %s", p))
+		s.notify(p.Hostname, p.address, mpv.Dropped+p.String())
 	}
 }
 

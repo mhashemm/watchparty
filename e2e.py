@@ -1830,7 +1830,7 @@ def relay_suite():
         ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
         ok("its log says how full its cache is, then that it's done", until(lambda: re.search(r"^.{20}buffering: \d+%$(?s:.*)^.{20}buffering: done$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-600:])
         ok("while the party waits, it says how many seconds it has ready", until(lambda: re.search(r"^.{20}buffered ahead: \d+$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-400:])
-        ok("and the others hear it", until(lambda: re.search(r'^.{20}buffered ahead: \d+ for "nodeSlow"$', log("nodeFast"), re.M), 10), log("nodeFast")[-400:])
+        ok("and the others hear it", until(lambda: re.search(r'^.{20}buffered ahead: \d+ for \{"id":"\w+","name":"nodeSlow"\}$', log("nodeFast"), re.M), 10), log("nodeFast")[-400:])
         ok("and show it on their mpv", any(re.fullmatch(r"nodeSlow's network is slow: \d+s ready", t) for t in osd("nodeFast")), str(osd("nodeFast")[-4:]))
         gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
         ok("both stopped where the slow node did", gap < 0.15, f"{gap:.2f}s apart")

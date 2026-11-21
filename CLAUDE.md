@@ -62,13 +62,13 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp`, `paused`, `at` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |
-  | mpv | `now playing: <file name as JSON>`; `buffering: <n>%`, `buffering: done`, `buffered ahead: <n>[ for <host as JSON>]` | GUI feed, status and members, `gui/store.go` (the first), e2e |
+  | mpv | `now playing: <file name as JSON>`; `buffering: <n>%`, `buffering: done`, `buffered ahead: <n>[ for <member>]`, `member joined\|here\|left: <member>` (`{"id","name"}`) | GUI feed, status and members, `gui/store.go` (the first and member), e2e |
   | mpv | `sent again, as <host> missed something: …` | e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
-- **Notice texts** "X has joined", "connected to X", "X has left" are sent by `server/` and `relay/` with
-  the member's `From`, parsed by `mpv` (a leave pauses, and frees the stop it led) and `gui/store.go`,
-  all from the constants in `mpv`; e2e's `known()` spells them again. Change all or none.
+- **Notice texts** "X has joined", "connected to X", "X has left" (P2P "dropped …") are sent by `server/` and
+  `relay/` with the member's `From`, read only by `mpv` (a leave pauses, and frees the stop it led; each about
+  its sender logs a member line), from its constants; e2e's `known()` spells them again. Change all or none.
 - **The relay protocol is `relay/wire`**, imported by both `relay/main.go` and `party/ws.go`:
   the envelope `{"hostname", "from", "event": <raw mpv JSON>}`, path, query, headers, close codes.
   It imports nothing that would grow the relay image; importing `party` would pull upnp and server.

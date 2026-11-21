@@ -3816,3 +3816,30 @@ func TestAPositionBeforeAStopIsReportedIsNoSeek(t *testing.T) {
 		}
 	})
 }
+
+// A member line comes only from a notice about its own sender, by the id the transport gave
+// it: another's name in the text, or a name dressed as a notice, makes none.
+func TestMemberLinesComeOnlyFromNoticesAboutTheirSender(t *testing.T) {
+	t.Parallel()
+	omar := IncomingMessage{HostName: "Omar", From: "ID1"}
+	for _, c := range []struct {
+		text string
+		e    IncomingMessage
+		want string
+	}{
+		{"Omar has joined", omar, `member joined: {"id":"ID1","name":"Omar"}`},
+		{"connected to Omar", omar, `member here: {"id":"ID1","name":"Omar"}`},
+		{"Omar has left", omar, `member left: {"id":"ID1","name":"Omar"}`},
+		{"dropped 1.2.3.4:6969 (Omar)", IncomingMessage{HostName: "Omar", From: "1.2.3.4:6969"}, `member left: {"id":"1.2.3.4:6969","name":"Omar"}`},
+		{"Lina has joined", omar, ""},
+		{"resumed by Mallory has joined", IncomingMessage{HostName: "Mallory has joined", From: "ID3"}, ""},
+		{"paused for Omar: left", omar, ""},
+		{"dropped 9.9.9.9:1 (Omar)", omar, ""},
+		{"Eve\n2026/11/21 00:00:00 init done has joined", IncomingMessage{HostName: "Eve\n2026/11/21 00:00:00 init done", From: "ID2"}, `member joined: {"id":"ID2","name":"Eve\n2026/11/21 00:00:00 init done"}`},
+	} {
+		got, ok := memberLine(c.text, c.e)
+		if got != c.want || ok != (c.want != "") {
+			t.Errorf("memberLine(%q, %+v) = %q, %v; want %q", c.text, c.e, got, ok, c.want)
+		}
+	}
+}

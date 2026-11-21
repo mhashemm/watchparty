@@ -76,12 +76,14 @@ const (
 // overruled is shown when a go undid the person's key, pressed as the party changed.
 const overruled = "your key came as the party changed: press it again"
 
-// The notices both transports show, around a member's name. apply reads HasLeft to pause
-// the party, and gui/store.go reads the other two; e2e spells them again.
+// The notices the transports show, around a member's name (Dropped: the mesh's, before
+// "<address> (<name>)"). apply reads HasLeft to pause the party, and logs a member line for
+// each (memberLine); e2e spells them again.
 const (
 	HasJoined   = " has joined"
 	HasLeft     = " has left"
 	ConnectedTo = "connected to "
+	Dropped     = "dropped "
 )
 
 var (
@@ -1280,6 +1282,9 @@ func (c *Client) apply(e IncomingMessage) {
 		switch event.Name {
 		case showText:
 			err = c.showText(event.Data)
+			if line, ok := memberLine(event.Data, e); ok {
+				log.Println(line)
+			}
 			if event.Data == e.HostName+HasLeft {
 				err = errors.Join(err, c.left(e.HostName, e.From))
 			}
@@ -1289,8 +1294,7 @@ func (c *Client) apply(e IncomingMessage) {
 			// shown, never acted on: a peer's name can hold anything, so the log quotes it
 			var secs int
 			if secs, err = strconv.Atoi(event.Data); err == nil {
-				name, _ := json.Marshal(e.HostName)
-				log.Printf("buffered ahead: %d for %s\n", secs, name)
+				log.Printf("buffered ahead: %d for %s\n", secs, memberOf(e))
 				err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
 			}
 		case joined:
@@ -1301,6 +1305,33 @@ func (c *Client) apply(e IncomingMessage) {
 	if err != nil {
 		log.Printf("ProcessIncomingEvents: %s [event=%s] [host=%s]\n", err, e.Event, e.HostName)
 	}
+}
+
+// memberLine is who joined, was here first or left, for the GUI and its history: only from a
+// notice the transport sent about its own sender, named by the id the relay or the mesh gave
+// it, so a name can't fake a member nor stand for another with the same name.
+func memberLine(text string, e IncomingMessage) (string, bool) {
+	what := ""
+	switch text {
+	case e.HostName + HasJoined:
+		what = "joined"
+	case ConnectedTo + e.HostName:
+		what = "here"
+	case e.HostName + HasLeft, Dropped + e.From + " (" + e.HostName + ")":
+		what = "left"
+	default:
+		return "", false
+	}
+	return "member " + what + ": " + memberOf(e), true
+}
+
+// memberOf is the member a message is from, as JSON: its name can hold anything.
+func memberOf(e IncomingMessage) string {
+	b, _ := json.Marshal(struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}{e.From, e.HostName})
+	return string(b)
 }
 
 // shared is a message that says what state its sender holds.
