@@ -127,7 +127,9 @@ class Shipped(Wp3):
                 seen = next((l["args"][5] for l in reversed(m.lines) if l.get("event") == "client-message"
                              and l.get("args", [None])[0] == "watchparty" and len(l["args"]) > 5), "")
             args = (*args[:4], seen, *args[4:])
-        return m.send("script-message-to", self.NAME, cmd.replace("wp-", "watchparty-"), *[str(a) for a in args])
+        # the shipped script calls a go a set (watchparty-set); probe3's wp3.lua keeps wp-go
+        name = "watchparty-set" if cmd == "wp-go" else cmd.replace("wp-", "watchparty-")
+        return m.send("script-message-to", self.NAME, name, *[str(a) for a in args])
 
     # A move to an entry that takes 8s to start: the ack comes once its file loads, on it. A round
     # with an error keeps mpv's log in logs/ (CI uploads it): a seek mpv answered and never ran
