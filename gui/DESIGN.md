@@ -95,6 +95,9 @@ that.
   - **"In the party, N"**, a closed `details` (expanding the chosen row list): a row per
     member with a turtle shell in rotating colours, "since 9:08 PM", or "already here" for
     those who were in before you, whose join time the app never learns.
+  - **A slow member** (option B of three): the status says whose network is slow and to stay
+    paused, the detail how many seconds each has ready, and their row a porcini bar, full
+    at a minute. Gone on the next resume.
 - **Voice:** plain, active, sentence case. The title is "Hahas and Hehes Watch Party"
   with a small mushroom. The medical theme lives in names only: "Vitals", "Patient
   chart" (the raw log), and every error starts with "Diagnosis:" then what happened

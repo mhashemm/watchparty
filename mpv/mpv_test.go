@@ -1172,6 +1172,90 @@ func TestBufferingIsWhileMpvWaitsOnItsCache(t *testing.T) {
 	})
 }
 
+// stallsOnAStream is a node playing a stream whose cache ran out: the party paused for it.
+func stallsOnAStream(n *node, network string) {
+	n.t.Helper()
+	n.mpvSays(propertyChangeLine(viaNetwork, network, 0))
+	n.plays()
+	n.mpvSays(mpvAt(20), propertyChangeLine(pausedForCache, "yes", 0))
+	n.mpvSays(propertyChangeLine(pause, "yes", 0))
+	n.mpvWasTold()
+	n.broadcasts()
+}
+
+// A member that ran out of cache on a stream tells the party how many whole seconds it has
+// ready while the party waits: at once, then once it had that many seconds, 5s to a minute
+// apart, only when the number changed, and never once it plays again.
+func TestASlowMemberSaysHowMuchItHasReady(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		stallsOnAStream(n, "yes")
+		has := func(secs string) string {
+			n.mpvSays(propertyChangeLine(cacheAhead, secs, 0))
+			return fmt.Sprint(said(n.broadcasts()))
+		}
+		for _, step := range []struct {
+			wait       time.Duration
+			has, wants string
+		}{
+			{0, "0.4", "[buffered=0]"},
+			{4 * time.Second, "3.2", "[]"}, // under the 5s floor
+			{time.Second, "7.0", "[buffered=7]"},
+			{6 * time.Second, "12.0", "[]"}, // its 7 seconds haven't played out
+			{time.Second, "13.0", "[buffered=13]"},
+			{13 * time.Second, "13.9", "[]"}, // due, but the same whole second
+			{0, "75.0", "[buffered=75]"},
+			{59 * time.Second, "130.0", "[]"}, // a minute at most, but a minute
+			{time.Second, "131.0", "[buffered=131]"},
+		} {
+			time.Sleep(step.wait)
+			if got := has(step.has); got != step.wants {
+				t.Fatalf("with %ss ready, %v later: broadcast %s, want %s", step.has, step.wait, got, step.wants)
+			}
+		}
+		n.mpvSays(propertyChangeLine(pausedForCache, "no", 0), propertyChangeLine(pause, "no", 0))
+		n.broadcasts()
+		time.Sleep(time.Minute)
+		if got := has("140.0"); got != "[]" {
+			t.Fatalf("broadcast %s while playing", got)
+		}
+	})
+}
+
+// A local file that ran out (a slow disk) says nothing: everyone has their own copy.
+func TestALocalFileNeverSaysHowMuchItHasReady(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		stallsOnAStream(n, "no")
+		n.mpvSays(propertyChangeLine(cacheAhead, "10.0", 0))
+		if got := said(n.broadcasts()); len(got) != 0 {
+			t.Fatalf("broadcast %q", got)
+		}
+	})
+}
+
+// A member's seconds ready are only for the GUI: they hold no state, so the node does nothing
+// and its next change takes the very next stamp.
+func TestAMembersSecondsReadyChangeNothing(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvSays(propertyChangeLine(pause, "no", 0))
+		resumed := n.broadcasts()
+		n.peerSays("z", `{"name":"buffered","data":"45"}`)
+		if got := n.mpvWasTold(); len(got) != 0 {
+			t.Fatalf("told mpv %q", got)
+		}
+		if got := said(n.broadcasts()); len(got) != 0 {
+			t.Fatalf("broadcast %q", got)
+		}
+		n.mpvSays(mpvAt(20), propertyChangeLine(pause, "yes", 0))
+		paused := n.broadcasts()
+		if len(resumed) == 0 || len(paused) == 0 || paused[0].Stamp != resumed[0].Stamp+1 {
+			t.Fatalf("resumed %+v then paused %+v, want the next stamp", resumed, paused)
+		}
+	})
+}
+
 // A peer's resume reaching a node that is still stalled is refused: the node never
 // plays, and tells the party it is paused again and where. Applying the resume and
 // pausing at once doesn't work, because mpv folds the two into no event at all.

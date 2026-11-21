@@ -90,6 +90,10 @@ config still applies, for example `keep-open` (see "Ending").
   `"yes"`, which comes first; then it climbs about 4 times a second (its first value can be
   stale: 10, then 0) until `paused-for-cache` clears. A 1.5 Mbit/s file over 120 KB/s, 0.37.0
   and 0.40.0, 2026-11-21. The node logs it as `buffering: <n>%` only while stalled.
+- **`demuxer-cache-duration`** (RO): seconds cached ahead; about 4 changes a second on a
+  stream, 2 on a local file, and it keeps growing while paused (0.4s to 13.6s over 21s paused,
+  same stream). **`demuxer-via-network`**: `no` for a local file, `yes` over HTTP, our
+  loopback torrent stream too. Both 0.37.0, 2026-11-21.
 - **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet, or quitting)
   **the `property-change` event has no `data` field at all**, which unmarshals to `Data == ""`.
 - **`filename`** (RO): percent-decoded for a URL; it can hold a newline, so it is logged as JSON. Probed on 0.37.0. It fires only when the

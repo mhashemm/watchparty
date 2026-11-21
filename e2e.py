@@ -1829,6 +1829,8 @@ def relay_suite():
         until(lambda: reasons() and both_paused(), 30)
         ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
         ok("its log says how full its cache is, then that it's done", until(lambda: re.search(r"^.{20}buffering: \d+%$(?s:.*)^.{20}buffering: done$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-600:])
+        ok("while the party waits, it says how many seconds it has ready", until(lambda: re.search(r"^.{20}buffered ahead: \d+$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-400:])
+        ok("and the others hear it", until(lambda: re.search(r'^.{20}buffered ahead: \d+ for "nodeSlow"$', log("nodeFast"), re.M), 10), log("nodeFast")[-400:])
         gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
         ok("both stopped where the slow node did", gap < 0.15, f"{gap:.2f}s apart")
         setp("nodeFast", "pause", False)

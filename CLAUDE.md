@@ -44,7 +44,7 @@ Only the node that generates an event broadcasts it, with its `stamp`: the newer
 once the safer. A peer's change reaches mpv as one go to the script, whose ack is weighed against it; `seen` drops mpv's first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
-the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
+the playlist entry go over the wire, besides a stalled stream's seconds ready, for people to judge. Anything that would put nodes out of step (a seek while
 playing, running out of cache, a mid-party join, a member leaving, a new playlist entry, a
 node that missed something, even while it had lost the relay) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
@@ -62,7 +62,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp`, `paused`, `at` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |
-  | mpv | `now playing: <file name as JSON>`; `buffering: <n>%`, `buffering: done` | GUI feed and status, `gui/store.go` (the first), e2e |
+  | mpv | `now playing: <file name as JSON>`; `buffering: <n>%`, `buffering: done`, `buffered ahead: <n>[ for <host as JSON>]` | GUI feed, status and members, `gui/store.go` (the first), e2e |
   | mpv | `sent again, as <host> missed something: …` | e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
@@ -107,8 +107,8 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   a recipe to verify. Never what a function does, inventories, or history: the incident
   goes in the commit body, where the next session will look for it.
 - **Each fact lives in one place**, cross-package here, the rest in its package's doc.
-- **Update a doc only when a change makes something in it wrong.** Budget: this file
-  ≤150 lines, `mpv/MPV.md` ≤300, every other doc ≤200. Trim before adding.
+- **Update a doc only when a change makes something in it wrong.** Budget: this file ≤150 lines,
+  `mpv/MPV.md` ≤300, `mpv/CLAUDE.md` ≤210, others ≤200. Trim first; raise one only to keep what matters.
 
 ## How we work
 

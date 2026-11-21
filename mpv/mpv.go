@@ -25,6 +25,9 @@ const (
 	timePos        = "time-pos"
 	pausedForCache = "paused-for-cache"
 	cacheFill      = "cache-buffering-state"
+	cacheAhead     = "demuxer-cache-duration"
+	viaNetwork     = "demuxer-via-network"
+	buffered       = "buffered"
 	playlistPos    = "playlist-pos"
 	filename       = "filename"
 	duration       = "duration"
@@ -64,6 +67,10 @@ const (
 const (
 	replyLimit = 5 * time.Second
 	moveLimit  = 3 * time.Minute
+	// a member that ran out of cache tells the party how much it has ready once it had that
+	// many seconds, never more often than reportMin nor less than reportMax
+	reportMin = 5 * time.Second
+	reportMax = time.Minute
 )
 
 // overruled is shown when a go undid the person's key, pressed as the party changed.
@@ -349,6 +356,12 @@ type Client struct {
 	duration float64
 	stalled  bool
 	seen     map[string]bool
+	// slow: mpv ran out of cache on a stream (network) since this node last played, so while
+	// paused it tells the party how many seconds it has ready (readySaid), next at reportAt
+	network   bool
+	slow      bool
+	readySaid int
+	reportAt  time.Time
 
 	// marked: the seeks this node sent that mpv hasn't landed, oldest first (wentTo).
 	// flying: the go the script hasn't acked (goTo), one at a time. read: the number of the
@@ -416,8 +429,9 @@ type flight struct {
 // decided it, so its stamp is the one that change was given.
 func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	// mpv's own order, to read after a run; not its position while playing, one per frame,
-	// nor how full its cache is, which the buffering line says
-	if event.Name != timePos && event.Name != cacheFill || event.Name == timePos && c.paused {
+	// nor how full its cache is, which the buffering line says, nor how far ahead, a few
+	// times a second
+	if event.Name != timePos && event.Name != cacheFill && event.Name != cacheAhead || event.Name == timePos && c.paused {
 		log.Printf("Watch: mpv said: %s\n", line)
 	}
 	out, err := c.react(event)
@@ -642,12 +656,21 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 	case pausedForCache:
 		was := c.stalled
 		c.stalled = event.paused()
+		if c.stalled && c.network && !c.slow {
+			c.slow, c.readySaid, c.reportAt = true, -1, time.Time{}
+		}
 		if c.stalled && !c.paused {
 			c.pauseParty("buffering", false)
 		}
 		if was && !c.stalled {
 			log.Println("buffering: done")
 		}
+		return nil, errDoNotSend
+	case viaNetwork:
+		c.network = event.Data == "yes"
+		return nil, errDoNotSend
+	case cacheAhead:
+		c.ahead(event.Data)
 		return nil, errDoNotSend
 	case cacheFill:
 		// 100 but while mpv waits on its cache, when it climbs a few times a second
@@ -737,8 +760,25 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 	c.paused = paused
 	if !paused {
 		c.seeking, c.since = false, c.target()
+		c.slow = false
 	}
 	return extra, nil
+}
+
+// ahead tells the party how many whole seconds this node has ready, after it ran out of cache
+// on a stream and while the party waits for it. Once it said a number, the next waits as many
+// seconds, from reportMin to reportMax: a slow member costs the party a tiny message a minute
+// once it has some way to go, and nothing at all while it plays or on a local file.
+func (c *Client) ahead(data string) {
+	secs, err := strconv.ParseFloat(data, 64)
+	if !c.slow || !c.paused || err != nil || int(secs) == c.readySaid || time.Now().Before(c.reportAt) {
+		return
+	}
+	c.readySaid = int(secs)
+	c.reportAt = time.Now().Add(min(max(time.Duration(secs*float64(time.Second)), reportMin), reportMax))
+	log.Printf("buffered ahead: %d\n", c.readySaid)
+	b, _ := json.Marshal(Event{Name: buffered, Data: strconv.Itoa(c.readySaid)})
+	c.say(b)
 }
 
 // positionChanged is the person's seek, as the script said where it went (wentTo): stopped, it
@@ -1242,6 +1282,13 @@ func (c *Client) apply(e IncomingMessage) {
 			}
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
+		case buffered:
+			// only for the GUI: a peer's name can hold anything, so it is quoted
+			var secs int
+			if secs, err = strconv.Atoi(event.Data); err == nil {
+				name, _ := json.Marshal(e.HostName)
+				log.Printf("buffered ahead: %d for %s\n", secs, name)
+			}
 		case joined:
 			delete(c.missed, e.From)
 			err = c.answer(e.HostName, "joining")
@@ -1661,7 +1708,7 @@ func (c *Client) Position() (int, float64) {
 }
 
 // observed are the properties New observes, as ids 1 and up
-var observed = []string{filename, timePos, pausedForCache, duration, cacheFill}
+var observed = []string{filename, timePos, pausedForCache, duration, cacheFill, viaNetwork, cacheAhead}
 
 // Buffering is mpv waiting on its cache (paused-for-cache).
 func (c *Client) Buffering() bool {

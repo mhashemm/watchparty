@@ -71,7 +71,9 @@ A seek while playing, or a node waiting on its cache, leaves the others out of s
 
 - **`seek`**: a seek that isn't ours while playing (`seeking`). mpv folds seeks, so one carrying
   this node's id off its second is the person's too.
-- **`buffering`**: `paused-for-cache` turns `yes` while playing.
+- **`buffering`**: `paused-for-cache` turns `yes` while playing. Then, on a stream
+  (`demuxer-via-network`) and until it plays, an untagged `buffered` says its whole seconds ready,
+  next after that many (5s to a minute, `ahead`): network cost is the constraint. Peers only log it.
 - **`still buffering`**: a local resume while `stalled` is caught and not broadcast. A **peer's**
   never reaches mpv: the go stays stopped, and `refuseResume` sends pause, position and reason.
 
@@ -122,9 +124,8 @@ change takes the next stamp, **written in the step that decided the event goes o
 
 A joiner opens at 0, paused, and would stay behind until the next seek.
 
-1. Once its file has loaded, the joiner broadcasts `joined`, after what it heard while
-   loading. So the party pauses only when the joiner can actually play, and a joiner whose
-   mpv fails pauses nobody.
+1. Once its file has loaded, the joiner broadcasts `joined`, after what it heard while loading,
+   so the party pauses only when the joiner can actually play: one whose mpv fails pauses nobody.
 2. Every member, in `answer`, shows "paused for X: joining", **then** stops (the GUI's feed
    merges the two into "paused by you: joining", as for catching up) and says where it is.
    **One that was playing answers by stopping:** it pauses its own mpv (its ack's pause isn't
@@ -194,7 +195,7 @@ playing also pauses the party with a reason: nobody starts the next one until so
   production (`setup`, `takes`), never through a field. **`mpvAnswersLate`** has mpv report before
   answering and the script ack late: without it, breaking a guard passed every test.
 - **What nodes must agree on: `party_test.go`**, whole parties through every order a seed
-  picks. A new message or rule gets a check there.
+  picks. A new rule nodes must agree on gets a check there.
 - **Both fakes run the shipped `watchparty.lua`** (`script_test.go`, gopher-lua) and model only mpv.
   A file has started at its `playback-restart`, not `file-loaded`: a test that means so says both.
 - Never a real socket. mpv emits nothing for a no-op set, so a test counting events alternates values.

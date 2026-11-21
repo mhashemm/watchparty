@@ -329,6 +329,10 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .rows .name { font-weight: 700; flex: 1; word-break: break-word; }
 .rows .since { color: var(--ink-soft); font-size: .875rem; flex: none; }
 .shell { width: 22px; height: 22px; flex: none; }
+.rows li { flex-wrap: wrap; }
+.rows .ready { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: .8rem; font-weight: 700; color: var(--porcini); padding-left: 32px; }
+.rows .ready .bar { flex: 1; margin: 0; height: 8px; }
+.rows .ready .bar i { background: repeating-linear-gradient(-45deg, var(--porcini) 0 8px, #b97638 8px 16px); }
 .share { background: #f3eedf; border: 2px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 18px; }
 .share code { display: block; font: .9rem/1.4 ui-monospace, Consolas, monospace; word-break: break-all; margin: 6px 0 10px; color: var(--soil); }
 #feed { margin: 0 0 18px; }
@@ -1031,7 +1035,8 @@ async function startParty(extra) {
 let run = 0, from = 0, state = {}, plan = null;
 function reset() {
   state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, leftPause: false, stopping: null,
-    shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [] };
+    shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
+    myAhead: null, aheadOf: {} };
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -1114,12 +1119,18 @@ function handle(line) {
   if (/^mpv is up, /.test(msg)) state.mpvUp = true;
   if ((m = msg.match(/^buffering: (\d+)%$/))) state.buffering = +m[1];
   if (/^buffering: done$/.test(msg)) Object.assign(state, { buffering: null, swarm: null });
+  // how many seconds a member that ran out has ready, while the party waits for it
+  if ((m = msg.match(/^buffered ahead: (\d+)$/))) state.myAhead = +m[1];
+  if ((m = msg.match(/^buffered ahead: (\d+) for (".*")$/))) {
+    try { state.aheadOf[JSON.parse(m[2])] = +m[1]; } catch {}
+  }
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try {
       const text = JSON.parse(m[1]).command[1];
       const li = addFeed(text, at);
       member(text, at);
+      if (/^resumed by /.test(text)) resumed();
       if (/^paused for .*: left$/.test(text)) state.leftPause = true;
       // if this node was playing it stops next, and that is this line, not a pause of its own
       const why = text.match(/^paused for .*: (joining|catching up)$|^paused: (out of sync) with .*$/);
@@ -1135,6 +1146,7 @@ function handle(line) {
       if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
       else if (e.name === "pause" && e.data === "yes" && state.stopping) state.stopping.li.lastChild.textContent = "paused by you: " + state.stopping.why;
       else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you", at);
+      if (e.name === "pause" && e.data === "no") resumed();
       if (e.name === "pause") state.stopping = null;
       if (e.name === "pause-reason") [...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
@@ -1151,8 +1163,14 @@ function member(text, at) {
   } else if ((m = text.match(/^(.*) has left$/s) || text.match(/^dropped .* \((.*)\)$/s))) {
     const i = state.members.findIndex(p => p.name === m[1]);
     if (i >= 0) state.members.splice(i, 1);
+    delete state.aheadOf[m[1]];
   }
 }
+// once the party plays again, nobody is waited for
+function resumed() {
+  Object.assign(state, { myAhead: null, aheadOf: {} });
+}
+const seconds = n => `${n} ${n === 1 ? "second" : "seconds"}`;
 
 const MUSHROOM = `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M12 18h8l1 11h-10z" fill="#f1ead6" stroke="#6e4b30" stroke-width="1.5"/><path d="M3 18C5 5 27 5 29 18z" fill="currentColor" stroke="#4a3220" stroke-width="1.5"/><circle cx="11" cy="12" r="2" fill="#f6efdc"/><circle cx="19" cy="9.5" r="1.6" fill="#f6efdc"/></svg>`;
 const SHELLS = ["#7d9a4a", "#a8642a", "#c8a245", "#9a3a35"].map(c => `<svg class="shell" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 17 C2 4 22 4 22 17 Z" fill="${c}" stroke="#4a3220" stroke-width="1.4"/><path d="M7 16.5 L9 10 H15 L17 16.5 M12 10 V16.5" stroke="#4a3220" stroke-width="1.1" fill="none"/><rect x="1" y="16" width="22" height="3" rx="1.5" fill="#6e4b30"/></svg>`);
@@ -1218,16 +1236,25 @@ function renderMembers(show) {
   $("members").hidden = !show;
   if (!show) return;
   $("member-count").textContent = 1 + state.members.length;
-  const row = (i, name, since) => {
+  const row = (i, name, since, ahead) => {
     const li = document.createElement("li");
     li.innerHTML = SHELLS[i % SHELLS.length];
     const n = document.createElement("span"), t = document.createElement("span");
     n.className = "name"; n.textContent = name;
     t.className = "since"; t.textContent = since ? "since " + clock(since) : "already here";
     li.append(n, t);
+    if (ahead != null) {
+      // full at a minute ready, the longest a member waits between saying so
+      const r = document.createElement("span"), bar = document.createElement("span"), fill = document.createElement("i");
+      r.className = "ready"; bar.className = "bar";
+      fill.style.width = Math.min(100, ahead / 60 * 100) + "%";
+      bar.append(fill);
+      r.append(`${ahead}s ready`, bar);
+      li.append(r);
+    }
     return li;
   };
-  $("member-list").replaceChildren(row(0, "You", state.inAt), ...state.members.map((p, i) => row(i + 1, p.name, p.since)));
+  $("member-list").replaceChildren(row(0, "You", state.inAt, state.myAhead), ...state.members.map((p, i) => row(i + 1, p.name, p.since, state.aheadOf[p.name])));
 }
 
 const notSameFile = () => $("playlist").checked
@@ -1261,6 +1288,14 @@ function render(exitErr) {
     text = "Your player is buffering…";
     detail = [[`${state.buffering}%`, " ready"], ...(state.swarm ? [["", ", "], ...swarmText(state.swarm)] : [])];
     pct = state.buffering;
+  } else if (running && state.myAhead != null) {
+    text = "Your network is slow. Everyone sees how much you have ready.";
+    detail = [[seconds(state.myAhead), " of video ready"]];
+  } else if (running && Object.keys(state.aheadOf).length) {
+    const slow = Object.keys(state.aheadOf);
+    text = slow.length === 1 ? `${slow[0]}'s network is slow. Stay paused while it buffers.`
+      : `${names(slow)} have slow networks. Stay paused while they buffer.`;
+    detail = slow.flatMap((name, i) => [[seconds(state.aheadOf[name]), ` ready on ${name}'s side`], ...(i < slow.length - 1 ? [["", ", "]] : [])]);
   } else if (running && state.unreachable) {
     text = "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.";
   } else if (running) {
