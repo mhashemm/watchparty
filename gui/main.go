@@ -105,19 +105,20 @@ type gui struct {
 	exe         string
 	wg          sync.WaitGroup
 
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	store      *store
-	session    int
-	installed  string
-	run        int
-	lines      []string
-	exitErr    string
-	lastPoll   time.Time
-	idleAfter  time.Duration
-	pages      int
-	// news: one per connected page, told there are new lines, so it reads them at once
-	news       map[chan struct{}]bool
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	store     *store
+	session   int
+	installed string
+	run       int
+	lines     []string
+	exitErr   string
+	lastPoll  time.Time
+	idleAfter time.Duration
+	pages     int
+	// news has one channel per page holding /alive open: Write nudges each without
+	// blocking, and the page then reads the new lines at once instead of on its next poll
+	news       map[chan struct{}]struct{}
 	heartbeat  time.Duration
 	closeGrace time.Duration
 }
@@ -322,9 +323,9 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	g.pages++
 	if g.news == nil {
-		g.news = map[chan struct{}]bool{}
+		g.news = map[chan struct{}]struct{}{}
 	}
-	g.news[news] = true
+	g.news[news] = struct{}{}
 	g.mu.Unlock()
 	defer func() {
 		g.mu.Lock()
