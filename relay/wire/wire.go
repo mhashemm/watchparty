@@ -25,7 +25,13 @@ const (
 	OpenedHeader = "room-opened"
 	// WaitingHeader is "yes" on the 101 for a node held until a key holder opens the room.
 	WaitingHeader = "room-waiting"
+	// VideoHeader is the node's video as the party describes it to a refused joiner. The
+	// relay keeps the opener's and sends it back on a 409, unread.
+	VideoHeader = "room-video"
 )
+
+// MaxVideo caps VideoHeader: the relay keeps one per room, on disk too.
+const MaxVideo = 1024
 
 // How the relay closes a held node: join now, or give up.
 const (

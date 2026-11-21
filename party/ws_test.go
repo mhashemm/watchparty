@@ -81,6 +81,28 @@ func TestRejectionEndsTheParty(t *testing.T) {
 	}
 }
 
+// A 409 ends the party with what the room plays, for Run to set beside this node's video,
+// and every dial says what this node plays, in case it opens the room.
+func TestRefusalForTheFileKeepsWhatTheRoomPlays(t *testing.T) {
+	t.Parallel()
+	sent := make(chan string, 1)
+	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		sent <- r.Header.Get(wire.VideoHeader)
+		w.Header().Set(wire.VideoHeader, "described")
+		w.WriteHeader(http.StatusConflict)
+	})
+	r := newRelayConn(addr, nil)
+	r.video = "mine"
+	c, cancel := context.WithCancel(context.Background())
+	r.Connect(c, cancel)
+	if got := <-sent; got != "mine" {
+		t.Fatalf("the dial said %q", got)
+	}
+	if got := r.refusedFor(); got == nil || got.Video != "described" {
+		t.Fatalf("kept %v", got)
+	}
+}
+
 // 401 is a guest who arrived before the host opened the room. They must wait, not
 // exit, and get in once the room exists.
 func TestNotOpenYetKeepsRetrying(t *testing.T) {

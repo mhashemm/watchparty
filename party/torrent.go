@@ -91,6 +91,8 @@ func torrentConfig() *torrent.ClientConfig {
 type torrentStream struct {
 	urls  []string
 	names []string
+	sums  []string
+	sizes []int64
 	files []*torrent.File
 	id    string
 	close func()
@@ -196,7 +198,7 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 	}
 	token := rand.Text()
 	routes := map[string]*torrent.File{}
-	urls, names := make([]string, len(files)), make([]string, len(files))
+	urls, names, sums, sizes := make([]string, len(files)), make([]string, len(files)), make([]string, len(files)), make([]int64, len(files))
 	identity := sha256.New()
 	io.WriteString(identity, t.InfoHash().HexString())
 	for i, f := range files {
@@ -205,6 +207,9 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 		routes["/"+token+"/"+strconv.Itoa(i)+"/"+name] = f
 		urls[i] = "http://" + listener.Addr().String() + "/" + token + "/" + strconv.Itoa(i) + "/" + url.PathEscape(name)
 		io.WriteString(identity, "/"+f.Path())
+		// a video's own identity, so one alone is the torrent's
+		sum := sha256.Sum256([]byte(t.InfoHash().HexString() + "/" + f.Path()))
+		sums[i], sizes[i] = hex.EncodeToString(sum[:]), f.Length()
 	}
 	server := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f, ok := routes[r.URL.Path]
@@ -223,5 +228,5 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 	go server.Serve(listener)
 	closers = append(closers, func() { server.Close() })
 
-	return &torrentStream{urls, names, files, hex.EncodeToString(identity.Sum(nil)), closeAll}, nil
+	return &torrentStream{urls, names, sums, sizes, files, hex.EncodeToString(identity.Sum(nil)), closeAll}, nil
 }

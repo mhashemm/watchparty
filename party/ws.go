@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -37,12 +38,15 @@ type relayConn struct {
 	id        string
 	session   string
 	file      string
-	incoming  chan<- mpv.IncomingMessage
-	retry     time.Duration
-	wait      time.Duration
-	waiting   time.Time
-	opened    bool
-	up        chan struct{}
+	video     string
+	// refused is the relay's 409, kept for Run to say what differs
+	refused  atomic.Pointer[server.DifferentFile]
+	incoming chan<- mpv.IncomingMessage
+	retry    time.Duration
+	wait     time.Duration
+	waiting  time.Time
+	opened   bool
+	up       chan struct{}
 }
 
 func (r *relayConn) set(conn *websocket.Conn) {
@@ -55,6 +59,15 @@ func (r *relayConn) set(conn *websocket.Conn) {
 		default:
 		}
 	}
+}
+
+// refusedFor is the relay's refusal of this node's file, if that is what ended the party. A
+// mesh party has no relay.
+func (r *relayConn) refusedFor() *server.DifferentFile {
+	if r == nil {
+		return nil
+	}
+	return r.refused.Load()
 }
 
 // errRejected means the relay will never accept these credentials, so retrying
@@ -86,14 +99,14 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.IDParam: {r.id}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}}
 	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+wire.Path+"?"+q.Encode(), &websocket.DialOptions{
-		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}},
+		HTTPHeader: http.Header{wire.SecretHeader: {r.secret}, wire.CreateKeyHeader: {r.createKey}, wire.VideoHeader: {r.video}},
 	})
 	if err != nil && res != nil {
 		switch res.StatusCode {
 		case http.StatusForbidden, http.StatusBadRequest:
 			return nil, false, fmt.Errorf("%w: %s; check -room and -secret", errRejected, res.Status)
 		case http.StatusConflict:
-			return nil, false, fmt.Errorf("%w: %s: %w", errRejected, res.Status, server.ErrDifferentFile)
+			return nil, false, fmt.Errorf("%w: %s: %w", errRejected, res.Status, &server.DifferentFile{Video: res.Header.Get(wire.VideoHeader)})
 		case http.StatusUnauthorized:
 			if r.creating {
 				return nil, false, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
@@ -168,6 +181,9 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 		conn, err := r.dial(c)
 		if errors.Is(err, errRejected) {
 			log.Printf("relay: %s\n", err)
+			if refused := (*server.DifferentFile)(nil); errors.As(err, &refused) {
+				r.refused.Store(refused)
+			}
 			cancel()
 			return
 		}

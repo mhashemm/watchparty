@@ -194,6 +194,7 @@ def relay_suite():
             ok("the different file's node exited with an error", nodes[other]["proc"].poll() not in (None, 0),
                f"rc={nodes[other]['proc'].returncode}")
             ok("it was told 409 and why", "409" in log(other) and "not the same file as the party's" in log(other))
+            ok("and what each plays", "the party's: " in log(other) and "yours: " in log(other), log(other)[-400:])
             ok("it did not retry", log(other).count("relay: dial") == 0, "409 is permanent")
             ok("nobody in the room saw it join", not any(other in known(n) for n in P))
 

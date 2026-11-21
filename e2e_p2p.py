@@ -184,7 +184,7 @@ def p2p_suite():
             nodes[other]["sock"] = child_mpv_socket(nodes[other]["proc"].pid)  # only if it wrongly got in
             ok("the different file's node exited with an error", nodes[other]["proc"].poll() not in (None, 0),
                f"rc={nodes[other]['proc'].returncode}")
-            ok("it was told why", "not the same file as the party's" in log(other))
+            ok("it was told why, and what each plays", "not the same file as the party's" in log(other) and "the party's: " in log(other) and "yours: " in log(other), log(other)[-400:])
             ok(f"{a} logged the refusal", f"refused {other}" in log(a))
             ok("nobody saw it join", not any(other in known(n) for n in P))
             launch(bad, nodes[a]["addr"], secret="wrongsecret", port=free_port())

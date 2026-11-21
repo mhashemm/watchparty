@@ -95,11 +95,11 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		v = video{files: stream.urls, names: stream.names, playlist: len(stream.urls) > 1, id: stream.id}
+		v = video{files: stream.urls, names: stream.names, sums: stream.sums, sizes: stream.sizes, playlist: len(stream.urls) > 1, id: stream.id}
 		cfg.Playlist = false
 	} else {
 		var err error
-		if v, err = localVideo(target, cfg.Playlist); err != nil {
+		if v, err = media(target, cfg.Playlist); err != nil {
 			return err
 		}
 		cfg.Playlist = v.playlist
@@ -113,6 +113,8 @@ func Run(parent context.Context, cfg Config) error {
 			startAt = 0
 		}
 	}
+	// what a joiner refused for its file is told, and sets beside the party's
+	ours, local := v.about(), !isTorrent(target) && !strings.Contains(target, "://")
 	if cfg.Secret == "" {
 		cfg.Secret = rand.Text()
 	}
@@ -120,41 +122,39 @@ func Run(parent context.Context, cfg Config) error {
 		cfg.Hostname, _ = os.Hostname()
 	}
 
+	var relay *relayConn
 	if strings.TrimSpace(cfg.Relay) != "" {
-		joinRelay(c, cancel, &cfg, incoming, outgoing, v.id)
+		relay = joinRelay(c, cancel, &cfg, incoming, outgoing, v.id, ours.header())
 	} else {
-		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id)
+		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id, ours.header())
 		if err != nil && parent.Err() != nil {
 			return nil
+		}
+		if refused := (*server.DifferentFile)(nil); errors.As(err, &refused) {
+			return differs(refused, ours, local)
 		}
 		if err != nil {
 			return err
 		}
 		defer cleanup()
 	}
-	return runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing)
+	err := runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing)
+	if refused := relay.refusedFor(); refused != nil && errors.Is(err, errStopped) {
+		return differs(refused, ours, local)
+	}
+	return err
 }
 
 // video is what the party plays: the files mpv opens and their names, the entry it starts
-// on, and the fingerprint every member's must match (id).
+// on, and the fingerprint every member's must match (id). sums and sizes are each file's,
+// for a refused joiner (about).
 type video struct {
 	files, names []string
+	sums         []string
+	sizes        []int64
 	start        int
 	playlist     bool
 	id           string
-}
-
-// localVideo is a file, or with siblings its folder's playlist.
-func localVideo(target string, siblings bool) (video, error) {
-	files, start, playlist, id, err := media(target, siblings)
-	if err != nil {
-		return video{}, err
-	}
-	v := video{files: files, start: start, playlist: playlist, id: id}
-	for _, f := range files {
-		v.names = append(v.names, filepath.Base(f))
-	}
-	return v, nil
 }
 
 // openSwarm opens a torrent and reports its swarm while the party waits on it.
@@ -174,7 +174,7 @@ func openSwarm(c context.Context, target, cache string, playing *atomic.Pointer[
 }
 
 // joinRelay connects to the relay in the background, creating a room when cfg has none.
-func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file string) {
+func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file, video string) *relayConn {
 	creating := cfg.Room == ""
 	if creating {
 		cfg.Room = rand.Text()
@@ -189,6 +189,7 @@ func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incomi
 		id:        rand.Text(),
 		session:   rand.Text(),
 		file:      file,
+		video:     video,
 		incoming:  incoming,
 		retry:     minBackoff,
 		wait:      notOpenFor,
@@ -197,6 +198,7 @@ func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incomi
 	go conn.Connect(c, cancel)
 	go conn.Broadcast(c, outgoing)
 	log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
+	return conn
 }
 
 // runMpv starts mpv on the video with the sync script, joins it to the party and waits for
@@ -415,12 +417,12 @@ func fingerprint(path string) (string, error) {
 // runMesh starts this node's side of the P2P mesh: an address others can reach, the
 // server, and a hello to each address given. The cleanup it returns runs in reverse: /bye
 // first, then the HTTP server, then the UPNP mapping. Callers defer it, so it runs in Run.
-func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file string) (func(), error) {
+func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, video string) (func(), error) {
 	var cleanup cleanups
 	address, err := meshAddress(c, cfg, &cleanup)
 	if err == nil {
 		var ser *server.Server
-		if ser, err = serveMesh(c, cancel, incoming, outgoing, cfg, file, address, &cleanup); err == nil {
+		if ser, err = serveMesh(c, cancel, incoming, outgoing, cfg, file, video, address, &cleanup); err == nil {
 			err = joinMesh(c, ser, cfg.Addrs, incoming)
 		}
 	}
@@ -489,8 +491,8 @@ func meshAddress(c context.Context, cfg Config, cleanup *cleanups) (string, erro
 }
 
 // serveMesh starts the HTTP server peers send to, and the broadcast to them.
-func serveMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, address string, cleanup *cleanups) (*server.Server, error) {
-	ser := server.New(c, incoming, address, cfg.Hostname, file, cfg.Secret, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
+func serveMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, video, address string, cleanup *cleanups) (*server.Server, error) {
+	ser := server.New(c, incoming, address, cfg.Hostname, file, video, cfg.Secret, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
 	mux.HandleFunc("/bye", ser.Bye)

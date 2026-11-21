@@ -26,6 +26,7 @@ const (
 	counterHeaderKey  = "counter"
 	hostnameHeaderKey = "hostname"
 	fileHeaderKey     = "file"
+	videoHeaderKey    = "video"
 	secretHeaderKey   = "secret"
 
 	maxFails = 3
@@ -36,6 +37,14 @@ var (
 	ErrDifferentFile = errors.New("your video is not the same file as the party's, or only one of you passed -playlist")
 	ErrWrongSecret   = errors.New("the party refused your secret")
 )
+
+// DifferentFile is a refusal for another file. Video is the party's video as the party
+// described it to New, and as the relay passes it on too: opaque here.
+type DifferentFile struct{ Video string }
+
+func (*DifferentFile) Error() string { return ErrDifferentFile.Error() }
+
+func (*DifferentFile) Unwrap() error { return ErrDifferentFile }
 
 type peer struct {
 	Counter      uint64     `json:"counter,string"`
@@ -64,6 +73,7 @@ type Server struct {
 	counter    uint64
 	hostname   string
 	file       string
+	video      string
 	secret     string
 	evictAfter time.Duration
 	// chaseFrom and chaseTo bound how often a peer is sent this node's state again
@@ -98,6 +108,7 @@ func (s *Server) Hi(res http.ResponseWriter, req *http.Request) {
 	hostname := req.Header.Get(hostnameHeaderKey)
 	if req.Header.Get(fileHeaderKey) != s.file {
 		log.Printf("refused %s with ip %s: not the same file\n", hostname, addr)
+		res.Header().Set(videoHeaderKey, s.video)
 		res.WriteHeader(http.StatusConflict)
 		return
 	}
@@ -439,7 +450,7 @@ func (s *Server) request(c context.Context, addr string, endpoint string, data [
 	}
 	if res.StatusCode == http.StatusConflict {
 		res.Body.Close()
-		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, ErrDifferentFile)
+		return nil, fmt.Errorf("%s%s: %w", addr, endpoint, &DifferentFile{res.Header.Get(videoHeaderKey)})
 	}
 	if res.StatusCode == http.StatusForbidden {
 		res.Body.Close()
@@ -460,7 +471,7 @@ func (s *Server) post(c context.Context, addr string, endpoint string, data []by
 	return res.Body.Close()
 }
 
-func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, secret string, evictAfter time.Duration) *Server {
+func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string, hostname string, file string, video string, secret string, evictAfter time.Duration) *Server {
 	return &Server{
 		c:          c,
 		incoming:   incoming,
@@ -469,6 +480,7 @@ func New(c context.Context, incoming chan mpv.IncomingMessage, myAddress string,
 		myAddress:  myAddress,
 		hostname:   hostname,
 		file:       file,
+		video:      video,
 		secret:     secret,
 		evictAfter: evictAfter,
 		chaseFrom:  time.Second,
