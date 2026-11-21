@@ -187,14 +187,15 @@ func (r *relay) broadcast(name string, from *member, b []byte) {
 	}
 }
 
-// admit enforces the caps in cost order, creating the room if it is new. It runs
-// before the upgrade so a refused caller never becomes a websocket. old is the room as
-// it was remembered: a keyless member of it that can wait gets a channel that closes
-// when a key holder opens it, since only a key holder creates a room. Whoever gets one
-// must call stopWaiting. Anyone else gets the room it was checked against, which add and
-// leave act on only while it is still the room of that name: a handler slow to add could
-// otherwise join a newer room of that name, whose secret and file it was never checked
-// against.
+// admit enforces the caps, cheapest first, and creates the room if it is new. It runs
+// before the upgrade, so a refused caller never becomes a websocket.
+//
+// old is the room as it was remembered. A keyless member of it that can wait gets a
+// channel that closes when a key holder opens it, as only a key holder creates a room;
+// whoever gets one must call stopWaiting. Anyone else gets the room it was checked
+// against. add and leave act on it only while it is still the room of that name: otherwise
+// a handler slow to add could join a newer room of that name, whose secret and file it was
+// never checked against.
 func (r *relay) admit(name string, secret, key []byte, file, ip string, old *known) (*room, bool, <-chan struct{}, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -215,8 +216,8 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 		return rm, false, nil, 0, nil
 	}
 	if len(key) == 0 {
-		// no key for a room never opened is a member early for the party, not a
-		// guess, so it costs no quota and the node keeps retrying
+		// no key for a room never opened is a member early for the party, not a guess, so it
+		// costs no quota and the node keeps retrying
 		if old == nil {
 			return nil, false, nil, http.StatusUnauthorized, fmt.Errorf("room not open yet")
 		}
@@ -256,8 +257,8 @@ func (r *relay) admit(name string, secret, key []byte, file, ip string, old *kno
 	return rm, true, nil, 0, nil
 }
 
-// opened sends anyone held for the room to join, once its key holder is in it: sent
-// sooner, one could be added first and say joined to an empty room.
+// opened tells everyone held for the room to join, once its key holder is in it. Sooner,
+// one could be added first and announce itself to an empty room.
 func (r *relay) opened(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -312,12 +313,11 @@ func (r *relay) hold(c context.Context, conn *websocket.Conn, open <-chan struct
 	}
 }
 
-// add registers the member only once its conn is set, so broadcast can never
-// reach a member whose conn is still nil. It returns the stale member m replaced
-// if this is the same node reconnecting, and false if rm, the room m was admitted to,
-// was reaped after m's admit. The notices are queued under the same
-// lock, so "has joined" reaches exactly the members m found, and they are the
-// ones m is told it is connected to.
+// add registers m once its conn is set, so broadcast never reaches a member with a nil
+// conn. It returns the stale member m replaced if this is the same node reconnecting, and
+// false if rm, the room m was admitted to, was reaped after admit. The notices are queued
+// under the same lock, so "has joined" reaches exactly the members m found, and those are
+// the ones m is told it is connected to.
 func (r *relay) add(name string, rm *room, m *member) (*member, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -348,7 +348,7 @@ func (r *relay) add(name string, rm *room, m *member) (*member, bool) {
 	return stale, true
 }
 
-// queue drops a notice rather than block under r.mu; notices are cosmetic
+// queue drops a notice rather than block under r.mu; notices are cosmetic.
 func queue(m *member, b []byte) {
 	select {
 	case m.ch <- b:
@@ -356,12 +356,12 @@ func queue(m *member, b []byte) {
 	}
 }
 
-// leave removes m from rm and reaps rm once it is empty, never a newer room of that name.
-// A nil m only reaps, and so does an m that add already replaced: the room was never told
-// it left. A member that
-// dropped without saying goodbye is away: the room is told it left only if it isn't back
-// within the grace, as most drops are back in a second and a leave stops the party. It
-// says what became of m: "left", "away" or "replaced by its reconnect".
+// leave removes m from rm and reaps rm once it is empty, never a newer room of that name. A
+// nil m only reaps, and so does an m that add already replaced: the room never heard it
+// leave. A member that dropped without saying goodbye is away: the room is told it left
+// only if it isn't back within the grace, as most drops come back in a second and a leave
+// stops the party. It returns what became of m: "left", "away" or "replaced by its
+// reconnect".
 func (r *relay) leave(name string, rm *room, m *member, bye bool) string {
 	r.mu.Lock()
 	if r.rooms[name] != rm {
@@ -508,8 +508,8 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		r.wait(res, req, name, open, l)
 		return
 	}
-	// a node told it opened the room answers joiners with its position: only a key
-	// holder creates a room
+	// the node that opened the room answers joiners with its position; only a key holder
+	// creates a room
 	if created {
 		res.Header().Set(wire.OpenedHeader, "yes")
 	}

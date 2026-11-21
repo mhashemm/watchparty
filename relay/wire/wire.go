@@ -33,10 +33,11 @@ const (
 	StatusNotOpened websocket.StatusCode = 4002
 )
 
-// Message is every frame: the sender's hostname, its id and its raw mpv JSON, which the
-// relay forwards without parsing. The id is one rand.Text() per party, never the session:
-// that and the secret replace a member. A notice the relay makes carries the member's id,
-// as it came in the query: a leave tells its followers their leader left, whatever its name.
+// Message is every frame: the sender's hostname, its id, and its raw mpv JSON, which the
+// relay forwards without parsing. The id is one rand.Text() per party, never the session,
+// which together with the secret replaces a member. A notice the relay makes carries the
+// member's id as it came in the query, so a leave tells followers their leader left,
+// whatever its name.
 type Message struct {
 	Hostname string          `json:"hostname"`
 	From     string          `json:"from,omitempty"`

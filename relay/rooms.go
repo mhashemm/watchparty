@@ -11,8 +11,8 @@ import (
 
 const forgetAfter = 30 * 24 * time.Hour
 
-// remembered keeps the rooms key holders opened, so a member can bring one back
-// without the key after its last member left. Only a hash of the secret is stored.
+// remembered keeps the rooms key holders opened, so a member can bring one back without
+// the key after its last member left. Only a hash of the secret is stored.
 type remembered struct {
 	db     *sql.DB
 	forget time.Duration

@@ -144,7 +144,7 @@ type video struct {
 	id           string
 }
 
-// localVideo is a file, or with siblings the playlist of its folder.
+// localVideo is a file, or with siblings its folder's playlist.
 func localVideo(target string, siblings bool) (video, error) {
 	files, start, playlist, id, err := media(target, siblings)
 	if err != nil {
@@ -291,11 +291,10 @@ func logEnd(client *mpv.Client, names []string) {
 	}
 }
 
-// outcome is what Run returns, decided from what is known once it ends, in one place, never
-// from which channel said so first: a Stop kills mpv, so "cancelled" and "mpv exited" both
-// fire, and the cancel is why mpv died. The caller cancelling parent and the user quitting
-// mpv are normal ends; anything inside cancelling c stopped the party; otherwise err, mpv's
-// own reason, stands.
+// outcome decides what Run returns from the facts once it ends, never from which channel
+// fired first: a Stop kills mpv, so "cancelled" and "mpv exited" both fire, and the cancel is
+// why mpv died. The caller cancelling parent and the user quitting mpv are normal ends;
+// anything else cancelling c stopped the party; otherwise err, mpv's own reason, stands.
 func outcome(parent, c context.Context, mpvQuit bool, err error) error {
 	switch {
 	case parent.Err() != nil, mpvQuit:
@@ -334,9 +333,9 @@ func mpvArgs(flags string) []string {
 	return args
 }
 
-// lineLog logs mpv's output a line at a time, so the reason a file won't play
-// reaches the CLI's log and the GUI's chart. exec gives one writer shared by
-// stdout and stderr a single goroutine, so Write needs no lock.
+// lineLog logs mpv's output a line at a time, so the reason a file won't play reaches the
+// CLI's log and the GUI's chart. exec copies into one writer shared by stdout and stderr
+// from a single goroutine, so Write needs no lock.
 type lineLog struct {
 	l   *log.Logger
 	buf []byte
@@ -354,8 +353,8 @@ func (w *lineLog) Write(p []byte) (int, error) {
 	}
 }
 
-// notReady reports mpv exiting before the video was loaded. Exit 0 is the user
-// closing it, which is a normal end; mpv exits non-zero for a bad file or flag.
+// notReady reports mpv exiting before the video loaded. Exit 0 is the user closing it, a
+// normal end; mpv exits non-zero for a bad file or flag.
 func notReady(err error) error {
 	if err == nil {
 		return nil
@@ -511,8 +510,8 @@ func serveMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.I
 	})
 	cleanup.add(ser.Shutdown)
 
-	// listening here, not in the goroutine: a port in use is why this party can't start, and
-	// found later it only cancelled c, so a joiner said nobody answered and a host just stopped
+	// listen here, not in the goroutine: a port in use must be the error Run returns. Found
+	// later, it only cancelled c, so a joiner said nobody answered and a host just stopped
 	l, err := net.Listen("tcp", s.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("can't take port %d, maybe another program has it; choose another port: %w", cfg.Port, err)

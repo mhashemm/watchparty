@@ -62,7 +62,7 @@ func (r *relayConn) set(conn *websocket.Conn) {
 var errRejected = errors.New("rejected by relay")
 
 // dial returns a connection in the room. A keyless member of a room the relay remembers
-// is held until a key holder opens it, then dials again at once and joins.
+// is held until someone with the key opens it, then dials again at once and joins.
 func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 	for {
 		conn, held, err := r.dialOnce(c)
@@ -82,6 +82,7 @@ func (r *relayConn) dial(c context.Context) (*websocket.Conn, error) {
 	}
 }
 
+// dialOnce dials the relay once. held: the relay is holding this node until the room opens.
 func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 	q := url.Values{wire.RoomParam: {r.room}, wire.HostnameParam: {r.hostname}, wire.IDParam: {r.id}, wire.SessionParam: {r.session}, wire.FileParam: {r.file}}
 	conn, res, err := websocket.Dial(c, strings.TrimRight(r.addr, "/")+wire.Path+"?"+q.Encode(), &websocket.DialOptions{
@@ -97,8 +98,8 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 			if r.creating {
 				return nil, false, fmt.Errorf("%w: %s; this relay needs -createKey to open a new room", errRejected, res.Status)
 			}
-			// a room nobody opens (a fake invite, a host who never comes) must not
-			// keep a node waiting forever
+			// a room nobody opens (a fake invite, a host who never comes) must not keep a
+			// node waiting forever
 			if r.waiting.IsZero() {
 				r.waiting = time.Now()
 			}
@@ -106,7 +107,7 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 				return nil, false, fmt.Errorf("%w: %s; room %s did not open within %s", errRejected, res.Status, r.room, r.wait)
 			}
 			return nil, false, fmt.Errorf("room %s is not open yet, waiting for someone with -createKey", r.room)
-		// both clear by themselves, so the node keeps retrying; the status goes first for the GUI
+		// both clear by themselves, so the node keeps retrying; the status comes first for the GUI
 		case http.StatusTooManyRequests:
 			return nil, false, fmt.Errorf("%s: the relay has had too many attempts from your network, which clears within the hour", res.Status)
 		case http.StatusServiceUnavailable:
@@ -116,7 +117,7 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 	if err == nil && res.Header.Get(wire.WaitingHeader) == "yes" {
 		return conn, true, nil
 	}
-	// ahead of the first frame, so mpv knows it opened the room before anyone joins
+	// before the first frame, so mpv knows it opened the room before anyone joins
 	r.opened = err == nil && res.Header.Get(wire.OpenedHeader) == "yes"
 	if r.opened {
 		r.tell(c, mpv.IncomingMessage{Opened: true})
@@ -124,7 +125,7 @@ func (r *relayConn) dialOnce(c context.Context) (*websocket.Conn, bool, error) {
 	return conn, false, err
 }
 
-// tell is for what only this node's relay client knows; it never comes from the wire.
+// tell hands mpv news only this node's relay client knows, never anything from the wire.
 func (r *relayConn) tell(c context.Context, m mpv.IncomingMessage) {
 	select {
 	case r.incoming <- m:
@@ -132,9 +133,10 @@ func (r *relayConn) tell(c context.Context, m mpv.IncomingMessage) {
 	}
 }
 
+// read hands the room's messages to mpv until the connection fails.
 func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 	for {
-		// not c: its end would close the conn at once, before the goodbye is sent
+		// not c: when it ends, the library would close the conn before the goodbye is sent
 		_, b, err := conn.Read(context.WithoutCancel(c))
 		if err != nil {
 			return err
@@ -153,13 +155,13 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 	}
 }
 
-// Connect owns the reconnect loop for the lifetime of the process. A dropped
-// relay is not a reason to tear down the player, so only a rejection cancels.
+// Connect dials and redials the relay for the whole party. A dropped connection never ends
+// the party; only a rejection cancels it.
 //
-// It is a reason to stop it: what this node sends while away is dropped and what the
-// party sends never arrives, so mpv is told when the connection is lost, and pauses, and
-// when it is back, and joins again. Not if it just opened the room: there is no party to
-// join yet, and it is the one who answers the others.
+// mpv is told when the connection is lost (Lost), and plays on, and when it is back (Back),
+// so it tells the party where it is: what it sent meanwhile was dropped, and what the party
+// sent never arrived. Not Back if the redial opened the room: nobody is there yet, and this
+// node answers the others.
 func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 	backoff, dropped := r.retry, false
 	for c.Err() == nil {
@@ -186,7 +188,7 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 			r.tell(c, mpv.IncomingMessage{Back: true})
 		}
 
-		// the party's end says goodbye, so the relay tells the room at once instead of
+		// when the party ends, say goodbye, so the relay tells the room at once instead of
 		// waiting for this node to come back
 		bye := context.AfterFunc(c, func() { conn.Close(websocket.StatusNormalClosure, "bye") })
 		err = r.read(c, conn)
@@ -202,12 +204,12 @@ func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
 	}
 }
 
-// Broadcast is the single writer for the whole process. It must not be restarted
-// per connection: two of these ranging over outgoing would steal frames from each
-// other during a redial.
+// Broadcast is the only writer for the whole party. It must not be restarted per
+// connection: two of them reading outgoing would steal frames from each other during a
+// redial.
 //
-// It starts once the first dial has succeeded. mpv can finish loading before that, and
-// its "joined" going nowhere would leave the joiner at 0 with the party playing on.
+// It starts once the first dial has succeeded: mpv can finish loading before that, and a
+// "joined" sent nowhere would leave the joiner at 0 while the party plays on.
 func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 	select {
 	case <-r.up:
@@ -226,8 +228,8 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 			log.Printf("relay: marshal: %s\n", err)
 			continue
 		}
-		// never hold mu across the write: it would wedge the supervisor's set() for
-		// the whole timeout. mu only guards the pointer, and this is the only writer.
+		// never hold mu across the write: it would block Connect's set() for the whole
+		// timeout. mu only guards the pointer, and this is the only writer.
 		r.mu.Lock()
 		conn := r.conn
 		r.mu.Unlock()
@@ -239,7 +241,7 @@ func (r *relayConn) Broadcast(c context.Context, outgoing <-chan []byte) {
 		err = conn.Write(ctx, websocket.MessageText, b)
 		cancel()
 		if err != nil {
-			// the supervisor is already redialling, and rejoins the party once it is back
+			// Connect is already redialling, and tells the party where it is once back
 			log.Printf("relay: write: %s\n", err)
 		}
 	}

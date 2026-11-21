@@ -44,8 +44,8 @@ type peer struct {
 	address      string     `json:"-"`
 	fails        int        `json:"-"`
 	failingSince time.Time  `json:"-"`
-	// reached is open while an event this node sent failed to reach the peer, and is
-	// closed by the next that does
+	// reached is open while the peer has missed an event this node sent, and is closed by
+	// the next one that reaches it
 	reached chan struct{} `json:"-"`
 	tried   time.Time     `json:"-"`
 }
@@ -82,8 +82,8 @@ func (s *Server) Guard(next http.Handler) http.Handler {
 	})
 }
 
-// notify shows a notice about the peer at from: a leave tells its followers their leader left,
-// whatever its name.
+// notify sends mpv a notice about the peer at from, without blocking (CLAUDE.md). From
+// tells followers that their leader left, whatever its name.
 func (s *Server) notify(hostname, from, text string) {
 	event, _ := json.Marshal(mpv.Event{Name: "show-text", Data: text})
 	select {
@@ -237,8 +237,8 @@ func (s *Server) AddAddress(addr string) error {
 	}
 	s.mu.RUnlock()
 
-	// together: one by one, each peer that vanished without a /bye held the join up
-	// for its own timeout
+	// all at once: one by one, each peer that vanished without a /bye held the join up for
+	// its own timeout
 	var wg sync.WaitGroup
 	for a := range addresses {
 		wg.Go(func() {
@@ -281,9 +281,9 @@ func (s *Server) BroadcastEvents(outgoing chan []byte) {
 	}
 }
 
-// track follows whether a peer has every event this node sent. Each is the sender's whole
-// state, so the first that fails leaves the peer behind on what the party holds: mpv is
-// told, and asked to send its state again (chase) until one gets through.
+// track records whether a peer has every event this node sent. Each event carries the
+// sender's whole state, so the first that fails leaves the peer behind: mpv is told, and
+// asked to send its state again (chase) until one gets through.
 func (s *Server) track(p *peer, err error) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -299,12 +299,12 @@ func (s *Server) track(p *peer, err error) error {
 	return err
 }
 
-// chase tells mpv a peer missed something, then, each time it waited longer, sends the peer
-// its state again, until a send reaches it, it is dropped, or the party ends. Not at once:
-// that would fail as the send did. A wait in which this node sent the peer something
-// anyway, which carried its state, sends nothing: each send to a peer that is down is a
-// strike. Not from the send that failed: BroadcastEvents is waiting for it, and mpv can be
-// blocked on outgoing meanwhile.
+// chase tells mpv a peer missed something, then resends the peer this node's state after
+// ever longer waits, until a send reaches it, it is dropped, or the party ends. Not at once:
+// that would fail as the send did. After a wait in which this node sent the peer something
+// anyway, which carried its state, it sends nothing: each send to a peer that is down is a
+// strike. It runs in its own goroutine, not in the failed send: BroadcastEvents is waiting
+// for that send, and mpv can be blocked on outgoing meanwhile.
 func (s *Server) chase(p *peer, reached chan struct{}) {
 	if !s.tell(mpv.IncomingMessage{HostName: p.Hostname, From: p.address, Missed: true}) {
 		return
@@ -330,7 +330,7 @@ func (s *Server) chase(p *peer, reached chan struct{}) {
 }
 
 // resend asks mpv for its state and sends it to p alone: the rest of the party has it, and
-// to a member holding it, a resume sent again says it got the first one late.
+// to a member that already plays it, a resume sent again says the first one came late.
 func (s *Server) resend(p *peer) bool {
 	reply := make(chan []byte, 1)
 	if !s.tell(mpv.IncomingMessage{HostName: p.Hostname, From: p.address, Resend: true, Reply: reply}) {
@@ -364,9 +364,9 @@ func (s *Server) tell(m mpv.IncomingMessage) bool {
 	}
 }
 
-// broadcast waits for every peer, except that with detach it does not wait for a
-// peer already at maxFails: it may be kept for evictAfter, and the next event must
-// not queue behind its timeout for that long.
+// broadcast sends to every peer at once and waits for them all. With detach it doesn't wait
+// for a peer already at maxFails: it may be kept for evictAfter, and the next event must not
+// queue behind its timeout for that long.
 func (s *Server) broadcast(parent context.Context, detach bool, f func(context.Context, *peer, uint64) error) {
 	s.mu.Lock()
 	s.counter += 1
