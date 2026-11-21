@@ -83,9 +83,14 @@ func TestGuard(t *testing.T) {
 // inline didn't replace would serve a page with no style or no script.
 func TestPageInlinesItsStyleAndScript(t *testing.T) {
 	t.Parallel()
+	// a Windows checkout has CRLF line endings (CI's windows job)
+	crlf := inline(strings.ReplaceAll(pageHTML, "\n", "\r\n"), pageCSS, pageJS)
 	for _, tag := range []string{`href="app.css"`, `src="app.js"`} {
 		if bytes.Contains(page, []byte(tag)) {
 			t.Errorf("the page still loads %s instead of inlining it", tag)
+		}
+		if bytes.Contains(crlf, []byte(tag)) {
+			t.Errorf("with CRLF line endings, the page still loads %s instead of inlining it", tag)
 		}
 	}
 }
