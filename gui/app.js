@@ -474,12 +474,12 @@ function renderMembers(show) {
   $("member-list").replaceChildren(row(0, "You", state.inAt, state.myAhead), ...state.members.map((p, i) => row(i + 1, p.name, p.since, state.aheadOf[p.id]?.secs)));
 }
 
-// a refusal that says what each side plays: the diagnosis from it, and a row per fact, what
-// differs on your side in berry
+// a refusal that says what differs (party.NotTheSameFile): the diagnosis from it, and its
+// rows as party gives them, what differs on your side in berry
 function refusedFor(r) {
-  if (r.box === "tick") return `Diagnosis: the party plays a playlist of ${r.party.videos} videos, and you picked one file. Tick the box under File and start again.`;
+  if (r.box === "tick") return `Diagnosis: the party plays a playlist of ${r.videos} videos, and you picked one file. Tick the box under File and start again.`;
   if (r.box === "untick") return "Diagnosis: the party plays one file, and you picked a whole folder. Untick the box under File and start again.";
-  return r.party.videos || r.yours.videos
+  return r.playlist
     ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order."
     : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.";
 }
@@ -487,9 +487,6 @@ function refusedFor(r) {
 function renderCompare(r) {
   $("compare").hidden = !r;
   if (!r) return;
-  const size = n => !n ? "" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${Math.floor(n / 1e6)} MB` : n >= 1e3 ? `${Math.floor(n / 1e3)} KB` : `${n} bytes`;
-  const rows = [["Video", a => a.name], ["Size", a => size(a.size)], ["Checksum", a => a.sum, true]];
-  if (r.party.videos || r.yours.videos) rows.push(["Videos", a => a.videos ? String(a.videos) : "one file"], ["Playlist checksum", a => a.playlist || "", true]);
   const cell = (text, mono, cls) => {
     const s = document.createElement("span");
     if (cls) s.className = cls;
@@ -499,8 +496,7 @@ function renderCompare(r) {
   const li = (...cells) => { const l = document.createElement("li"); l.append(...cells); return l; };
   $("compare").replaceChildren(
     li(cell(""), cell("The party's", false, "h"), cell("Yours", false, "h")),
-    ...rows.filter(([, f]) => f(r.party) || f(r.yours)).map(([k, f, mono]) =>
-      li(cell(k, false, "k"), cell(f(r.party), mono), cell(f(r.yours), mono, f(r.party) !== f(r.yours) ? "x" : ""))));
+    ...r.rows.map(x => li(cell(x.label, false, "k"), cell(x.party, x.mono), cell(x.yours, x.mono, x.differs ? "x" : ""))));
 }
 
 const notSameFile = () => $("playlist").checked

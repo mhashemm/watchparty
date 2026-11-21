@@ -231,7 +231,8 @@ func (r *relay) admit(name string, secret, key []byte, file, video, ip string, o
 			return nil, false, nil, http.StatusForbidden, fmt.Errorf("bad secret")
 		}
 		if old.file != file {
-			return nil, false, nil, http.StatusConflict, otherFile{old.video}
+			// a remembered room keeps no video: names stay off the disk
+			return nil, false, nil, http.StatusConflict, otherFile{}
 		}
 		o, ok := r.opening[name]
 		if !ok {
@@ -515,7 +516,7 @@ func (r *relay) handle(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if created {
-		if err := r.remembered.remember(name, secret, file, video); err != nil {
+		if err := r.remembered.remember(name, secret, file); err != nil {
 			l.Error("remembering a room failed", "err", err)
 		}
 	}

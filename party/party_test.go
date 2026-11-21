@@ -141,6 +141,9 @@ func TestOutcomeFollowsTheFactsInOrder(t *testing.T) {
 	exited := errors.New("mpv exited before the video was ready: signal: killed")
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
+	rejected := errors.New("rejected by relay: 403 Forbidden")
+	refused, refuse := context.WithCancelCause(context.Background())
+	refuse(rejected)
 	live := context.Background()
 	for _, c := range []struct {
 		name      string
@@ -151,6 +154,7 @@ func TestOutcomeFollowsTheFactsInOrder(t *testing.T) {
 		{"the caller stopped it, and mpv was killed for it", stopped, stopped, false, exited, nil},
 		{"the user quit mpv", live, stopped, true, exited, nil},
 		{"something inside stopped it", live, stopped, false, exited, errStopped},
+		{"the relay rejected it, and said why", live, refused, false, exited, rejected},
 		{"mpv's own reason", live, live, false, exited, exited},
 		{"a normal end", live, live, false, nil, nil},
 	} {

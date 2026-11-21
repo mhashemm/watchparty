@@ -18,8 +18,9 @@ release doesn't. An edit that keeps the size and misses every sample slips throu
 accepted. A `-file` containing `://` is a URL, fingerprinted by its text, so nothing is
 fetched. A joiner that differs gets 409 from the peer it bootstraps off (`/hi`) or from
 the relay (against the room creator's) and its party ends, told the party's `About` beside
-its own: the video it opened on, and a playlist's count and checksum. Not every video's: a
-big playlist outgrows the header (nginx and Cloudflare cap one at 8KB).
+its own (`NotTheSameFile`). A playlist sends each video's checksum cut to 4 bytes, not its
+name, so the joiner names the one that differs from its own list: names outgrow the header
+(nginx and Cloudflare cap one at 8KB). Past `wire.MaxVideo` it sends only the opened video.
 
 **`Config.Playlist` loads the file's folder (`media`):** its videos, not its subfolders, in
 natural order (`v2` before `v10`), starting on the file. Its identity is the hash of its
@@ -96,8 +97,9 @@ torrent of long videos. The check mark doesn't matter.
 |---|---|
 | The caller cancelled `parent` (Ctrl-C, GUI Stop or exit) | `nil` |
 | **The user quit mpv** | `nil` |
-| Something inside cancelled `c` (relay rejection, the mesh's server failing) | `errStopped` |
-| The bootstrap peer or the relay plays another file | `differs`: what each plays |
+| The relay rejected this node: it stops `c` with the rejection as the cause | that rejection |
+| Something else inside cancelled `c` (the mesh's server failing) | `errStopped` |
+| The bootstrap peer or the relay plays another file | `*NotTheSameFile`: what differs |
 | P2P: the port is taken | that error, naming the port |
 | Setup failed (unreadable file, no mpv, UPNP, no LAN IP) | that error |
 | P2P bootstrap refuses the secret | `server.ErrWrongSecret` |
@@ -157,7 +159,7 @@ SIGTERM. Nothing asserts a rejected node's exit code: check by hand that a wrong
   | 101 + `room-waiting` | held: remembered room, no key | logs the "not open yet" line, reads until the close: 4001 dials again at once, 4002 gives up ("did not open") |
   | 401 | room not open or remembered, no create key sent | retries: "room X is not open yet, waiting for someone with -createKey". Gives up (`errRejected`) if `Run` generated the room, since no host is coming, and after 30 minutes of 401s since the last connection (`r.wait`, "did not open within"), since a fake invite would wait forever |
   | 403 | wrong secret or create key | gives up, logs `rejected by relay`. A wrong secret never becomes right, and retrying burns the relay's rate limit |
-  | 409 | not the room creator's file | gives up, `errRejected` wrapping `server.DifferentFile` with the room's `room-video`, kept for `Run` |
+  | 409 | not the room creator's file | gives up, `errRejected` wrapping `server.DifferentFile` with the room's `room-video` |
   | 429, 503 | rate limit, caps | retries; the dial line starts with the status and says which, for the GUI |
   | other | | retries |
 

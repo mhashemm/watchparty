@@ -74,7 +74,9 @@ const mpvExitGrace = 10 * time.Second
 // stop and returns nil; every cleanup (/bye, the UPNP mapping) has run by the time
 // it returns.
 func Run(parent context.Context, cfg Config) error {
-	c, cancel := context.WithCancel(parent)
+	// a relay's rejection says why it stopped the party (outcome)
+	c, stop := context.WithCancelCause(parent)
+	cancel := func() { stop(nil) }
 	defer cancel()
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 	// mpv's client once it has the video
@@ -95,7 +97,7 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		v = video{files: stream.urls, names: stream.names, sums: stream.sums, sizes: stream.sizes, playlist: len(stream.urls) > 1, id: stream.id}
+		v = video{files: stream.urls, names: stream.names, sizes: stream.sizes, infohash: stream.infohash, playlist: len(stream.urls) > 1, id: stream.id}
 		cfg.Playlist = false
 	} else {
 		var err error
@@ -113,8 +115,8 @@ func Run(parent context.Context, cfg Config) error {
 			startAt = 0
 		}
 	}
-	// what a joiner refused for its file is told, and sets beside the party's
-	ours, local := v.about(), !isTorrent(target) && !strings.Contains(target, "://")
+	// what a joiner refused for its file is told, and sets beside its own
+	ours := v.about().header()
 	if cfg.Secret == "" {
 		cfg.Secret = rand.Text()
 	}
@@ -122,36 +124,29 @@ func Run(parent context.Context, cfg Config) error {
 		cfg.Hostname, _ = os.Hostname()
 	}
 
-	var relay *relayConn
 	if strings.TrimSpace(cfg.Relay) != "" {
-		relay = joinRelay(c, cancel, &cfg, incoming, outgoing, v.id, ours.header())
+		joinRelay(c, stop, &cfg, incoming, outgoing, v.id, ours)
 	} else {
-		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id, ours.header())
+		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id, ours)
 		if err != nil && parent.Err() != nil {
 			return nil
 		}
-		if refused := (*server.DifferentFile)(nil); errors.As(err, &refused) {
-			return differs(refused, ours, local)
-		}
 		if err != nil {
-			return err
+			return refusedFile(err, v)
 		}
 		defer cleanup()
 	}
-	err := runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing)
-	if refused := relay.refusedFor(); refused != nil && errors.Is(err, errStopped) {
-		return differs(refused, ours, local)
-	}
-	return err
+	return refusedFile(runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing), v)
 }
 
 // video is what the party plays: the files mpv opens and their names, the entry it starts
-// on, and the fingerprint every member's must match (id). sums and sizes are each file's,
-// for a refused joiner (about).
+// on, and the fingerprint every member's must match (id). sizes and, on disk, sums are
+// each file's, and infohash a torrent's, for a refused joiner (About).
 type video struct {
 	files, names []string
 	sums         []string
 	sizes        []int64
+	infohash     string
 	start        int
 	playlist     bool
 	id           string
@@ -174,7 +169,7 @@ func openSwarm(c context.Context, target, cache string, playing *atomic.Pointer[
 }
 
 // joinRelay connects to the relay in the background, creating a room when cfg has none.
-func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file, video string) *relayConn {
+func joinRelay(c context.Context, stop context.CancelCauseFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file, video string) {
 	creating := cfg.Room == ""
 	if creating {
 		cfg.Room = rand.Text()
@@ -195,10 +190,9 @@ func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incomi
 		wait:      notOpenFor,
 		up:        make(chan struct{}, 1),
 	}
-	go conn.Connect(c, cancel)
+	go conn.Connect(c, stop)
 	go conn.Broadcast(c, outgoing)
 	log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
-	return conn
 }
 
 // runMpv starts mpv on the video with the sync script, joins it to the party and waits for
@@ -302,6 +296,10 @@ func outcome(parent, c context.Context, mpvQuit bool, err error) error {
 	case parent.Err() != nil, mpvQuit:
 		return nil
 	case c.Err() != nil:
+		// a relay's rejection, which a cancel without a cause isn't
+		if cause := context.Cause(c); !errors.Is(cause, context.Canceled) {
+			return cause
+		}
 		return errStopped
 	}
 	return err

@@ -34,9 +34,9 @@ goes there too. Not in the release; deployed by the `deploy-relay` workflow (`de
 - **`CREATE_KEY` is required**, or the relay won't start: without it, anyone who finds
   the relay gets an anonymous fan-out for any bytes. Only a key holder creates a room.
 - **Closed rooms are remembered** (`rooms.go`, SQLite at `DB`): name, SHA-256 of the
-  secret, file, video, last used (opened or closed), forgotten after 30 days. A keyless
-  member of a remembered one is **held** until a key holder opens it. Pure-Go
-  `modernc.org/sqlite`: releases and the `scratch` image are `CGO_ENABLED=0`.
+  secret, file, last used (opened or closed), forgotten after 30 days. A keyless member of
+  a remembered one is **held** until a key holder opens it. Pure-Go `modernc.org/sqlite`:
+  releases and the `scratch` image are `CGO_ENABLED=0`.
 - **`room` and `hostname` arrive URL-decoded**, so a newline is one `%0a` away. `hostname`
   is cleaned once at ingress, since notices echo it. `room` is the routing key, so it stays
   raw and every log site cleans it.
@@ -49,7 +49,8 @@ goes there too. Not in the release; deployed by the `deploy-relay` workflow (`de
 - `GET /ws?room=&hostname=&id=&session=&file=` upgrades. The secret is in the
   **`room-secret`** header, never the query (proxies log it); the create key, needed
   only to open a room, in **`create-key`**. `file` isn't secret. **`room-video`**: the
-  opener's is kept with the room and sent back on a 409, unread; over `MaxVideo` is 400.
+  opener's is kept with the open room, in memory only (names stay off the disk), and sent
+  back on a 409, unread; over `MaxVideo` is 400.
 - The 101 carries **`room-opened: yes`** for the node that created the room with the key:
   its position is the party's, and a joiner jumps to it (`mpv/CLAUDE.md`, joining).
 - **Held** (`hold`): a keyless member of a remembered room gets a 101 with

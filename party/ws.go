@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -39,14 +38,12 @@ type relayConn struct {
 	session   string
 	file      string
 	video     string
-	// refused is the relay's 409, kept for Run to say what differs
-	refused  atomic.Pointer[server.DifferentFile]
-	incoming chan<- mpv.IncomingMessage
-	retry    time.Duration
-	wait     time.Duration
-	waiting  time.Time
-	opened   bool
-	up       chan struct{}
+	incoming  chan<- mpv.IncomingMessage
+	retry     time.Duration
+	wait      time.Duration
+	waiting   time.Time
+	opened    bool
+	up        chan struct{}
 }
 
 func (r *relayConn) set(conn *websocket.Conn) {
@@ -59,15 +56,6 @@ func (r *relayConn) set(conn *websocket.Conn) {
 		default:
 		}
 	}
-}
-
-// refusedFor is the relay's refusal of this node's file, if that is what ended the party. A
-// mesh party has no relay.
-func (r *relayConn) refusedFor() *server.DifferentFile {
-	if r == nil {
-		return nil
-	}
-	return r.refused.Load()
 }
 
 // errRejected means the relay will never accept these credentials, so retrying
@@ -169,22 +157,19 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 }
 
 // Connect dials and redials the relay for the whole party. A dropped connection never ends
-// the party; only a rejection cancels it.
+// the party; only a rejection stops it, as the cause, which Run returns.
 //
 // mpv is told when the connection is lost (Lost), and plays on, and when it is back (Back),
 // so it tells the party where it is: what it sent meanwhile was dropped, and what the party
 // sent never arrived. Not Back if the redial opened the room: nobody is there yet, and this
 // node answers the others.
-func (r *relayConn) Connect(c context.Context, cancel context.CancelFunc) {
+func (r *relayConn) Connect(c context.Context, stop context.CancelCauseFunc) {
 	backoff, dropped := r.retry, false
 	for c.Err() == nil {
 		conn, err := r.dial(c)
 		if errors.Is(err, errRejected) {
 			log.Printf("relay: %s\n", err)
-			if refused := (*server.DifferentFile)(nil); errors.As(err, &refused) {
-				r.refused.Store(refused)
-			}
-			cancel()
+			stop(err)
 			return
 		}
 		if err != nil {

@@ -763,7 +763,8 @@ func gone(t *testing.T, r *relay, roomName string) {
 }
 
 // A joiner refused for its file is told what the room plays, as its opener described it,
-// while the room is open and once it is only remembered. An oversized description is refused.
+// while the room is open. A remembered room is on disk, and names stay off it, so it says
+// nothing. An oversized description is refused.
 func TestRefusedJoinerHearsTheOpenersVideo(t *testing.T) {
 	t.Parallel()
 	r, url := keyed(t, t.TempDir()+"/relay.db")
@@ -779,17 +780,17 @@ func TestRefusedJoinerHearsTheOpenersVideo(t *testing.T) {
 	if host == nil {
 		t.Fatalf("the opener got %v", res)
 	}
-	refused := func(when string) {
+	refused := func(when, want string) {
 		t.Helper()
 		_, res := dialWith("xyz", "mine")
-		if res == nil || res.StatusCode != http.StatusConflict || res.Header.Get(wire.VideoHeader) != "described" {
+		if res == nil || res.StatusCode != http.StatusConflict || res.Header.Get(wire.VideoHeader) != want {
 			t.Fatalf("%s: got %v", when, res)
 		}
 	}
-	refused("open")
+	refused("open", "described")
 	host.CloseNow()
 	gone(t, r, "room")
-	refused("remembered")
+	refused("remembered", "")
 }
 
 // keyed remembers rooms in db, so a second relay on it is the first one restarted.
