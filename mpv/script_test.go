@@ -16,7 +16,7 @@ import (
 type script struct {
 	l   *lua.LState
 	mpv scriptMpv
-	// queue: what the script still has to hear; busy: it is hearing one now; idle: what it
+	// queue: what the script still has to hear; applying: it is hearing one now; idle: what it
 	// hears once the queue is empty, as mpv sends a property's change then; marked: a pause
 	// change mark it hasn't heard yet, which another one folds into
 	queue  []func()

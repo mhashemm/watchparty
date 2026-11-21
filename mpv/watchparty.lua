@@ -1,15 +1,15 @@
--- The node's own way into mpv (mpv/ORDER.md): mpv runs it in order with everything else it
--- does, and what it says reaches the node as client-message events, which mpv never merges.
--- It decides nothing; the rules are in Go. Every message after its name says what mpv holds
--- when it is sent, and its number:
+-- The node's way into mpv (mpv/ORDER.md): mpv runs this script in order with everything
+-- else it does, and its messages reach the node as client-message events, which mpv never
+-- merges. It decides nothing; the rules are in Go. Every message says what mpv holds when
+-- it is sent, and carries a number:
 -- watchparty <kind> <id> <pause> <time-pos> <n> <over|> <playlist-pos>.
 
--- said: what each recent message said, by its number, so a go can tell what the node had read
+-- said: what each recent message said, by number, so a set can tell what the node had read
 local n, said = 0, {}
 -- opened: the entry the last start opened
 local opened = nil
 
--- entry: the one a start says it opened, else playlist-pos as mpv holds it now
+-- entry: the entry a start opened; otherwise mpv's playlist-pos now
 local function say(kind, id, over, entry)
     n = n + 1
     local paused = mp.get_property("pause", "")
@@ -18,40 +18,40 @@ local function say(kind, id, over, entry)
     said[n] = {pause = paused, entry = entry, person = person, auto = kind == "start" and id == "auto"}
     said[n - 256] = nil
     local pos = mp.get_property("time-pos", "")
-    -- set to another entry that hasn't started: time-pos is still the old file's (0.42 keeps
-    -- it as it leaves; ORDER.md), and the new one opens at 0
+    -- moved to an entry that hasn't started: time-pos is still the old file's (0.42 keeps
+    -- it while leaving; ORDER.md), and the new one opens at 0
     if opened and mp.get_property("playlist-pos") ~= opened then pos = "" end
     mp.commandv("script-message", "watchparty", kind, id or "", paused,
         pos, tostring(n), over and "over" or "", entry)
 end
 
--- hello: the node learns this script's name by asking everyone, as a user's script with the
--- same file name would take the name and leave this one another; and what mpv holds, as the
--- observer below fires once as this script starts, which can be before the node connects
+-- hello: the node asks every script, to learn this one's name (a user's script with the same
+-- file name would take it), and gets mpv's pause: the observer below fires once as this
+-- script starts, which can be before the node connects
 mp.register_script_message("watchparty-hello", function() say("hello", mp.get_script_name()) end)
 
--- every change mark of pause, also one that ends where it was: mpv reports nothing of a set
--- the person's key undid at once (ORDER.md)
+-- every change of pause, even one that ends where it began: mpv reports nothing at all for
+-- a set the person's key undid at once (ORDER.md)
 mp.observe_property("pause", "none", function() say("pause") end)
 
--- go is the whole state the node adopts, in one message, so a person's key lands before it or
--- after it, never between its steps: stopped, on the entry, on the second, then playing if
--- asked. ack: once mpv has all of it, with what mpv holds then. A seek runs async: its reply
--- comes in this script's events in order with mpv's seek events, so the first seek after it
--- is the one that carries the node's. A move waits for its file to start (heading, loaded),
--- and a go meanwhile replaces the one waiting.
+-- A set is the whole state the node adopts, in one message, so a person's key lands before
+-- it or after it, never between its steps: paused, on the entry, on the second, then playing
+-- if asked. The ack comes once mpv has all of it, with what mpv holds then. A seek runs
+-- async; its reply arrives in order with mpv's seek events, so the first seek event after it
+-- is the one carrying the node's seek. A move waits for its file to start (heading, loaded),
+-- and a new set meanwhile replaces the one waiting.
 local replied, waiting, heading, loaded = {}, nil, nil, false
--- moves: the entries gos set, with their ids, oldest first, until a start says which opened;
--- ended: why the last file ended, so a start after a file's end or error is mpv's own (auto);
--- first: the file mpv opens as it starts is nobody's move
+-- moves: the entries sets moved to, with their ids, oldest first, until a start says which
+-- opened. ended: why the last file ended, so a start after a file's end or error is mpv's own
+-- (auto). first: the file mpv opens as it starts is nobody's move
 local moves, ended, first = {}, nil, true
--- over: the gos that undo a change of the person's the node hadn't read when it sent them, so
--- its ack says so; seeking: the go whose seek mpv has queued but not answered
+-- over: sets that undo a change by the person the node hadn't read when it sent them; their
+-- ack says so. seeking: the set whose seek mpv has queued but not answered
 local over, seeking = {}, nil
 
--- overrules: what mpv holds now, against what the node had read (seen), undone by a go that
--- ends on paused: the person's pause or seek the node never had. Another entry is the
--- person's key, unless mpv moved there itself at a file's end: its start said auto, or it is
+-- overrules is whether a set undoes something the person did that the node hadn't read
+-- (seen): a pause or seek the set's paused state overwrites. Another entry is also the
+-- person's key, unless mpv moved there itself at a file's end: its start said auto, or is
 -- still to come after that file's end.
 local function overrules(seen, paused, entry)
     seen = tonumber(seen)
@@ -95,13 +95,13 @@ local function apply(paused, second, id)
             return
         end
         table.insert(replied, id)
-        -- playing before it is played: the person's space ran between the go's stop and here
+        -- already playing before we play: the person's space ran between the set's pause and here
         if paused == "no" and mp.get_property("pause") == "no" then over[id] = true end
         finish()
     end)
 end
 
--- the go waiting, acked alone: mpv isn't on its file
+-- drop acks the waiting set without applying it: mpv isn't on its file
 local function drop()
     heading, loaded = nil, false
     local w = waiting
@@ -109,16 +109,16 @@ local function drop()
     if w then ack(w.id) end
 end
 
-mp.register_script_message("watchparty-go", function(paused, second, entry, id, seen, on)
+mp.register_script_message("watchparty-set", function(paused, second, entry, id, seen, on)
     if overrules(seen, paused, entry) then over[id] = true end
     if waiting then
         ack(waiting.id)
         waiting = nil
     end
-    -- a go for the file still starting waits for it too: a seek before it can be lost
+    -- a set for a file still starting waits for it too: a seek before it can be lost
     if entry == "-" and heading then entry = heading end
-    -- for a file mpv has left by a key the node hasn't heard yet: only stopped, and the ack's
-    -- entry sends that move out; a seek here would land on the wrong file
+    -- for a file the person's key has left, which the node hasn't heard yet: only pause, and
+    -- the ack's entry reports the move; a seek here would land on the wrong file
     if entry == "-" and on and on ~= "-" and mp.get_property("playlist-pos") ~= on then
         if paused == "yes" then mp.set_property("pause", "yes") end
         ack(id)
@@ -139,20 +139,20 @@ mp.register_script_message("watchparty-go", function(paused, second, entry, id, 
     apply(paused, second, id)
 end)
 
--- the file a move waits for, or another the person's key or a file's end took mpv to, which
--- the node hears from mpv: the ack alone
+-- the file a move waits for has loaded; any other one (the person's key or a file's end)
+-- gets the waiting set acked alone, and the node hears of the move from the start
 mp.register_event("file-loaded", function()
     if not heading then return end
     if opened ~= heading then
-        -- another file: the go waits on if mpv is still on its way to its own
+        -- another file: the set keeps waiting if mpv is still heading to its own
         if mp.get_property("playlist-pos") ~= heading then drop() end
         return
     end
     loaded = true
 end)
 
--- the file started: a seek made at its file-loaded, before this, can be dropped on a stream
--- that is slow to start (ORDER.md)
+-- the file started; a seek at its file-loaded, before this, can be dropped on a stream that
+-- is slow to start (ORDER.md)
 mp.register_event("playback-restart", function()
     if not loaded then return end
     heading, loaded = nil, false
@@ -161,25 +161,26 @@ mp.register_event("playback-restart", function()
     if w then apply(w.paused, w.second, w.id) end
 end)
 
--- a file mpv couldn't open: nothing loads, so the go waiting for it is acked
+-- a file mpv couldn't open never loads, so the set waiting for it is acked
 mp.register_event("end-file", function(e)
     ended = e.reason
     if e.reason == "error" and heading then drop() end
 end)
 
 -- seek: where a seek goes, read at its seek event, which is where it lands (ORDER.md), with
--- the node's id if it carries the node's
+-- the node's id if it carries the node's seek
 mp.register_event("seek", function()
-    -- a seek before ours is answered: the person's, queued before it, and lost to it
+    -- a seek event before ours was answered: the person's, queued before it and lost to it
     if seeking and #replied == 0 then over[seeking] = true end
     say("seek", replied[#replied])
     replied = {}
 end)
 
 -- a seek queued for the file mpv leaves never runs (MPV.md, "Playlists")
--- start: whose file mpv opens. A go's, by the move it set; mpv's own (auto) after a file's
--- end or error, or as it starts; else the person's (a key, the OSC, another script). A move
--- set before this start lost to it, and never opens; one set after it is still to come.
+-- start: whose file mpv opens. A set's, labelled with its id; mpv's own (auto) after a
+-- file's end or error, or as mpv starts; otherwise the person's (a key, the OSC, another
+-- script). A move set before this start lost to it and never opens; one set after it is
+-- still to come.
 mp.register_event("start-file", function(e)
     replied = {}
     local entry = tostring((e.playlist_entry_id or 0) - 1)
@@ -203,7 +204,7 @@ mp.register_event("start-file", function(e)
         if first or ended == "eof" or ended == "error" then
             label = "auto"
         elseif waiting and now == heading then
-            -- the person's move, which the go's, set after it, undoes
+            -- the person's move, which the waiting set, sent after it, undoes
             over[waiting.id] = true
         end
     end
