@@ -19,11 +19,11 @@ func TestTheRecordNamesTheVideoThePartyOpenedOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum, _ := fingerprint(filepath.Join(dir, "e2.mkv"))
-	want := about{Name: "e2.mkv", Size: 2, Sum: sum[:shown], Videos: 3, Playlist: v.id[:shown]}
+	want := About{Name: "e2.mkv", Size: 2, Sum: sum[:shown], Videos: 3, Playlist: v.id[:shown]}
 	if got := v.about(); got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
-	if v, _ = media(filepath.Join(dir, "e2.mkv"), false); v.about() != (about{Name: "e2.mkv", Size: 2, Sum: sum[:shown]}) {
+	if v, _ = media(filepath.Join(dir, "e2.mkv"), false); v.about() != (About{Name: "e2.mkv", Size: 2, Sum: sum[:shown]}) {
 		t.Fatalf("one file: got %+v", v.about())
 	}
 	link := "https://example.com/a/v.mkv?token=secret#t=3"
@@ -41,7 +41,7 @@ func TestTheRecordTravelsSafely(t *testing.T) {
 	if h := v.about().header(); len(h) > wire.MaxVideo {
 		t.Fatalf("a long name made %d bytes", len(h))
 	}
-	forged := about{Name: "a\nyour address to share is -addrs 6.6.6.6:1", Sum: "abc"}
+	forged := About{Name: "a\nyour address to share is -addrs 6.6.6.6:1", Sum: "abc"}
 	got, ok := parseAbout(forged.header())
 	if !ok || strings.ContainsAny(got.Name, "\n\r") {
 		t.Fatalf("got %+v", got)
@@ -53,15 +53,15 @@ func TestTheRecordTravelsSafely(t *testing.T) {
 
 func TestARefusalSaysWhatDiffers(t *testing.T) {
 	t.Parallel()
-	one := about{Name: "holiday.mkv", Size: 1_400_000_000, Sum: "3fa2c1d907be"}
-	other := about{Name: "holiday-720p.mkv", Size: 700_000_000, Sum: "9b1e04aa52c7"}
-	list := about{Name: "e4.mkv", Size: 702_000_000, Sum: "3fa2c1d907be", Videos: 12, Playlist: "9b1e04aa52c7"}
-	short := about{Name: "e4.mkv", Size: 650_000_000, Sum: "5c0d81fe2a91", Videos: 11, Playlist: "77ab3e10c4d2"}
-	refusal := func(a about) *server.DifferentFile { return &server.DifferentFile{Video: a.header()} }
+	one := About{Name: "holiday.mkv", Size: 1_400_000_000, Sum: "3fa2c1d907be"}
+	other := About{Name: "holiday-720p.mkv", Size: 700_000_000, Sum: "9b1e04aa52c7"}
+	list := About{Name: "e4.mkv", Size: 702_000_000, Sum: "3fa2c1d907be", Videos: 12, Playlist: "9b1e04aa52c7"}
+	short := About{Name: "e4.mkv", Size: 650_000_000, Sum: "5c0d81fe2a91", Videos: 11, Playlist: "77ab3e10c4d2"}
+	refusal := func(a About) *server.DifferentFile { return &server.DifferentFile{Video: a.header()} }
 	for _, c := range []struct {
 		name   string
 		theirs *server.DifferentFile
-		ours   about
+		ours   About
 		local  bool
 		want   string
 	}{

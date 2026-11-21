@@ -299,6 +299,13 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .now { margin: 0 0 18px; }
 .detail { font-size: .9rem; color: var(--ink-soft); margin: 4px 0 0; word-break: break-word; }
 .detail b { color: var(--forest); }
+.compare { list-style: none; margin: 10px 0 0; padding: 0; border: 2px solid var(--line); border-radius: 14px; background: #f3eedf; }
+.compare li { display: grid; grid-template-columns: 6.2em 1fr 1fr; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: .9rem; word-break: break-word; }
+.compare li:last-child { border-bottom: 0; }
+.compare .k { color: var(--ink-soft); }
+.compare .h { font-weight: 700; color: var(--bark); }
+.compare .x { color: var(--berry); font-weight: 700; }
+.compare code { font: .85rem ui-monospace, Consolas, monospace; }
 .bar { height: 10px; border-radius: 6px; background: #e8e6d2; border: 1.5px solid var(--line); overflow: hidden; margin: 8px 0 0; }
 .bar i { display: block; height: 100%; width: 0; background: repeating-linear-gradient(-45deg, var(--moss) 0 8px, #5d8a3f 8px 16px); border-radius: 6px; transition: width .3s; }
 .trail { display: flex; align-items: flex-start; margin: 4px 0 12px; }

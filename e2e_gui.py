@@ -249,8 +249,10 @@ def gui_suite():
             ok("the relay rejected the secret", status(G) == "Diagnosis: the relay rejected this room or secret. Check the invite and start again.", status(G))
             _, diff = variants()
             start(G, secret=SECRET, file=diff)
-            until(lambda: status(G).startswith("Diagnosis: your video"), BOOT)
+            until(lambda: status(G) == NOT_THE_SAME_VIDEO, BOOT)
             ok("the relay rejected the file", status(G) == NOT_THE_SAME_VIDEO, status(G))
+            rows = js(G, '$("compare").hidden ? "" : $("compare").textContent')
+            ok("and it shows what each plays", os.path.basename(MEDIA) in rows and os.path.basename(diff) in rows, rows)
             ok(f"{G}'s party ended", until(lambda: js(G, '!$("fields").hidden')))
 
     @case("[G17b] opening a new party without the create key is diagnosed, not left waiting")
@@ -442,8 +444,9 @@ def gui_suite():
         js(G, '$("playlist").checked = false')
         fill(G, file=f"{folder}/e2.mkv")
         go(G)
-        until(lambda: status(G).startswith("Diagnosis"), BOOT)
-        ok("with the box unticked, it says to tick it", status(G) == NOT_THE_SAME_VIDEO, status(G))
+        tick = "Diagnosis: the party plays a playlist of 3 videos, and you picked one file. Tick the box under File and start again."
+        until(lambda: status(G) == tick, BOOT)
+        ok("with the box unticked, it says to tick it", status(G) == tick, status(G))
         short = f"{RUN}/guishort"
         with making:
             shutil.copytree(folder, short)
@@ -451,7 +454,7 @@ def gui_suite():
         js(G, '$("playlist").checked = true')
         fill(G, file=f"{short}/e2.mkv")
         go(G)
-        until(lambda: status(G).startswith("Diagnosis: this folder"), BOOT)
+        until(lambda: status(G) == NOT_THE_SAME_FOLDER, BOOT)
         ok("with another folder, it says the folders differ", status(G) == NOT_THE_SAME_FOLDER, status(G))
         paste("-relay ws://example.invalid -room r -secret s")
         ok("an invite with no playlist unticks it", not js(G, '$("playlist").checked'))
@@ -574,7 +577,7 @@ def gui_suite():
         ok(f"{G} switched to Peer-to-Peer and filled it in", js(G, f'mode() == "direct" && $("addrs").value == {json.dumps(addr)} && $("psecret").value == {json.dumps(wsecret)}'))
         _, diff = variants()
         start(G, file=diff, port=str(gport))
-        until(lambda: status(G).startswith("Diagnosis"), BOOT)
+        until(lambda: status(G) == NOT_THE_SAME_VIDEO, BOOT)
         ok("over Wi-Fi, another file gets the same diagnosis", status(G) == NOT_THE_SAME_VIDEO, status(G))
         start(G, file=MEDIA, port=str(gport))
         must(f"{G} is in", joined(G), status(G))

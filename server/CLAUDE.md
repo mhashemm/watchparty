@@ -23,7 +23,7 @@ advertised `ip:port`, its key in every peer map), `counter` (monotonic `uint64`)
   `hit-me-up` is just a claim, and anyone reaching the port could send `/event` or
   `/bye` as a known peer with a high counter. Bodies are capped at 64KB (an mpv event is
   under 200 bytes). Members hold the secret and are trusted, so the peer map has no cap.
-- `/hi`: 409 for another file, with this node's `video` (`party.about`, opaque here),
+- `/hi`: 409 for another file, with this node's `video` (`party.About`, opaque here),
   else registers or **replaces** the caller (so a restarted node with its counter back at
   0 can rejoin) and answers with the peers it knows, not including the caller, plus its
   own counter and hostname in headers.

@@ -474,14 +474,45 @@ function renderMembers(show) {
   $("member-list").replaceChildren(row(0, "You", state.inAt, state.myAhead), ...state.members.map((p, i) => row(i + 1, p.name, p.since, state.aheadOf[p.id]?.secs)));
 }
 
+// a refusal that says what each side plays: the diagnosis from it, and a row per fact, what
+// differs on your side in berry
+function refusedFor(r) {
+  if (r.box === "tick") return `Diagnosis: the party plays a playlist of ${r.party.videos} videos, and you picked one file. Tick the box under File and start again.`;
+  if (r.box === "untick") return "Diagnosis: the party plays one file, and you picked a whole folder. Untick the box under File and start again.";
+  return r.party.videos || r.yours.videos
+    ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order."
+    : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again.";
+}
+
+function renderCompare(r) {
+  $("compare").hidden = !r;
+  if (!r) return;
+  const size = n => !n ? "" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${Math.floor(n / 1e6)} MB` : n >= 1e3 ? `${Math.floor(n / 1e3)} KB` : `${n} bytes`;
+  const rows = [["Video", a => a.name], ["Size", a => size(a.size)], ["Checksum", a => a.sum, true]];
+  if (r.party.videos || r.yours.videos) rows.push(["Videos", a => a.videos ? String(a.videos) : "one file"], ["Playlist checksum", a => a.playlist || "", true]);
+  const cell = (text, mono, cls) => {
+    const s = document.createElement("span");
+    if (cls) s.className = cls;
+    if (mono && text) { const c = document.createElement("code"); c.textContent = text; s.append(c); } else s.textContent = text;
+    return s;
+  };
+  const li = (...cells) => { const l = document.createElement("li"); l.append(...cells); return l; };
+  $("compare").replaceChildren(
+    li(cell(""), cell("The party's", false, "h"), cell("Yours", false, "h")),
+    ...rows.filter(([, f]) => f(r.party) || f(r.yours)).map(([k, f, mono]) =>
+      li(cell(k, false, "k"), cell(f(r.party), mono), cell(f(r.yours), mono, f(r.party) !== f(r.yours) ? "x" : ""))));
+}
+
 const notSameFile = () => $("playlist").checked
   ? "Diagnosis: this folder doesn't match the party's. Everyone needs the same videos in the same order, with the box ticked."
   : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again. If the party is watching a whole folder, tick the box under File.";
 
-function render(exitErr) {
+function render(exitErr, refusal) {
   let text, bad = false, mood = "awake", walking = false, detail = null, pct = null;
   const list = steps(), now = running && !state.rejected ? list.find(k => !stepDone(k)) : undefined;
-  if (state.rejected === "file") {
+  if (refusal) {
+    text = refusedFor(refusal); bad = true;
+  } else if (state.rejected === "file") {
     text = notSameFile(); bad = true;
   } else if (state.rejected === "unopened") {
     text = "Diagnosis: nobody opened this room for 30 minutes. Start again once someone with the create key is in."; bad = true;
@@ -532,6 +563,7 @@ function render(exitErr) {
   $("status").classList.toggle("bad", bad);
   renderTrail(list, now);
   renderDetail(detail, pct);
+  renderCompare(refusal);
   renderMembers(running && state.ready && !now);
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
@@ -569,7 +601,7 @@ async function poll() {
     running = j.running;
     if (run > 0) {
       $("vitals").hidden = false;
-      render(j.exitErr);
+      render(j.exitErr, j.refusal);
     }
   } catch {
     polling = false;
