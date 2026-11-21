@@ -73,7 +73,7 @@ A seek while playing, or a node waiting on its cache, leaves the others out of s
   this node's id off its second is the person's too.
 - **`buffering`**: `paused-for-cache` turns `yes` while playing. Then, on a stream
   (`demuxer-via-network`) and until it plays, an untagged `buffered` says its whole seconds ready,
-  next after that many (5s to a minute, `ahead`): network cost is the constraint. Peers only log it.
+  next after that many (5s to a minute, `ahead`): network cost is the constraint. Peers log and show it.
 - **`still buffering`**: a local resume while `stalled` is caught and not broadcast. A **peer's**
   never reaches mpv: the go stays stopped, and `refuseResume` sends pause, position and reason.
 

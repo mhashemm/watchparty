@@ -1194,11 +1194,16 @@ func TestASlowMemberSaysHowMuchItHasReady(t *testing.T) {
 			n.mpvSays(propertyChangeLine(cacheAhead, secs, 0))
 			return fmt.Sprint(said(n.broadcasts()))
 		}
+		if got := has("0.4"); got != "[buffered=0]" {
+			t.Fatalf("with 0.4s ready: broadcast %s", got)
+		}
+		if got := fmt.Sprint(n.mpvWasTold()); got != "[show-text your network is slow: 0s ready 5000]" {
+			t.Fatalf("told mpv %s, want the number on its screen too", got)
+		}
 		for _, step := range []struct {
 			wait       time.Duration
 			has, wants string
 		}{
-			{0, "0.4", "[buffered=0]"},
 			{4 * time.Second, "3.2", "[]"}, // under the 5s floor
 			{time.Second, "7.0", "[buffered=7]"},
 			{6 * time.Second, "12.0", "[]"}, // its 7 seconds haven't played out
@@ -1242,8 +1247,8 @@ func TestAMembersSecondsReadyChangeNothing(t *testing.T) {
 		n.mpvSays(propertyChangeLine(pause, "no", 0))
 		resumed := n.broadcasts()
 		n.peerSays("z", `{"name":"buffered","data":"45"}`)
-		if got := n.mpvWasTold(); len(got) != 0 {
-			t.Fatalf("told mpv %q", got)
+		if got := fmt.Sprint(n.mpvWasTold()); got != "[show-text z's network is slow: 45s ready 5000]" {
+			t.Fatalf("told mpv %s, want it only shown", got)
 		}
 		if got := said(n.broadcasts()); len(got) != 0 {
 			t.Fatalf("broadcast %q", got)

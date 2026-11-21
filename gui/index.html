@@ -1128,6 +1128,8 @@ function handle(line) {
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try {
       const text = JSON.parse(m[1]).command[1];
+      // a slow member's seconds ready, on mpv's screen every few seconds: the status has them
+      if (/^(your|.*'s) network is slow: \d+s ready$/s.test(text)) return;
       const li = addFeed(text, at);
       member(text, at);
       if (/^resumed by /.test(text)) resumed();

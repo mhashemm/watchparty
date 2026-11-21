@@ -779,6 +779,9 @@ func (c *Client) ahead(data string) {
 	log.Printf("buffered ahead: %d\n", c.readySaid)
 	b, _ := json.Marshal(Event{Name: buffered, Data: strconv.Itoa(c.readySaid)})
 	c.say(b)
+	// on the screen too: people watch in mpv, not in the app
+	text := fmt.Sprintf("your network is slow: %ds ready", c.readySaid)
+	c.later = append(c.later, func() { c.showText(text) })
 }
 
 // positionChanged is the person's seek, as the script said where it went (wentTo): stopped, it
@@ -1283,11 +1286,12 @@ func (c *Client) apply(e IncomingMessage) {
 		case pauseReason:
 			err = c.showText(fmt.Sprintf("paused for %s: %s", e.HostName, event.Data))
 		case buffered:
-			// only for the GUI: a peer's name can hold anything, so it is quoted
+			// shown, never acted on: a peer's name can hold anything, so the log quotes it
 			var secs int
 			if secs, err = strconv.Atoi(event.Data); err == nil {
 				name, _ := json.Marshal(e.HostName)
 				log.Printf("buffered ahead: %d for %s\n", secs, name)
+				err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
 			}
 		case joined:
 			delete(c.missed, e.From)
