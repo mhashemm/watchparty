@@ -76,35 +76,18 @@ const mpvExitGrace = 10 * time.Second
 func Run(parent context.Context, cfg Config) error {
 	c, cancel := context.WithCancel(parent)
 	defer cancel()
-	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
-
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
 	// mpv's client once it has the video
 	var playing atomic.Pointer[mpv.Client]
 
+	var v video
 	target := strings.TrimSpace(cfg.File)
-	var files []string
-	var start int
-	var playlist bool
-	var file string
-	var names []string
 	if isTorrent(target) {
 		cache, err := torrentCache(strings.TrimSpace(cfg.CacheDir))
 		if err != nil {
 			return err
 		}
-		stream, err := openTorrent(c, target, cache, torrentConfig(), findFor, func(t *torrent.Torrent) {
-			stats := func() (int, int64) {
-				s := t.Stats()
-				return s.ActivePeers, s.BytesReadUsefulData.Int64()
-			}
-			// until mpv has the video, and then while it buffers
-			wanted := func() bool {
-				cl := playing.Load()
-				return cl == nil || cl.Buffering()
-			}
-			go swarmReport(c, reportEvery, stats, wanted, func(s string) { log.Println(s) })
-		})
+		stream, err := openSwarm(c, target, cache, &playing)
 		if err != nil && parent.Err() != nil {
 			return nil
 		}
@@ -112,24 +95,20 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		files, names, playlist, file = stream.urls, stream.names, len(stream.urls) > 1, stream.id
+		v = video{files: stream.urls, names: stream.names, playlist: len(stream.urls) > 1, id: stream.id}
 		cfg.Playlist = false
 	} else {
 		var err error
-		files, start, playlist, file, err = media(target, cfg.Playlist)
-		if err != nil {
+		if v, err = localVideo(target, cfg.Playlist); err != nil {
 			return err
 		}
-		cfg.Playlist = playlist
-		for _, f := range files {
-			names = append(names, filepath.Base(f))
-		}
+		cfg.Playlist = v.playlist
 	}
-	log.Printf("file fingerprint: %s\n", file)
+	log.Printf("file fingerprint: %s\n", v.id)
 	startAt := cfg.Start
-	if playlist && cfg.Entry != "" {
-		if i := slices.Index(names, cfg.Entry); i >= 0 {
-			start = i
+	if v.playlist && cfg.Entry != "" {
+		if i := slices.Index(v.names, cfg.Entry); i >= 0 {
+			v.start = i
 		} else {
 			startAt = 0
 		}
@@ -137,36 +116,14 @@ func Run(parent context.Context, cfg Config) error {
 	if cfg.Secret == "" {
 		cfg.Secret = rand.Text()
 	}
-
 	if cfg.Hostname == "" {
 		cfg.Hostname, _ = os.Hostname()
 	}
 
 	if strings.TrimSpace(cfg.Relay) != "" {
-		creating := cfg.Room == ""
-		if creating {
-			cfg.Room = rand.Text()
-		}
-		conn := &relayConn{
-			addr:      strings.TrimSpace(cfg.Relay),
-			room:      cfg.Room,
-			secret:    cfg.Secret,
-			createKey: cfg.CreateKey,
-			creating:  creating,
-			hostname:  cfg.Hostname,
-			id:        rand.Text(),
-			session:   rand.Text(),
-			file:      file,
-			incoming:  incoming,
-			retry:     minBackoff,
-			wait:      notOpenFor,
-			up:        make(chan struct{}, 1),
-		}
-		go conn.Connect(c, cancel)
-		go conn.Broadcast(c, outgoing)
-		log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
+		joinRelay(c, cancel, &cfg, incoming, outgoing, v.id)
 	} else {
-		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, file)
+		cleanup, err := runMesh(c, cancel, incoming, outgoing, cfg, v.id)
 		if err != nil && parent.Err() != nil {
 			return nil
 		}
@@ -175,8 +132,77 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		defer cleanup()
 	}
+	return runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing)
+}
 
-	// the node's way into mpv: mpv reads it as it starts, and loads it even under the user's
+// video is what the party plays: the files mpv opens and their names, the entry it starts
+// on, and the fingerprint every member's must match (id).
+type video struct {
+	files, names []string
+	start        int
+	playlist     bool
+	id           string
+}
+
+// localVideo is a file, or with siblings the playlist of its folder.
+func localVideo(target string, siblings bool) (video, error) {
+	files, start, playlist, id, err := media(target, siblings)
+	if err != nil {
+		return video{}, err
+	}
+	v := video{files: files, start: start, playlist: playlist, id: id}
+	for _, f := range files {
+		v.names = append(v.names, filepath.Base(f))
+	}
+	return v, nil
+}
+
+// openSwarm opens a torrent and reports its swarm while the party waits on it.
+func openSwarm(c context.Context, target, cache string, playing *atomic.Pointer[mpv.Client]) (*torrentStream, error) {
+	return openTorrent(c, target, cache, torrentConfig(), findFor, func(t *torrent.Torrent) {
+		stats := func() (int, int64) {
+			s := t.Stats()
+			return s.ActivePeers, s.BytesReadUsefulData.Int64()
+		}
+		// until mpv has the video, and then while it buffers
+		wanted := func() bool {
+			cl := playing.Load()
+			return cl == nil || cl.Buffering()
+		}
+		go swarmReport(c, reportEvery, stats, wanted, func(s string) { log.Println(s) })
+	})
+}
+
+// joinRelay connects to the relay in the background, creating a room when cfg has none.
+func joinRelay(c context.Context, cancel context.CancelFunc, cfg *Config, incoming chan mpv.IncomingMessage, outgoing chan []byte, file string) {
+	creating := cfg.Room == ""
+	if creating {
+		cfg.Room = rand.Text()
+	}
+	conn := &relayConn{
+		addr:      strings.TrimSpace(cfg.Relay),
+		room:      cfg.Room,
+		secret:    cfg.Secret,
+		createKey: cfg.CreateKey,
+		creating:  creating,
+		hostname:  cfg.Hostname,
+		id:        rand.Text(),
+		session:   rand.Text(),
+		file:      file,
+		incoming:  incoming,
+		retry:     minBackoff,
+		wait:      notOpenFor,
+		up:        make(chan struct{}, 1),
+	}
+	go conn.Connect(c, cancel)
+	go conn.Broadcast(c, outgoing)
+	log.Printf("your address to share is -relay %s -room %s -secret %s%s\n", conn.addr, cfg.Room, cfg.Secret, cfg.playlistFlag())
+}
+
+// runMpv starts mpv on the video with the sync script, joins it to the party and waits for
+// it to exit.
+func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v video, startAt float64, incoming chan mpv.IncomingMessage, outgoing chan []byte, playing *atomic.Pointer[mpv.Client]) error {
+	// the sync script: mpv reads it as it starts, and loads it even under the user's
 	// load-scripts=no
 	scripts, err := os.MkdirTemp("", "watchparty")
 	if err != nil {
@@ -187,13 +213,15 @@ func Run(parent context.Context, cfg Config) error {
 	if err := os.WriteFile(script, mpv.Script, 0o600); err != nil {
 		return err
 	}
+	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
 	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script)
-	if playlist {
-		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(start))
+	names := v.names
+	if v.playlist {
+		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(v.start))
 	} else {
 		names = nil
 	}
-	args = append(args, files...)
+	args = append(args, v.files...)
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
@@ -228,7 +256,7 @@ func Run(parent context.Context, cfg Config) error {
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names, start, startAt)
+	}, conn, outgoing, incoming, names, v.start, startAt)
 	if err != nil {
 		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)
@@ -240,22 +268,27 @@ func Run(parent context.Context, cfg Config) error {
 	log.Println("init done. now you can start watching")
 
 	err = <-exited
-	if client.Finished() {
-		log.Println("finished: played to the end")
-	} else {
-		entry, at := client.Position()
-		if entry < len(names) {
-			// the name Config.Entry looks up, from the same list
-			name, _ := json.Marshal(names[entry])
-			log.Printf("stopped at: %s in %s\n", strconv.FormatFloat(at, 'f', 3, 64), name)
-		} else {
-			log.Printf("stopped at: %s\n", strconv.FormatFloat(at, 'f', 3, 64))
-		}
-	}
+	logEnd(client, names)
 	if err != nil {
 		log.Println(err)
 	}
 	return outcome(parent, c, mpvQuit.Load(), err)
+}
+
+// logEnd says where the party stopped, which the GUI continues from, or that it finished.
+func logEnd(client *mpv.Client, names []string) {
+	if client.Finished() {
+		log.Println("finished: played to the end")
+		return
+	}
+	entry, at := client.Position()
+	if entry < len(names) {
+		// the name Config.Entry looks up, from the same list
+		name, _ := json.Marshal(names[entry])
+		log.Printf("stopped at: %s in %s\n", strconv.FormatFloat(at, 'f', 3, 64), name)
+	} else {
+		log.Printf("stopped at: %s\n", strconv.FormatFloat(at, 'f', 3, 64))
+	}
 }
 
 // outcome is what Run returns, decided from what is known once it ends, in one place, never
@@ -380,56 +413,84 @@ func fingerprint(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// runMesh starts this node's side of the P2P mesh: an address others can reach, the
+// server, and a hello to each address given. The cleanup it returns runs in reverse: /bye
+// first, then the HTTP server, then the UPNP mapping. Callers defer it, so it runs in Run.
 func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file string) (func(), error) {
-	cleanup := []func(){}
-	runCleanup := func() {
-		for _, f := range slices.Backward(cleanup) {
-			f()
+	var cleanup cleanups
+	address, err := meshAddress(c, cfg, &cleanup)
+	if err == nil {
+		var ser *server.Server
+		if ser, err = serveMesh(c, cancel, incoming, outgoing, cfg, file, address, &cleanup); err == nil {
+			err = joinMesh(c, ser, cfg.Addrs, incoming)
 		}
 	}
-	address := ""
+	if err != nil {
+		cleanup.run()
+		return nil, err
+	}
+	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())
+	return cleanup.run, nil
+}
+
+// cleanups run in reverse order of adding.
+type cleanups []func()
+
+func (cs *cleanups) add(f func()) {
+	*cs = append(*cs, f)
+}
+
+func (cs *cleanups) run() {
+	for _, f := range slices.Backward(*cs) {
+		f()
+	}
+}
+
+// meshAddress is the address others reach this node at: the LAN address with cfg.Local,
+// else the router's public address, with a port the router maps to this node.
+func meshAddress(c context.Context, cfg Config, cleanup *cleanups) (string, error) {
 	if cfg.Local {
 		localIP := upnp.GetLocalIPAddr()
 		if localIP == "" {
-			return nil, errors.New("cannot determine local ip; are you connected to a network?")
+			return "", errors.New("cannot determine local ip; are you connected to a network?")
 		}
-		address = fmt.Sprintf("%s:%d", localIP, cfg.Port)
-	} else {
-		log.Println("asking the router for a port")
-		upnp.Logger = slog.New(upnpLogger{l: log.Default()})
-		upnpClient, err := upnp.NewContext(c)
-		if err != nil {
-			return nil, fmt.Errorf("upnp: %w", err)
-		}
-
-		mapping := upnp.AddPortMappingRequest{
-			NewProtocol:               "TCP",
-			NewExternalPort:           cfg.PublicPort,
-			NewInternalPort:           cfg.Port,
-			NewEnabled:                1,
-			NewPortMappingDescription: "watchparty",
-			NewLeaseDuration:          86400,
-		}
-		_, err = upnpClient.AddPortMapping(mapping)
-		if err != nil {
-			return nil, fmt.Errorf("upnp: %w", err)
-		}
-		cleanup = append(cleanup, func() {
-			upnpClient.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: cfg.PublicPort, NewProtocol: "TCP"})
-		})
-
-		externalIp, err := upnpClient.GetExternalIPAddress()
-		if err != nil {
-			runCleanup()
-			return nil, fmt.Errorf("upnp: %w", err)
-		}
-		publicIp := flatten(externalIp.NewExternalIPAddress)
-		if upnp.IPClass(publicIp) != upnp.IPPublic {
-			log.Printf("unreachable address: %s can't be reached from outside this network, your connection may be behind carrier NAT; use a relay for friends elsewhere\n", publicIp)
-		}
-		address = fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort)
+		return fmt.Sprintf("%s:%d", localIP, cfg.Port), nil
+	}
+	log.Println("asking the router for a port")
+	upnp.Logger = slog.New(upnpLogger{l: log.Default()})
+	upnpClient, err := upnp.NewContext(c)
+	if err != nil {
+		return "", fmt.Errorf("upnp: %w", err)
 	}
 
+	mapping := upnp.AddPortMappingRequest{
+		NewProtocol:               "TCP",
+		NewExternalPort:           cfg.PublicPort,
+		NewInternalPort:           cfg.Port,
+		NewEnabled:                1,
+		NewPortMappingDescription: "watchparty",
+		NewLeaseDuration:          86400,
+	}
+	if _, err = upnpClient.AddPortMapping(mapping); err != nil {
+		return "", fmt.Errorf("upnp: %w", err)
+	}
+	cleanup.add(func() {
+		upnpClient.DeletePortMapping(upnp.DeletePortMappingRequest{NewExternalPort: cfg.PublicPort, NewProtocol: "TCP"})
+	})
+
+	externalIp, err := upnpClient.GetExternalIPAddress()
+	if err != nil {
+		return "", fmt.Errorf("upnp: %w", err)
+	}
+	publicIp := flatten(externalIp.NewExternalIPAddress)
+	if upnp.IPClass(publicIp) != upnp.IPPublic {
+		log.Printf("unreachable address: %s can't be reached from outside this network, your connection may be behind carrier NAT; use a relay for friends elsewhere\n", publicIp)
+	}
+	return fmt.Sprintf("%s:%d", publicIp, cfg.PublicPort), nil
+}
+
+// serveMesh starts the HTTP server peers send to, and the broadcast to them.
+func serveMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.IncomingMessage, outgoing chan []byte, cfg Config, file, address string, cleanup *cleanups) (*server.Server, error) {
 	ser := server.New(c, incoming, address, cfg.Hostname, file, cfg.Secret, cmp.Or(cfg.EvictAfter, DefaultEvictAfter))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hi", ser.Hi)
@@ -443,18 +504,17 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		MaxHeaderBytes:    8192,
 		BaseContext:       func(_ net.Listener) context.Context { return c },
 	}
-	cleanup = append(cleanup, func() {
+	cleanup.add(func() {
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		s.Shutdown(shutdownContext)
 	})
-	cleanup = append(cleanup, ser.Shutdown)
+	cleanup.add(ser.Shutdown)
 
 	// listening here, not in the goroutine: a port in use is why this party can't start, and
 	// found later it only cancelled c, so a joiner said nobody answered and a host just stopped
 	l, err := net.Listen("tcp", s.Addr)
 	if err != nil {
-		runCleanup()
 		return nil, fmt.Errorf("can't take port %d, maybe another program has it; choose another port: %w", cfg.Port, err)
 	}
 	go func() {
@@ -465,9 +525,14 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 	}()
 	go ser.BroadcastEvents(outgoing)
+	return ser, nil
+}
 
+// joinMesh says hello to each address in addrs. Given none, this node started the party, so
+// its position is the party's.
+func joinMesh(c context.Context, ser *server.Server, addrs string, incoming chan mpv.IncomingMessage) error {
 	asked, answered := false, false
-	for addr := range strings.SplitSeq(cfg.Addrs, ",") {
+	for addr := range strings.SplitSeq(addrs, ",") {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			continue
@@ -475,8 +540,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		asked = true
 		err := ser.AddAddress(addr)
 		if errors.Is(err, server.ErrDifferentFile) || errors.Is(err, server.ErrWrongSecret) {
-			runCleanup()
-			return nil, err
+			return err
 		}
 		if err != nil {
 			log.Printf("%s: %s\n", addr, err)
@@ -486,20 +550,13 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 	}
 	// a joiner nobody answered would play alone, told it is in the party
 	if asked && !answered {
-		runCleanup()
-		return nil, errNobody
+		return errNobody
 	}
-	// given no address, this node started the party: where it is is where the party is
 	if !asked {
 		select {
 		case incoming <- mpv.IncomingMessage{Opened: true}:
 		case <-c.Done():
 		}
 	}
-
-	log.Printf("your address to share is -addrs %s -secret %s%s\n", address, cfg.Secret, cfg.playlistFlag())
-
-	// callers defer this, so it runs in Run and keeps the original LIFO order:
-	// /bye first, then the http server, then the upnp mapping
-	return runCleanup, nil
+	return nil
 }
