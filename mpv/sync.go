@@ -166,10 +166,7 @@ func (c *Client) join() {
 func (c *Client) announce() {
 	c.stamp = unheard
 	hello, _ := json.Marshal(Event{Name: joined})
-	select {
-	case c.outgoing <- hello:
-	case <-c.ctx.Done():
-	}
+	c.say(hello)
 }
 
 // lost says the relay connection dropped. This node plays on: the party most likely does
@@ -186,21 +183,14 @@ func (c *Client) back() {
 	joiner, finishing := c.stamp < 0, !c.paused && c.ending()
 	var check []byte
 	if !joiner && !finishing {
-		data := "no"
-		if c.held().paused {
-			data = "yes"
-		}
-		check, _ = json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Check: true})
+		check, _ = json.Marshal(Event{EventType: propertyChange, Name: pause, Data: holds(c.held().paused), Check: true})
 		check = c.tag(check)
 	}
 	switch {
 	case joiner:
 		c.announce()
 	case check != nil:
-		select {
-		case c.outgoing <- check:
-		case <-c.ctx.Done():
-		}
+		c.say(check)
 	}
 }
 
@@ -499,11 +489,7 @@ func (c *Client) chase(e IncomingMessage) error {
 		c.reply(e.Reply, nil)
 		return nil
 	}
-	data := "no"
-	if c.held().paused {
-		data = "yes"
-	}
-	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: data, Again: true})
+	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: holds(c.held().paused), Again: true})
 	again = c.tag(again)
 	if c.reply(e.Reply, again) {
 		log.Printf("sent again, as %s missed something: %s\n", e.HostName, again)

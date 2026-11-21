@@ -19,9 +19,12 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	if event.Name != timePos && event.Name != cacheFill && event.Name != cacheAhead || event.Name == timePos && c.paused {
 		log.Printf("Watch: mpv said: %s\n", line)
 	}
-	out, err := c.react(event)
-	if err == nil {
-		out = append([][]byte{line}, out...)
+	var out [][]byte
+	if event.EventType == propertyChange && event.Data != "" {
+		var send bool
+		if out, send = c.propertyChanged(event); send {
+			out = append([][]byte{line}, out...)
+		}
 	}
 	if len(out) > 0 {
 		// this node's own change, or what it adds to a peer's: the next stamp. Only the
@@ -40,35 +43,24 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	return out
 }
 
-func (c *Client) react(event Event) ([][]byte, error) {
-	switch event.EventType {
-	case propertyChange:
-		if event.Data != "" {
-			return c.propertyChanged(event)
-		}
-	}
-	return nil, errDoNotSend
-}
-
-// propertyChanged is what a property-change with data means for the party: what to
-// broadcast after it, or instead of it, and nil only if the event itself goes out.
-func (c *Client) propertyChanged(event Event) ([][]byte, error) {
+// propertyChanged is what a property-change with data means for the party: whether the event
+// itself goes out (send), and what to broadcast after it, or instead of it.
+func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 	extra, moved := c.record(event)
 	first := !c.seen[event.Name]
 	c.seen[event.Name] = true
 	if first && event.Name == timePos {
 		close(c.ready)
 	}
-	var err error
 	switch event.Name {
 	case pause:
-		extra, err = c.pauseChanged(event.paused(), extra)
+		extra, send = c.pauseChanged(event.paused(), extra)
 	case timePos:
 		if !event.fromScript {
 			// how far mpv has played; where it stops and lands, the script says
-			return nil, errDoNotSend
+			return nil, false
 		}
-		err = c.positionChanged()
+		send = c.positionChanged()
 	case pausedForCache:
 		was := c.stalled
 		c.stalled = event.paused()
@@ -81,31 +73,31 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 		if was && !c.stalled {
 			log.Println("buffering: done")
 		}
-		return nil, errDoNotSend
+		return nil, false
 	case viaNetwork:
 		c.network = event.Data == "yes"
-		return nil, errDoNotSend
+		return nil, false
 	case cacheAhead:
 		c.ahead(event.Data)
-		return nil, errDoNotSend
+		return nil, false
 	case cacheFill:
 		// 100 but while mpv waits on its cache, when it climbs a few times a second
 		if c.stalled {
 			log.Printf("buffering: %s%%\n", event.Data)
 		}
-		return nil, errDoNotSend
+		return nil, false
 	case playlistPos:
 		if !event.fromScript {
-			return nil, errDoNotSend
+			return nil, false
 		}
-		err = c.entryChanged(moved)
+		send = c.entryChanged(moved)
 	default:
-		return nil, errDoNotSend
+		return nil, false
 	}
-	if err == nil && first {
-		return nil, errDoNotSend
+	if send && first {
+		return nil, false
 	}
-	return extra, err
+	return extra, send
 }
 
 // record keeps what mpv reported, echo or not. It returns what a pause carries, and
@@ -157,13 +149,13 @@ func (c *Client) clear(entry int) {
 }
 
 // pauseChanged is the user's own pause or resume.
-func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
+func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, bool) {
 	if c.paused == paused {
-		return extra, errNoChange
+		return extra, false
 	}
 	if !paused && c.stalled {
 		c.pauseParty("still buffering", false)
-		return nil, errDoNotSend
+		return nil, false
 	}
 	if !paused && c.led() && c.heading() != c.partyEntry {
 		// a follower resuming on the file the person moved to: as a move while playing, the
@@ -171,7 +163,7 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 		// file first, and they would play that far apart.
 		c.paused = false
 		c.pauseParty("video changed", true)
-		return nil, errDoNotSend
+		return nil, false
 	}
 	c.paused = paused
 	if !paused {
@@ -179,29 +171,29 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, error) {
 		c.slow = false
 		clear(c.shownOf)
 	}
-	return extra, nil
+	return extra, true
 }
 
 // positionChanged is the person's seek, as the script said where it went (wentTo): stopped, it
 // goes out; playing, it pauses the party.
-func (c *Client) positionChanged() error {
+func (c *Client) positionChanged() bool {
 	if c.paused && c.led() {
 		// the step taking the leader's state goes on: its seek overrides this one
 		c.keepOnScreen()
-		return errDoNotSend
+		return false
 	}
 	// the person's seek goes out, or stops the party, newer: wherever this node was being
 	// sent, this is where it is now. mpv lands nothing of a seek queued before it, and one
 	// sent after it lands as the person's, newer, which is where mpv then is.
 	c.marked, c.landing = nil, false
 	if c.paused {
-		return nil
+		return true
 	}
 	if c.seeking {
 		c.seeking = false
 		c.pauseParty("seek", true)
 	}
-	return errDoNotSend
+	return false
 }
 
 // keepOnScreen keeps a follower's seek or move on this screen until the party resumes, and
@@ -217,18 +209,18 @@ func (c *Client) keepOnScreen() {
 // entryChanged is this node moving to another entry by itself: it goes out, and pauses
 // the party if it was playing. A follower's stays on its screen, as its seek does: a move is a
 // seek far enough to land in another file. mpv moving on from the end is nobody's choice.
-func (c *Client) entryChanged(moved bool) error {
+func (c *Client) entryChanged(moved bool) bool {
 	if !moved {
-		return errDoNotSend
+		return false
 	}
 	if c.led() {
 		c.keepOnScreen()
-		return errDoNotSend
+		return false
 	}
 	if !c.paused {
 		c.pauseParty("video changed", !c.ranOut)
 	}
-	return nil
+	return true
 }
 
 func (c *Client) pauseExtras() [][]byte {
@@ -241,8 +233,13 @@ func (c *Client) pauseExtras() [][]byte {
 }
 
 func position(name string, pos float64) []byte {
-	b, _ := json.Marshal(Event{EventType: propertyChange, Name: name, Data: strconv.FormatFloat(pos, 'f', 6, 64)})
+	b, _ := json.Marshal(Event{EventType: propertyChange, Name: name, Data: seconds(pos)})
 	return b
+}
+
+// seconds is a second as mpv and the script write it.
+func seconds(pos float64) string {
+	return strconv.FormatFloat(pos, 'f', 6, 64)
 }
 
 // pauseParty stops the party for why this node is out of step: led by it after the person's
