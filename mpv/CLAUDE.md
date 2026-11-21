@@ -6,6 +6,14 @@ and why each flag is pinned, is in **`MPV.md`**: read it before changing anythin
 Security: the wire carries raw mpv JSON, but `apply` dispatches only the allow-list below,
 never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and holds the trust model.
 
+## Words the code uses
+
+- **set**: one script message carrying a whole state (`setState`); the script **acks** it once mpv
+  holds all of it. **Pending**: sent, not acked yet. **Move**: a change of entry, a seek into another file.
+- **Stop**: the party paused. Its **leader** is whose pause, seek or move it is; the rest follow (`led`).
+  A stop nobody chose (a join, a leave, catching up) is **leaderless**: its first seek leads.
+- **The person**: whoever presses keys in this node's mpv. **`held`**: the state this node tags its messages with.
+
 ## The loop
 
 - **One goroutine owns a node's state** (`watch`, then `serve`). The rest only hand it inputs
@@ -53,9 +61,9 @@ state goes to the script as one set, applied whole (`watchparty.lua`), or a chan
 
 - **Hold before the IPC call** (`commit` sets the state, `setState` the seek's mark): the ack can come
   before `do` returns. So `still`, mpv stopped before, is read before `commit`.
-- **While a set is on its way, what the script says is nobody's**, nor are mpv's positions: it is
+- **While a set is pending, what the script says is nobody's**, nor are mpv's positions: it is
   from before the set, which overwrites it, or from the set. A key lost so is lost everywhere.
-- **The ack is weighed, never matched** (`landed`): what differs from what this node holds is the
+- **The ack is compared, never matched** (`landed`): what differs from what this node holds is the
   person's, after the set, and goes out; a second off where mpv stood, with no seek sent, is their
   seek just before it. Another file than the one it headed to is their move, from where mpv stopped.
 - A seek the script says with this node's id, within **±0.1s** of its second (a frame at
@@ -97,7 +105,7 @@ what comes meanwhile waits. e2e `[R11d]`.
 
 Every message says the state it was sent from (`tag`, `held`): a `stamp` (a Lamport clock),
 `paused`, `at` (where it stopped, or resumes from), in a playlist `entry`; one missing any is
-refused (`stateOf`), and `take` weighs it. A move while playing says stopped. A node's own
+refused (`stateOf`), and `take` compares it. A move while playing says stopped. A node's own
 change takes the next stamp, **written in the step that decided the event goes out**
 (`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
 
@@ -113,7 +121,7 @@ change takes the next stamp, **written in the step that decided the event goes o
 - **A joiner syncs with the party, never the party with it.** `announce` sets the stamp to
   `unheard`, far below any a party holds: nothing it does before it is answered wins, and
   joiners still order among themselves. `Opened` takes 1.
-- **A newer state is taken whole, in the step that weighed it, before mpv is told** (`commit`:
+- **A newer state is taken whole, in the step that compared it, before mpv is told** (`commit`:
   stamp, entry, the stop; `adopt` then sends one set; one mpv refuses is unmarked by `release`,
   and the node `announce`s unless mpv is gone). Taken apart, it holds the party's stamp on its own entry or second, a tie it can win;
   so it speaks for the entry it is **heading** to, never mpv's (`held`). A newer resume on
@@ -136,7 +144,7 @@ A joiner opens at 0, paused, and would stay behind until the next seek.
 3. The joiner takes whatever it hears first, as newer; members stop a moment apart with
    one stamp, so everyone, joiner included, settles on the earliest (`over`).
 4. **A dropped relay connection stops nobody by itself:** on `Lost` the node says so and plays
-   on; on `Back` it sends its state marked `check`, weighed like any, but a resume in it stops
+   on; on `Back` it sends its state marked `check`, compared like any, but a resume in it stops
    the party unless it has the party's stamp: older, it missed a stop; newer, nobody heard it.
    A joiner never answered joins again; not near the end (`back`). `[R12]`, `[R13]`.
 
@@ -165,8 +173,8 @@ playing also pauses the party with a reason: nobody starts the next one until so
   or at the `end-file` of a file mpv can't open (not at another's load on the way); what comes
   meanwhile waits, a set for that file with it. `adopt` skips an entry it is on or already headed to: every member answers a
   joiner, and two nodes often reach the end together.
-- **Only the script's `start` moves `current`** (`started`), labelled with whose it is: the set's
-  that set the entry, `auto` (mpv's own at a file's end, or the first), else the person's.
+- **Only the script's `start` moves `current`** (`started`), labelled with whose it is: the id of
+  the set that moved there, `auto` (mpv's own at a file's end, or the first), else the person's.
   `playlist-pos` isn't observed: its reports overtake each other and fold (`MPV.md`).
 - **A set names the entry it is for** (`setState`): one a key left that this node hasn't read is
   only stopped, and the ack's (or refusal's) entry sends the move out. A seek there would go out

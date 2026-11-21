@@ -2,9 +2,9 @@ package mpv
 
 import "encoding/json"
 
-// The notices the transports show, around a member's name (Dropped: the mesh's, before
-// "<address> (<name>)"). apply reads HasLeft to pause the party, and logs a member line for
-// each (memberLine); e2e spells them again.
+// The notices the transports send, around a member's name (Dropped is the mesh's, before
+// "<address> (<name>)"). apply pauses the party on HasLeft, and logs a member line for each
+// (memberLine); e2e spells them again.
 const (
 	HasJoined   = " has joined"
 	HasLeft     = " has left"
@@ -12,9 +12,10 @@ const (
 	Dropped     = "dropped "
 )
 
-// memberLine is who joined, was here first or left, for the GUI and its history: only from a
-// notice the transport sent about its own sender, named by the id the relay or the mesh gave
-// it, so a name can't fake a member nor stand for another with the same name.
+// memberLine is the log line, for the GUI and its history, saying who joined, was already
+// here or left. It is made only from a notice the transport sent about its own sender, and
+// names the member by the id the relay or the mesh gave it, so a name can't fake a member or
+// stand for another with the same name.
 func memberLine(text string, e IncomingMessage) (string, bool) {
 	what := ""
 	switch text {
@@ -30,7 +31,7 @@ func memberLine(text string, e IncomingMessage) (string, bool) {
 	return "member " + what + ": " + memberOf(e), true
 }
 
-// memberOf is the member a message is from, as JSON: its name can hold anything.
+// memberOf is the member a message is from, as JSON, since a name can hold anything.
 func memberOf(e IncomingMessage) string {
 	b, _ := json.Marshal(struct {
 		ID   string `json:"id"`
