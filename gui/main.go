@@ -42,10 +42,11 @@ var (
 	page = inline(pageHTML, pageCSS, pageJS)
 )
 
-// inline puts css and js into html in place of the tags that load them.
+// inline puts css and js into html in place of the tags that load them. The tags are
+// matched without their line ending, which a Windows checkout turns into CRLF.
 func inline(html, css, js string) []byte {
-	html = strings.Replace(html, `<link rel="stylesheet" href="app.css">`+"\n", "<style>\n"+css+"</style>\n", 1)
-	html = strings.Replace(html, `<script src="app.js"></script>`+"\n", "<script>\n"+js+"</script>\n", 1)
+	html = strings.Replace(html, `<link rel="stylesheet" href="app.css">`, "<style>\n"+css+"</style>", 1)
+	html = strings.Replace(html, `<script src="app.js"></script>`, "<script>\n"+js+"</script>", 1)
 	return []byte(html)
 }
 
