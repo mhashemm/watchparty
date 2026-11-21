@@ -18,8 +18,8 @@ type state struct {
 	entry  int
 	paused bool
 	at     float64
-	// free: a stop with no leader (Event.Free); not weighed by over
-	free bool
+	// leaderless: a stop with no leader (Event.Free); not weighed by over
+	leaderless bool
 }
 
 // over orders two states the same way on every node: the higher stamp; with the same
@@ -58,17 +58,17 @@ func (c *Client) held() state {
 	at, entry := c.target(), c.heading()
 	if c.onAStop() {
 		// the party's entry and second, wherever the person has taken this node's own screen
-		at, entry = c.since, c.partyEntry
+		at, entry = c.resumedFrom, c.partyEntry
 	}
-	paused := c.paused || c.reason != ""
-	return state{stamp: c.stamp, entry: entry, paused: paused, at: at, free: paused && c.free}
+	paused := c.paused || c.stopReason != ""
+	return state{stamp: c.stamp, entry: entry, paused: paused, at: at, leaderless: paused && c.leaderless}
 }
 
 // onAStop is a node stopped on a member's state (by). Not a joiner, whose stamp is still
 // unheard, nor a node taking a member's resume: a seek the person makes before mpv plays is
 // theirs, newer, and stops it (moved).
 func (c *Client) onAStop() bool {
-	return c.paused && c.reason == "" && c.by != "" && !c.toPlay && c.stamp >= 0
+	return c.paused && c.stopReason == "" && c.leaderID != "" && !c.tookResume && c.stamp >= 0
 }
 
 // led is a node following the leader of a stop: the member whose pause or seek it took. Only
@@ -76,7 +76,7 @@ func (c *Client) onAStop() bool {
 // the party resumes, from the resumer's screen. A stop nobody chose has no leader (free):
 // anyone's seek goes out, and the first leads.
 func (c *Client) led() bool {
-	return c.onAStop() && !c.free
+	return c.onAStop() && !c.leaderless
 }
 
 // tag says what state a message was sent from, so whoever gets it knows whether it is
@@ -84,7 +84,7 @@ func (c *Client) led() bool {
 func (c *Client) tag(b []byte) []byte {
 	s := c.held()
 	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,`, s.stamp, s.paused, s.at)
-	if s.free {
+	if s.leaderless {
 		head = append(head, `"free":true,`...)
 	}
 	if len(c.names) > 0 {
@@ -99,7 +99,7 @@ func (c *Client) stateOf(e Event) (state, error) {
 	if e.Paused == nil || e.At == nil || len(c.names) > 0 && e.Entry == nil {
 		return state{}, errors.New("no state")
 	}
-	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At, free: e.Free && *e.Paused}
+	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At, leaderless: e.Free && *e.Paused}
 	if len(c.names) > 0 {
 		if s.entry = *e.Entry; s.entry < 0 || s.entry >= len(c.names) {
 			return s, errors.New("no such entry")
@@ -115,8 +115,8 @@ func (c *Client) on(pos float64) bool {
 
 // heading is the entry this node is on, or on its way to.
 func (c *Client) heading() int {
-	if c.toward >= 0 {
-		return c.toward
+	if c.headingTo >= 0 {
+		return c.headingTo
 	}
 	return c.current
 }
@@ -131,8 +131,8 @@ func (c *Client) hear(e IncomingMessage) {
 		c.notices = append(c.notices, e)
 		return
 	}
-	if s, err := c.stateOf(event); err == nil && (c.early == nil || s.over(c.best) > 0) {
-		c.early, c.best = &e, s
+	if s, err := c.stateOf(event); err == nil && (c.newestHeard == nil || s.over(c.newestState) > 0) {
+		c.newestHeard, c.newestState = &e, s
 	}
 }
 
@@ -144,21 +144,21 @@ func (c *Client) hear(e IncomingMessage) {
 func (c *Client) join() {
 	c.opening = false
 	c.opens()
-	c.busy++
-	defer func() { c.busy-- }()
+	c.applying++
+	defer func() { c.applying-- }()
 	if c.resumeAt > 0 {
-		if err := c.goTo(c.paused, &c.resumeAt, nil, c.paused); err != nil {
+		if err := c.setState(c.paused, &c.resumeAt, nil, c.paused); err != nil {
 			log.Println("continuing where it stopped:", err)
 		}
 	}
-	if c.early != nil {
-		c.apply(*c.early)
+	if c.newestHeard != nil {
+		c.apply(*c.newestHeard)
 	}
 	c.announce()
 	for _, e := range c.notices {
 		c.apply(e)
 	}
-	c.early, c.notices = nil, nil
+	c.newestHeard, c.notices = nil, nil
 }
 
 // announce joins the party: the members pause and answer with where they are, and this
@@ -236,12 +236,12 @@ func (c *Client) apply(e IncomingMessage) {
 			var secs int
 			if secs, err = strconv.Atoi(event.Data); err == nil {
 				log.Printf("buffered ahead: %d for %s\n", secs, memberOf(e))
-				shown, ok := c.shownOf[e.From]
+				shown, ok := c.peerReadyOnScreen[e.From]
 				if !ok {
 					shown = -1
 				}
 				if louder(secs, shown) {
-					c.shownOf[e.From] = secs
+					c.peerReadyOnScreen[e.From] = secs
 					err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
 				}
 			}
@@ -271,7 +271,7 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	}
 	hostname := m.HostName
 	h := c.held()
-	over, told := s.over(h), c.by == m.From
+	over, told := s.over(h), c.leaderID == m.From
 	// a resume reaching a node that plays: newer, this node missed the pause in between; a
 	// tie from a member something this node sent never reached, that member resumed from
 	// what it last heard; the state this node took from a member, sent again by it, to this
@@ -279,7 +279,7 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	// member back from losing the relay, made where nobody heard it; or a tie from another
 	// stop, more than the two seconds each could stop at from one. Not a joiner: it syncs
 	// when its join is answered.
-	elsewhere := !e.Again && !e.Check && math.Abs(s.at-c.since) > 2*timePosTolerance
+	elsewhere := !e.Again && !e.Check && math.Abs(s.at-c.resumedFrom) > 2*timePosTolerance
 	apart := !s.paused && h.stamp >= 0 && s.entry == h.entry &&
 		(!h.paused && (over > 0 || over == 0 && (c.missed[m.From] || e.Again && told || elsewhere)) || e.Check && over > 0)
 	if over > 0 {
@@ -295,7 +295,7 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 		c.stamp = max(c.stamp, s.stamp)
 	case over > 0:
 		a = c.commit(s, m.From)
-		c.leader, c.told = hostname, false
+		c.leaderName, c.toldWhoLeads = hostname, false
 	}
 	switch {
 	case apart:
@@ -341,16 +341,16 @@ func (c *Client) commit(s state, from string) adoption {
 	a.stop = (a.moving || s.paused) && !c.paused
 	if a.moving {
 		// another file opens at its start: the second and the seeks of this one are gone
-		c.pos, c.marked, c.landing = 0, nil, false
+		c.pos, c.ourSeeks, c.seekPending = 0, nil, false
 	}
 	a.there = c.on(s.at)
 	a.seek = a.stop && !a.moving || !a.there && (a.moving || c.paused)
-	a.still = !s.paused && (a.moving || c.stalled)
+	a.still = !s.paused && (a.moving || c.waitingOnCache)
 	paused := s.paused || a.still
 	a.tell = a.seek || a.moving || paused != c.paused
-	c.stamp, c.by, c.since, c.toPlay, c.free, c.partyEntry = s.stamp, from, s.at, !s.paused, s.free, s.entry
+	c.stamp, c.leaderID, c.resumedFrom, c.tookResume, c.leaderless, c.partyEntry = s.stamp, from, s.at, !s.paused, s.leaderless, s.entry
 	if a.moving {
-		c.toward = s.entry
+		c.headingTo = s.entry
 	}
 	if a.tell {
 		c.paused = paused
@@ -358,7 +358,7 @@ func (c *Client) commit(s state, from string) adoption {
 	return a
 }
 
-// adopt tells mpv to go where commit took this node, in one go: stopped, on the entry, on
+// adopt tells mpv to go where commit took this node, in one set: stopped, on the entry, on
 // the second, then playing if the state is. One that plays on another entry stops the party
 // instead: loading it, this node can't be in step. If this node moved while mpv took it, the
 // person's change is newer and stands (moved), and the rest is left.
@@ -388,7 +388,7 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 		if a.moving {
 			entry = &a.entry
 		}
-		if err = c.goTo(c.paused, second, entry, a.was); err != nil {
+		if err = c.setState(c.paused, second, entry, a.was); err != nil {
 			return err
 		}
 		if c.moved(from) {
@@ -417,16 +417,16 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	return nil
 }
 
-// release lets go of what commit marked once mpv refused the go, as it does while it quits or
-// between files: toward would head for a move mpv never makes, and a seek mark would put
+// release lets go of what commit marked once mpv refused the set, as it does while it quits or
+// between files: headingTo would head for a move mpv never makes, and a seek mark would put
 // this node on a second it never reached (target).
 func (c *Client) release(a adoption) {
-	if a.moving && c.toward == a.entry {
-		c.toward = -1
+	if a.moving && c.headingTo == a.entry {
+		c.headingTo = -1
 	}
 	if a.seek {
-		c.marked = slices.DeleteFunc(c.marked, func(s ourSeek) bool { return s.at == a.at })
-		c.landing = c.landing && len(c.marked) > 0
+		c.ourSeeks = slices.DeleteFunc(c.ourSeeks, func(s ourSeek) bool { return s.at == a.at })
+		c.seekPending = c.seekPending && len(c.ourSeeks) > 0
 	}
 }
 
@@ -456,10 +456,10 @@ func (c *Client) answer(hostname, reason string) error {
 	}
 	// a stop nobody chose: no leader, the first seek leads
 	if playing {
-		c.asked = true
+		c.pausedByNode = true
 		return c.pauseReq(true)
 	}
-	c.free = true
+	c.leaderless = true
 	// tagged now, not before the notice: what it says is where this node is when it goes out
 	c.say(c.tag(position(timePos, c.held().at)))
 	return nil
@@ -484,7 +484,7 @@ func (c *Client) chase(e IncomingMessage) error {
 	case e.Missed:
 		c.missed[e.From] = true
 		return nil
-	case c.stamp < 0 || c.by == e.From:
+	case c.stamp < 0 || c.leaderID == e.From:
 		// a joiner has no state yet; one taken from that member, it has
 		c.reply(e.Reply, nil)
 		return nil
@@ -501,14 +501,14 @@ func (c *Client) chase(e IncomingMessage) error {
 // left leaves its stop with none. By its id, not its name, which another member may share.
 func (c *Client) left(hostname, from string) error {
 	playing, ending := !c.paused, c.ending()
-	if c.led() && from != "" && c.by == from {
-		c.free = true
+	if c.led() && from != "" && c.leaderID == from {
+		c.leaderless = true
 	}
 	if !playing || ending {
 		return nil
 	}
 	c.showText(fmt.Sprintf("paused for %s: left", hostname))
-	c.asked = true
+	c.pausedByNode = true
 	return c.pauseReq(true)
 }
 
@@ -522,11 +522,11 @@ func (c *Client) entryName(i int) string {
 // refuseResume is a peer's resume reaching a node still waiting on its cache, which never
 // reaches mpv: the node stops the party again, with where and why.
 func (c *Client) refuseResume() error {
-	c.reason = "still buffering"
+	c.stopReason = "still buffering"
 	again, _ := json.Marshal(Event{EventType: propertyChange, Name: pause, Data: "yes"})
 	out := append([][]byte{again}, c.pauseExtras()...)
 	// this node's own pause, newer than the resume it refuses, a stop nobody chose
-	c.stamp, c.by, c.free = c.stamp+1, "", true
+	c.stamp, c.leaderID, c.leaderless = c.stamp+1, "", true
 	for i, b := range out {
 		out[i] = c.tag(b)
 	}
@@ -544,8 +544,8 @@ func (c *Client) refuseResume() error {
 // is still on its way, and answering another joiner with the old spot would drag the party
 // back to it.
 func (c *Client) target() float64 {
-	if c.landing && len(c.marked) > 0 {
-		return c.marked[len(c.marked)-1].at
+	if c.seekPending && len(c.ourSeeks) > 0 {
+		return c.ourSeeks[len(c.ourSeeks)-1].at
 	}
 	return c.pos
 }

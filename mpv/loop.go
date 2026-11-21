@@ -51,7 +51,7 @@ func (c *Client) ask(args ...any) (string, error) {
 }
 
 // await waits on the loop for id's answer, taking the inputs that come meanwhile: mpv's reply
-// to a request, or the script's ack of a go (goTo), for at most limit.
+// to a request, or the script's ack of a set (setState), for at most limit.
 func (c *Client) await(id int64, limit time.Duration) (string, error) {
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
@@ -270,19 +270,19 @@ func (c *Client) handle(in input) {
 	if c.opening && c.seen[timePos] && c.script != "" {
 		c.join()
 	}
-	for c.busy == 0 && len(c.queue) > 0 {
-		c.busy++
+	for c.applying == 0 && len(c.queue) > 0 {
+		c.applying++
 		m := c.queue[0]
 		c.queue = c.queue[1:]
 		c.apply(m)
-		c.busy--
+		c.applying--
 		c.runLater()
 	}
 	c.snapshot()
 }
 
 func (c *Client) runLater() {
-	for len(c.later) > 0 && c.flying == nil {
+	for len(c.later) > 0 && c.pending == nil {
 		f := c.later[0]
 		c.later = c.later[1:]
 		f()

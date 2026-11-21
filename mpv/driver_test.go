@@ -44,7 +44,7 @@ type node struct {
 	refuse map[string]string
 	// late: mpv answers a set only after reporting it (mpvAnswersLate); held: those answers.
 	// Its script's seeks are answered once mpv reports them (replies), and what the script
-	// says from a go's ack on waits for that too (saying), as mpv's event queue holds it.
+	// says from a set's ack on waits for that too (saying), as mpv's event queue holds it.
 	late    bool
 	held    []string
 	replies []int
@@ -53,7 +53,7 @@ type node struct {
 	// sent one
 	quitOn string
 	quit   bool
-	// the person's keys around the next go: first, a space just before it, which the node
+	// the person's keys around the next set: first, a space just before it, which the node
 	// hasn't read; seekTo and moveTo, a seek or a move just before it; moveDuring, a move once
 	// it has begun, before its seek; undo, a space right after it. ranOutTo: mpv's own move
 	// there at the file's end, just before it.
@@ -176,7 +176,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			if name == "script-message-to" {
 				args = args[1:]
 			}
-			if args[1] == "watchparty-go" {
+			if args[1] == "watchparty-set" {
 				n.goes(args[2:])
 			} else {
 				n.script.message(args[1], args[2:]...)
@@ -237,7 +237,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 	scanned(sc)
 }
 
-// goes hands the script a go, with the person's keys around it.
+// goes hands the script a set, with the person's keys around it.
 func (n *node) goes(args []string) {
 	if n.first {
 		n.first, n.paused = false, !n.paused
@@ -256,9 +256,9 @@ func (n *node) goes(args []string) {
 		n.opensLocked(n.ranOutTo)
 		n.ranOutTo = 0
 	}
-	n.script.message("watchparty-go", args...)
+	n.script.message("watchparty-set", args...)
 	if n.undo {
-		// the person's key, right after the go
+		// the person's key, right after the set
 		n.undo, n.paused = false, !n.paused
 		n.script.pauseMarked()
 	}
@@ -350,7 +350,7 @@ func (n *node) seek(second string, reply int) {
 }
 
 // say is what the script says, written after the line that made it; late, from an ack on, it
-// waits until mpv has reported what the go did.
+// waits until mpv has reported what the set did.
 func (n *node) say(args []string) {
 	if !n.listening {
 		return
@@ -420,7 +420,7 @@ func (n *node) writeLines(lines ...string) {
 		}
 		if e.EventType == "seek" {
 			// the replies to the script's seeks come before the seek events they cause, and
-			// with them what the script said from the go's ack on
+			// with them what the script said from the set's ack on
 			n.answerSeeksLocked()
 			n.pending, n.saying = append(n.pending, n.saying...), nil
 		}
@@ -555,7 +555,7 @@ func (n *node) reports(set []any) []string {
 }
 
 // mpvAnswers is mpv answering every set it holds, reporting nothing, until none is left, and
-// the script acking every go.
+// the script acking every set.
 func (n *node) mpvAnswers() {
 	n.t.Helper()
 	for {
@@ -575,23 +575,23 @@ func (n *node) mpvAnswers() {
 	}
 }
 
-// personPressesFirst is the person's space running just before the next go, which the node
-// hasn't read when it sends it: the go undoes it, and its ack says so.
+// personPressesFirst is the person's space running just before the next set, which the node
+// hasn't read when it sends it: the set undoes it, and its ack says so.
 func (n *node) personPressesFirst() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.first = true
 }
 
-// personSeeksFirst is the person's seek to second running just before the next go, which the
-// node hasn't read when it sends it: the script says it, and the go's ack says it came first.
+// personSeeksFirst is the person's seek to second running just before the next set, which the
+// node hasn't read when it sends it: the script says it, and the set's ack says it came first.
 func (n *node) personSeeksFirst(second float64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.seekTo = second
 }
 
-// personMovesFirst is the person's key opening entry (not the first) just before the next go,
+// personMovesFirst is the person's key opening entry (not the first) just before the next set,
 // which the node hasn't read when it sends it.
 func (n *node) personMovesFirst(entry int) {
 	n.mu.Lock()
@@ -600,22 +600,22 @@ func (n *node) personMovesFirst(entry int) {
 }
 
 // mpvRunsOutFirst is mpv reaching the file's end and opening entry by itself just before the
-// next go, which the node hasn't read when it sends it.
+// next set, which the node hasn't read when it sends it.
 func (n *node) mpvRunsOutFirst(entry int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.ranOutTo = entry
 }
 
-// personMovesDuring is the person's key opening entry once the next go has begun, so mpv
-// refuses the go's seek: there is no file to seek in.
+// personMovesDuring is the person's key opening entry once the next set has begun, so mpv
+// refuses the set's seek: there is no file to seek in.
 func (n *node) personMovesDuring(entry int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.moveDuring = entry
 }
 
-// personUndoesThePause is the person's key undoing the pause the next go leaves, right after
+// personUndoesThePause is the person's key undoing the pause the next set leaves, right after
 // its ack: the script says the change mark.
 func (n *node) personUndoesThePause() {
 	n.mu.Lock()

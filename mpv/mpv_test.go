@@ -35,17 +35,17 @@ func (d *dripReader) Read(p []byte) (int, error) {
 
 func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 	return &Client{
-		ctx:      context.Background(),
-		ready:    make(chan struct{}),
-		outgoing: outgoing,
-		paused:   false,
-		toward:   -1,
-		seen:     map[string]bool{},
-		missed:   map[string]bool{},
-		conn:     &connection{scanner: sc, closed: make(chan struct{})},
-		inbox:    newMailbox[input](),
-		replies:  map[int64]outcome{},
-		waiting:  map[int64]bool{},
+		ctx:       context.Background(),
+		ready:     make(chan struct{}),
+		outgoing:  outgoing,
+		paused:    false,
+		headingTo: -1,
+		seen:      map[string]bool{},
+		missed:    map[string]bool{},
+		conn:      &connection{scanner: sc, closed: make(chan struct{})},
+		inbox:     newMailbox[input](),
+		replies:   map[int64]outcome{},
+		waiting:   map[int64]bool{},
 		// as New leaves it: the script said its name
 		script: scriptName,
 	}
@@ -503,11 +503,11 @@ func scriptAnswers(conn net.Conn, req Request) bool {
 	return true
 }
 
-// scriptAcks answers the script's go as mpv and the script do, at once, and gives it as the
+// scriptAcks answers the script's set as mpv and the script do, at once, and gives it as the
 // set it is to mpv: its seek ("set_property time-pos 30.000000"), or its pause; ok is false for
 // any other request.
 func scriptAcks(conn net.Conn, req Request) (said string, ok bool) {
-	if req.Command[0] != "script-message-to" || len(req.Command) != 9 || req.Command[2] != "watchparty-go" {
+	if req.Command[0] != "script-message-to" || len(req.Command) != 9 || req.Command[2] != "watchparty-set" {
 		return "", false
 	}
 	paused, second, id := fmt.Sprint(req.Command[3]), fmt.Sprint(req.Command[4]), fmt.Sprint(req.Command[6])
@@ -893,7 +893,7 @@ func TestAChangeMadeWhileTakingAStateIsNotUndone(t *testing.T) {
 			n := ready(t, setup{})
 			n.mpvAnswersLate()
 			n.peerSays("a", stamped(5, `{"event":"property-change","name":"pause","data":"no","at":34}`))
-			// the go seeks and plays at once: the person's seek lands after it, while playing
+			// the set seeks and plays at once: the person's seek lands after it, while playing
 			n.mpvObeys(`{"event":"seek"}`, mpvAt(20), `{"event":"playback-restart"}`)
 			if got := n.mpvWasTold(); !slices.Contains(got, "set_property pause true") {
 				t.Fatalf("told mpv %q, want the party stopped", got)
@@ -1042,7 +1042,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 			t.Fatalf("the mark never reached mpv, applied %q", got)
 		}
 	}
-	// the last resume says where from, so it is the whole of what the party said: one go, to
+	// the last resume says where from, so it is the whole of what the party said: one set, to
 	// 999 and playing (scriptAcks gives it as its seek)
 	want := []string{"set_property time-pos 999.000000", "show-text resumed by a 5000", "show-text mark 5000"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -1926,7 +1926,7 @@ func TestEntryAlreadyHeadedThereIsNotRepeated(t *testing.T) {
 	})
 }
 
-// A peer's move to a file that takes long to load, as a slow stream or a torrent can: the go
+// A peer's move to a file that takes long to load, as a slow stream or a torrent can: the set
 // is acked once the file loads, so it waits for it. Given up after 5s, the node asked the
 // party again for a move that was only slow.
 func TestAMoveWaitsForASlowLoad(t *testing.T) {
@@ -1945,7 +1945,7 @@ func TestAMoveWaitsForASlowLoad(t *testing.T) {
 }
 
 // A move whose file never starts nor fails (a stream that hangs, under --network-timeout=0):
-// the node waits past the 81s mpv took to give up on one, then gives up on it, as on any go
+// the node waits past the 81s mpv took to give up on one, then gives up on it, as on any set
 // mpv never acks, and asks the party where it is.
 func TestAMoveThatNeverStartsIsGivenUp(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -2073,7 +2073,7 @@ func TestAStopTakenAsAKeyPressOpensAFileDoesNotSeekIt(t *testing.T) {
 }
 
 // A key opens a file once a peer's seek has begun in the script, so mpv refuses the seek: the
-// start came while the go was on its way, nobody's, and the refusal says the entry mpv ended on.
+// start came while the set was on its way, nobody's, and the refusal says the entry mpv ended on.
 // Another than the one this node heads to is the person's move, after the seek, and goes out.
 func TestAMoveThatMakesMpvRefuseAGoGoesOut(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -2262,7 +2262,7 @@ func TestARefusedSeekLeavesNoMarker(t *testing.T) {
 			n.takes(7, true, 0)
 			n.mpvRefuses("set_property playlist-pos", "property unavailable")
 			n.peerSays("a", `{"stamp":8,"at":20,"entry":1,"event":"property-change","name":"time-pos","data":"20.000000"}`)
-			// the script never reads a set's result: the go waits for a file that never opens,
+			// the script never reads a set's result: the set waits for a file that never opens,
 			// until the node gives up on it
 			time.Sleep(moveLimit)
 			n.broadcasts()
@@ -2477,7 +2477,7 @@ func TestOwnMoveWhileFollowingDoesNotHoldLaterSeeks(t *testing.T) {
 	t.Parallel()
 	// mpv moving on from the entry's end by itself: the script says that start is mpv's own
 	ended, started := `{"event":"end-file","reason":"eof"}`, strings.TrimSpace(started(2))
-	// loaded: its first frame is ready too, which is when the script applies the rest of a go
+	// loaded: its first frame is ready too, which is when the script applies the rest of a set
 	loaded, restarted := `{"event":"file-loaded"}`, `{"event":"playback-restart"}`
 	reported := strings.TrimSpace(propertyChangeLine(playlistPos, "2", 0))
 	for _, tc := range []struct {
@@ -3407,7 +3407,7 @@ func TestAFoldedSeekBackIsThePersonsOwn(t *testing.T) {
 }
 
 // A peer's stop at 60 reaches this node while it plays on 60; but mpv plays on until the stop
-// lands, to 60.3 or a frame on. The go seeks the stop's second with the stop, so the node
+// lands, to 60.3 or a frame on. The set seeks the stop's second with the stop, so the node
 // stops on it, as its own step, and says nothing (SIM_SEED=514736544449).
 func TestAStopThatLandsOffItsSecondIsSeekedBack(t *testing.T) {
 	t.Parallel()
@@ -3436,8 +3436,8 @@ func TestAStopThatLandsOffItsSecondIsSeekedBack(t *testing.T) {
 }
 
 // A peer's stop reaches a node that plays, and the person presses pause and play again before
-// the script's ack: what the script says while a go is on its way is from before it, which
-// the go overwrites, so nothing goes out and the node stops with the party
+// the script's ack: what the script says while a set is on its way is from before it, which
+// the set overwrites, so nothing goes out and the node stops with the party
 // (SIM_SEED=13000355 found the order).
 func TestKeysBeforeAGoIsAckedAreOverwritten(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -3457,7 +3457,7 @@ func TestKeysBeforeAGoIsAckedAreOverwritten(t *testing.T) {
 	})
 }
 
-// A peer's stop or resume, and the person's key undoing it right after the script's go: its
+// A peer's stop or resume, and the person's key undoing it right after the script's set: its
 // change mark comes after the ack, and differs from what this node holds, so it goes out,
 // newer than the peer's. Swallowed as the echo, this node would sit apart from a party that
 // believes it followed.
@@ -3524,7 +3524,7 @@ func TestAResumeWhileASeekLandsPlaysFromItsSecond(t *testing.T) {
 	})
 }
 
-// A peer's stop at 60 reaches this node while it plays on 30: one go stops it and seeks 60,
+// A peer's stop at 60 reaches this node while it plays on 30: one set stops it and seeks 60,
 // so the person's resume right after plays from 60, where mpv is (SIM_SEED=736469209410 found
 // the order when the stop and the seek were sent apart).
 func TestAResumeRightAfterAStopPlaysFromItsSecond(t *testing.T) {
@@ -3543,7 +3543,7 @@ func TestAResumeRightAfterAStopPlaysFromItsSecond(t *testing.T) {
 	})
 }
 
-// The script acks a go after this node gave up on it (no ack in 5s): the node asked the party
+// The script acks a set after this node gave up on it (no ack in 5s): the node asked the party
 // again, and the ack is for nothing on its way, so nothing goes out for it, and the next
 // message is taken as usual.
 func TestAnAckAfterTheGoWasGivenUpIsDropped(t *testing.T) {
@@ -3605,7 +3605,7 @@ func TestAKeyAGoUndoesIsShown(t *testing.T) {
 }
 
 // mpv reaches a file's end and opens the next by itself just before a peer's move reaches it,
-// before this node has read it: the go undoes mpv's move, which was nobody's key, so the
+// before this node has read it: the set undoes mpv's move, which was nobody's key, so the
 // person isn't told to press anything again (macOS's probe found it).
 func TestMpvsOwnMoveAGoUndoesIsNoKey(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -3620,9 +3620,9 @@ func TestMpvsOwnMoveAGoUndoesIsNoKey(t *testing.T) {
 	})
 }
 
-// The person presses space while a peer's resume from 30 is on its way, after the go's stop
-// and before mpv answers its seek: mpv plays before the go plays it, so the key is lost in the
-// go, and the ack says so (over, ORDER.md). The person is told why it did nothing.
+// The person presses space while a peer's resume from 30 is on its way, after the set's stop
+// and before mpv answers its seek: mpv plays before the set plays it, so the key is lost in the
+// set, and the ack says so (over, ORDER.md). The person is told why it did nothing.
 func TestASpaceBetweenAGosStopAndItsPlayIsShown(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
@@ -3639,7 +3639,7 @@ func TestASpaceBetweenAGosStopAndItsPlayIsShown(t *testing.T) {
 	})
 }
 
-// A seek of the person's just before a go that doesn't seek is no key lost: the ack says where
+// A seek of the person's just before a set that doesn't seek is no key lost: the ack says where
 // mpv went, and it goes out as theirs (landed). Its ack says it came first, but nothing is shown.
 func TestAKeyTheAckRevealsIsNotShown(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -3657,8 +3657,8 @@ func TestAKeyTheAckRevealsIsNotShown(t *testing.T) {
 }
 
 // A peer's stop reaches this node while its own stop for the person's seek is on its way: the
-// message waits for that go's ack, so this node's stop goes out, with where and why, before the
-// peer's is weighed. Taken inside the wait, it sent a second go, the first ack went unweighed,
+// message waits for that set's ack, so this node's stop goes out, with where and why, before the
+// peer's is weighed. Taken inside the wait, it sent a second set, the first ack went unweighed,
 // and the reason stayed: the person's next resume said stopped (SIM_SEED=12000065).
 func TestAMessageWaitsForTheGoOnItsWay(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -3723,8 +3723,8 @@ func TestAResumeAfterAFoldedSeekPlaysFromWhereMpvIs(t *testing.T) {
 	})
 }
 
-// The person presses play and pause again before the script's go to 82 is acked: what the
-// script says meanwhile is from before the go, or from it, so nothing goes out, and mpv lands
+// The person presses play and pause again before the script's set to 82 is acked: what the
+// script says meanwhile is from before the set, or from it, so nothing goes out, and mpv lands
 // where this node holds (SIM_SEED=1000074 found the order).
 func TestKeysBeforeASeekIsAckedLeaveItsSecond(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
@@ -3778,7 +3778,7 @@ func TestAPartyContinuesFromTheSecondMpvLastReported(t *testing.T) {
 }
 
 // A follower's seek to 20 replaces the leader's seek to 30 in mpv's queue: it lands with the
-// go's id away from its second, so it is the person's, kept on the screen, and the person's
+// set's id away from its second, so it is the person's, kept on the screen, and the person's
 // resume plays from 20, where mpv is (SIM_SEED=2000545 found the order).
 func TestAFollowersSeekOverTheLeadersIsKept(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
