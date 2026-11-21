@@ -546,7 +546,7 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
       <details id="chart">
         <summary>Patient chart</summary>
         <pre id="log"></pre>
-        <p><button type="button" class="small" id="save-chart">Save chart</button></p>
+        <p><button type="button" class="small" id="save-chart">Save chart</button> <span class="hint" id="chart-saved" hidden></span></p>
       </details>
     </section>
 
@@ -1190,6 +1190,8 @@ $("save-chart").addEventListener("click", async () => {
   a.href = URL.createObjectURL(new Blob([(j.lines || []).map(l => l + "\n").join("")], { type: "text/plain" }));
   a.download = `watchparty-${new Date().toLocaleString("sv").slice(0, 16).replace(/[ :]/g, "-")}.log`;
   a.click();
+  $("chart-saved").textContent = `Saved as ${a.download} in your downloads folder.`;
+  $("chart-saved").hidden = false;
 });
 
 document.querySelector(".cat").addEventListener("click", () => {

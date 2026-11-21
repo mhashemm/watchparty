@@ -149,7 +149,9 @@ The download, SHA-256 check and binary swap live in the `update` package
   - The page blocks DevTools' shortcuts, F5 and Ctrl/Cmd+R, and the right-click menu, except in a field, where
     right-click paste matters. That is only a deterrent: Chromium has no switch for it, and
     the policy that does it is system-wide.
-  - The profile is seeded to turn off the password manager. Edge also gets
+  - The profile is seeded to turn off the password manager and the download bubble: an
+    `--app` window has no toolbar to anchor it, so it shows as a blank box clipped at the
+    window's edge. Save chart says where the file went instead. Edge also gets
     `--disable-features=msImplicitSignin` (a name from its binary, which may change),
     or it signs every new profile into the Windows account.
   - **Only Chromium-family browsers**, since only they have `--app`. Firefox only

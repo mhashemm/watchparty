@@ -2546,6 +2546,7 @@ def gui_suite():
         ok("one watchparty-<date>.log", len(saved) == 1 and saved[0].startswith("watchparty-"), str(saved))
         chart = open(f"{dl}/{saved[0]}").read() if saved else ""
         ok("it holds the party's log", "init done" in chart and invite in chart)
+        ok("the page says where it went", saved and js(H, '$("chart-saved").textContent') == f"Saved as {saved[0]} in your downloads folder.", js(H, '$("chart-saved").textContent'))
 
         part("[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
         js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '

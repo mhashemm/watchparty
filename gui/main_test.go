@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -95,6 +96,27 @@ func TestPageScriptParses(t *testing.T) {
 	cmd.Stdin = bytes.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("the page script does not parse:\n%s", out)
+	}
+}
+
+// Chromium ignores a Preferences file it can't parse, so one typo would bring back both the
+// password manager and the clipped download bubble
+func TestTheProfileTurnsOffPasswordsAndTheDownloadBubble(t *testing.T) {
+	t.Parallel()
+	var p struct {
+		Credentials bool `json:"credentials_enable_service"`
+		Profile     struct {
+			Passwords *bool `json:"password_manager_enabled"`
+		} `json:"profile"`
+		Downloads struct {
+			Bubble *bool `json:"partial_view_enabled"`
+		} `json:"download_bubble"`
+	}
+	if err := json.Unmarshal([]byte(profilePrefs), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Credentials || p.Profile.Passwords == nil || *p.Profile.Passwords || p.Downloads.Bubble == nil || *p.Downloads.Bubble {
+		t.Fatalf("profilePrefs = %s", profilePrefs)
 	}
 }
 

@@ -411,6 +411,11 @@ type browser struct {
 	root string
 }
 
+// profilePrefs seeds each window's profile: no password manager, and no download bubble,
+// which an --app window has no toolbar button to anchor to, so Chromium draws it as a blank
+// box clipped at the window's edge; the page says where Save chart put the file instead
+const profilePrefs = `{"credentials_enable_service":false,"profile":{"password_manager_enabled":false},"download_bubble":{"partial_view_enabled":false}}`
+
 func newProfile(root string) (string, error) {
 	err := os.MkdirAll(root, 0o700)
 	if err != nil {
@@ -421,7 +426,7 @@ func newProfile(root string) (string, error) {
 		return "", err
 	}
 	os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
-	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
+	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(profilePrefs), 0o600)
 	return profile, nil
 }
 
