@@ -19,16 +19,16 @@ type connection struct {
 	closed  chan struct{}
 }
 
-// do sends mpv one command and waits for its answer on the loop, the node's one goroutine:
-// meanwhile it takes the inputs that come, as loop does, so mpv's lines are handled and a
-// transport message waits its turn (handle). Any other request's answer is kept for the do()
-// waiting on it. Never from another goroutine.
+// do sends mpv one command and waits for its answer. It runs on the loop, the node's one
+// goroutine, and keeps handling inputs while it waits: mpv's lines are handled, a transport
+// message waits its turn (handle), and other requests' answers are kept for the do() waiting
+// on them. Never call it from another goroutine.
 func (c *Client) do(args ...any) error {
 	_, err := c.ask(args...)
 	return err
 }
 
-// ask is do, and gives the answer's data: get_property_string's value.
+// ask is do, and also returns the answer's data, such as get_property_string's value.
 func (c *Client) ask(args ...any) (string, error) {
 	if c.gone {
 		return "", ErrClosed
@@ -50,8 +50,8 @@ func (c *Client) ask(args ...any) (string, error) {
 	return c.await(id, replyLimit)
 }
 
-// await waits on the loop for id's answer, taking the inputs that come meanwhile: mpv's reply
-// to a request, or the script's ack of a set (setState), for at most limit.
+// await handles inputs on the loop until id is answered, for at most limit: mpv's reply to
+// a request, or the script's ack of a set (setState).
 func (c *Client) await(id int64, limit time.Duration) (string, error) {
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
@@ -84,9 +84,9 @@ func (c *Client) await(id int64, limit time.Duration) (string, error) {
 	}
 }
 
-// mailbox is the loop's inbox: what it is given, in the order given. Giving never waits,
-// so mpv's lines are read while the loop writes to mpv: a reader waiting on the loop while
-// the loop waits on mpv, and mpv on the reader, would wait forever.
+// mailbox is an unbounded FIFO. put never blocks, so mpv's lines keep being read while the
+// loop writes to mpv: otherwise the reader waits on the loop, the loop on mpv, and mpv on
+// the reader, forever.
 type mailbox[T any] struct {
 	mu    sync.Mutex
 	items []T
@@ -125,8 +125,8 @@ type request struct {
 	body []byte
 }
 
-// writer writes requests to mpv's socket in order, so the loop never waits on mpv reading
-// it: a stalled mpv would make every peer wait. A write that fails comes back as an input.
+// writer writes requests to mpv's socket in order, so the loop never blocks on mpv reading
+// it: a stalled mpv would make every peer wait. A failed write comes back as an input.
 func (c *Client) writer(out *mailbox[request]) {
 	for {
 		r, ok := out.poll()
@@ -146,7 +146,7 @@ func (c *Client) writer(out *mailbox[request]) {
 	}
 }
 
-// outcome is mpv's answer to one request, or none in 5s.
+// outcome is mpv's answer to one request, or why there is none.
 type outcome struct {
 	Response
 	data    string
@@ -154,8 +154,8 @@ type outcome struct {
 	unsent  error
 }
 
-// input is one thing that happened to this node: a line mpv sent, mpv's socket closing, a
-// request's 5s running out or its write failing, or a transport message.
+// input is one thing for the loop to handle: a line from mpv, mpv's socket closing, a
+// request timing out or failing to write, or a transport message.
 type input struct {
 	line    []byte
 	closed  bool
@@ -165,8 +165,8 @@ type input struct {
 	msg     *IncomingMessage
 }
 
-// watch runs the loop until mpv's socket closes: a reader hands it mpv's lines in order,
-// and it handles them and everything else that comes, one at a time.
+// watch runs the loop until mpv's socket closes. A reader goroutine posts mpv's lines in
+// order; the loop handles them and every other input, one at a time.
 func (c *Client) watch() error {
 	var err error
 	done := make(chan struct{})
@@ -194,7 +194,7 @@ func (c *Client) watch() error {
 	return err
 }
 
-// serve keeps taking inputs after mpv's socket closed, until the party ends: a peer still
+// serve keeps handling inputs after mpv's socket closed, until the party ends, so a peer
 // never waits on this node.
 func (c *Client) serve() {
 	for {
@@ -214,10 +214,10 @@ func (c *Client) post(in input) bool {
 	return true
 }
 
-// next is the loop's next input. What the transport has handed over comes first: its
-// sender is done with it, so it came before whatever mpv says from here, and a message sent
-// before the file loaded is heard while it loads. Read on the loop itself, never by a
-// goroutine that would hold it a moment before passing it on.
+// next returns the loop's next input. Transport messages come first: the transport has
+// already let go of them, so they came before anything mpv says from here, and a message
+// sent while the file loads is heard while it loads. incoming is read here, on the loop,
+// never by a goroutine that would hold a message before passing it on.
 func (c *Client) next() (input, bool) {
 	for {
 		select {
@@ -238,9 +238,9 @@ func (c *Client) next() (input, bool) {
 	}
 }
 
-// handle is one input, with whatever it starts. The only rule for order: a transport
-// message is taken only when no other's change is still being applied, so each is applied
-// to its end, as mpv answers it, before the next; mpv's lines are handled meanwhile.
+// handle handles one input and whatever it starts. A transport message is applied only
+// when no other one is still being applied, so each is applied fully, through mpv's
+// answers, before the next; mpv's lines are handled in between.
 func (c *Client) handle(in input) {
 	switch {
 	case in.closed:
@@ -266,7 +266,7 @@ func (c *Client) handle(in input) {
 		c.mpvSaid(in.line)
 	}
 	c.runLater()
-	// the party's state is applied through the script, so it waits for its name too
+	// the party's state is applied through the script, so joining also waits for its name
 	if c.opening && c.seen[timePos] && c.script != "" {
 		c.join()
 	}
@@ -281,6 +281,7 @@ func (c *Client) handle(in input) {
 	c.snapshot()
 }
 
+// runLater runs the commands inputs started (later), unless a set is pending.
 func (c *Client) runLater() {
 	for len(c.later) > 0 && c.pending == nil {
 		f := c.later[0]
@@ -289,7 +290,7 @@ func (c *Client) runLater() {
 	}
 }
 
-// mpvSaid is one line from mpv: an answer to a request, or an event.
+// mpvSaid handles one line from mpv: an answer to a request, or an event.
 func (c *Client) mpvSaid(line []byte) {
 	event := Event{}
 	if err := json.Unmarshal(line, &event); err != nil {
@@ -329,7 +330,7 @@ func (c *Client) broadcast(out [][]byte) {
 	}
 }
 
-// say sends the party one message of this node's own.
+// say sends the party one message.
 func (c *Client) say(b []byte) {
 	select {
 	case c.outgoing <- b:

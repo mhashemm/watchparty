@@ -31,20 +31,20 @@ const (
 	joined         = "joined"
 	clientMessage  = "client-message"
 
-	// scriptName is what mpv names the script, from ScriptFile; another script with that
-	// file name takes it, and this one gets a number after it (ORDER.md)
+	// scriptName is the name mpv gives the script, from ScriptFile. If another script has
+	// that file name, it takes the name and this one gets a number after it (ORDER.md)
 	scriptName = "watchparty"
 
 	lostRelay = "lost the relay, reconnecting"
-	// unheard is the stamp of a node that hasn't heard the party yet: so far below any the
-	// party can hold that nothing a joiner does before it is answered wins over the party,
-	// while joiners still order what they do among themselves.
+	// unheard is the stamp of a node that hasn't heard the party yet. It is far below any
+	// stamp the party can hold, so nothing a joiner does before it is answered wins over the
+	// party, while joiners can still order their own changes among themselves.
 	unheard = -1 << 30
-	// catchingUp is why the party stops for a node whose pause or seek was older than
-	// what the party holds: it missed something, and is told where the party is.
+	// catchingUp is why the party stops for a node whose pause or seek was older than the
+	// party's state: it missed something, and is told where the party is.
 	catchingUp = "catching up"
-	// outOfSync is why the party stops for a resume reaching a node that plays: one of the
-	// two missed a pause or a resume, and plays from another second.
+	// outOfSync is why the party stops when a resume reaches a node that is playing: one of
+	// the two missed a pause or a resume, and plays from another second.
 	outOfSync = "out of sync"
 
 	showTextDurationSeconds = 5
@@ -53,19 +53,19 @@ const (
 	maxSeeks                = 16
 )
 
-// How long the node waits on mpv before it gives up (errTimeout): replyLimit for a reply or a
-// set's ack, moveLimit for a move's set, acked once its file starts, which mpv gives up on after
-// its --network-timeout (60s; 81s seen, ORDER.md).
+// How long the node waits on mpv before giving up (errTimeout): replyLimit for a reply or a
+// set's ack; moveLimit for a set that moves to another file, acked once the file starts,
+// which mpv gives up on after its --network-timeout (60s; 81s seen, ORDER.md).
 const (
 	replyLimit = 5 * time.Second
 	moveLimit  = 3 * time.Minute
-	// a member that ran out of cache tells the party how much it has ready once it had that
-	// many seconds, never more often than reportMin nor less than reportMax
+	// a member that ran out of cache reports its seconds ready again after that many
+	// seconds, but no sooner than reportMin and no later than reportMax
 	reportMin = 5 * time.Second
 	reportMax = time.Minute
-	// mpv's screen shows a member's seconds ready the first time, then only once they are
-	// twice the last shown, and at least twice screenFrom: every report would keep text up
-	// for most of a stall's first minute, over any other notice
+	// mpv's screen shows a member's seconds ready the first time, then only when they reach
+	// twice the last shown and at least twice screenFrom: showing every report would cover
+	// the screen for most of a stall's first minute, hiding every other notice
 	screenFrom = 5
 )
 
@@ -73,58 +73,61 @@ var (
 	errTimeout = errors.New("mpv did not answer in time")
 
 	ErrClosed = errors.New("mpv closed the IPC connection")
-	// ErrNoScript: mpv didn't load Script, as it was built without Lua
+	// ErrNoScript: mpv didn't load Script because it was built without Lua
 	ErrNoScript = errors.New("this mpv can't run the sync script: install an mpv built with Lua")
 )
 
-// Script is the node's way into mpv, which party.Run hands mpv as ScriptFile with --script.
+// Script is the Lua script the node controls mpv through; party.Run passes it to mpv as
+// ScriptFile with --script.
 //
 //go:embed watchparty.lua
 var Script []byte
 
-// ScriptFile is the file name Script is written as: mpv names a script after it.
+// ScriptFile is the file name Script is written to: mpv names a script after its file.
 const ScriptFile = scriptName + ".lua"
 
+// IncomingMessage is what the transport hands the node: a peer's message, or news about the
+// transport itself.
 type IncomingMessage struct {
-	// HostName is who sent it, as people know them; From tells members apart, which their
+	// HostName is the sender's name, as people know them. From tells members apart, which
 	// names may not: the mesh address, or the relay client's id. Notices have no From.
 	HostName string
 	From     string
 	Event    []byte
 	// Opened, Lost and Back are set only by this node's own transport, never from the wire.
-	// Opened: this node opened the room with the key, or started the mesh, so its position
-	// is the party's.
+	// Opened: this node created the room or started the mesh, so its position is the party's.
 	Opened bool
-	// Lost: its connection to the relay dropped. Back: it is in the room again, and
-	// didn't open it; whatever was sent meanwhile is gone.
+	// Lost: the relay connection dropped. Back: it is in the room again (not as its
+	// creator); whatever was sent meanwhile is gone.
 	Lost, Back bool
 	// Missed: something this node sent failed to reach From, maybe the latest state it
-	// heard. Resend: hand Reply this node's state, which the transport sends to From alone,
-	// or nil for none.
+	// heard. Resend: send this node's state on Reply, or nil for none; the transport
+	// delivers it to From alone.
 	Missed, Resend bool
 	Reply          chan<- []byte
 }
 
+// Event is a line from mpv, or a message between nodes: raw mpv JSON plus the sender's state.
 type Event struct {
 	EventType string `json:"event,omitempty"`
 	Name      string `json:"name"`
 	Data      string `json:"data"`
-	// Stamp, Paused, At and Entry are the state its sender was in when it sent this (tag)
+	// Stamp, Paused, At and Entry are the state its sender held when it sent this (tag)
 	Stamp  int      `json:"stamp,omitempty"`
 	Paused *bool    `json:"paused,omitempty"`
 	At     *float64 `json:"at,omitempty"`
 	Entry  *int     `json:"entry,omitempty"`
-	// Again: the state its sender holds, sent again to a member the mesh failed to reach.
-	// Check: the state its sender holds, back in the room after losing the relay.
+	// Again: the sender's state, sent again to a member the mesh failed to reach.
+	// Check: the sender's state, sent when it is back in the room after losing the relay.
 	Again bool `json:"again,omitempty"`
 	Check bool `json:"check,omitempty"`
-	// Free: a stop nobody chose (answering a join, catching up, a leave): it has no leader,
-	// and the first seek leads
+	// Free: a stop nobody chose (a join, catching up, a leave): it has no leader, and the
+	// first seek leads
 	Free bool `json:"free,omitempty"`
-	// Args: what a script said, in a client-message
+	// Args: a script's message, in a client-message
 	Args []string `json:"args,omitempty"`
-	// fromScript: a report made from what the script said (scriptSaid), never sent as is.
-	// stoppedAt: for a move the ack found, where mpv stopped on the new file
+	// fromScript: a report built from a script message (scriptSaid), never sent as is.
+	// stoppedAt: for a move found in an ack, where mpv stopped on the new file
 	fromScript bool
 	stoppedAt  *float64
 	Response
@@ -260,7 +263,7 @@ type slowReport struct {
 	peerReadyOnScreen map[string]int
 }
 
-// opens gives New its answer once all it waits for is there.
+// opens gives New its answer once everything it waits for has arrived.
 func (c *Client) opens() {
 	if c.observed && !c.opening && c.script != "" {
 		c.open(nil)
@@ -275,7 +278,8 @@ func (c *Client) open(err error) {
 	}
 }
 
-// snapshot is what Position and Finished need, as of the last input.
+// snapshot is what Position, Buffering and Finished read from other goroutines, as of the
+// last input.
 type snapshot struct {
 	current, entries int
 	pos, duration    float64
@@ -291,9 +295,9 @@ func (c *Client) snapshot() {
 	c.snap.Store(&snapshot{current: current, entries: len(c.names), pos: pos, duration: c.duration, buffering: c.waitingOnCache})
 }
 
-// Position is the entry and the second to continue the party from. Within
-// endGraceSeconds of an entry's end that is the next entry's start: with keep-open=always
-// mpv stays on the finished one, and continuing there would only end it again.
+// Position is the entry and second to continue the party from. Within endGraceSeconds of
+// an entry's end it is the next entry's start: with keep-open=always mpv stays on the
+// finished entry, and continuing there would only end it again.
 func (c *Client) Position() (int, float64) {
 	s := c.snap.Load()
 	if !s.ending() {
@@ -302,16 +306,16 @@ func (c *Client) Position() (int, float64) {
 	return min(s.current+1, max(s.entries-1, 0)), 0
 }
 
-// observed are the properties New observes, as ids 1 and up
+// observed are the properties New observes, with ids from 1
 var observed = []string{filename, timePos, pausedForCache, duration, cacheFill, viaNetwork, cacheAhead}
 
-// Buffering is mpv waiting on its cache (paused-for-cache).
+// Buffering is whether mpv is waiting on its cache (paused-for-cache).
 func (c *Client) Buffering() bool {
 	return c.snap.Load().buffering
 }
 
-// Finished is the last entry, or the only file, played to its end: nothing is left to
-// continue.
+// Finished is whether the last entry, or the only file, played to its end, leaving nothing
+// to continue.
 func (c *Client) Finished() bool {
 	s := c.snap.Load()
 	return s.ending() && s.current >= s.entries-1
@@ -329,9 +333,10 @@ func (c *Client) showText(text string) error {
 	return c.do(showText, text, showTextDurationSeconds*1000)
 }
 
-// New wires up one mpv. names are its playlist entries in order, and nil for a single file;
-// start is the entry it opens on, which a peer's answer can arrive before mpv reports. A
-// continued party seeks that entry to at once it is open (see join).
+// New connects to one mpv and returns once its first file is open. names are the playlist
+// entries in order, nil for a single file; start is the entry mpv opens on, needed because a
+// peer's answer can arrive before mpv reports it. A continued party seeks that entry to at
+// once it is open (join).
 func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int, at float64) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
@@ -361,11 +366,11 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 	}
 	client.snapshot()
 
-	// the loop's first step, once the reader runs: observing makes mpv say what it holds
-	// pause comes from the script (acked), with every change mark
+	// the loop's first step, once the reader runs. Observing makes mpv report each
+	// property's value; pause comes from the script instead (hello).
 	client.later = append(client.later, func() {
-		// mpv makes a script's client before it runs any command (ORDER.md), so one sent to
-		// the script's name fails only if there is none: mpv couldn't load it, as it has no Lua
+		// mpv creates a script's client before running any command (ORDER.md), so a message
+		// to the script's name fails only if mpv couldn't load it: it has no Lua
 		if err := client.do("script-message-to", scriptName, "watchparty-check"); err != nil {
 			client.open(fmt.Errorf("%w (%v)", ErrNoScript, err))
 			return

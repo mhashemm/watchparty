@@ -9,13 +9,13 @@ import (
 	"time"
 )
 
-// handleEvent returns what goes out for one line from mpv: the line itself when it is
-// this node's own change, and whatever must follow it. Each is tagged in the step that
-// decided it, so its stamp is the one that change was given.
+// handleEvent returns what to broadcast for one line from mpv: the line itself if it is this
+// node's own change, then anything that must follow it. Everything is tagged here, in the
+// step that decided it goes out, so it carries the stamp that change was given.
 func (c *Client) handleEvent(event Event, line []byte) [][]byte {
-	// mpv's own order, to read after a run; not its position while playing, one per frame,
-	// nor how full its cache is, which the buffering line says, nor how far ahead, a few
-	// times a second
+	// log mpv's lines to read their order after a run, except the noisy ones: time-pos
+	// while playing (one per frame), cache fill (the buffering line says it), cache ahead
+	// (a few times a second)
 	if event.Name != timePos && event.Name != cacheFill && event.Name != cacheAhead || event.Name == timePos && c.paused {
 		log.Printf("Watch: mpv said: %s\n", line)
 	}
@@ -27,9 +27,8 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 		}
 	}
 	if len(out) > 0 {
-		// this node's own change, or what it adds to a peer's: the next stamp. Only the
-		// person's own pause, seek or move leads; any other stop is free, and the first seek
-		// leads.
+		// our own change takes the next stamp. Only the person's own pause, seek or move
+		// leads the stop; any other stop is leaderless, and its first seek leads.
 		lead := event.Name == timePos || event.Name == pause && event.paused() && !c.pausedByNode ||
 			event.Name == playlistPos && !c.advancedAtEnd
 		c.stamp, c.leaderID, c.leaderless = c.stamp+1, "", !lead
@@ -43,8 +42,8 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 	return out
 }
 
-// propertyChanged is what a property-change with data means for the party: whether the event
-// itself goes out (send), and what to broadcast after it, or instead of it.
+// propertyChanged decides what a property change means for the party: whether the event
+// itself goes out (send), and what to broadcast after it or instead of it.
 func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 	extra, moved := c.record(event)
 	first := !c.seen[event.Name]
@@ -57,7 +56,7 @@ func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 		extra, send = c.pauseChanged(event.paused(), extra)
 	case timePos:
 		if !event.fromScript {
-			// how far mpv has played; where it stops and lands, the script says
+			// mpv's playing position; where it stops and lands comes from the script
 			return nil, false
 		}
 		send = c.positionChanged()
@@ -81,7 +80,7 @@ func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 		c.ahead(event.Data)
 		return nil, false
 	case cacheFill:
-		// 100 but while mpv waits on its cache, when it climbs a few times a second
+		// it reads 100 except while mpv waits on its cache, when it climbs a few times a second
 		if c.waitingOnCache {
 			log.Printf("buffering: %s%%\n", event.Data)
 		}
@@ -100,14 +99,15 @@ func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 	return extra, send
 }
 
-// record keeps what mpv reported, echo or not. It returns what a pause carries, and
-// whether the playlist moved to another entry after the first file was open.
+// record stores what mpv reported, whether or not it is an echo of our own change. It
+// returns what a pause carries, and whether the playlist moved to another entry after the
+// first file opened.
 func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 	switch event.Name {
 	case timePos:
-		// stopped, mpv is where the script last said: a playing second it reported before
-		// the stop can come after (MPV.md, [R6c]); and while a set is on its way, mpv may not
-		// play yet, wherever the person took it
+		// while paused, mpv is where the script last said: a playing second can arrive
+		// after the pause (MPV.md, [R6c]). While a set is pending, mpv may not be where the
+		// person took it yet.
 		if pos, err := strconv.ParseFloat(event.Data, 64); err == nil {
 			c.reported = pos
 			if event.fromScript || !c.paused && c.pending == nil {
@@ -139,16 +139,15 @@ func (c *Client) record(event Event) (extra [][]byte, moved bool) {
 	return extra, moved
 }
 
-// clear forgets the second this node was on and the seeks it sent for other files, as mpv
-// opens entry: the old second would go out with a pause, and a seek queued for the old file
-// never lands.
+// clear forgets the old second and our seeks for other files when mpv opens entry: the old
+// second would go out with the next pause, and a seek queued for the old file never lands.
 func (c *Client) clear(entry int) {
 	c.pos, c.seekWhilePlaying = 0, false
 	c.ourSeeks = slices.DeleteFunc(c.ourSeeks, func(s ourSeek) bool { return s.entry != entry })
 	c.seekPending = c.seekPending && len(c.ourSeeks) > 0
 }
 
-// pauseChanged is the user's own pause or resume.
+// pauseChanged handles the person's own pause or resume.
 func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, bool) {
 	if c.paused == paused {
 		return extra, false
@@ -158,9 +157,9 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, bool) {
 		return nil, false
 	}
 	if !paused && c.led() && c.heading() != c.partyEntry {
-		// a follower resuming on the file the person moved to: as a move while playing, the
-		// party stops there, on this node's second, and it leads. Everyone must load the
-		// file first, and they would play that far apart.
+		// a follower resuming on a file the person moved to. Like a move while playing, the
+		// party stops there, on this node's second, and this node leads: everyone has to load
+		// the file first, and would otherwise play far apart.
 		c.paused = false
 		c.pauseParty("video changed", true)
 		return nil, false
@@ -174,17 +173,16 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, bool) {
 	return extra, true
 }
 
-// positionChanged is the person's seek, as the script said where it went (wentTo): stopped, it
-// goes out; playing, it pauses the party.
+// positionChanged handles the person's seek, as the script reported where it landed
+// (wentTo). While paused it goes out; while playing it pauses the party.
 func (c *Client) positionChanged() bool {
 	if c.paused && c.led() {
-		// the step taking the leader's state goes on: its seek overrides this one
+		// only the leader seeks for the party; the leader's next seek overrides this one
 		c.keepOnScreen()
 		return false
 	}
-	// the person's seek goes out, or stops the party, newer: wherever this node was being
-	// sent, this is where it is now. mpv lands nothing of a seek queued before it, and one
-	// sent after it lands as the person's, newer, which is where mpv then is.
+	// the person's seek is newer than any of ours: mpv drops a seek queued before it, and
+	// one sent after lands on the person's second too, so our marks are done.
 	c.ourSeeks, c.seekPending = nil, false
 	if c.paused {
 		return true
@@ -196,8 +194,8 @@ func (c *Client) positionChanged() bool {
 	return false
 }
 
-// keepOnScreen keeps a follower's seek or move on this screen until the party resumes, and
-// tells the person, once for each state it takes, so a held key doesn't flood the feed.
+// keepOnScreen leaves a follower's seek or move on this screen only, until the party
+// resumes. The person is told once per state taken, so a held key doesn't flood the feed.
 func (c *Client) keepOnScreen() {
 	if !c.toldWhoLeads {
 		c.toldWhoLeads = true
@@ -206,9 +204,9 @@ func (c *Client) keepOnScreen() {
 	}
 }
 
-// entryChanged is this node moving to another entry by itself: it goes out, and pauses
-// the party if it was playing. A follower's stays on its screen, as its seek does: a move is a
-// seek far enough to land in another file. mpv moving on from the end is nobody's choice.
+// entryChanged handles this node moving to another entry by itself: the move goes out, and
+// pauses the party if it was playing. A follower's move stays on its screen, like its seek:
+// a move is a seek into another file. mpv moving on at a file's end leads nothing.
 func (c *Client) entryChanged(moved bool) bool {
 	if !moved {
 		return false
@@ -223,6 +221,7 @@ func (c *Client) entryChanged(moved bool) bool {
 	return true
 }
 
+// pauseExtras is what follows a pause that pauseParty started: where mpv stopped, and why.
 func (c *Client) pauseExtras() [][]byte {
 	if c.stopReason == "" {
 		return nil
@@ -242,8 +241,8 @@ func seconds(pos float64) string {
 	return strconv.FormatFloat(pos, 'f', 6, 64)
 }
 
-// pauseParty stops the party for why this node is out of step: led by it after the person's
-// seek or move (lead), by nobody otherwise.
+// pauseParty stops the party because this node is out of step. lead: the person's seek or
+// move caused it, so this node leads the stop; otherwise it is leaderless.
 func (c *Client) pauseParty(reason string, lead bool) {
 	c.stopReason = reason
 	c.later = append(c.later, func() {

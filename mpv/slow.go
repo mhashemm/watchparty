@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// ahead tells the party how many whole seconds this node has ready, after it ran out of cache
-// on a stream and while the party waits for it. Once it said a number, the next waits as many
-// seconds, from reportMin to reportMax: a slow member costs the party a tiny message a minute
-// once it has some way to go, and nothing at all while it plays or on a local file.
+// ahead tells the party how many whole seconds this node has ready, after it ran out of
+// cache on a stream and while the party waits for it. After sending a number, it waits that
+// many seconds before the next, between reportMin and reportMax: a slow member costs the
+// party one tiny message a minute once it is well on its way, and nothing while it plays or
+// on a local file.
 func (c *Client) ahead(data string) {
 	secs, err := strconv.ParseFloat(data, 64)
 	if !c.slowStream || !c.paused || err != nil || int(secs) == c.readySent || time.Now().Before(c.reportAt) {
@@ -22,7 +23,7 @@ func (c *Client) ahead(data string) {
 	log.Printf("buffered ahead: %d\n", c.readySent)
 	b, _ := json.Marshal(Event{Name: buffered, Data: strconv.Itoa(c.readySent)})
 	c.say(b)
-	// on the screen too, now and then: people watch in mpv, not in the app
+	// on mpv's screen too, now and then: people watch mpv, not the app
 	if louder(c.readySent, c.readyOnScreen) {
 		c.readyOnScreen = c.readySent
 		text := fmt.Sprintf("your network is slow: %ds ready", c.readySent)
@@ -30,7 +31,7 @@ func (c *Client) ahead(data string) {
 	}
 }
 
-// louder says whether secs ready go on mpv's screen, the last shown being shown (-1: none).
+// louder is whether secs ready should go on mpv's screen, given the last shown (-1: none).
 func louder(secs, shown int) bool {
 	return shown < 0 || secs >= 2*max(shown, screenFrom)
 }
