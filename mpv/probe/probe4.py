@@ -525,13 +525,16 @@ class Shipped(Wp3):
             net = get(m, "demuxer-via-network")
             if net != "yes":
                 errors["stream-not-via-network"].append((r, net))
-            # served at about half its bitrate: paused 3s, about 1.5s more is ready
-            before = num(m, "demuxer-cache-duration")
-            time.sleep(3)
-            after = num(m, "demuxer-cache-duration")
+            # served at about half its bitrate, so paused it gains about 0.5s a second; but opening
+            # can take seconds on a slow runner (macOS: 0.08s in its first 3), so up to 10s for 0.5s
+            before, t0 = num(m, "demuxer-cache-duration"), time.time()
+            after = before
+            while after < before + 0.5 and time.time() - t0 < 10:
+                time.sleep(0.25)
+                after = num(m, "demuxer-cache-duration")
             if after < before + 0.5:
                 errors["not-growing"].append((r, before, after))
-            tally(shapes, (f"file {local}", f"stream {net}", f"paused 3s: +{round(after - before)}s ready"))
+            tally(shapes, (f"file {local}", f"stream {net}", f"paused: +0.5s within {int(time.time() - t0) + 1}s"))
             m.stop()
         srv.shutdown()
         report("ahead", rounds, errors, shapes)
