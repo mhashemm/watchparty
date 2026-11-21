@@ -558,7 +558,7 @@ function render(exitErr, refusal) {
   if ($("status").textContent !== text) $("status").textContent = text;
   $("status").classList.toggle("bad", bad);
   renderTrail(list, now);
-  renderDetail(detail, pct);
+  renderDetail(refusal?.detail || detail, pct);
   renderCompare(refusal);
   renderMembers(running && state.ready && !now);
   document.body.dataset.mood = mood;

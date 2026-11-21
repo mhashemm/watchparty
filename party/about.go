@@ -89,18 +89,21 @@ func parseAbout(h string) (About, bool) {
 	return a, true
 }
 
-// NotTheSameFile is a refusal for another file that says what differs. Rows are the facts,
-// the party's beside yours, which the GUI shows as they are. Box is "tick" or "untick" when
-// the check mark under File is the difference; Videos is then the party's count.
+// NotTheSameFile is a refusal for another file that says what differs, which the GUI shows
+// as it is. Rows are the facts both sides have, the party's beside yours, so no cell is
+// ever empty; Detail says what only one side has, as the page's detail line ([bold, plain]
+// pairs). Box is "tick" or "untick" when the check mark under File is the difference;
+// Videos is then the party's count.
 type NotTheSameFile struct {
-	Box      string `json:"box,omitempty"`
-	Videos   int    `json:"videos,omitempty"`
-	Playlist bool   `json:"playlist"`
-	Rows     []Row  `json:"rows"`
+	Box      string      `json:"box,omitempty"`
+	Videos   int         `json:"videos,omitempty"`
+	Playlist bool        `json:"playlist"`
+	Detail   [][2]string `json:"detail,omitempty"`
+	Rows     []Row       `json:"rows"`
 	text     string
 }
 
-// Row is one fact. Differs: both sides have it, and they differ.
+// Row is one fact both sides have. Differs: they differ.
 type Row struct {
 	Label   string `json:"label"`
 	Party   string `json:"party"`
@@ -128,6 +131,9 @@ func differs(refusal *server.DifferentFile, ours video) error {
 	}
 	mine := ours.about()
 	e := &NotTheSameFile{Videos: theirs.Videos, Playlist: theirs.Videos > 0 || mine.Videos > 0, Rows: facts(theirs, mine)}
+	if theirs.Kind != mine.Kind {
+		e.Detail = [][2]string{{"", "The party plays "}, {kinds[theirs.Kind], ", and you picked "}, {kinds[mine.Kind], "."}}
+	}
 	// the box decides only between files on disk
 	onDisk := theirs.Kind == "" && mine.Kind == ""
 	switch {
@@ -168,29 +174,33 @@ func (e *NotTheSameFile) where(theirs About, ours video) bool {
 			at = fmt.Sprintf("video %d differs, and yours has %s to the party's %d", i+1, countVideos(len(ours.sums)), n)
 		}
 		e.text = fmt.Sprintf("your playlist is not the same file as the party's: %s\n  the party's: checksum %s\n  yours:       %s · %s · checksum %s", at, party, name, size(ours.sizes[i]), mine)
-		e.Rows = []Row{
-			{Label: "Differs at", Party: fmt.Sprintf("video %d", i+1), Yours: fmt.Sprintf("video %d", i+1)},
-			{Label: "Video", Yours: name},
-			{Label: "Size", Yours: size(ours.sizes[i])},
-			{Label: "Checksum", Party: party, Yours: mine, Mono: true, Differs: true},
-			videos,
+		e.Detail = [][2]string{{"", "They differ at video "}, {strconv.Itoa(i + 1), " of "}, {strconv.Itoa(n), ". Yours is "}, {name, ", "}, {size(ours.sizes[i]), "."}}
+		if videos.Differs {
+			e.Detail = [][2]string{{"", "They differ at video "}, {strconv.Itoa(i + 1), ". Yours is "}, {name, ", "}, {size(ours.sizes[i]), "."}}
 		}
+		e.Rows = []Row{{Label: "Checksum", Party: party, Yours: mine, Mono: true, Differs: true}, videos}
 		return true
 	}
 	switch last := min(n, len(ours.sums)) - 1; {
 	case len(ours.sums) > n:
 		e.text = fmt.Sprintf("your playlist is not the same file as the party's: yours has %s and the party's %d\n  yours goes on with %s", countVideos(len(ours.sums)), n, flatten(ours.names[n]))
-		e.Rows = []Row{videos, {Label: "Only in yours", Yours: flatten(ours.names[n])}}
+		e.Detail = [][2]string{{"", "Yours goes on with "}, {flatten(ours.names[n]), ", after the party's last video."}}
+		e.Rows = []Row{videos}
 	case len(ours.sums) < n:
 		e.text = fmt.Sprintf("your playlist is not the same file as the party's: yours has %s and the party's %d\n  the party's goes on after your %s", countVideos(len(ours.sums)), n, flatten(ours.names[last]))
-		e.Rows = []Row{videos, {Label: "Last in common", Yours: flatten(ours.names[last])}}
+		e.Detail = [][2]string{{"", "The party's goes on after your "}, {flatten(ours.names[last]), "."}}
+		e.Rows = []Row{videos}
 	default:
 		return false
 	}
 	return true
 }
 
-// facts are both sides' facts as rows, for the GUI.
+// kinds names an About's kind in a sentence.
+var kinds = map[string]string{"": "a file", "link": "a link", "torrent": "a torrent"}
+
+// facts are the facts both sides have, as rows for the GUI. One side's alone (a torrent's
+// infohash beside a file's checksum, a link's missing size) can't be compared.
 func facts(theirs, mine About) []Row {
 	playlist := theirs.Videos > 0 || mine.Videos > 0
 	cells := func(a About) map[string]string {
@@ -213,11 +223,11 @@ func facts(theirs, mine About) []Row {
 	rows := []Row{}
 	for _, label := range []string{"Video", "Size", "Checksum", "Infohash", "Videos", "Playlist checksum"} {
 		p, y := party[label], yours[label]
-		if p == "" && y == "" {
+		if p == "" || y == "" {
 			continue
 		}
 		mono := label == "Checksum" || label == "Infohash" || label == "Playlist checksum"
-		rows = append(rows, Row{Label: label, Party: p, Yours: y, Mono: mono, Differs: p != "" && y != "" && p != y})
+		rows = append(rows, Row{Label: label, Party: p, Yours: y, Mono: mono, Differs: p != y})
 	}
 	return rows
 }
