@@ -1,7 +1,13 @@
 # E2E.md
 
-Notes for working on `e2e.py`. What each phase covers is in its docstring; this file
-has the rules for writing and running cases. Needs `mpv`, `ffmpeg`, `dbus-daemon`
+Notes for working on the e2e suite. `e2e.py` runs it, and its docstring says what each
+phase covers; each phase's cases are `e2e_<phase>.py`, and what they share (settings,
+helpers, the case runner) is `e2e_core.py`. This file has the rules for writing and running
+cases.
+
+- **A phase takes the core with `from e2e_core import *`**, which copies each name once, at
+  import. A phase that sets a core global sets it on the module (`e2e_core.BUS = …`), or
+  the core's helpers never see it. Needs `mpv`, `ffmpeg`, `dbus-daemon`
 and Chrome or Chromium on PATH and a `-local`-reachable interface.
 
 ## Phases
