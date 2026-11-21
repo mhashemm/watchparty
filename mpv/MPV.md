@@ -86,6 +86,10 @@ config still applies, for example `keep-open` (see "Ending").
   `pause` still `"no"`. At load it comes first with no data, then `"no"`. Under
   `--cache-pause-wait` (default 1s) it clears once that much is cached again, and mpv
   then resumes by itself unless `pause` is set, which is why the node pauses itself.
+- **`cache-buffering-state`** (RO): `100`, and silent, but while `paused-for-cache` is
+  `"yes"`, which comes first; then it climbs about 4 times a second (its first value can be
+  stale: 10, then 0) until `paused-for-cache` clears. A 1.5 Mbit/s file over 120 KB/s, 0.37.0
+  and 0.40.0, 2026-11-21. The node logs it as `buffering: <n>%` only while stalled.
 - **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet, or quitting)
   **the `property-change` event has no `data` field at all**, which unmarshals to `Data == ""`.
 - **`filename`** (RO): percent-decoded for a URL; it can hold a newline, so it is logged as JSON. Probed on 0.37.0. It fires only when the

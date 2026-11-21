@@ -1828,6 +1828,7 @@ def relay_suite():
         setp("nodeFast", "pause", False)
         until(lambda: reasons() and both_paused(), 30)
         ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
+        ok("its log says how full its cache is, then that it's done", until(lambda: re.search(r"^.{20}buffering: \d+%$(?s:.*)^.{20}buffering: done$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-600:])
         gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
         ok("both stopped where the slow node did", gap < 0.15, f"{gap:.2f}s apart")
         setp("nodeFast", "pause", False)
@@ -2074,6 +2075,8 @@ def media_suite():
         must(f"{guest} is up", until(lambda: booted(guest) and f"{guest} has joined" in osd(host), BOOT))
         resolve(guest)
         ok("the invite asks for the playlist", nodes[host]["addr"].endswith(" -playlist"), nodes[host]["addr"])
+        checked = re.findall(r"^.{20}checking (\d+ of \d+): (.*)$", log(guest), re.M)
+        ok(f"{guest} said each file it checked", checked == [("1 of 3", '"a1.mkv"'), ("2 of 3", '"a2.mkv"'), ("3 of 3", '"a10.mkv"')], str(checked))
         ok("a joiner's renamed copy is let in, on the same entry", until(on("video2.mkv", "a1.mkv")), get(guest, "filename"))
 
         ipc(nodes[host]["sock"], "playlist-next")

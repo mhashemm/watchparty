@@ -26,6 +26,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/anacrolix/torrent"
 	"github.com/mhashemm/upnp"
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/server"
@@ -78,6 +79,8 @@ func Run(parent context.Context, cfg Config) error {
 	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
 
 	incoming, outgoing := make(chan mpv.IncomingMessage, 1024), make(chan []byte, 1024)
+	// mpv's client once it has the video
+	var playing atomic.Pointer[mpv.Client]
 
 	target := strings.TrimSpace(cfg.File)
 	var files []string
@@ -90,7 +93,18 @@ func Run(parent context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		stream, err := openTorrent(c, target, cache, torrentConfig(), findFor)
+		stream, err := openTorrent(c, target, cache, torrentConfig(), findFor, func(t *torrent.Torrent) {
+			stats := func() (int, int64) {
+				s := t.Stats()
+				return s.ActivePeers, s.BytesReadUsefulData.Int64()
+			}
+			// until mpv has the video, and then while it buffers
+			wanted := func() bool {
+				cl := playing.Load()
+				return cl == nil || cl.Buffering()
+			}
+			go swarmReport(c, reportEvery, stats, wanted, func(s string) { log.Println(s) })
+		})
 		if err != nil && parent.Err() != nil {
 			return nil
 		}
@@ -207,6 +221,7 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		conn, err = mpv.Dial(c, mpvSocket)
 	}
+	log.Println("mpv is up, loading the video")
 
 	client, err := mpv.New(c, func() {
 		if c.Err() == nil {
@@ -221,6 +236,7 @@ func Run(parent context.Context, cfg Config) error {
 		return outcome(parent, c, mpvQuit.Load(), err)
 	}
 
+	playing.Store(client)
 	log.Println("init done. now you can start watching")
 
 	err = <-exited
@@ -379,6 +395,7 @@ func runMesh(c context.Context, cancel context.CancelFunc, incoming chan mpv.Inc
 		}
 		address = fmt.Sprintf("%s:%d", localIP, cfg.Port)
 	} else {
+		log.Println("asking the router for a port")
 		upnp.Logger = slog.New(upnpLogger{l: log.Default()})
 		upnpClient, err := upnp.NewContext(c)
 		if err != nil {

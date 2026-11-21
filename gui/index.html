@@ -1066,7 +1066,7 @@ function handle(line) {
   }
   if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) state.ready = true;
-  if (/^torrent: /.test(msg)) state.finding = /^torrent: finding/.test(msg);
+  if (/^torrent: (finding|found) /.test(msg)) state.finding = /^torrent: finding/.test(msg);
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try {

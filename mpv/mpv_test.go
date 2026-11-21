@@ -724,7 +724,7 @@ func TestNewReturnsWhenMpvGoesAwayBeforeTheFileLoads(t *testing.T) {
 		defer ours.Close()
 		go func() {
 			sc := bufio.NewScanner(theirs)
-			for n := 1; n <= 4 && sc.Scan(); n++ { // every observe
+			for n := 1; n <= len(observed) && sc.Scan(); n++ { // every observe
 				req := Request{}
 				json.Unmarshal(sc.Bytes(), &req)
 				if scriptAnswers(theirs, req) {
@@ -807,7 +807,7 @@ func TestNewSucceedsWhenMpvLoadsThenQuitsAtOnce(t *testing.T) {
 		defer ours.Close()
 		go func() {
 			sc := bufio.NewScanner(theirs)
-			for n := 1; n <= 4 && sc.Scan(); n++ { // every observe
+			for n := 1; n <= len(observed) && sc.Scan(); n++ { // every observe
 				req := Request{}
 				json.Unmarshal(sc.Bytes(), &req)
 				if scriptAnswers(theirs, req) {
@@ -1138,6 +1138,35 @@ func TestBufferingPausesTheParty(t *testing.T) {
 			t.Fatalf("told mpv %q, want the node to pause itself again", got)
 		}
 		if got := said(n.broadcasts()); fmt.Sprint(got) != "[time-pos=20.000000 pause-reason=still buffering]" {
+			t.Fatalf("broadcast %q", got)
+		}
+	})
+}
+
+// Buffering says when mpv waits on its cache, so a torrent can say how its download goes
+// only then; how full the cache is goes nowhere but the log.
+func TestBufferingIsWhileMpvWaitsOnItsCache(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.plays()
+		if n.c.Buffering() {
+			t.Fatal("buffering before mpv said so")
+		}
+		n.mpvSays(mpvAt(20), propertyChangeLine(pausedForCache, "yes", 0), propertyChangeLine(cacheFill, "40", 0))
+		if !n.c.Buffering() {
+			t.Fatal("not buffering while mpv waits on its cache")
+		}
+		n.mpvSays(propertyChangeLine(pause, "yes", 0))
+		n.mpvWasTold()
+		n.broadcasts()
+		n.mpvSays(propertyChangeLine(cacheFill, "80", 0), propertyChangeLine(pausedForCache, "no", 0), propertyChangeLine(cacheFill, "100", 0))
+		if n.c.Buffering() {
+			t.Fatal("still buffering once the cache refilled")
+		}
+		if got := n.mpvWasTold(); len(got) != 0 {
+			t.Fatalf("told mpv %q", got)
+		}
+		if got := said(n.broadcasts()); len(got) != 0 {
 			t.Fatalf("broadcast %q", got)
 		}
 	})

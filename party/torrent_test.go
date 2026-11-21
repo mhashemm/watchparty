@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -117,7 +119,7 @@ func openOrFail(t *testing.T, target string) *torrentStream {
 	t.Helper()
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	stream, err := openTorrent(c, target, t.TempDir(), testConfig(t), time.Minute)
+	stream, err := openTorrent(c, target, t.TempDir(), testConfig(t), time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +233,7 @@ func TestADeadMagnetEndsAndLeavesNothingBehind(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() {
-				_, err := openTorrent(c, "magnet:?xt=urn:btih:"+strings.Repeat("ab", 20), cache, cfg, find)
+				_, err := openTorrent(c, "magnet:?xt=urn:btih:"+strings.Repeat("ab", 20), cache, cfg, find, nil)
 				done <- err
 			}()
 			dirs := filepath.Join(cache, "torrent-*")
@@ -267,7 +269,7 @@ func TestClosingAStreamRemovesItsDownload(t *testing.T) {
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cache := t.TempDir()
-	stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute)
+	stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +293,7 @@ func TestTheDownloadTakesNoNamesFromTheTorrent(t *testing.T) {
 	cache := t.TempDir()
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute)
+	stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +382,7 @@ func TestClosingMidDownloadDoesNotCrash(t *testing.T) {
 	for range 5 {
 		cache := t.TempDir()
 		c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute)
+		stream, err := openTorrent(c, magnet, cache, testConfig(t), time.Minute, nil)
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -416,7 +418,7 @@ func TestDeeplyNestedMetadataDoesNotCrash(t *testing.T) {
 	}
 	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if stream, err := openTorrent(c, file, t.TempDir(), testConfig(t), time.Minute); err == nil {
+	if stream, err := openTorrent(c, file, t.TempDir(), testConfig(t), time.Minute, nil); err == nil {
 		stream.close()
 		t.Fatal("opened a crafted torrent")
 	}
@@ -450,4 +452,57 @@ func TestDeepFileTreeDoesNotHang(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("still parsing after 10s")
 	}
+}
+
+func TestSwarmSaysPeersAndSpeed(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		peers int
+		rate  float64
+		want  string
+	}{
+		{0, 0, "0 peers, 0 B/s"},
+		{1, 512, "1 peer, 512 B/s"},
+		{3, 52_400, "3 peers, 52 KB/s"},
+		{14, 1_234_567, "14 peers, 1.2 MB/s"},
+	} {
+		if got := swarm(c.peers, c.rate); got != c.want {
+			t.Errorf("swarm(%d, %v) = %q, want %q", c.peers, c.rate, got, c.want)
+		}
+	}
+}
+
+// The swarm is reported only while the party waits on it, at the speed since the last tick
+// whether or not that one was said.
+func TestSwarmReportOnlyWhileWanted(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		c, cancel := context.WithCancel(t.Context())
+		var read atomic.Int64
+		var wanted atomic.Bool
+		wanted.Store(true)
+		said := make(chan string, 8)
+		go swarmReport(c, time.Second, func() (int, int64) { return 4, read.Load() }, wanted.Load, func(s string) { said <- s })
+		synctest.Wait() // it has read where the download starts
+		tick := func(bytes int64) {
+			read.Add(bytes)
+			time.Sleep(time.Second)
+			synctest.Wait()
+		}
+		tick(2e6)
+		wanted.Store(false)
+		tick(1e6)
+		wanted.Store(true)
+		tick(3e3)
+		cancel()
+		synctest.Wait()
+		close(said)
+		var got []string
+		for s := range said {
+			got = append(got, s)
+		}
+		if want := []string{"torrent: 4 peers, 2.0 MB/s", "torrent: 4 peers, 3 KB/s"}; !slices.Equal(got, want) {
+			t.Fatalf("said %q, want %q", got, want)
+		}
+	})
 }

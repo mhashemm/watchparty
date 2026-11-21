@@ -24,6 +24,7 @@ const (
 	pause          = "pause"
 	timePos        = "time-pos"
 	pausedForCache = "paused-for-cache"
+	cacheFill      = "cache-buffering-state"
 	playlistPos    = "playlist-pos"
 	filename       = "filename"
 	duration       = "duration"
@@ -414,8 +415,9 @@ type flight struct {
 // this node's own change, and whatever must follow it. Each is tagged in the step that
 // decided it, so its stamp is the one that change was given.
 func (c *Client) handleEvent(event Event, line []byte) [][]byte {
-	// mpv's own order, to read after a run; not its position while playing, one per frame
-	if event.Name != timePos || c.paused {
+	// mpv's own order, to read after a run; not its position while playing, one per frame,
+	// nor how full its cache is, which the buffering line says
+	if event.Name != timePos && event.Name != cacheFill || event.Name == timePos && c.paused {
 		log.Printf("Watch: mpv said: %s\n", line)
 	}
 	out, err := c.react(event)
@@ -638,9 +640,19 @@ func (c *Client) propertyChanged(event Event) ([][]byte, error) {
 		}
 		err = c.positionChanged()
 	case pausedForCache:
+		was := c.stalled
 		c.stalled = event.paused()
 		if c.stalled && !c.paused {
 			c.pauseParty("buffering", false)
+		}
+		if was && !c.stalled {
+			log.Println("buffering: done")
+		}
+		return nil, errDoNotSend
+	case cacheFill:
+		// 100 but while mpv waits on its cache, when it climbs a few times a second
+		if c.stalled {
+			log.Printf("buffering: %s%%\n", event.Data)
 		}
 		return nil, errDoNotSend
 	case playlistPos:
@@ -1061,6 +1073,7 @@ func (c *Client) open(err error) {
 type snapshot struct {
 	current, entries int
 	pos, duration    float64
+	buffering        bool
 }
 
 func (c *Client) snapshot() {
@@ -1069,7 +1082,7 @@ func (c *Client) snapshot() {
 		// the party's entry and second, wherever the person took this node's screen
 		current, pos = c.partyEntry, c.since
 	}
-	c.snap.Store(&snapshot{current: current, entries: len(c.names), pos: pos, duration: c.duration})
+	c.snap.Store(&snapshot{current: current, entries: len(c.names), pos: pos, duration: c.duration, buffering: c.stalled})
 }
 
 // mpvSaid is one line from mpv: an answer to a request, or an event.
@@ -1647,6 +1660,14 @@ func (c *Client) Position() (int, float64) {
 	return min(s.current+1, max(s.entries-1, 0)), 0
 }
 
+// observed are the properties New observes, as ids 1 and up
+var observed = []string{filename, timePos, pausedForCache, duration, cacheFill}
+
+// Buffering is mpv waiting on its cache (paused-for-cache).
+func (c *Client) Buffering() bool {
+	return c.snap.Load().buffering
+}
+
 // Finished is the last entry, or the only file, played to its end: nothing is left to
 // continue.
 func (c *Client) Finished() bool {
@@ -1699,7 +1720,6 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 
 	// the loop's first step, once the reader runs: observing makes mpv say what it holds
 	// pause comes from the script (acked), with every change mark
-	events := []string{filename, timePos, pausedForCache, duration}
 	client.later = append(client.later, func() {
 		// mpv makes a script's client before it runs any command (ORDER.md), so one sent to
 		// the script's name fails only if there is none: mpv couldn't load it, as it has no Lua
@@ -1711,7 +1731,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 			client.open(err)
 			return
 		}
-		for i, event := range events {
+		for i, event := range observed {
 			if err := client.do("observe_property_string", i+1, event); err != nil {
 				client.open(err)
 				return
