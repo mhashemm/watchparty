@@ -240,7 +240,7 @@ async function startParty(extra) {
 
 let run = 0, from = 0, state = {}, plan = null;
 function reset() {
-  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, leftPause: false, stopping: null,
+  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", unreachable: false, leftPause: false, stopping: null,
     shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
     myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false };
   $("log").textContent = "";
@@ -313,7 +313,6 @@ function handle(line) {
     state.waiting = /is not open yet/.test(msg);
     state.busy = /^relay: dial: 429 /.test(msg) ? "limited" : /^relay: dial: 503 /.test(msg) ? "full" : "";
   }
-  if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
   if (/^init done/.test(msg)) Object.assign(state, { ready: true, inAt: at, swarm: null });
   if (/^torrent: finding /.test(msg)) state.torrent = true;
   if (/^torrent: found /.test(msg)) state.found = true;
@@ -505,16 +504,18 @@ const notSameFile = () => $("playlist").checked
 
 function render(exitErr, refusal) {
   let text, bad = false, mood = "awake", walking = false, detail = null, pct = null;
-  const list = steps(), now = running && !state.rejected ? list.find(k => !stepDone(k)) : undefined;
+  const list = steps(), now = running ? list.find(k => !stepDone(k)) : undefined;
+  // the relay's rejection, as Run returned it
+  const rejected = !/^rejected by relay/.test(exitErr || "") ? "" : /not the same file/.test(exitErr) ? "file" : /did not open/.test(exitErr) ? "unopened" : /-createKey/.test(exitErr) ? "key" : "secret";
   if (refusal) {
     text = refusedFor(refusal); bad = true;
-  } else if (state.rejected === "file") {
+  } else if (rejected === "file") {
     text = notSameFile(); bad = true;
-  } else if (state.rejected === "unopened") {
+  } else if (rejected === "unopened") {
     text = "Diagnosis: nobody opened this room for 30 minutes. Start again once someone with the create key is in."; bad = true;
-  } else if (state.rejected === "key") {
+  } else if (rejected === "key") {
     text = "Diagnosis: this relay needs a create key to open a new party. Add it in Settings and start again."; bad = true;
-  } else if (state.rejected) {
+  } else if (rejected) {
     text = "Diagnosis: the relay rejected this room or secret. Check the invite and start again."; bad = true;
   } else if (running && state.waiting) {
     text = "Waiting for the host to open this room. It starts by itself once they're in."; walking = true;

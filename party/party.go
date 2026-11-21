@@ -235,6 +235,11 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 	cmd.Stdout, cmd.Stderr = out, out
 
 	if err := cmd.Start(); err != nil {
+		// the party stopped before mpv started, as when the relay refuses at once: why it
+		// stopped, not exec's "context canceled"
+		if c.Err() != nil {
+			return outcome(parent, c, false, nil)
+		}
 		return err
 	}
 	defer cmd.Cancel()

@@ -167,8 +167,8 @@ func (r *relayConn) Connect(c context.Context, stop context.CancelCauseFunc) {
 	backoff, dropped := r.retry, false
 	for c.Err() == nil {
 		conn, err := r.dial(c)
+		// Run returns it, and the CLI prints it or the GUI diagnoses it, once
 		if errors.Is(err, errRejected) {
-			log.Printf("relay: %s\n", err)
 			stop(err)
 			return
 		}

@@ -10,8 +10,11 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mhashemm/watchparty/mpv"
 )
 
 // Only the content counts: a copy under another name and folder, with another
@@ -161,6 +164,21 @@ func TestOutcomeFollowsTheFactsInOrder(t *testing.T) {
 		if got := outcome(c.parent, c.c, c.quit, c.err); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A relay can refuse before mpv has started. exec then says only "context canceled"; Run
+// must say why the party stopped.
+func TestAStopBeforeMpvStartsSaysWhy(t *testing.T) {
+	t.Parallel()
+	rejected := errors.New("rejected by relay: 409 Conflict")
+	c, stop := context.WithCancelCause(context.Background())
+	stop(rejected)
+	var playing atomic.Pointer[mpv.Client]
+	v := video{entries: []entry{{file: "video.mkv", name: "video.mkv"}}}
+	err := runMpv(context.Background(), c, func() {}, Config{Mpv: os.Args[0]}, v, 0, make(chan mpv.IncomingMessage), make(chan []byte), &playing)
+	if err != rejected {
+		t.Fatalf("got %v, want %v", err, rejected)
 	}
 }
 
