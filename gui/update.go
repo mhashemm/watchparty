@@ -99,14 +99,15 @@ type tool struct {
 	Steps   []string `json:"steps,omitempty"`
 }
 
-// the flag that prints a version, and which word of its first line is the version
+// versionFlags is, per tool, the flag that prints its version and which word of the first
+// line is the version.
 var versionFlags = map[string]struct {
 	flag string
 	word int
 }{"mpv": {"--version", 1}, "ffmpeg": {"-version", 2}, "yt-dlp": {"--version", 0}}
 
-// About's rows: each tool's version and path, how to update the installer's yt-dlp, which
-// breaks as sites change, and for a missing one how to install it by hand
+// tools answers About's rows: each tool's version and path, how to update the installer's
+// yt-dlp (it breaks as sites change), and for a missing tool how to install it by hand.
 func (g *gui) tools(w http.ResponseWriter, r *http.Request) {
 	list := []tool{}
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
@@ -135,8 +136,8 @@ func (g *gui) tools(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-// cmd on PATH, else for ffmpeg and yt-dlp the installer's copy; mpv's cmd is already
-// defaultMpv's choice or the path set in Settings
+// probe finds a tool and its version: cmd on PATH, else for ffmpeg and yt-dlp the
+// installer's copy. For mpv, cmd is already defaultMpv's choice or the path in Settings.
 func probe(ctx context.Context, name, cmd string) (path, version string) {
 	path, err := exec.LookPath(cmd)
 	if err != nil && cmd == name {
@@ -161,7 +162,7 @@ func probe(ctx context.Context, name, cmd string) (path, version string) {
 	return path, version
 }
 
-// by hand, what setup.nsi and install.sh do
+// installSteps are the steps to install a tool by hand: what setup.nsi and install.sh do.
 func installSteps(goos, name, appDir string) []string {
 	if goos != "windows" {
 		return []string{"Install Homebrew from brew.sh if you don't have it.", "Run brew install " + name + " in Terminal."}

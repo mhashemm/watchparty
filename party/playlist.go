@@ -15,9 +15,9 @@ import (
 // VideoExts is what counts as a video, in a folder and in the GUI's pickers.
 var VideoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".ogv", ".3gp", ".rmvb"}
 
-// media resolves -file. With siblings, a file also brings the other videos in its folder,
-// starting on it. That list's identity is its videos in order, so everyone's next entry
-// is the same one. A URL or a file the list wouldn't hold plays alone.
+// media resolves -file. With siblings, a file brings the other videos in its folder too,
+// starting on it. The list's identity is its videos in order, so everyone's next entry is
+// the same. A URL, or a file the list wouldn't hold, plays alone.
 func media(path string, siblings bool) (files []string, start int, playlist bool, id string, err error) {
 	if siblings {
 		files, start = neighbours(path)
@@ -39,8 +39,8 @@ func media(path string, siblings bool) (files []string, start int, playlist bool
 	return files, start, true, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// checking says which file is being fingerprinted: a big folder on a slow disk takes a while.
-// A URL is identified by its text, at once.
+// checking logs which file is being fingerprinted, as a big folder on a slow disk takes a
+// while. A URL is identified by its text, at once.
 func checking(i, n int, path string) {
 	if strings.Contains(path, "://") {
 		return

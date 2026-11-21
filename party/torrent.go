@@ -31,16 +31,16 @@ func isTorrent(target string) bool {
 	return strings.HasPrefix(lower, "magnet:") || (strings.HasSuffix(lower, ".torrent") && !strings.Contains(lower, "://"))
 }
 
-// findFor is how long a torrent may take to get its metadata: it is tiny, so any peer sends
-// it within seconds, and none in this long means nobody is sharing it.
+// findFor is how long a torrent may take to get its metadata. The metadata is tiny, so any
+// peer sends it within seconds; none in this long means nobody is sharing it.
 const findFor = 5 * time.Minute
 
-// reportEvery is how often the swarm is reported while the party waits on it
+// reportEvery is how often the swarm is reported while the party waits on it.
 const reportEvery = 2 * time.Second
 
-// swarmReport says how the swarm does every so often, but only while wanted: the party waits on
-// it while it finds peers, while mpv opens the video and while mpv buffers. Played smoothly, it
-// says nothing, or the log would grow a line every few seconds for hours.
+// swarmReport logs the swarm's peers and speed every so often, but only while wanted: while
+// the party waits on it to find peers, to open the video, or to buffer. While the video plays
+// smoothly it says nothing, or the log would grow a line every few seconds for hours.
 func swarmReport(c context.Context, every time.Duration, stats func() (peers int, read int64), wanted func() bool, say func(string)) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
@@ -60,7 +60,7 @@ func swarmReport(c context.Context, every time.Duration, stats func() (peers int
 	}
 }
 
-// swarm is "3 peers, 1.2 MB/s"
+// swarm is "3 peers, 1.2 MB/s".
 func swarm(peers int, rate float64) string {
 	s := strconv.Itoa(peers) + " peers, "
 	if peers == 1 {
@@ -75,8 +75,8 @@ func swarm(peers int, rate float64) string {
 	return s + strconv.FormatFloat(rate, 'f', 0, 64) + " B/s"
 }
 
-// errNoPeers is a torrent nobody sent the metadata of within findFor. The GUI shows it as
-// the diagnosis, so it says findFor in words.
+// errNoPeers: nobody sent the torrent's metadata within findFor. The GUI shows it as the
+// diagnosis, so it says findFor in words.
 var errNoPeers = errors.New("no peer sent this torrent's details within 5 minutes, so nobody seems to be sharing it")
 
 func torrentConfig() *torrent.ClientConfig {
@@ -96,11 +96,11 @@ type torrentStream struct {
 	close func()
 }
 
-// playable picks what a torrent plays: its videos in natural order, without samples, or
-// anything under a tenth of the largest, which keeps a trailer from playing before the main video.
-// ponytail: a size guess, so a short video among long ones is dropped too; a
-// way to choose files is the upgrade. A torrent with no videos plays its largest file and
-// leaves the failing to mpv.
+// playable picks what a torrent plays: its videos in natural order, without samples or
+// anything under a tenth of the largest, which keeps a trailer from playing before the main
+// video. The size rule is a guess, so a short video among long ones is dropped too; letting
+// people choose files would fix it. A torrent with no videos plays its largest file, and
+// leaves failing to mpv.
 func playable(files []*torrent.File) []*torrent.File {
 	largest := slices.MaxFunc(files, func(a, b *torrent.File) int { return cmp.Compare(a.Length(), b.Length()) })
 	videos := slices.DeleteFunc(slices.Clone(files), func(f *torrent.File) bool {
@@ -141,7 +141,7 @@ func torrentCache(chosen string) (string, error) {
 }
 
 // openTorrent waits up to find for the torrent's metadata, then serves what it plays to mpv
-// on loopback. Nothing downloads but what mpv reads, so only the video playing buffers. It
+// on loopback. Only what mpv reads is downloaded, so only the playing video buffers. It
 // downloads into a new folder in cache, which close removes.
 func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig, find time.Duration, added func(*torrent.Torrent)) (*torrentStream, error) {
 	dir, err := os.MkdirTemp(cache, "torrent-*")

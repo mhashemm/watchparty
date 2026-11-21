@@ -202,7 +202,7 @@ func (s *store) observe(i int, line string) {
 }
 
 // note is observe without the save: it reports whether there is something to save, so
-// gui.Write can do that after letting go of g.mu.
+// gui.Write can save after releasing g.mu.
 func (s *store) note(i int, line string) bool {
 	person := ""
 	if after, ok := strings.CutPrefix(message(line), "your address to share is "); ok {

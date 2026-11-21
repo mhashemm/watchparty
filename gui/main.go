@@ -232,7 +232,7 @@ func (g *gui) Write(p []byte) (int, error) {
 		}
 	}
 	for news := range g.news {
-		// one waiting is enough: the page reads every line since its last
+		// one nudge waiting is enough: the page reads every line since its last poll
 		select {
 		case news <- struct{}{}:
 		default:
@@ -408,7 +408,7 @@ func defaultMpv() string {
 	return cmp.Or(sibling("mpv"+exeSuffix), ownCopy("mpv"), "mpv")
 }
 
-// the copy setup.nsi put in the app's folder, or ""
+// ownCopy is the copy of a tool setup.nsi put in the app's folder, or "".
 func ownCopy(name string) string {
 	dir := name
 	if name == "ffmpeg" {
@@ -453,9 +453,9 @@ type browser struct {
 	root string
 }
 
-// profilePrefs seeds each window's profile: no password manager, and no download bubble,
-// which an --app window has no toolbar button to anchor to, so Chromium draws it as a blank
-// box clipped at the window's edge; the page says where Save chart put the file instead
+// profilePrefs seeds each window's profile: no password manager, and no download bubble.
+// An --app window has no toolbar button to anchor the bubble to, so Chromium draws it as a
+// blank box clipped at the window's edge; the page says where Save chart put the file.
 const profilePrefs = `{"credentials_enable_service":false,"profile":{"password_manager_enabled":false},"download_bubble":{"partial_view_enabled":false}}`
 
 func newProfile(root string) (string, error) {
