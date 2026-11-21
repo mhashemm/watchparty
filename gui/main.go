@@ -29,8 +29,26 @@ import (
 	"github.com/mhashemm/watchparty/update"
 )
 
-//go:embed index.html
-var page []byte
+// The page's sources are three files an editor understands on its own; the browser gets one
+// page, as only GET / is open without the token (CLAUDE.md).
+var (
+	//go:embed index.html
+	pageHTML string
+	//go:embed app.css
+	pageCSS string
+	//go:embed app.js
+	pageJS string
+
+	page = inline(pageHTML, pageCSS, pageJS)
+)
+
+// inline puts css and js into html in place of the tags that load them. The tags are
+// matched without their line ending, which a Windows checkout turns into CRLF.
+func inline(html, css, js string) []byte {
+	html = strings.Replace(html, `<link rel="stylesheet" href="app.css">`, "<style>\n"+css+"</style>", 1)
+	html = strings.Replace(html, `<script src="app.js"></script>`, "<script>\n"+js+"</script>", 1)
+	return []byte(html)
+}
 
 type form struct {
 	Mode      string `json:"mode"`
