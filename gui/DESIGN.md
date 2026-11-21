@@ -1,6 +1,6 @@
 # gui/DESIGN.md
 
-The look of `index.html`. Read it before any visual change; `gui/CLAUDE.md` has the
+The look of the page (`index.html`, `app.css`). Read it before any visual change; `gui/CLAUDE.md` has the
 code. The visual identity is part of the product, so keep it:
 
 - a forest-floor palette of greens and browns
@@ -12,7 +12,7 @@ code. The visual identity is part of the product, so keep it:
 
 Visual taste is the user's call, and guessing has repeatedly gone wrong.
 
-1. Make the change in a **sandbox copy** of `index.html` (or a standalone SVG) outside
+1. Make the change in a **sandbox copy** of `index.html` with `app.css` and `app.js` beside it (or a standalone SVG) outside
    the repo.
 2. Render it (below). For a face change, render it next to the current version and any
    reference the user gave.

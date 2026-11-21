@@ -174,8 +174,9 @@ The download, SHA-256 check and binary swap live in the `update` package
     Vivaldi, in `/Applications` then `~/Applications`, the binary inside the `.app`.
   - If everything fails, the log says `gui: no browser could be opened` with the URL.
 
-## Page script (`index.html`)
+## Page script (`app.js`)
 
+- **`index.html`, `app.css`, `app.js` are served as one page** (`inline`): only `GET /` skips the token.
 - **One syntax error kills every button** while the server still answers.
   `TestPageScriptParses` parses the script with Node's `vm.Script`.
 - `[hidden] { display: none !important; }` is required, or `.grid`'s `display:grid` shows hidden fields.
@@ -187,7 +188,7 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 ## Log lines
 
-`handle()` in `index.html` and `store.go`'s `observe` react only to log lines; the table
+`handle()` in `app.js` and `store.go`'s `observe` react only to log lines; the table
 of which lines, and who prints them, is in the root `CLAUDE.md`.
 **Both read them only right after the 20-byte timestamp, never as a substring:** `refused
 <header>` and `upnp:` lines put a stranger's text mid-line, and it can spell any of them.

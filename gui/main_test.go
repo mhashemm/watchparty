@@ -79,6 +79,17 @@ func TestGuard(t *testing.T) {
 	}
 }
 
+// The browser can't fetch app.css or app.js: only GET / is open without the token, so a tag
+// inline didn't replace would serve a page with no style or no script.
+func TestPageInlinesItsStyleAndScript(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{`href="app.css"`, `src="app.js"`} {
+		if bytes.Contains(page, []byte(tag)) {
+			t.Errorf("the page still loads %s instead of inlining it", tag)
+		}
+	}
+}
+
 // One syntax error anywhere in the page's script kills every button, and nothing
 // on the Go side notices. vm.Script parses it the way a browser parses a classic
 // <script>: no top-level await, no top-level return.
