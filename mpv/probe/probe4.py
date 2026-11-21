@@ -3,7 +3,7 @@ pause and time-pos, and the node hears the entry and the cache from mpv's own re
 snapshot here is the script's message with the entry and cache mpv last reported, and mpv's
 reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
 entry and to one mpv can't open.
-Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang> <rounds>. Under load:
+Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang|ahead> <rounds>. Under load:
 python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
 import http.server, os, socketserver, sys, tempfile, threading, time
 from typing import Any
@@ -11,7 +11,7 @@ from typing import Any
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
 from probe import OFFSETS_MS, race, ready, reply
-from probe2 import FAILED, HARMLESS, M, fnear, get, num, person_conn, report, setpos, stopped, tally
+from probe2 import FAILED, HARMLESS, M, Slow, fnear, get, num, person_conn, report, setpos, stopped, tally
 from probe3 import Wp3
 _VIEW = {}
 
@@ -494,6 +494,39 @@ class Shipped(Wp3):
         report("away", rounds, errors, shapes)
 
     # A move to a stream that hangs in each way: how long until the go is acked, and by what.
+    # What a slow member tells the party (mpv/CLAUDE.md, `ahead`): mpv must call a stream "via
+    # network" and a local file not, or a file would say it is slow or a stream never would; and
+    # paused, it must keep loading the stream, or the seconds ready it tells never grow.
+    def ahead(self, rounds):
+        srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), lambda *a, **k: Slow(*a, directory=HERE, **k))
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/net.mkv"
+        errors = {"file-via-network": [], "stream-not-via-network": [], "not-growing": []}
+        shapes = {}
+        for r in range(rounds):
+            m = self.M(os.path.join(HERE, "p1.mkv"), self.WP)
+            ready(m, [])
+            local = get(m, "demuxer-via-network")
+            if local != "no":
+                errors["file-via-network"].append((r, local))
+            m.stop()
+            m = self.M(url, self.WP)
+            ready(m, [])
+            net = get(m, "demuxer-via-network")
+            if net != "yes":
+                errors["stream-not-via-network"].append((r, net))
+            # served at about half its bitrate: paused 3s, about 1.5s more is ready
+            before = num(m, "demuxer-cache-duration")
+            time.sleep(3)
+            after = num(m, "demuxer-cache-duration")
+            if after < before + 0.5:
+                errors["not-growing"].append((r, before, after))
+            tally(shapes, (f"file {local}", f"stream {net}", f"paused 3s: +{round(after - before)}s ready"))
+            m.stop()
+        srv.shutdown()
+        report("ahead", rounds, errors, shapes)
+
     def hang(self, rounds):
         errors = {"never-acked": []}
         shapes = {}

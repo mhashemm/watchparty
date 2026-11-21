@@ -93,7 +93,7 @@ config still applies, for example `keep-open` (see "Ending").
 - **`demuxer-cache-duration`** (RO): seconds cached ahead; about 4 changes a second on a
   stream, 2 on a local file, and it keeps growing while paused (0.4s to 13.6s over 21s paused,
   same stream). **`demuxer-via-network`**: `no` for a local file, `yes` over HTTP, our
-  loopback torrent stream too. Both 0.37.0, 2026-11-21.
+  loopback torrent stream too. Both 0.37.0, 0.40.0 and 0.42.0, 2026-11-21; weekly: `probe4.py ahead`.
 - **`time-pos`** (RW): the position in seconds. **When unavailable** (no file yet, or quitting)
   **the `property-change` event has no `data` field at all**, which unmarshals to `Data == ""`.
 - **`filename`** (RO): percent-decoded for a URL; it can hold a newline, so it is logged as JSON. Probed on 0.37.0. It fires only when the
