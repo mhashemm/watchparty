@@ -20,29 +20,25 @@ var VideoExts = []string{".mkv", ".mp4", ".m4v", ".webm", ".avi", ".mov", ".wmv"
 // the same. A URL, or a file the list wouldn't hold, plays alone.
 func media(path string, siblings bool) (video, error) {
 	var v video
+	var files []string
 	if siblings {
-		v.files, v.start = neighbours(path)
+		files, v.start = neighbours(path)
 	}
-	v.playlist = v.files != nil
+	v.playlist = files != nil
 	if !v.playlist {
-		v.files = []string{path}
+		files = []string{path}
 	}
 	h := sha256.New()
-	for i, f := range v.files {
-		checking(i+1, len(v.files), f)
-		sum, err := fingerprint(f)
+	for i, f := range files {
+		checking(i+1, len(files), f)
+		sum, size, err := fingerprint(f)
 		if err != nil {
 			return video{}, err
 		}
-		var size int64
-		if st, err := os.Stat(f); err == nil {
-			size = st.Size()
-		}
-		v.names = append(v.names, filepath.Base(f))
-		v.sums, v.sizes = append(v.sums, sum), append(v.sizes, size)
+		v.entries = append(v.entries, entry{file: f, name: filepath.Base(f), sum: sum, size: size})
 		h.Write([]byte(sum))
 	}
-	v.id = v.sums[0]
+	v.id = v.entries[0].sum
 	if v.playlist {
 		v.id = hex.EncodeToString(h.Sum(nil))
 	}

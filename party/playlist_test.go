@@ -39,8 +39,8 @@ func TestPlaylistHoldsTheFoldersVideosAndStartsOnTheFile(t *testing.T) {
 		t.Fatal(v.playlist, err)
 	}
 	names := []string{}
-	for _, f := range v.files {
-		names = append(names, filepath.Base(f))
+	for _, e := range v.entries {
+		names = append(names, filepath.Base(e.file))
 	}
 	if want := []string{"e1.webm", "e2.MP4", "e10.mkv"}; !slices.Equal(names, want) {
 		t.Fatalf("got %q, want %q", names, want)
@@ -91,9 +91,9 @@ func TestWhatPlaysAlone(t *testing.T) {
 		filepath.Join(dir, "odd.xyz"): true,
 	} {
 		v, err := media(target, siblings)
-		want, _ := fingerprint(target)
-		if err != nil || v.playlist || !slices.Equal(v.files, []string{target}) || v.id != want {
-			t.Fatalf("%s: got %q %v %s %v", target, v.files, v.playlist, v.id, err)
+		want, _, _ := fingerprint(target)
+		if err != nil || v.playlist || len(v.entries) != 1 || v.entries[0].file != target || v.id != want {
+			t.Fatalf("%s: got %+v %v %s %v", target, v.entries, v.playlist, v.id, err)
 		}
 	}
 }

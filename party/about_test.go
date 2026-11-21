@@ -28,10 +28,10 @@ func TestTheRecordNamesWhatThePartyPlays(t *testing.T) {
 	t.Parallel()
 	v := load(t, map[string]string{"e1.mkv": "a", "e2.mkv": "bb", "e3.mkv": "c"}, "e2.mkv", true)
 	a := v.about()
-	if a.Kind != "" || a.Name != "e2.mkv" || a.Size != 2 || a.Sum != v.sums[1][:shown] || a.Videos != 3 || a.Playlist != v.id[:shown] {
+	if a.Kind != "" || a.Name != "e2.mkv" || a.Size != 2 || a.Sum != v.entries[1].sum[:shown] || a.Videos != 3 || a.Playlist != v.id[:shown] {
 		t.Fatalf("a playlist: %+v", a)
 	}
-	if want := v.sums[0][:2*short] + v.sums[1][:2*short] + v.sums[2][:2*short]; fmt.Sprintf("%x", a.Sums) != want {
+	if want := v.entries[0].sum[:2*short] + v.entries[1].sum[:2*short] + v.entries[2].sum[:2*short]; fmt.Sprintf("%x", a.Sums) != want {
 		t.Fatalf("sums %x, want %s", a.Sums, want)
 	}
 	if a := load(t, map[string]string{"e1.mkv": "a"}, "e1.mkv", false).about(); a.Videos != 0 || a.Sums != nil || a.Sum == "" {
@@ -41,7 +41,7 @@ func TestTheRecordNamesWhatThePartyPlays(t *testing.T) {
 	if v, err := media(link, false); err != nil || v.about().Name != link || v.about().Kind != "link" || v.about().Sum != "" {
 		t.Fatalf("a link: %+v %v", v.about(), err)
 	}
-	torrent := video{files: []string{"http://127.0.0.1:1/t/0/a.mkv"}, names: []string{"a.mkv"}, sizes: []int64{5}, infohash: strings.Repeat("ab", 20)}
+	torrent := video{entries: []entry{{file: "http://127.0.0.1:1/t/0/a.mkv", name: "a.mkv", size: 5}}, infohash: strings.Repeat("ab", 20)}
 	if a := torrent.about(); a.Kind != "torrent" || a.Sum != strings.Repeat("ab", 6) || a.Name != "a.mkv" {
 		t.Fatalf("a torrent: %+v", a)
 	}
@@ -54,8 +54,7 @@ func TestTheRecordTravelsSafely(t *testing.T) {
 	playlist := func(n int, name string) video {
 		v := video{playlist: true, id: strings.Repeat("f", 64)}
 		for range n {
-			v.files, v.names = append(v.files, name), append(v.names, name)
-			v.sums, v.sizes = append(v.sums, strings.Repeat("a", 64)), append(v.sizes, 1)
+			v.entries = append(v.entries, entry{file: name, name: name, sum: strings.Repeat("a", 64), size: 1})
 		}
 		return v
 	}
@@ -104,7 +103,7 @@ func TestARefusalSaysWhatDiffers(t *testing.T) {
 	t.Parallel()
 	abc := map[string]string{"e1.mkv": "a", "e2.mkv": "b", "e3.mkv": "c"}
 	theirs := func(v video) *server.DifferentFile { return &server.DifferentFile{Video: v.about().header()} }
-	sum := func(v video, i int) string { return v.sums[i][:2*short] }
+	sum := func(v video, i int) string { return v.entries[i].sum[:2*short] }
 
 	one, other := load(t, map[string]string{"one.mkv": "aaaa"}, "one.mkv", false), load(t, map[string]string{"other.mkv": "bb"}, "other.mkv", false)
 	folder := load(t, abc, "e1.mkv", true)
@@ -112,7 +111,7 @@ func TestARefusalSaysWhatDiffers(t *testing.T) {
 	longer := load(t, map[string]string{"e1.mkv": "a", "e2.mkv": "b", "e3.mkv": "c", "e4.mkv": "d"}, "e1.mkv", true)
 	shorter := load(t, map[string]string{"e1.mkv": "a", "e2.mkv": "b"}, "e1.mkv", true)
 	link := func(q string) video { v, _ := media("https://example.com/watch?v="+q, false); return v }
-	torrent := video{files: []string{"http://127.0.0.1:1/t/0/one.mkv"}, names: []string{"one.mkv"}, sizes: []int64{4}, infohash: strings.Repeat("ab", 20)}
+	torrent := video{entries: []entry{{file: "http://127.0.0.1:1/t/0/one.mkv", name: "one.mkv", size: 4}}, infohash: strings.Repeat("ab", 20)}
 	// the party's, as if too long to list
 	bigAbout := folder.about()
 	bigAbout.Sums = nil
@@ -126,16 +125,16 @@ func TestARefusalSaysWhatDiffers(t *testing.T) {
 		differs []string
 		detail  string
 	}{
-		{"files", theirs(one), other, "", fmt.Sprintf("your video is not the same file as the party's:\n  the party's: one.mkv · 4 bytes · checksum %s\n  yours:       other.mkv · 2 bytes · checksum %s", one.sums[0][:shown], other.sums[0][:shown]), []string{"Video", "Size", "Checksum"}, ""},
+		{"files", theirs(one), other, "", fmt.Sprintf("your video is not the same file as the party's:\n  the party's: one.mkv · 4 bytes · checksum %s\n  yours:       other.mkv · 2 bytes · checksum %s", one.entries[0].sum[:shown], other.entries[0].sum[:shown]), []string{"Video", "Size", "Checksum"}, ""},
 		{"box unticked", theirs(folder), load(t, abc, "e1.mkv", false), "tick", "the party plays a playlist of 3 videos, and you picked one file: tick the box under File (-playlist)", []string{"Videos"}, ""},
 		{"box ticked", theirs(one), folder, "untick", "the party plays one file, and you picked a playlist of 3 videos: untick the box under File (no -playlist)", []string{"Video", "Size", "Checksum", "Videos"}, ""},
-		{"one video differs", theirs(folder), changed, "", fmt.Sprintf("your playlist is not the same file as the party's: video 2 of 3 differs\n  the party's: checksum %s\n  yours:       e2.mkv · 1 byte · checksum %s", sum(folder, 1), sum(changed, 1)), []string{"Checksum"}, "They differ at video 2 of 3. Yours is e2.mkv, 1 byte."},
-		{"yours goes on", theirs(folder), longer, "", "your playlist is not the same file as the party's: yours has 4 videos and the party's 3\n  yours goes on with e4.mkv", []string{"Videos"}, "Yours goes on with e4.mkv, after the party's last video."},
-		{"the party's goes on", theirs(folder), shorter, "", "your playlist is not the same file as the party's: yours has 2 videos and the party's 3\n  the party's goes on after your e2.mkv", []string{"Videos"}, "The party's goes on after your e2.mkv."},
-		{"a playlist too long to list", &server.DifferentFile{Video: bigAbout.header()}, changed, "", fmt.Sprintf("your playlist is not the same file as the party's:\n  the party's: e1.mkv · 1 byte · checksum %s\n               3 videos · playlist checksum %s\n  yours:       e1.mkv · 1 byte · checksum %s\n               3 videos · playlist checksum %s", folder.sums[0][:shown], folder.id[:shown], changed.sums[0][:shown], changed.id[:shown]), []string{"Playlist checksum"}, ""},
+		{"one video differs", theirs(folder), changed, "", fmt.Sprintf("your playlist is not the same file as the party's. They differ at video 2 of 3. Yours is e2.mkv, 1 byte.\n  the party's: checksum %s\n               3 videos\n  yours:       checksum %s\n               3 videos", sum(folder, 1), sum(changed, 1)), []string{"Checksum"}, "They differ at video 2 of 3. Yours is e2.mkv, 1 byte."},
+		{"yours goes on", theirs(folder), longer, "", "your playlist is not the same file as the party's. Yours goes on with e4.mkv, after the party's last video.\n  the party's: 3 videos\n  yours:       4 videos", []string{"Videos"}, "Yours goes on with e4.mkv, after the party's last video."},
+		{"the party's goes on", theirs(folder), shorter, "", "your playlist is not the same file as the party's. The party's goes on after your e2.mkv.\n  the party's: 3 videos\n  yours:       2 videos", []string{"Videos"}, "The party's goes on after your e2.mkv."},
+		{"a playlist too long to list", &server.DifferentFile{Video: bigAbout.header()}, changed, "", fmt.Sprintf("your playlist is not the same file as the party's:\n  the party's: e1.mkv · 1 byte · checksum %s\n               3 videos · playlist checksum %s\n  yours:       e1.mkv · 1 byte · checksum %s\n               3 videos · playlist checksum %s", folder.entries[0].sum[:shown], folder.id[:shown], changed.entries[0].sum[:shown], changed.id[:shown]), []string{"Playlist checksum"}, ""},
 		{"links", theirs(link("abc")), link("xyz"), "", "your video is not the same file as the party's:\n  the party's: https://example.com/watch?v=abc\n  yours:       https://example.com/watch?v=xyz", []string{"Video"}, ""},
 		// the box doesn't make a torrent a playlist, and an infohash is no checksum
-		{"a torrent", theirs(torrent), one, "", fmt.Sprintf("your video is not the same file as the party's:\n  the party's: one.mkv · 4 bytes · infohash %s\n  yours:       one.mkv · 4 bytes · checksum %s", strings.Repeat("ab", 6), one.sums[0][:shown]), nil, "The party plays a torrent, and you picked a file."},
+		{"a torrent", theirs(torrent), one, "", "your video is not the same file as the party's. The party plays a torrent, and you picked a file.\n  the party's: one.mkv · 4 bytes\n  yours:       one.mkv · 4 bytes", nil, "The party plays a torrent, and you picked a file."},
 	} {
 		var e *NotTheSameFile
 		if !errors.As(differs(c.theirs, c.ours), &e) {

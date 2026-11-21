@@ -37,7 +37,7 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 	}
 	sum := func(path string) string {
 		t.Helper()
-		s, err := fingerprint(path)
+		s, _, err := fingerprint(path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +62,7 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 			t.Errorf("%d bytes: a longer file kept the fingerprint", size)
 		}
 	}
-	if _, err := fingerprint(dir); err == nil {
+	if _, _, err := fingerprint(dir); err == nil {
 		t.Error("a folder got a fingerprint")
 	}
 }
@@ -70,12 +70,12 @@ func TestFingerprintIsContentOnly(t *testing.T) {
 // mpv plays URLs too. Nothing is fetched: the same URL is the same video.
 func TestFingerprintOfAURLIsTheURL(t *testing.T) {
 	t.Parallel()
-	a, err := fingerprint("https://example.com/video.mkv")
+	a, _, err := fingerprint("https://example.com/video.mkv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := fingerprint("https://example.com/video.mkv")
-	c, _ := fingerprint("https://example.com/other.mkv")
+	b, _, _ := fingerprint("https://example.com/video.mkv")
+	c, _, _ := fingerprint("https://example.com/other.mkv")
 	if a != b || a == c {
 		t.Errorf("same URL matched: %v, different URL matched: %v", a == b, a == c)
 	}

@@ -41,24 +41,24 @@ const (
 )
 
 func (v video) about() About {
-	file := v.files[v.start]
-	a := About{Name: v.names[v.start], Size: v.sizes[v.start]}
+	opened := v.entries[v.start]
+	a := About{Name: opened.name, Size: opened.size}
 	switch {
 	case v.infohash != "":
 		a.Kind, a.Sum = "torrent", v.infohash[:shown]
-	case strings.Contains(file, "://"):
-		a.Kind, a.Name = "link", file
+	case strings.Contains(opened.file, "://"):
+		a.Kind, a.Name = "link", opened.file
 	default:
-		a.Sum = v.sums[v.start][:shown]
+		a.Sum = opened.sum[:shown]
 		if v.playlist {
-			for _, s := range v.sums {
-				b, _ := hex.DecodeString(s[:2*short])
+			for _, e := range v.entries {
+				b, _ := hex.DecodeString(e.sum[:2*short])
 				a.Sums = append(a.Sums, b...)
 			}
 		}
 	}
 	if v.playlist {
-		a.Videos, a.Playlist = len(v.files), v.id[:shown]
+		a.Videos, a.Playlist = len(v.entries), v.id[:shown]
 	}
 	a.Name = flatten(a.Name)
 	if r := []rune(a.Name); len(r) > maxName {
@@ -90,17 +90,18 @@ func parseAbout(h string) (About, bool) {
 }
 
 // NotTheSameFile is a refusal for another file that says what differs, which the GUI shows
-// as it is. Rows are the facts both sides have, the party's beside yours, so no cell is
-// ever empty; Detail says what only one side has, as the page's detail line ([bold, plain]
-// pairs). Box is "tick" or "untick" when the check mark under File is the difference;
-// Videos is then the party's count.
+// as it is and the CLI as text made from the same facts. Rows are the facts both sides
+// have, the party's beside yours, so no cell is ever empty; Detail says what only one side
+// has, as the page's detail line ([bold, plain] pairs). Box is "tick" or "untick" when the
+// check mark under File is the difference; Videos is the party's count.
 type NotTheSameFile struct {
 	Box      string      `json:"box,omitempty"`
 	Videos   int         `json:"videos,omitempty"`
 	Playlist bool        `json:"playlist"`
 	Detail   [][2]string `json:"detail,omitempty"`
 	Rows     []Row       `json:"rows"`
-	text     string
+	// yours is our count, for the CLI's untick
+	yours int
 }
 
 // Row is one fact both sides have. Differs: they differ.
@@ -112,7 +113,57 @@ type Row struct {
 	Differs bool   `json:"differs,omitempty"`
 }
 
-func (e *NotTheSameFile) Error() string { return e.text }
+func (e *NotTheSameFile) Error() string {
+	switch e.Box {
+	case "tick":
+		return fmt.Sprintf("the party plays a playlist of %s, and you picked one file: tick the box under File (-playlist)", countVideos(e.Videos))
+	case "untick":
+		return fmt.Sprintf("the party plays one file, and you picked a playlist of %s: untick the box under File (no -playlist)", countVideos(e.yours))
+	}
+	what := "video"
+	if e.yours > 0 {
+		what = "playlist"
+	}
+	s := "your " + what + " is not the same file as the party's:"
+	if len(e.Detail) > 0 {
+		// the detail line is one sentence, its bold parts plain here
+		var sentence strings.Builder
+		for _, d := range e.Detail {
+			sentence.WriteString(d[0] + d[1])
+		}
+		s = "your " + what + " is not the same file as the party's. " + sentence.String()
+	}
+	return s + "\n  the party's: " + side(e.Rows, func(r Row) string { return r.Party }) +
+		"\n  yours:       " + side(e.Rows, func(r Row) string { return r.Yours })
+}
+
+// side is one side's rows in a line: the video, then a playlist's on a second line.
+func side(rows []Row, of func(Row) string) string {
+	var video, playlist []string
+	for _, r := range rows {
+		v := of(r)
+		switch r.Label {
+		case "Checksum", "Infohash", "Playlist checksum":
+			v = strings.ToLower(r.Label) + " " + v
+		case "Videos":
+			if n, err := strconv.Atoi(v); err == nil {
+				v = countVideos(n)
+			}
+		}
+		if r.Label == "Videos" || r.Label == "Playlist checksum" {
+			playlist = append(playlist, v)
+		} else {
+			video = append(video, v)
+		}
+	}
+	switch {
+	case len(video) == 0:
+		return strings.Join(playlist, " · ")
+	case len(playlist) == 0:
+		return strings.Join(video, " · ")
+	}
+	return strings.Join(video, " · ") + "\n               " + strings.Join(playlist, " · ")
+}
 
 // refusedFile turns a refusal for this node's file, from either transport, into what
 // differs between the party's video and ours.
@@ -130,77 +181,63 @@ func differs(refusal *server.DifferentFile, ours video) error {
 		return refusal
 	}
 	mine := ours.about()
-	e := &NotTheSameFile{Videos: theirs.Videos, Playlist: theirs.Videos > 0 || mine.Videos > 0, Rows: facts(theirs, mine)}
+	e := &NotTheSameFile{Videos: theirs.Videos, Playlist: theirs.Videos > 0 || mine.Videos > 0, Rows: facts(theirs, mine), yours: mine.Videos}
 	if theirs.Kind != mine.Kind {
 		e.Detail = [][2]string{{"", "The party plays "}, {kinds[theirs.Kind], ", and you picked "}, {kinds[mine.Kind], "."}}
 	}
 	// the box decides only between files on disk
-	onDisk := theirs.Kind == "" && mine.Kind == ""
-	switch {
-	case onDisk && theirs.Videos > 0 && mine.Videos == 0:
-		e.Box = "tick"
-		e.text = fmt.Sprintf("the party plays a playlist of %s, and you picked one file: tick the box under File (-playlist)", countVideos(theirs.Videos))
-	case onDisk && theirs.Videos == 0 && mine.Videos > 0:
-		e.Box = "untick"
-		e.text = fmt.Sprintf("the party plays one file, and you picked a playlist of %s: untick the box under File (no -playlist)", countVideos(mine.Videos))
-	case onDisk && mine.Videos > 0 && e.where(theirs, ours):
-	default:
-		what := "video"
-		if mine.Videos > 0 {
-			what = "playlist"
+	if theirs.Kind == "" && mine.Kind == "" {
+		switch {
+		case theirs.Videos > 0 && mine.Videos == 0:
+			e.Box = "tick"
+		case theirs.Videos == 0 && mine.Videos > 0:
+			e.Box = "untick"
+		case mine.Videos > 0:
+			e.where(theirs, ours)
 		}
-		e.text = fmt.Sprintf("your %s is not the same file as the party's:\n  the party's: %s\n  yours:       %s", what, theirs.describe(), mine.describe())
 	}
 	return e
 }
 
 // where finds the first video of two playlists on disk that differs, by position, and says
-// it, naming ours. False when the party sent no sums, or they agree as far as both go and
-// the counts do too.
-func (e *NotTheSameFile) where(theirs About, ours video) bool {
+// it, naming ours. It says nothing when the party sent no sums, or they agree as far as both
+// go and the counts do too.
+func (e *NotTheSameFile) where(theirs About, ours video) {
 	n := len(theirs.Sums) / short
 	if n == 0 || len(theirs.Sums)%short != 0 {
-		return false
+		return
 	}
-	videos := Row{Label: "Videos", Party: strconv.Itoa(n), Yours: strconv.Itoa(len(ours.sums)), Differs: n != len(ours.sums)}
-	for i := range min(n, len(ours.sums)) {
-		party, mine := hex.EncodeToString(theirs.Sums[i*short:(i+1)*short]), ours.sums[i][:2*short]
-		if party == mine {
+	mine := ours.entries
+	videos := Row{Label: "Videos", Party: strconv.Itoa(n), Yours: strconv.Itoa(len(mine)), Differs: n != len(mine)}
+	for i := range min(n, len(mine)) {
+		party, yours := hex.EncodeToString(theirs.Sums[i*short:(i+1)*short]), mine[i].sum[:2*short]
+		if party == yours {
 			continue
 		}
-		name := flatten(ours.names[i])
-		at := fmt.Sprintf("video %d of %d differs", i+1, n)
+		at := [][2]string{{"", "They differ at video "}, {strconv.Itoa(i + 1), " of "}, {strconv.Itoa(n), ". Yours is "}}
 		if videos.Differs {
-			at = fmt.Sprintf("video %d differs, and yours has %s to the party's %d", i+1, countVideos(len(ours.sums)), n)
+			at = [][2]string{{"", "They differ at video "}, {strconv.Itoa(i + 1), ". Yours is "}}
 		}
-		e.text = fmt.Sprintf("your playlist is not the same file as the party's: %s\n  the party's: checksum %s\n  yours:       %s · %s · checksum %s", at, party, name, size(ours.sizes[i]), mine)
-		e.Detail = [][2]string{{"", "They differ at video "}, {strconv.Itoa(i + 1), " of "}, {strconv.Itoa(n), ". Yours is "}, {name, ", "}, {size(ours.sizes[i]), "."}}
-		if videos.Differs {
-			e.Detail = [][2]string{{"", "They differ at video "}, {strconv.Itoa(i + 1), ". Yours is "}, {name, ", "}, {size(ours.sizes[i]), "."}}
-		}
-		e.Rows = []Row{{Label: "Checksum", Party: party, Yours: mine, Mono: true, Differs: true}, videos}
-		return true
+		e.Detail = append(at, [2]string{flatten(mine[i].name), ", "}, [2]string{size(mine[i].size), "."})
+		e.Rows = []Row{{Label: "Checksum", Party: party, Yours: yours, Mono: true, Differs: true}, videos}
+		return
 	}
-	switch last := min(n, len(ours.sums)) - 1; {
-	case len(ours.sums) > n:
-		e.text = fmt.Sprintf("your playlist is not the same file as the party's: yours has %s and the party's %d\n  yours goes on with %s", countVideos(len(ours.sums)), n, flatten(ours.names[n]))
-		e.Detail = [][2]string{{"", "Yours goes on with "}, {flatten(ours.names[n]), ", after the party's last video."}}
-		e.Rows = []Row{videos}
-	case len(ours.sums) < n:
-		e.text = fmt.Sprintf("your playlist is not the same file as the party's: yours has %s and the party's %d\n  the party's goes on after your %s", countVideos(len(ours.sums)), n, flatten(ours.names[last]))
-		e.Detail = [][2]string{{"", "The party's goes on after your "}, {flatten(ours.names[last]), "."}}
-		e.Rows = []Row{videos}
+	switch {
+	case len(mine) > n:
+		e.Detail = [][2]string{{"", "Yours goes on with "}, {flatten(mine[n].name), ", after the party's last video."}}
+	case len(mine) < n:
+		e.Detail = [][2]string{{"", "The party's goes on after your "}, {flatten(mine[len(mine)-1].name), "."}}
 	default:
-		return false
+		return
 	}
-	return true
+	e.Rows = []Row{videos}
 }
 
 // kinds names an About's kind in a sentence.
 var kinds = map[string]string{"": "a file", "link": "a link", "torrent": "a torrent"}
 
-// facts are the facts both sides have, as rows for the GUI. One side's alone (a torrent's
-// infohash beside a file's checksum, a link's missing size) can't be compared.
+// facts are the facts both sides have, as rows. One side's alone (a torrent's infohash
+// beside a file's checksum, a link's missing size) can't be compared.
 func facts(theirs, mine About) []Row {
 	playlist := theirs.Videos > 0 || mine.Videos > 0
 	cells := func(a About) map[string]string {
@@ -232,25 +269,6 @@ func facts(theirs, mine About) []Row {
 	return rows
 }
 
-// describe is a's facts on one line, and a playlist's on a second.
-func (a About) describe() string {
-	parts := []string{a.Name}
-	if a.Size > 0 {
-		parts = append(parts, size(a.Size))
-	}
-	switch a.Kind {
-	case "":
-		parts = append(parts, "checksum "+a.Sum)
-	case "torrent":
-		parts = append(parts, "infohash "+a.Sum)
-	}
-	s := strings.Join(parts, " · ")
-	if a.Videos > 0 {
-		s += "\n               " + countVideos(a.Videos) + " · playlist checksum " + a.Playlist
-	}
-	return s
-}
-
 func countVideos(n int) string {
 	if n == 1 {
 		return "1 video"
@@ -269,8 +287,7 @@ func size(n int64) string {
 		return strconv.FormatInt(n/1e6, 10) + " MB"
 	case n >= 1e3:
 		return strconv.FormatInt(n/1e3, 10) + " KB"
-	}
-	if n == 1 {
+	case n == 1:
 		return "1 byte"
 	}
 	return strconv.FormatInt(n, 10) + " bytes"

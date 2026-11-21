@@ -97,7 +97,10 @@ func Run(parent context.Context, cfg Config) error {
 			return err
 		}
 		defer stream.close()
-		v = video{files: stream.urls, names: stream.names, sizes: stream.sizes, infohash: stream.infohash, playlist: len(stream.urls) > 1, id: stream.id}
+		v = video{playlist: len(stream.urls) > 1, id: stream.id, infohash: stream.infohash}
+		for i, u := range stream.urls {
+			v.entries = append(v.entries, entry{file: u, name: stream.names[i], size: stream.sizes[i]})
+		}
 		cfg.Playlist = false
 	} else {
 		var err error
@@ -109,7 +112,7 @@ func Run(parent context.Context, cfg Config) error {
 	log.Printf("file fingerprint: %s\n", v.id)
 	startAt := cfg.Start
 	if v.playlist && cfg.Entry != "" {
-		if i := slices.Index(v.names, cfg.Entry); i >= 0 {
+		if i := slices.IndexFunc(v.entries, func(e entry) bool { return e.name == cfg.Entry }); i >= 0 {
 			v.start = i
 		} else {
 			startAt = 0
@@ -139,17 +142,21 @@ func Run(parent context.Context, cfg Config) error {
 	return refusedFile(runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing), v)
 }
 
-// video is what the party plays: the files mpv opens and their names, the entry it starts
-// on, and the fingerprint every member's must match (id). sizes and, on disk, sums are
-// each file's, and infohash a torrent's, for a refused joiner (About).
+// video is what the party plays: its entries, the one it starts on, and the fingerprint
+// every member's must match (id). infohash is a torrent's, for a refused joiner (About).
 type video struct {
-	files, names []string
-	sums         []string
-	sizes        []int64
-	infohash     string
-	start        int
-	playlist     bool
-	id           string
+	entries  []entry
+	start    int
+	playlist bool
+	id       string
+	infohash string
+}
+
+// entry is one video mpv opens: its file or URL, its name, and for a refused joiner its
+// size (0 when unknown) and, on disk, its fingerprint.
+type entry struct {
+	file, name, sum string
+	size            int64
 }
 
 // openSwarm opens a torrent and reports its swarm while the party waits on it.
@@ -211,13 +218,16 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 	}
 	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
 	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script)
-	names := v.names
+	var names []string
 	if v.playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(v.start))
-	} else {
-		names = nil
 	}
-	args = append(args, v.files...)
+	for _, e := range v.entries {
+		args = append(args, e.file)
+		if v.playlist {
+			names = append(names, e.name)
+		}
+	}
 	cmd := exec.CommandContext(c, strings.TrimSpace(cfg.Mpv), args...)
 
 	mpv.Init(cmd)
@@ -379,20 +389,21 @@ func (cfg Config) playlistFlag() string {
 }
 
 // fingerprint identifies a video by its content alone, so the same file under
-// another name, path or timestamp matches. A URL is identified by itself.
-func fingerprint(path string) (string, error) {
+// another name, path or timestamp matches, and says its size. A URL is identified by
+// itself, with no size.
+func fingerprint(path string) (string, int64, error) {
 	if strings.Contains(path, "://") {
 		sum := sha256.Sum256([]byte(path))
-		return hex.EncodeToString(sum[:]), nil
+		return hex.EncodeToString(sum[:]), 0, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	size := st.Size()
 	h := sha256.New()
@@ -407,9 +418,9 @@ func fingerprint(path string) (string, error) {
 		}
 	}
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), size, nil
 }
 
 // runMesh starts this node's side of the P2P mesh: an address others can reach, the
