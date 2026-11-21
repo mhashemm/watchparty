@@ -105,17 +105,20 @@ type gui struct {
 	exe         string
 	wg          sync.WaitGroup
 
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	store      *store
-	session    int
-	installed  string
-	run        int
-	lines      []string
-	exitErr    string
-	lastPoll   time.Time
-	idleAfter  time.Duration
-	pages      int
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	store     *store
+	session   int
+	installed string
+	run       int
+	lines     []string
+	exitErr   string
+	lastPoll  time.Time
+	idleAfter time.Duration
+	pages     int
+	// news has one channel per page holding /alive open: Write nudges each without
+	// blocking, and the page then reads the new lines at once instead of on its next poll
+	news       map[chan struct{}]struct{}
 	heartbeat  time.Duration
 	closeGrace time.Duration
 }
@@ -209,6 +212,13 @@ func (g *gui) Write(p []byte) (int, error) {
 		g.lines = append(g.lines, line)
 		if g.session >= 0 && g.store.note(g.session, line) {
 			dirty = true
+		}
+	}
+	for news := range g.news {
+		// one waiting is enough: the page reads every line since its last
+		select {
+		case news <- struct{}{}:
+		default:
 		}
 	}
 	g.mu.Unlock()
@@ -309,14 +319,26 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	rc := http.NewResponseController(w)
+	news := make(chan struct{}, 1)
 	g.mu.Lock()
 	g.pages++
+	if g.news == nil {
+		g.news = map[chan struct{}]struct{}{}
+	}
+	g.news[news] = struct{}{}
 	g.mu.Unlock()
-	defer g.pageGone()
+	defer func() {
+		g.mu.Lock()
+		delete(g.news, news)
+		g.mu.Unlock()
+		g.pageGone()
+	}()
 	tick := time.NewTicker(g.heartbeat)
 	defer tick.Stop()
+	// a heartbeat is a comment; new lines are an event, which the page answers with a poll
+	beat := ":\n\n"
 	for {
-		_, err := io.WriteString(w, ":\n\n")
+		_, err := io.WriteString(w, beat)
 		if err == nil {
 			err = rc.Flush()
 		}
@@ -329,6 +351,9 @@ func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
 		case <-g.ctx.Done():
 			return
 		case <-tick.C:
+			beat = ":\n\n"
+		case <-news:
+			beat = "data: lines\n\n"
 		}
 	}
 }
@@ -411,6 +436,11 @@ type browser struct {
 	root string
 }
 
+// profilePrefs seeds each window's profile: no password manager, and no download bubble,
+// which an --app window has no toolbar button to anchor to, so Chromium draws it as a blank
+// box clipped at the window's edge; the page says where Save chart put the file instead
+const profilePrefs = `{"credentials_enable_service":false,"profile":{"password_manager_enabled":false},"download_bubble":{"partial_view_enabled":false}}`
+
 func newProfile(root string) (string, error) {
 	err := os.MkdirAll(root, 0o700)
 	if err != nil {
@@ -421,7 +451,7 @@ func newProfile(root string) (string, error) {
 		return "", err
 	}
 	os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
-	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(`{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}`), 0o600)
+	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(profilePrefs), 0o600)
 	return profile, nil
 }
 

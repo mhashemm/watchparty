@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,11 +23,13 @@ func media(path string, siblings bool) (files []string, start int, playlist bool
 		files, start = neighbours(path)
 	}
 	if files == nil {
+		checking(1, 1, path)
 		id, err = fingerprint(path)
 		return []string{path}, 0, false, id, err
 	}
 	h := sha256.New()
-	for _, f := range files {
+	for i, f := range files {
+		checking(i+1, len(files), f)
 		sum, err := fingerprint(f)
 		if err != nil {
 			return nil, 0, false, "", err
@@ -33,6 +37,16 @@ func media(path string, siblings bool) (files []string, start int, playlist bool
 		h.Write([]byte(sum))
 	}
 	return files, start, true, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// checking says which file is being fingerprinted: a big folder on a slow disk takes a while.
+// A URL is identified by its text, at once.
+func checking(i, n int, path string) {
+	if strings.Contains(path, "://") {
+		return
+	}
+	name, _ := json.Marshal(filepath.Base(path))
+	log.Printf("checking %d of %d: %s\n", i, n, name)
 }
 
 func neighbours(path string) ([]string, int) {

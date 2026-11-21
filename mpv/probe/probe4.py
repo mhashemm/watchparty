@@ -3,7 +3,7 @@ pause and time-pos, and the node hears the entry and the cache from mpv's own re
 snapshot here is the script's message with the entry and cache mpv last reported, and mpv's
 reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
 entry and to one mpv can't open.
-Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang> <rounds>. Under load:
+Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang|ahead> <rounds>. Under load:
 python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
 import http.server, os, socketserver, sys, tempfile, threading, time
 from typing import Any
@@ -11,7 +11,7 @@ from typing import Any
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # -I leaves this folder off the path; last, so the standard library wins
 from probe import OFFSETS_MS, race, ready, reply
-from probe2 import FAILED, HARMLESS, M, fnear, get, num, person_conn, report, setpos, stopped, tally
+from probe2 import FAILED, HARMLESS, M, Slow, fnear, get, num, person_conn, report, setpos, stopped, tally
 from probe3 import Wp3
 _VIEW = {}
 
@@ -391,7 +391,9 @@ class Shipped(Wp3):
             undone = scen in (">", "<") and dest is not None and fe == str(target) and (kinds == "person ours" or kinds == "ours" and after)
             if undone and not heard and not over:
                 errors["missed"].append((scen, off, e0, target, dest, st))
-            if scen in ("none", "seek", "eof", "back") and over:
+            # eof's go that plays reaches an mpv the node read playing, which it never sends (a resume
+            # then stops the party): mpv's own pause at the end (keep-open) racing it reads as undone
+            if scen in ("none", "seek", "eof", "back") and over and not (scen == "eof" and want == "no"):
                 errors["false"].append((scen, off, e0, target, st))
             tally(shapes, (scen, kinds, "over" if over else "", "heard" if heard else ""))
         m.stop()
@@ -446,7 +448,7 @@ class Shipped(Wp3):
         m = self.M(files[2], [*self.WP, files[0], files[1]])  # M puts the file last
         ready(m, [])
         p = person_conn(m)
-        errors = {"seeked": [], "ack": [], "ack-late": [], "pos-wrong": []}
+        errors = {"seeked": [], "ack": [], "ack-late": [], "pos-wrong": [], "refused-elsewhere": []}
         shapes = {}
         for r in range(rounds):
             off = OFFSETS_MS[r % len(OFFSETS_MS)]
@@ -468,10 +470,19 @@ class Shipped(Wp3):
             go()
             if off >= 0:
                 time.sleep(off / 1000); m.send("keypress", ">", s=p)
-            k = self.wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i, 5)
+            k = self.wsnap(m, lambda s: s["kind"] in ("ack", "refused") and s["id"] == tag, i, 5)
             if k is None:
                 errors["ack-late"].append((off, e0, [(s["kind"], s["id"], s["pause"], s.get("at")) for _, s in self.snaps(m, i)],
                                            [l.get("event") for l in m.since(i) if l.get("event") not in (None, "client-message", "property-change")]))
+                continue
+            if self.W(m.lines[k]["args"])["kind"] == "refused":
+                # the key opened its file as the go's seek began: no file to seek in. The node sends
+                # the refusal's entry out as the person's move, so it must be where mpv ends
+                time.sleep(0.8)
+                at, fe = self.W(m.lines[k]["args"]).get("at", ""), get(m, "playlist-pos")
+                if at != fe:
+                    errors["refused-elsewhere"].append((off, e0, at, fe))
+                tally(shapes, ("playing" if r % 4 >= 2 else "stopped", "refused", "names " + at, "ends on " + str(fe)))
                 continue
             time.sleep(0.8)
             ack = self.W(m.lines[k]["args"])
@@ -494,6 +505,42 @@ class Shipped(Wp3):
         report("away", rounds, errors, shapes)
 
     # A move to a stream that hangs in each way: how long until the go is acked, and by what.
+    # What a slow member tells the party (mpv/CLAUDE.md, `ahead`): mpv must call a stream "via
+    # network" and a local file not, or a file would say it is slow or a stream never would; and
+    # paused, it must keep loading the stream, or the seconds ready it tells never grow.
+    def ahead(self, rounds):
+        srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), lambda *a, **k: Slow(*a, directory=HERE, **k))
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/net.mkv"
+        errors = {"file-via-network": [], "stream-not-via-network": [], "not-growing": []}
+        shapes = {}
+        for r in range(rounds):
+            m = self.M(os.path.join(HERE, "p1.mkv"), self.WP)
+            ready(m, [])
+            local = get(m, "demuxer-via-network")
+            if local != "no":
+                errors["file-via-network"].append((r, local))
+            m.stop()
+            m = self.M(url, self.WP)
+            ready(m, [])
+            net = get(m, "demuxer-via-network")
+            if net != "yes":
+                errors["stream-not-via-network"].append((r, net))
+            # served at about half its bitrate, so paused it gains about 0.5s a second; but opening
+            # can take seconds on a slow runner (macOS: 0.08s in its first 3), so up to 10s for 0.5s
+            before, t0 = num(m, "demuxer-cache-duration"), time.time()
+            after = before
+            while after < before + 0.5 and time.time() - t0 < 10:
+                time.sleep(0.25)
+                after = num(m, "demuxer-cache-duration")
+            if after < before + 0.5:
+                errors["not-growing"].append((r, before, after))
+            tally(shapes, (f"file {local}", f"stream {net}", f"paused: +0.5s within {int(time.time() - t0) + 1}s"))
+            m.stop()
+        srv.shutdown()
+        report("ahead", rounds, errors, shapes)
+
     def hang(self, rounds):
         errors = {"never-acked": []}
         shapes = {}

@@ -1828,6 +1828,10 @@ def relay_suite():
         setp("nodeFast", "pause", False)
         until(lambda: reasons() and both_paused(), 30)
         ok("the slow node paused the party", both_paused() and reasons() == ["paused for nodeSlow: buffering"], f"{reasons()}")
+        ok("its log says how full its cache is, then that it's done", until(lambda: re.search(r"^.{20}buffering: \d+%$(?s:.*)^.{20}buffering: done$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-600:])
+        ok("while the party waits, it says how many seconds it has ready", until(lambda: re.search(r"^.{20}buffered ahead: \d+$", log("nodeSlow"), re.M), 30), log("nodeSlow")[-400:])
+        ok("and the others hear it", until(lambda: re.search(r'^.{20}buffered ahead: \d+ for \{"id":"\w+","name":"nodeSlow"\}$', log("nodeFast"), re.M), 10), log("nodeFast")[-400:])
+        ok("and show it on their mpv", any(re.fullmatch(r"nodeSlow's network is slow: \d+s ready", t) for t in osd("nodeFast")), str(osd("nodeFast")[-4:]))
         gap = abs((get("nodeFast", "time-pos") or 0) - (get("nodeSlow", "time-pos") or 0))
         ok("both stopped where the slow node did", gap < 0.15, f"{gap:.2f}s apart")
         setp("nodeFast", "pause", False)
@@ -2074,6 +2078,8 @@ def media_suite():
         must(f"{guest} is up", until(lambda: booted(guest) and f"{guest} has joined" in osd(host), BOOT))
         resolve(guest)
         ok("the invite asks for the playlist", nodes[host]["addr"].endswith(" -playlist"), nodes[host]["addr"])
+        checked = re.findall(r"^.{20}checking (\d+ of \d+): (.*)$", log(guest), re.M)
+        ok(f"{guest} said each file it checked", checked == [("1 of 3", '"a1.mkv"'), ("2 of 3", '"a2.mkv"'), ("3 of 3", '"a10.mkv"')], str(checked))
         ok("a joiner's renamed copy is let in, on the same entry", until(on("video2.mkv", "a1.mkv")), get(guest, "filename"))
 
         ipc(nodes[host]["sock"], "playlist-next")
@@ -2478,7 +2484,7 @@ def gui_suite():
         click(H, "#tip-button")
         ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
         sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
-        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
         tip = js(H, '$("tip").textContent')
         ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
         click(H, "#tip h2")
@@ -2546,6 +2552,7 @@ def gui_suite():
         ok("one watchparty-<date>.log", len(saved) == 1 and saved[0].startswith("watchparty-"), str(saved))
         chart = open(f"{dl}/{saved[0]}").read() if saved else ""
         ok("it holds the party's log", "init done" in chart and invite in chart)
+        ok("the page says where it went", saved and js(H, '$("chart-saved").textContent') == f"Saved as {saved[0]} in your downloads folder.", js(H, '$("chart-saved").textContent'))
 
         part("[G9] the guest pastes the whole invite line and joins, after mpv takes its time")
         js(G, f'$("invite").value = {json.dumps("2026/11/01 12:00:00 your address to share is " + invite)}; '
@@ -2559,6 +2566,9 @@ def gui_suite():
         until(lambda: f"{G} has joined" in feed(H) and f"connected to {H}" in feed(G))
         ok(f"{H}'s feed says {G} joined", f"{G} has joined" in feed(H), str(feed(H)))
         ok(f"{G}'s feed says it connected", f"connected to {H}" in feed(G), str(feed(G)))
+        members = lambda n: js(n, '[...$("member-list").children].map(li => li.querySelector(".name").textContent + " " + li.querySelector(".since").textContent)')
+        ok(f"{H}'s members name {G} since it joined", [m.split(" since ")[0] for m in members(H)] == ["You", G] and js(H, '$("member-count").textContent') == "2", str(members(H)))
+        ok(f"{G}'s name {H} as already here", members(G)[1:] == [f"{H} already here"], str(members(G)))
 
         part(f"[G10] a resume in {G}'s mpv: the feeds say who did it")
         must("the join is over", quiet((H, G)))
@@ -2677,6 +2687,10 @@ def gui_suite():
         start(G, hostname=G, file="magnet:?xt=urn:btih:" + "ab" * 20 + "&dn=The.Video&tr=udp://tracker.invalid/announce", room="g17d", secret="g17dsecret")
         until(lambda: status(G).startswith("Looking"), BOOT)
         ok("it says it is looking", status(G) == "Looking for this torrent's peers. It can take a while…", status(G))
+        # the trail shows once the step has taken half a second
+        until(lambda: js(G, '!$("trail").hidden'), BOOT)
+        trail = js(G, '[...$("trail").children].map(s => (s.classList.contains("now-step") ? "*" : "") + s.textContent)')
+        ok("its trail is on the torrent, the steps after it to come", trail == ["*Torrent", "Relay", "mpv", "Video"], str(trail))
         ok("and started no mpv", not mpv_of(G))
         end(G)
         ok("Stop ends it with no diagnosis", until(lambda: status(G) == "The party has ended."), status(G))

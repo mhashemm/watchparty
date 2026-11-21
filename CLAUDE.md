@@ -44,7 +44,7 @@ Only the node that generates an event broadcasts it, with its `stamp`: the newer
 once the safer. A peer's change reaches mpv as one go to the script, whose ack is weighed against it; `seen` drops mpv's first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
-the playlist entry go over the wire. Anything that would put nodes out of step (a seek while
+the playlist entry go over the wire, besides a stalled stream's seconds ready, for people to judge. Anything that would put nodes out of step (a seek while
 playing, running out of cache, a mid-party join, a member leaving, a new playlist entry, a
 node that missed something, even while it had lost the relay) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
@@ -56,19 +56,19 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   | Printed by | Line | Read by |
   |---|---|---|
   | party | `your address to share is <invite>` | GUI invite box and status (a relay party is in once connected), `gui/store.go` (real room and secret), e2e |
-  | party | `init done`, `unreachable address: …`, `torrent: finding peers`, `torrent: found …` | GUI status, e2e |
+  | party | `checking <i> of <n>: <file name as JSON>`, `asking the router for a port`, `mpv is up, loading the video`, `init done`, `unreachable address: …`, `torrent: finding peers`, `torrent: found …`, `torrent: <n> peers, <speed>` (`1 peer`) | GUI status, e2e |
   | party | `file fingerprint: <hex>`; `stopped at: <seconds>[ in <file name as JSON>]` or `finished: …` once mpv exits | e2e; `gui/store.go` (where Continue starts) |
   | party/ws.go | `relay: connected`, `relay: dial: …` (`… is not open yet …` inside it, or `429 `/`503 ` at its start), `relay: disconnected` | GUI "You're in", reconnecting, "waiting for the host" and a busy relay, e2e |
   | party/ws.go | `rejected by relay`, plus `not the same file`, `did not open` or `-createKey` | GUI diagnosis |
   | mpv | `do: sent request: {"command":["show-text",<text>,…` | GUI feed (it moves `from A to B, by X`, `…: video changed` and `synced by X` to the file they're about), `gui/store.go`, e2e `osd()` |
   | mpv | `Watch: broadcasted event: <raw mpv JSON, with `stamp`, `paused`, `at` and in a playlist `entry`>` | GUI feed (your own pause/resume), e2e |
-  | mpv | `now playing: <file name as JSON>` | GUI feed, `gui/store.go`, e2e |
+  | mpv | `now playing: <file name as JSON>`; `buffering: <n>%`, `buffering: done`, `buffered ahead: <n>[ for <member>]`, `member joined\|here\|left: <member>` (`{"id","name"}`) | GUI feed, status and members, `gui/store.go` (the first and member), e2e |
   | mpv | `sent again, as <host> missed something: …` | e2e |
   | server | `skipped event from`, `refused <host>`, `does not exists`, `the party refused your secret` | e2e |
 
-- **Notice texts** "X has joined", "connected to X", "X has left" are sent by `server/` and `relay/` with
-  the member's `From`, parsed by `mpv` (a leave pauses, and frees the stop it led) and `gui/store.go`,
-  all from the constants in `mpv`; e2e's `known()` spells them again. Change all or none.
+- **Notice texts** "X has joined", "connected to X", "X has left" (P2P "dropped …") are sent by `server/` and
+  `relay/` with the member's `From`, read only by `mpv` (a leave pauses, and frees the stop it led; each about
+  its sender logs a member line), from its constants; e2e's `known()` spells them again. Change all or none.
 - **The relay protocol is `relay/wire`**, imported by both `relay/main.go` and `party/ws.go`:
   the envelope `{"hostname", "from", "event": <raw mpv JSON>}`, path, query, headers, close codes.
   It imports nothing that would grow the relay image; importing `party` would pull upnp and server.
@@ -107,8 +107,8 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
   a recipe to verify. Never what a function does, inventories, or history: the incident
   goes in the commit body, where the next session will look for it.
 - **Each fact lives in one place**, cross-package here, the rest in its package's doc.
-- **Update a doc only when a change makes something in it wrong.** Budget: this file
-  ≤150 lines, `mpv/MPV.md` ≤300, every other doc ≤200. Trim before adding.
+- **Update a doc only when a change makes something in it wrong.** Budget: this file ≤150 lines,
+  `mpv/MPV.md` ≤300, `mpv/CLAUDE.md` ≤210, others ≤200. Trim first; raise one only to keep what matters.
 
 ## How we work
 

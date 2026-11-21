@@ -35,6 +35,46 @@ func isTorrent(target string) bool {
 // it within seconds, and none in this long means nobody is sharing it.
 const findFor = 5 * time.Minute
 
+// reportEvery is how often the swarm is reported while the party waits on it
+const reportEvery = 2 * time.Second
+
+// swarmReport says how the swarm does every so often, but only while wanted: the party waits on
+// it while it finds peers, while mpv opens the video and while mpv buffers. Played smoothly, it
+// says nothing, or the log would grow a line every few seconds for hours.
+func swarmReport(c context.Context, every time.Duration, stats func() (peers int, read int64), wanted func() bool, say func(string)) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	_, last := stats()
+	for {
+		select {
+		case <-c.Done():
+			return
+		case <-tick.C:
+		}
+		peers, read := stats()
+		rate := float64(read-last) / every.Seconds()
+		last = read
+		if wanted() {
+			say("torrent: " + swarm(peers, rate))
+		}
+	}
+}
+
+// swarm is "3 peers, 1.2 MB/s"
+func swarm(peers int, rate float64) string {
+	s := strconv.Itoa(peers) + " peers, "
+	if peers == 1 {
+		s = "1 peer, "
+	}
+	switch {
+	case rate >= 1e6:
+		return s + strconv.FormatFloat(rate/1e6, 'f', 1, 64) + " MB/s"
+	case rate >= 1e3:
+		return s + strconv.FormatFloat(rate/1e3, 'f', 0, 64) + " KB/s"
+	}
+	return s + strconv.FormatFloat(rate, 'f', 0, 64) + " B/s"
+}
+
 // errNoPeers is a torrent nobody sent the metadata of within findFor. The GUI shows it as
 // the diagnosis, so it says findFor in words.
 var errNoPeers = errors.New("no peer sent this torrent's details within 5 minutes, so nobody seems to be sharing it")
@@ -103,7 +143,7 @@ func torrentCache(chosen string) (string, error) {
 // openTorrent waits up to find for the torrent's metadata, then serves what it plays to mpv
 // on loopback. Nothing downloads but what mpv reads, so only the video playing buffers. It
 // downloads into a new folder in cache, which close removes.
-func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig, find time.Duration) (*torrentStream, error) {
+func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientConfig, find time.Duration, added func(*torrent.Torrent)) (*torrentStream, error) {
 	dir, err := os.MkdirTemp(cache, "torrent-*")
 	if err != nil {
 		return nil, err
@@ -132,6 +172,9 @@ func openTorrent(c context.Context, target, cache string, cfg *torrent.ClientCon
 		return nil, err
 	}
 	log.Println("torrent: finding peers")
+	if added != nil {
+		added(t)
+	}
 	timer := time.NewTimer(find)
 	defer timer.Stop()
 	select {

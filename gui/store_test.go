@@ -15,6 +15,12 @@ func noticeLine(text string) string {
 	return `2026/10/30 18:00:00 do: sent request: {"command":["show-text","` + text + `",5000],"request_id":42}`
 }
 
+// memberLine is mpv's line for a member: joined, here (before this node) or left.
+func memberLine(what, name string) string {
+	b, _ := json.Marshal(name)
+	return `2026/10/30 18:00:00 member ` + what + `: {"id":"ID","name":` + string(b) + `}`
+}
+
 func TestStoreRecordsAParty(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "watchparty", "gui.json")
@@ -22,11 +28,13 @@ func TestStoreRecordsAParty(t *testing.T) {
 	i := s.begin(form{Mode: "relay", File: " /m/video.mkv ", Hostname: "Mohamed", Relay: "ws://r"})
 
 	s.observe(i, "2026/10/30 18:00:00 your address to share is -relay ws://r -room ROOM1 -secret SEC1")
-	s.observe(i, noticeLine("connected to Fosdo2"))
-	s.observe(i, noticeLine("Sam has joined"))
-	s.observe(i, noticeLine("Sam has joined"))
-	s.observe(i, noticeLine("Sam has left"))
+	s.observe(i, memberLine("here", "Fosdo2"))
+	s.observe(i, memberLine("joined", "Sam"))
+	s.observe(i, memberLine("joined", "Sam"))
+	s.observe(i, memberLine("left", "Sam"))
 	s.observe(i, noticeLine("paused by Sam"))
+	// only mpv's member lines count: a name can make any show-text
+	s.observe(i, noticeLine("Eve has joined"))
 	s.observe(i, "2026/10/30 18:00:00 init done. now you can start watching")
 	s.end(i)
 
@@ -157,22 +165,6 @@ func TestStoreCapsHistory(t *testing.T) {
 	}
 }
 
-func TestNotice(t *testing.T) {
-	t.Parallel()
-	if text, ok := notice(noticeLine("Sam has joined")); !ok || text != "Sam has joined" {
-		t.Fatalf("notice = %q, %v", text, ok)
-	}
-	for _, line := range []string{
-		`do: sent request: {"command":["set_property","pause",true],"request_id":1}`,
-		"relay: connected to ws://r room X",
-		`do: sent request: not json`,
-	} {
-		if _, ok := notice(line); ok {
-			t.Errorf("notice(%q) matched, want no match", line)
-		}
-	}
-}
-
 func TestObserveReadsAPILinesOnlyAtTheStart(t *testing.T) {
 	t.Parallel()
 	s := openStore(filepath.Join(t.TempDir(), "gui.json"))
@@ -197,7 +189,7 @@ func TestStoreContinuesAParty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gui.json")
 	s := openStore(path)
 	first := s.begin(form{Mode: "relay", File: "/m/a.mkv", Relay: "ws://r", Room: "R", Secret: "S", Playlist: true})
-	s.observe(first, noticeLine("Sam has joined"))
+	s.observe(first, memberLine("joined", "Sam"))
 	s.observe(first, `2026/10/30 18:00:00 now playing: "a.mkv"`)
 	s.observe(first, `2026/10/30 18:00:00 now playing: "b.mkv"`)
 	s.observe(first, `2026/10/30 18:00:00 stopped at: 754.250 in "b.mkv"`)

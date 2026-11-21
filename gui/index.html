@@ -305,8 +305,34 @@ button.small { font-size: .875rem; padding: 4px 10px; border-radius: 10px; margi
 body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinite; }
 @keyframes beat { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
 #vitals { margin-bottom: 24px; border-bottom: 2px dashed var(--line); padding-bottom: 6px; }
-.status { font-size: 1.1rem; font-weight: 700; margin: 0 0 16px; }
+.status { font-size: 1.1rem; font-weight: 700; margin: 0; }
 .status.bad { color: var(--berry); }
+.now { margin: 0 0 18px; }
+.detail { font-size: .9rem; color: var(--ink-soft); margin: 4px 0 0; word-break: break-word; }
+.detail b { color: var(--forest); }
+.bar { height: 10px; border-radius: 6px; background: #e8e6d2; border: 1.5px solid var(--line); overflow: hidden; margin: 8px 0 0; }
+.bar i { display: block; height: 100%; width: 0; background: repeating-linear-gradient(-45deg, var(--moss) 0 8px, #5d8a3f 8px 16px); border-radius: 6px; transition: width .3s; }
+.trail { display: flex; align-items: flex-start; margin: 4px 0 12px; }
+.trail .st { flex: 1; text-align: center; font-size: .8rem; color: var(--ink-soft); position: relative; }
+.trail .st svg { width: 30px; height: 30px; display: block; margin: 0 auto 4px; color: #d9d5bd; position: relative; z-index: 1; }
+.trail .st:not(:last-child)::after { content: ""; position: absolute; top: 15px; left: calc(50% + 18px); right: calc(-50% + 18px); border-top: 2px dashed var(--line); }
+.trail .done svg { color: var(--porcini); }
+.trail .done:not(:last-child)::after { border-top: 2px solid var(--moss); }
+.trail .now-step svg { color: var(--berry); width: 36px; height: 36px; margin-top: -3px; margin-bottom: 1px; }
+.trail .now-step { color: var(--forest); font-weight: 700; }
+.who { margin: 0 0 18px; border-top: 0; padding-top: 0; }
+.who summary { font: 700 1.25rem/1.2 var(--display); color: var(--bark); cursor: pointer; }
+.who[open] summary { margin-bottom: 10px; }
+.rows { list-style: none; margin: 0; padding: 0; border: 2px solid var(--line); border-radius: 14px; background: #f3eedf; }
+.rows li { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.rows li:last-child { border-bottom: 0; }
+.rows .name { font-weight: 700; flex: 1; word-break: break-word; }
+.rows .since { color: var(--ink-soft); font-size: .875rem; flex: none; }
+.shell { width: 22px; height: 22px; flex: none; }
+.rows li { flex-wrap: wrap; }
+.rows .ready { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: .8rem; font-weight: 700; color: var(--porcini); padding-left: 32px; }
+.rows .ready .bar { flex: 1; margin: 0; height: 8px; }
+.rows .ready .bar i { background: repeating-linear-gradient(-45deg, var(--porcini) 0 8px, #b97638 8px 16px); }
 .share { background: #f3eedf; border: 2px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 18px; }
 .share code { display: block; font: .9rem/1.4 ui-monospace, Consolas, monospace; word-break: break-all; margin: 6px 0 10px; color: var(--soil); }
 #feed { margin: 0 0 18px; }
@@ -429,6 +455,16 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
           <li>loses the relay, unless the video is in its last few seconds: they stop at once, and everyone stops when they are back</li>
           <li>moves to another video in a playlist</li>
         </ul>
+        <h2>Who's in the party</h2>
+        <ul>
+          <li>Vitals lists everyone in the party now, and since when. Anyone who was in before you shows as already here.</li>
+        </ul>
+        <h2>Slow networks</h2>
+        <ul>
+          <li>When a link or torrent runs out of loaded video, the party pauses, and everyone sees how many seconds that person has ready, here and on mpv's screen.</li>
+          <li>Waiting helps, as their player keeps loading while paused. Resume once they have enough.</li>
+          <li>A file on your own computer never counts as slow.</li>
+        </ul>
         <h2>Links</h2>
         <ul>
           <li>File also takes a video's URL. Everyone uses the same URL.</li>
@@ -533,20 +569,29 @@ body.walking .turtle .body { animation: bob .3s ease-in-out infinite alternate; 
     </nav>
 
     <div id="view-party">
-    <section id="vitals" hidden aria-live="polite">
+    <section id="vitals" hidden>
       <h2>Vitals <svg class="ecg" viewBox="0 0 64 20" aria-hidden="true"><path d="M0 11 H18 L22 4 L27 17 L31 2 L35 11 H64"/></svg></h2>
-      <p class="status" id="status"></p>
+      <div class="trail" id="trail" hidden></div>
+      <div class="now">
+        <p class="status" id="status" role="status"></p>
+        <p class="detail" id="detail" hidden></p>
+        <div class="bar" id="bar" hidden><i></i></div>
+      </div>
+      <details class="who" id="members" hidden>
+        <summary>In the party, <span id="member-count"></span></summary>
+        <ul class="rows" id="member-list"></ul>
+      </details>
       <div class="share" id="share" hidden>
         <span class="label">Invite to share</span>
         <code id="share-text"></code>
         <button type="button" id="copy">Copy invite</button>
       </div>
       <h2>Party feed</h2>
-      <div id="feed"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>
+      <div id="feed" aria-live="polite" aria-relevant="additions"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>
       <details id="chart">
         <summary>Patient chart</summary>
         <pre id="log"></pre>
-        <p><button type="button" class="small" id="save-chart">Save chart</button></p>
+        <p><button type="button" class="small" id="save-chart">Save chart</button> <span class="hint" id="chart-saved" hidden></span></p>
       </details>
     </section>
 
@@ -988,6 +1033,7 @@ $("form").addEventListener("submit", async e => {
 async function startParty(extra) {
   showError("");
   if (!$("file").value.trim()) { showError("Pick a video first."); $("file").focus(); return; }
+  plan = planFor(collect());
   const res = await api("/start", { ...collect(), ...extra });
   if (!res.ok) {
     const text = (await res.text()).trim();
@@ -996,9 +1042,11 @@ async function startParty(extra) {
   if (res.ok) loadState();
 }
 
-let run = 0, from = 0, state = {};
+let run = 0, from = 0, state = {}, plan = null;
 function reset() {
-  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, finding: false, leftPause: false, stopping: null };
+  state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", rejected: false, unreachable: false, leftPause: false, stopping: null,
+    shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
+    myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false };
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -1057,21 +1105,46 @@ function handle(line) {
   if ((m = msg.match(/^your address to share is (.*)$/))) {
     $("share-text").textContent = m[1].trim();
     state.relay = /^-relay /.test(m[1].trim());
+    state.shared = true;
   }
-  if (/^relay: connected/.test(msg)) Object.assign(state, { connected: true, reconnecting: false, waiting: false, busy: "" });
+  if (/^relay: connected/.test(msg)) {
+    // back after a drop, the relay names everyone still here again, and missed leaves are gone
+    if (state.connected) state.members = [];
+    Object.assign(state, { connected: true, reconnecting: false, waiting: false, busy: "" });
+  }
   if (/^relay: (dial|disconnected)/.test(msg)) {
     state.reconnecting = true;
     state.waiting = /is not open yet/.test(msg);
     state.busy = /^relay: dial: 429 /.test(msg) ? "limited" : /^relay: dial: 503 /.test(msg) ? "full" : "";
   }
   if (/^relay: rejected by relay/.test(msg)) state.rejected = /not the same file/.test(msg) ? "file" : /did not open/.test(msg) ? "unopened" : /-createKey/.test(msg) ? "key" : "secret";
-  if (/^init done/.test(msg)) state.ready = true;
-  if (/^torrent: /.test(msg)) state.finding = /^torrent: finding/.test(msg);
+  if (/^init done/.test(msg)) Object.assign(state, { ready: true, inAt: at, swarm: null });
+  if (/^torrent: finding /.test(msg)) state.torrent = true;
+  if (/^torrent: found /.test(msg)) state.found = true;
+  if ((m = msg.match(/^torrent: (\d+) peers?, (.+)$/))) state.swarm = { peers: +m[1], speed: m[2] };
+  if ((m = msg.match(/^checking (\d+) of (\d+): (".*")$/))) {
+    try { state.check = { i: +m[1], n: +m[2], name: JSON.parse(m[3]) }; } catch {}
+  }
+  if (/^asking the router for a port$/.test(msg)) state.router = true;
+  if (/^mpv is up, /.test(msg)) state.mpvUp = true;
+  if ((m = msg.match(/^buffering: (\d+)%$/))) state.buffering = +m[1];
+  if (/^buffering: done$/.test(msg)) Object.assign(state, { buffering: null, swarm: null });
+  // how many seconds a member that ran out has ready, while the party waits for it
+  if ((m = msg.match(/^buffered ahead: (\d+)$/))) state.myAhead = +m[1];
+  if ((m = msg.match(/^buffered ahead: (\d+) for (\{.*\})$/))) {
+    try { const p = JSON.parse(m[2]); state.aheadOf[p.id] = { name: p.name, secs: +m[1] }; } catch {}
+  }
+  if ((m = msg.match(/^member (joined|here|left): (\{.*\})$/))) {
+    try { member(m[1], JSON.parse(m[2]), at); } catch {}
+  }
   if (/^unreachable address:/.test(msg)) state.unreachable = true;
   if ((m = msg.match(/^do: sent request: (\{"command":\["show-text".*)$/))) {
     try {
       const text = JSON.parse(m[1]).command[1];
+      // a slow member's seconds ready, on mpv's screen every few seconds: the status has them
+      if (/^(your|.*'s) network is slow: \d+s ready$/s.test(text)) return;
       const li = addFeed(text, at);
+      if (/^resumed by /.test(text)) resumed();
       if (/^paused for .*: left$/.test(text)) state.leftPause = true;
       // if this node was playing it stops next, and that is this line, not a pause of its own
       const why = text.match(/^paused for .*: (joining|catching up)$|^paused: (out of sync) with .*$/);
@@ -1087,10 +1160,122 @@ function handle(line) {
       if (e.name === "pause" && e.data === "yes" && state.leftPause) state.leftPause = false;
       else if (e.name === "pause" && e.data === "yes" && state.stopping) state.stopping.li.lastChild.textContent = "paused by you: " + state.stopping.why;
       else if (e.name === "pause") addFeed(e.data === "yes" ? "paused by you" : "resumed by you", at);
+      if (e.name === "pause" && e.data === "no") resumed();
       if (e.name === "pause") state.stopping = null;
       if (e.name === "pause-reason") [...$("feed").querySelectorAll("li")].find(li => li.lastChild.textContent === "paused by you")?.remove();
     } catch {}
   }
+}
+
+// who is in the party, by the id its transport gave each member, so two with one name stay
+// two; whoever was there before this node is "already here", as only their names come
+function member(what, p, at) {
+  const i = state.members.findIndex(q => q.id === p.id);
+  if (what === "left") {
+    if (i >= 0) state.members.splice(i, 1);
+    delete state.aheadOf[p.id];
+  } else if (i < 0) {
+    state.members.push({ id: p.id, name: p.name, since: what === "joined" ? at : null });
+  }
+}
+// once the party plays again, nobody is waited for
+function resumed() {
+  Object.assign(state, { myAhead: null, aheadOf: {} });
+}
+const seconds = n => `${n} ${n === 1 ? "second" : "seconds"}`;
+
+const MUSHROOM = `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M12 18h8l1 11h-10z" fill="#f1ead6" stroke="#6e4b30" stroke-width="1.5"/><path d="M3 18C5 5 27 5 29 18z" fill="currentColor" stroke="#4a3220" stroke-width="1.5"/><circle cx="11" cy="12" r="2" fill="#f6efdc"/><circle cx="19" cy="9.5" r="1.6" fill="#f6efdc"/></svg>`;
+const SHELLS = ["#7d9a4a", "#a8642a", "#c8a245", "#9a3a35"].map(c => `<svg class="shell" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 17 C2 4 22 4 22 17 Z" fill="${c}" stroke="#4a3220" stroke-width="1.4"/><path d="M7 16.5 L9 10 H15 L17 16.5 M12 10 V16.5" stroke="#4a3220" stroke-width="1.1" fill="none"/><rect x="1" y="16" width="22" height="3" rx="1.5" fill="#6e4b30"/></svg>`);
+
+// the steps a party takes to start, from the form; a page reloaded mid-party has no form for
+// it, so it reads them from the lines instead (steps())
+function planFor(f) {
+  const file = f.file.trim(), torrent = /^magnet:/i.test(file) || /\.torrent$/i.test(file);
+  const steps = torrent ? ["torrent"] : /:\/\//.test(file) ? [] : [f.playlist ? "files" : "file"];
+  if (f.mode === "relay") steps.push("relay");
+  else if (!f.local) steps.push("router");
+  return [...steps, "mpv", "video"];
+}
+function steps() {
+  if (plan) return plan;
+  const s = state.torrent ? ["torrent"] : state.check ? ["files"] : [];
+  if (state.relay) s.push("relay");
+  else if (state.router) s.push("router");
+  return [...s, "mpv", "video"];
+}
+function stepDone(k) {
+  // the invite comes once the file is known, before mpv starts
+  const checked = state.shared || state.router || state.mpvUp || state.ready;
+  return { torrent: state.found || state.shared, file: checked, files: checked, relay: state.connected, router: state.shared, mpv: state.mpvUp || state.ready, video: state.ready }[k];
+}
+const swarmText = sw => [[`${sw.peers} ${sw.peers === 1 ? "peer" : "peers"}`, `, ${sw.speed}`]];
+function stepText(k) {
+  const c = state.check, sw = state.swarm, many = c ? c.n > 1 : k === "files";
+  switch (k) {
+    case "torrent": return { text: "Looking for this torrent's peers. It can take a while…", detail: sw && [[sw.peers ? `${sw.peers} ${sw.peers === 1 ? "peer" : "peers"}` : "No peers", sw.peers ? " so far" : " yet"]] };
+    case "file": case "files": return { text: `Checking the ${many ? "videos" : "video"}…`, detail: c && (many ? [[`${c.i} of ${c.n}:`, " " + c.name]] : [["", c.name]]), pct: c && many ? c.i / c.n * 100 : null };
+    case "router": return { text: "Asking your router to open a port. This takes a few seconds…" };
+    case "relay": return { text: "Connecting to the relay…" };
+    case "mpv": return { text: "Opening mpv. This takes a few seconds…" };
+    case "video": return { text: "Loading the video…", detail: sw && swarmText(sw) };
+  }
+}
+const LABELS = { torrent: "Torrent", file: "File", files: "Files", relay: "Relay", router: "Router", mpv: "mpv", video: "Video" };
+// the trail shows once a step has taken half a second, then stays until the node is in: a
+// quick start would only flash it
+const TRAIL_AFTER = 500;
+let trailTimer = 0;
+function renderTrail(list, now) {
+  const trail = $("trail");
+  if (now !== state.trailStep) Object.assign(state, { trailStep: now, trailAt: performance.now() });
+  const wait = TRAIL_AFTER - (performance.now() - state.trailAt);
+  clearTimeout(trailTimer);
+  if (now && !state.trailShown && wait > 0) trailTimer = setTimeout(poll, wait);
+  else if (now) state.trailShown = true;
+  trail.hidden = !now || !state.trailShown;
+  if (trail.hidden) return;
+  trail.replaceChildren(...list.map(k => {
+    const st = document.createElement("div");
+    st.className = "st " + (k === now ? "now-step" : stepDone(k) ? "done" : "");
+    st.innerHTML = MUSHROOM;
+    st.append(k === "files" && state.check?.n === 1 ? "File" : LABELS[k]);
+    return st;
+  }));
+}
+// detail is a list of [bold, plain] pairs
+function renderDetail(detail, pct) {
+  $("detail").hidden = !detail;
+  if (detail) $("detail").replaceChildren(...detail.flatMap(([b, plain]) => {
+    const strong = document.createElement("b");
+    strong.textContent = b;
+    return b ? [strong, plain] : [plain];
+  }));
+  $("bar").hidden = pct == null;
+  if (pct != null) $("bar").firstChild.style.width = Math.max(0, Math.min(100, pct)) + "%";
+}
+function renderMembers(show) {
+  $("members").hidden = !show;
+  if (!show) return;
+  $("member-count").textContent = 1 + state.members.length;
+  const row = (i, name, since, ahead) => {
+    const li = document.createElement("li");
+    li.innerHTML = SHELLS[i % SHELLS.length];
+    const n = document.createElement("span"), t = document.createElement("span");
+    n.className = "name"; n.textContent = name;
+    t.className = "since"; t.textContent = since ? "since " + clock(since) : "already here";
+    li.append(n, t);
+    if (ahead != null) {
+      // full at a minute ready, the longest a member waits between saying so
+      const r = document.createElement("span"), bar = document.createElement("span"), fill = document.createElement("i");
+      r.className = "ready"; bar.className = "bar";
+      fill.style.width = Math.min(100, ahead / 60 * 100) + "%";
+      bar.append(fill);
+      r.append(`${ahead}s ready`, bar);
+      li.append(r);
+    }
+    return li;
+  };
+  $("member-list").replaceChildren(row(0, "You", state.inAt, state.myAhead), ...state.members.map((p, i) => row(i + 1, p.name, p.since, state.aheadOf[p.id]?.secs)));
 }
 
 const notSameFile = () => $("playlist").checked
@@ -1098,7 +1283,8 @@ const notSameFile = () => $("playlist").checked
   : "Diagnosis: your video is not the same file as the party's. Pick the same video and start again. If the party is watching a whole folder, tick the box under File.";
 
 function render(exitErr) {
-  let text, bad = false, mood = "awake", walking = false;
+  let text, bad = false, mood = "awake", walking = false, detail = null, pct = null;
+  const list = steps(), now = running && !state.rejected ? list.find(k => !stepDone(k)) : undefined;
   if (state.rejected === "file") {
     text = notSameFile(); bad = true;
   } else if (state.rejected === "unopened") {
@@ -1115,13 +1301,22 @@ function render(exitErr) {
     text = "The relay is full right now. Trying again…"; walking = true;
   } else if (running && state.reconnecting) {
     text = "Lost the relay. Reconnecting…"; walking = true;
-  } else if (running && state.finding) {
-    text = "Looking for this torrent's peers. It can take a while…"; walking = true;
-  } else if (running && !state.ready) {
-    text = "Opening mpv. This takes a few seconds…"; walking = true;
-  } else if (running && state.relay && !state.connected) {
-    // mpv is ready before the relay's handshake can be done: in only once the room has this node
-    text = "Connecting to the relay…"; walking = true;
+  } else if (now) {
+    // the first step not done yet: the relay's handshake can end after mpv is ready, and this
+    // node is in only once the room has it
+    ({ text, detail, pct } = stepText(now)); walking = true;
+  } else if (running && state.buffering != null) {
+    text = "Your player is buffering…";
+    detail = [[`${state.buffering}%`, " ready"], ...(state.swarm ? [["", ", "], ...swarmText(state.swarm)] : [])];
+    pct = state.buffering;
+  } else if (running && state.myAhead != null) {
+    text = "Your network is slow. Everyone sees how much you have ready.";
+    detail = [[seconds(state.myAhead), " of video ready"]];
+  } else if (running && Object.keys(state.aheadOf).length) {
+    const slow = Object.values(state.aheadOf);
+    text = slow.length === 1 ? `${slow[0].name}'s network is slow. Stay paused while it buffers.`
+      : `${names(slow.map(p => p.name))} have slow networks. Stay paused while they buffer.`;
+    detail = slow.flatMap((p, i) => [[seconds(p.secs), ` ready on ${p.name}'s side`], ...(i < slow.length - 1 ? [["", ", "]] : [])]);
   } else if (running && state.unreachable) {
     text = "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.";
   } else if (running) {
@@ -1136,8 +1331,12 @@ function render(exitErr) {
   } else {
     text = "The party has ended."; mood = "sleep";
   }
-  $("status").textContent = text;
+  // a live region: rewriting the same words makes a screen reader say them again
+  if ($("status").textContent !== text) $("status").textContent = text;
   $("status").classList.toggle("bad", bad);
+  renderTrail(list, now);
+  renderDetail(detail, pct);
+  renderMembers(running && state.ready && !now);
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
   $("fields").hidden = running;
@@ -1151,7 +1350,18 @@ function render(exitErr) {
   document.querySelectorAll("#history-list button").forEach(b => b.disabled = running);
 }
 
+// one poll at a time: every second, and at once when /alive says there are new lines (soon,
+// 100ms later, so a burst of lines is read in one go); news during a poll polls again after it
+let polling = false, again = false, next = 0;
+function soon() {
+  if (polling) { again = true; return; }
+  clearTimeout(next);
+  next = setTimeout(poll, 100);
+}
 async function poll() {
+  if (polling) { again = true; return; }
+  polling = true;
+  clearTimeout(next);
   try {
     const res = await api(`/log?from=${from}&run=${run}`);
     const j = await res.json();
@@ -1166,11 +1376,14 @@ async function poll() {
       render(j.exitErr);
     }
   } catch {
+    polling = false;
     if (updated) return;
     showError("The app closed in the background. Close this window and open it again.");
     document.body.dataset.mood = "sleep";
   }
-  setTimeout(poll, 1000);
+  polling = false;
+  next = setTimeout(poll, again ? 0 : 1000);
+  again = false;
 }
 
 $("copy").addEventListener("click", async () => {
@@ -1190,6 +1403,8 @@ $("save-chart").addEventListener("click", async () => {
   a.href = URL.createObjectURL(new Blob([(j.lines || []).map(l => l + "\n").join("")], { type: "text/plain" }));
   a.download = `watchparty-${new Date().toLocaleString("sv").slice(0, 16).replace(/[ :]/g, "-")}.log`;
   a.click();
+  $("chart-saved").textContent = `Saved as ${a.download} in your downloads folder.`;
+  $("chart-saved").hidden = false;
 });
 
 document.querySelector(".cat").addEventListener("click", () => {
@@ -1302,7 +1517,10 @@ async function alive() {
   const res = await api("/alive").catch(() => null);
   if (!res?.ok) return;
   try {
-    for (const r = res.body.getReader(); !(await r.read()).done;);
+    const r = res.body.getReader(), text = new TextDecoder();
+    for (let chunk; !(chunk = await r.read()).done;) {
+      if (text.decode(chunk.value, { stream: true }).includes("data:")) soon();
+    }
   } catch {}
   alive();
 }

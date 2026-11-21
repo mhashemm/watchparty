@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/mhashemm/watchparty/mpv"
 )
 
 const (
@@ -243,11 +241,12 @@ func (s *store) note(i int, line string) bool {
 		}
 		return s.change(i, func(sess *session) { sess.openVideo(name, time.Now()) })
 	}
-	if text, ok := notice(line); ok {
-		if name, ok := strings.CutSuffix(text, mpv.HasJoined); ok {
-			person = name
-		} else if name, ok := strings.CutPrefix(text, mpv.ConnectedTo); ok {
-			person = name
+	// everyone who was in it: who joined, and who was there first
+	if after, ok := strings.CutPrefix(message(line), "member "); ok {
+		what, body, _ := strings.Cut(after, ": ")
+		m := struct{ Name string }{}
+		if (what == "joined" || what == "here") && json.Unmarshal([]byte(body), &m) == nil {
+			person = m.Name
 		}
 	}
 	if person == "" {
@@ -295,19 +294,4 @@ func message(line string) string {
 		return ""
 	}
 	return line[len("2006/01/02 15:04:05 "):]
-}
-
-func notice(line string) (string, bool) {
-	body, ok := strings.CutPrefix(message(line), "do: sent request: ")
-	if !ok {
-		return "", false
-	}
-	req := struct {
-		Command []any `json:"command"`
-	}{}
-	if json.Unmarshal([]byte(body), &req) != nil || len(req.Command) < 2 || req.Command[0] != "show-text" {
-		return "", false
-	}
-	text, ok := req.Command[1].(string)
-	return text, ok
 }

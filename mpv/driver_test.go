@@ -126,7 +126,7 @@ func start(t *testing.T, s setup) (*node, error) {
 			}
 		}
 	}()
-	observes := 4
+	observes := len(observed)
 	go n.mpv(theirs, observes, s)
 	if !s.joiner {
 		n.in <- IncomingMessage{Opened: true}

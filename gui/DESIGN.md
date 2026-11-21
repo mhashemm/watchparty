@@ -87,6 +87,18 @@ that.
   a party. One topic per section, named for what it is, never for one kind of video.
 - **Vitals** is hidden until the first `/start`. While a party runs the form fieldset
   is `hidden`, so Vitals and End sit under the title.
+  - **Starting, a mushroom trail** (chosen over a checklist and a step counter): one
+    mushroom per step, labelled Torrent or File(s), Relay or Router, mpv, Video. Done ones
+    are porcini on a solid moss path, the current one berry and larger, the rest pale on a
+    dashed path. Under the status, a detail line (numbers bold) and a striped moss bar when
+    there is a fraction. The trail shows only once a step has taken half a second (a quick
+    start would flash it), and goes once the node is in; buffering reuses detail and bar.
+  - **"In the party, N"**, a closed `details` (expanding the chosen row list): a row per
+    member with a turtle shell in rotating colours, "since 9:08 PM", or "already here" for
+    those who were in before you, whose join time the app never learns.
+  - **A slow member** (option B of three): the status says whose network is slow and to stay
+    paused, the detail how many seconds each has ready, and their row a porcini bar, full
+    at a minute. Gone on the next resume.
 - **Voice:** plain, active, sentence case. The title is "Hahas and Hehes Watch Party"
   with a small mushroom. The medical theme lives in names only: "Vitals", "Patient
   chart" (the raw log), and every error starts with "Diagnosis:" then what happened

@@ -174,7 +174,8 @@ says: 0 errors on all three. The old file's queued seek can still be said after 
 as it leaves that file, and the new one opens at 0. 0.42.0 then still says the old file's second
 (the seek's, with `playlist-pos` already on the new: 3 of 840 rounds, all with the key 1ms after),
 which the node sent with the move, so the script says no position until a set entry starts. A
-go's seek begun just before such a key is `refused` instead (once in `moves` on 0.40.0).
+go's seek begun just before such a key is `refused` instead (once in `moves` on 0.40.0; twice in 56
+`away` rounds on Windows 0.42.0, key 0ms off), naming the key's file, where mpv ends.
 
 ## Re-running
 
