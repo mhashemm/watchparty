@@ -105,7 +105,9 @@ that.
     over filler words and sending more): what only one side has, like which of your videos
     differs, is the detail line above the rows.
   - **Say something** (option B of three), between the invite and the feed once the node is in:
-    a pill field and a moss Send with the paw. A message shows in the feed as mpv's screen does.
+    a pill field and a moss Send with the paw. Under it the chat, never in the feed (option A of
+    three): rows like the feed's, newest first, yours in moss; the latest three, the rest under
+    "All messages, N" (the user's own addition). On mpv, chat is top-right (option C of three).
 - **Voice:** plain, active, sentence case. The title is "Hahas and Hehes Watch Party"
   with a small mushroom. The medical theme lives in names only: "Vitals", "Patient
   chart" (the raw log), and every error starts with "Diagnosis:" then what happened

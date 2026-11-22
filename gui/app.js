@@ -55,6 +55,8 @@ const fileName = path => /^magnet:/i.test(path || "")
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
 const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
+// how many chat messages show before "All messages" (renderSaid; reset() runs at load)
+const SAID_SHOWN = 3;
 function videoList(videos, hide) {
   const ul = document.createElement("ul");
   ul.className = "videos";
@@ -242,7 +244,8 @@ let run = 0, from = 0, saidFrom = 0, state = {}, plan = null;
 function reset() {
   state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", unreachable: false, leftPause: false, stopping: null,
     shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
-    myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false };
+    myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false, said: [] };
+  renderSaid();
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -599,10 +602,12 @@ async function poll() {
     const lines = j.lines || [], said = j.said || [];
     lines.forEach(handle);
     from = j.from + lines.length;
-    // chat, kept apart from the log and only while the party runs: gone from the feed at its end
-    said.forEach(m => addFeed(`${m.who}: ${m.text}`, new Date(m.at)).classList.add("said"));
+    // chat, kept apart from the log and only while the party runs: gone from the page at its end
     saidFrom = j.saidFrom + said.length;
-    if (!j.running) $("feed").querySelectorAll("li.said").forEach(li => li.remove());
+    if (said.length || (!j.running && state.said.length)) {
+      state.said = j.running ? state.said.concat(said) : [];
+      renderSaid();
+    }
     if (running && !j.running) loadState();
     running = j.running;
     if (run > 0) {
@@ -631,8 +636,35 @@ $("copy").addEventListener("click", async () => {
   setTimeout(() => $("copy").textContent = "Copy invite", 2000);
 });
 
-// a message goes on everyone's mpv; the feed shows it once this node's mpv does (said). Kept in
-// the box if the party didn't take it
+// the chat under the box, newest first: the latest SAID_SHOWN, the rest under "All messages".
+// Whose it is shows by its colour (ours), since a member can be named "you"
+function renderSaid() {
+  const row = m => {
+    const li = document.createElement("li"), time = document.createElement("time"), who = document.createElement("b"), text = document.createElement("span");
+    time.textContent = clock(m.at);
+    who.textContent = m.who;
+    text.textContent = m.text;
+    li.classList.toggle("ours", !!m.ours);
+    li.append(time, who, text);
+    return li;
+  };
+  const newest = state.said.slice().reverse();
+  $("said-latest").replaceChildren(...newest.slice(0, SAID_SHOWN).map(row));
+  $("said-rest").replaceChildren(...newest.slice(SAID_SHOWN).map(row));
+  $("said-count").textContent = newest.length;
+  $("said-more").hidden = newest.length <= SAID_SHOWN;
+}
+
+// a message is ChatLimit characters at most, counted as the node does: maxlength counts an
+// emoji as two
+const CHAT_LIMIT = 200;
+$("chat-text").addEventListener("input", () => {
+  const chars = [...$("chat-text").value];
+  if (chars.length > CHAT_LIMIT) $("chat-text").value = chars.slice(0, CHAT_LIMIT).join("");
+});
+
+// a message goes on everyone's mpv, and under the box once this node's mpv shows it (said).
+// Kept in the box if the party didn't take it
 $("chat-form").addEventListener("submit", async e => {
   e.preventDefault();
   const text = $("chat-text").value;

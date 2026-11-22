@@ -335,6 +335,17 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .chat input { flex: 1; min-width: 0; border-radius: 999px; padding-left: 16px; }
 .chat button { border-radius: 999px; display: flex; align-items: center; gap: 6px; }
 .chat .paw-icon { width: 18px; height: 18px; }
+.said { list-style: none; padding: 0; margin: -6px 0 12px; }
+.said li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+.said li:last-child { border-bottom: 0; }
+.said time { flex: none; color: var(--ink-soft); font-size: .875rem; min-width: 3.2em; padding-top: 1px; }
+.said b { flex: none; color: var(--bark); }
+.said span { min-width: 0; overflow-wrap: anywhere; }
+.said .ours, .said .ours b { color: var(--moss-deep); }
+.said-more { margin: -6px 0 18px; }
+.said-more summary { font-weight: 700; color: var(--bark); cursor: pointer; }
+.said-more[open] summary { margin-bottom: 6px; }
+#said-latest:empty { display: none; }
 #feed { margin: 0 0 18px; }
 #feed details { border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 0 0 8px; }
 #feed details[open] { background: #eef3df; border-color: var(--moss); }
