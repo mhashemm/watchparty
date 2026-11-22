@@ -43,6 +43,12 @@
         <ul>
           <li>Vitals lists everyone in the party now, and since when. Anyone who was in before you shows as already here.</li>
         </ul>
+        <h2>Chat</h2>
+        <ul>
+          <li>Type in <b>Say something</b> and press Enter. It shows in the top-right corner of everyone's mpv for a few seconds, and under the box here. A message holds up to 200 characters.</li>
+          <li>Your own messages are green, so nobody can pass for you by taking your name.</li>
+          <li>Messages are never saved: not in your history, not in the Patient chart, and not by the relay, which only passes them on. Use a <b>wss://</b> relay so nobody else on the network can read them. They leave this page when the party ends.</li>
+        </ul>
         <h2>Slow networks</h2>
         <ul>
           <li>When a link or torrent runs out of loaded video, the party pauses, and everyone sees how many seconds that person has ready, here and on mpv's screen.</li>
@@ -170,6 +176,19 @@
         <span class="label">Invite to share</span>
         <code id="share-text"></code>
         <button type="button" id="copy">Copy invite</button>
+      </div>
+      <div id="chat" hidden>
+        <h2>Say something</h2>
+        <form class="chat" id="chat-form">
+          <input type="text" id="chat-text" autocomplete="off" aria-label="Say something" placeholder="Shows on everyone's mpv for a few seconds">
+          <button type="submit" class="primary" id="chat-send"><svg class="paw-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="16" rx="5.5" ry="4.5"/><circle cx="5" cy="10" r="2.3"/><circle cx="9.3" cy="5.5" r="2.3"/><circle cx="14.7" cy="5.5" r="2.3"/><circle cx="19" cy="10" r="2.3"/></svg>Send</button>
+        </form>
+        <p class="hint chat-hint" id="chat-hint" role="status" hidden></p>
+        <ul class="said" id="said-latest"></ul>
+        <details class="said-more" id="said-more" hidden>
+          <summary>All messages, <span id="said-count"></span></summary>
+          <ul class="said" id="said-rest"></ul>
+        </details>
       </div>
       <h2>Party feed</h2>
       <div id="feed" aria-live="polite" aria-relevant="additions"><p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p></div>

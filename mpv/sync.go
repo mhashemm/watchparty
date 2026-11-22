@@ -172,6 +172,7 @@ func (c *Client) announce() {
 // lost shows that the relay connection dropped. This node plays on, as the party most
 // likely does too, and says where it is once back in the room (back).
 func (c *Client) lost() error {
+	c.offline = true
 	return c.showText(lostRelay)
 }
 
@@ -180,6 +181,7 @@ func (c *Client) lost() error {
 // a state other than its own. A joiner that was never answered joins again. Nothing is sent
 // while this node plays out the end, or it would stop everyone just short of it.
 func (c *Client) back() {
+	c.offline = false
 	joiner, finishing := c.stamp < 0, !c.paused && c.ending()
 	var check []byte
 	if !joiner && !finishing {
@@ -209,6 +211,12 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 	if e.Back {
 		c.back()
+		return
+	}
+	if e.typed {
+		if err := c.chatOut(e.say); err != nil {
+			log.Println("apply: chat:", err)
+		}
 		return
 	}
 	if e.Missed || e.Resend {
@@ -247,6 +255,12 @@ func (c *Client) apply(e IncomingMessage) {
 					err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
 				}
 			}
+		case chat:
+			// on its own: the error line below would quote the message
+			if err := c.chatIn(event, e); err != nil {
+				log.Println("apply: chat:", err)
+			}
+			return
 		case joined:
 			delete(c.missed, e.From)
 			err = c.answer(e.HostName, "joining")

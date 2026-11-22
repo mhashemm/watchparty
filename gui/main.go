@@ -132,7 +132,13 @@ type gui struct {
 	lines     []string
 	exitErr   string
 	// refusal is what each side plays, when the party refused this node's file
-	refusal   *party.NotTheSameFile
+	refusal *party.NotTheSameFile
+	// chatTo is the running party's Config.Chat; said, the last saidKept messages mpv showed
+	// in it, saidGone the ones dropped before them. Kept only here, never in the log or on
+	// disk, and gone once the party ends.
+	chatTo    chan<- string
+	said      []said
+	saidGone  int
 	lastPoll  time.Time
 	idleAfter time.Duration
 	pages     int
@@ -155,6 +161,7 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 	g.mux.HandleFunc("POST /pick-folder", pick(pickFolder))
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
+	g.mux.HandleFunc("POST /chat", g.chat)
 	g.mux.HandleFunc("GET /log", g.log)
 	g.mux.HandleFunc("GET /alive", g.alive)
 	g.mux.HandleFunc("GET /update", g.checkUpdate)
@@ -208,6 +215,9 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	c, cancel := context.WithCancel(g.ctx)
 	g.cancel, g.lines, g.exitErr, g.refusal = cancel, nil, "", nil
 	g.run++
+	// its own channel: a message the party never took dies with it
+	chat := make(chan string, 16)
+	g.chatTo, cfg.Chat, cfg.Heard, g.said, g.saidGone = chat, chat, g.heard(g.run), nil, 0
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
 		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
@@ -215,15 +225,39 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	g.wg.Go(func() {
 		err := party.Run(c, cfg)
 		cancel()
+		g.ended(err)
+	})
+}
+
+// heard keeps a chat message mpv showed in run, while that party runs: the last saidKept,
+// so a member sending without end can't fill this process.
+func (g *gui) heard(run int) func(who, text string, ours bool) {
+	return func(who, text string, ours bool) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.store.end(g.session)
-		g.cancel, g.session = nil, -1
-		if err != nil {
-			g.exitErr = err.Error()
+		if g.run == run && g.cancel != nil {
+			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: who, Text: text, Ours: ours})
+			if over := len(g.said) - saidKept; over > 0 {
+				g.said, g.saidGone = slices.Clone(g.said[over:]), g.saidGone+over
+			}
+			g.nudge()
 		}
-		errors.As(err, &g.refusal)
-	})
+	}
+}
+
+// saidKept is the most chat messages kept, and so the most the page lists (SAID_KEPT).
+const saidKept = 500
+
+// ended is the party gone, Run having returned err. Its chat goes with it.
+func (g *gui) ended(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.store.end(g.session)
+	g.cancel, g.session, g.said, g.saidGone = nil, -1, nil, 0
+	if err != nil {
+		g.exitErr = err.Error()
+	}
+	errors.As(err, &g.refusal)
 }
 
 func (g *gui) Write(p []byte) (int, error) {
@@ -235,13 +269,7 @@ func (g *gui) Write(p []byte) (int, error) {
 			dirty = true
 		}
 	}
-	for news := range g.news {
-		// one nudge waiting is enough: the page reads every line since its last poll
-		select {
-		case news <- struct{}{}:
-		default:
-		}
-	}
+	g.nudge()
 	g.mu.Unlock()
 	// the disk write waits until g.mu is free, which every page request needs. What it
 	// writes is the store as it is by then, so a party ending in between loses nothing.
@@ -249,6 +277,26 @@ func (g *gui) Write(p []byte) (int, error) {
 		g.store.save()
 	}
 	return len(p), nil
+}
+
+// nudge tells each page holding /alive open that there is something new; g.mu is held.
+func (g *gui) nudge() {
+	for news := range g.news {
+		// one nudge waiting is enough: the page reads everything since its last poll
+		select {
+		case news <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// said is a chat message mpv showed: who, the text, when (ms), and whether it is this node's
+// own, which only that says: a member can be named "you".
+type said struct {
+	At   int64  `json:"at"`
+	Who  string `json:"who"`
+	Text string `json:"text"`
+	Ours bool   `json:"ours"`
 }
 
 func (g *gui) state(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +355,31 @@ func (g *gui) stop(w http.ResponseWriter, r *http.Request) {
 	g.stopParty()
 }
 
+// chat hands the running party a message the person typed.
+func (g *gui) chat(w http.ResponseWriter, r *http.Request) {
+	in := struct {
+		Text string `json:"text"`
+	}{}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cancel == nil {
+		http.Error(w, "no party is running", http.StatusConflict)
+		return
+	}
+	select {
+	case g.chatTo <- in.Text:
+	default:
+		http.Error(w, "too many messages at once", http.StatusServiceUnavailable)
+	}
+}
+
 func (g *gui) stopParty() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -317,22 +390,29 @@ func (g *gui) stopParty() {
 
 func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+	saidFrom, _ := strconv.Atoi(r.URL.Query().Get("said"))
 	run, _ := strconv.Atoi(r.URL.Query().Get("run"))
 	g.mu.Lock()
 	g.lastPoll = time.Now()
 	if run != g.run {
-		from = 0
+		from, saidFrom = 0, 0
 	}
 	from = min(max(from, 0), len(g.lines))
+	// saidFrom counts every message of the run, those dropped too
+	saidFrom = min(max(saidFrom, g.saidGone), g.saidGone+len(g.said))
 	res := struct {
-		Run     int                   `json:"run"`
-		From    int                   `json:"from"`
-		Lines   []string              `json:"lines"`
-		Running bool                  `json:"running"`
-		ExitErr string                `json:"exitErr"`
-		Refusal *party.NotTheSameFile `json:"refusal,omitempty"`
-	}{g.run, from, slices.Clone(g.lines[from:]), g.cancel != nil, g.exitErr, g.refusal}
+		Run      int                   `json:"run"`
+		From     int                   `json:"from"`
+		Lines    []string              `json:"lines"`
+		SaidFrom int                   `json:"saidFrom"`
+		Said     []said                `json:"said"`
+		Running  bool                  `json:"running"`
+		ExitErr  string                `json:"exitErr"`
+		Refusal  *party.NotTheSameFile `json:"refusal,omitempty"`
+	}{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom-g.saidGone:]), g.cancel != nil, g.exitErr, g.refusal}
 	g.mu.Unlock()
+	// it carries chat, which nothing may keep: without this, Chromium writes it to its disk cache
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
 }

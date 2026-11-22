@@ -24,10 +24,11 @@ import (
 // broadcast" is a fact, not a timeout. The fake mpv runs the shipped watchparty.lua
 // (script_test.go): it models only mpv, and the script decides what it says.
 type node struct {
-	t   *testing.T
-	c   *Client
-	in  chan IncomingMessage
-	out chan []byte
+	t     *testing.T
+	c     *Client
+	in    chan IncomingMessage
+	out   chan []byte
+	typed chan string
 
 	writes chan string
 	// batch is held while one mpvSays (or mpvObeys step) writes its lines, and while mpv takes
@@ -40,6 +41,7 @@ type node struct {
 	// are. sets: what mpv was set and hasn't reported yet (mpvObeys). refuse: commands mpv
 	// answers with an error.
 	told   []string
+	chats  []string
 	sets   [][]any
 	refuse map[string]string
 	// late: mpv answers a set only after reporting it (mpvAnswersLate); held: those answers.
@@ -109,7 +111,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
 	if !s.noScript {
 		n.script = newScript(n)
 	}
@@ -134,7 +136,14 @@ func start(t *testing.T, s setup) (*node, error) {
 	for _, m := range s.heard {
 		n.in <- m
 	}
-	c, err := New(ctx, cancel, ours, n.out, n.in, s.names, s.start, s.at)
+	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, Names: s.names, Start: s.start, At: s.at, Heard: func(who, text string, ours bool) {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if ours {
+			who += " (ours)"
+		}
+		n.chats = append(n.chats, who+": "+text)
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +173,10 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		name := fmt.Sprint(req.Command[0])
 		said := strings.TrimSpace(fmt.Sprintln(req.Command...))
 		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		if name == "osd-overlay" {
+			// as mpv answers it: data is an object, not a string
+			reply = fmt.Sprintf(`{"data":{},"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		}
 		arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
 		n.mu.Lock()
 		n.listening = true
@@ -668,6 +681,13 @@ func (n *node) transportSays(m IncomingMessage) {
 	synctest.Wait()
 }
 
+// personTypes is a chat message typed in this node's GUI.
+func (n *node) personTypes(text string) {
+	n.t.Helper()
+	n.typed <- text
+	synctest.Wait()
+}
+
 // broadcasts is what it sent the party since the last call.
 func (n *node) broadcasts() []Event {
 	n.t.Helper()
@@ -692,6 +712,17 @@ func (n *node) mpvWasTold() []string {
 	told := n.told
 	n.told = nil
 	return told
+}
+
+// heardChats is every chat message the node handed on since the last call, as "who: text".
+func (n *node) heardChats() []string {
+	n.t.Helper()
+	synctest.Wait()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	chats := n.chats
+	n.chats = nil
+	return chats
 }
 
 // seeksIn is the seeks among what it told mpv.

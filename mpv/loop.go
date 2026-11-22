@@ -30,6 +30,12 @@ func (c *Client) do(args ...any) error {
 
 // ask is do, and also returns the answer's data, such as get_property_string's value.
 func (c *Client) ask(args ...any) (string, error) {
+	return c.send(false, args)
+}
+
+// send is ask; an unlogged request never reaches the log, as a chat message must not
+// (chat.go).
+func (c *Client) send(unlogged bool, args []any) (string, error) {
 	if c.gone {
 		return "", ErrClosed
 	}
@@ -46,7 +52,7 @@ func (c *Client) ask(args ...any) (string, error) {
 		c.out = newMailbox[request]()
 		go c.writer(c.out)
 	}
-	c.out.put(request{id: id, body: body})
+	c.out.put(request{id: id, body: body, unlogged: unlogged})
 	return c.await(id, replyLimit)
 }
 
@@ -121,8 +127,9 @@ func (m *mailbox[T]) poll() (T, bool) {
 
 // request is one command on its way to mpv's socket.
 type request struct {
-	id   int64
-	body []byte
+	id       int64
+	body     []byte
+	unlogged bool
 }
 
 // writer writes requests to mpv's socket in order, so the loop never blocks on mpv reading
@@ -142,7 +149,9 @@ func (c *Client) writer(out *mailbox[request]) {
 			c.post(input{unsent: r.id, err: err})
 			continue
 		}
-		log.Printf("do: sent request: %s\n", r.body)
+		if !r.unlogged {
+			log.Printf("do: sent request: %s\n", r.body)
+		}
 	}
 }
 
@@ -163,6 +172,8 @@ type input struct {
 	unsent  int64
 	err     error
 	msg     *IncomingMessage
+	// chatDue: a chat message on mpv's screen is due to go
+	chatDue bool
 }
 
 // watch runs the loop until mpv's socket closes. A reader goroutine posts mpv's lines in
@@ -223,6 +234,8 @@ func (c *Client) next() (input, bool) {
 		select {
 		case m := <-c.incoming:
 			return input{msg: &m}, true
+		case text := <-c.chat:
+			return input{msg: &IncomingMessage{typed: true, say: text}}, true
 		default:
 		}
 		if in, ok := c.inbox.poll(); ok {
@@ -231,6 +244,8 @@ func (c *Client) next() (input, bool) {
 		select {
 		case m := <-c.incoming:
 			return input{msg: &m}, true
+		case text := <-c.chat:
+			return input{msg: &IncomingMessage{typed: true, say: text}}, true
 		case <-c.inbox.ready:
 		case <-c.ctx.Done():
 			return input{}, false
@@ -256,6 +271,12 @@ func (c *Client) handle(in input) {
 		if c.waiting[in.unsent] {
 			c.replies[in.unsent] = outcome{unsent: in.err}
 		}
+	case in.chatDue:
+		c.later = append(c.later, func() {
+			if err := c.chatGoes(); err != nil {
+				log.Println("chat:", err)
+			}
+		})
 	case in.msg != nil:
 		if c.opening {
 			c.hear(*in.msg)
@@ -294,6 +315,12 @@ func (c *Client) runLater() {
 func (c *Client) mpvSaid(line []byte) {
 	event := Event{}
 	if err := json.Unmarshal(line, &event); err != nil {
+		// an answer whose data isn't a string, like osd-overlay's {}, still answers its request
+		r := Response{}
+		if json.Unmarshal(line, &r) == nil && r.RequestId > 0 && r.Error != "" && c.waiting[r.RequestId] {
+			c.replies[r.RequestId] = outcome{Response: r}
+			return
+		}
 		log.Println("Watch: unmarshal:", err, string(line))
 		return
 	}

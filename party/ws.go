@@ -145,7 +145,8 @@ func (r *relayConn) read(c context.Context, conn *websocket.Conn) error {
 		msg := wire.Message{}
 		err = json.Unmarshal(b, &msg)
 		if err != nil {
-			log.Printf("relay: unmarshal: %s: %s\n", err, b)
+			// not b: it may carry a chat message, which no log may keep (mpv/chat.go)
+			log.Printf("relay: unmarshal: %s (%d bytes)\n", err, len(b))
 			continue
 		}
 		select {

@@ -33,6 +33,11 @@ def gui_suite():
         must(f"{n} saved its settings", save_settings(n, **fields) == "Saved.", js(n, '$("settings-saved").textContent'))
         return n
 
+    def chats(n):
+        """The chat under the box, newest first, as "who: text", "ours " before this node's own."""
+        return js(n, '[...document.querySelectorAll("#said-latest li, #said-rest li")]'
+                     '.map(li => (li.classList.contains("ours") ? "ours " : "") + li.children[1].textContent + ": " + li.children[2].textContent)')
+
     def press_continue(n):
         tab(n, "history")
         run = js(n, "run")
@@ -95,7 +100,7 @@ def gui_suite():
         click(H, "#tip-button")
         ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
         sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
-        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Chat", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
         tip = js(H, '$("tip").textContent')
         ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
         click(H, "#tip h2")
@@ -211,6 +216,27 @@ def gui_suite():
         ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
         ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
 
+        part(f"[G13b] {G} says something: both feeds show it, and nothing keeps it")
+        said = "g13b-chat popcorn?"
+        # every file under a GUI's folder, its browser profile too, and its log, which a desktop can keep
+        kept = lambda: [f for n in (H, G) for f in [nodes[n]["log"], *glob.glob(f"{nodes[n]['home']}/**", recursive=True)]
+                        if os.path.isfile(f) and not os.path.islink(f) and said.encode() in open(f, "rb").read()]
+        js(G, '$("chat-text").value = "😀".repeat(205); $("chat-text").dispatchEvent(new Event("input"))')
+        ok("the box takes 200 characters, an emoji as one", js(G, '[...$("chat-text").value].length') == 200)
+        fill(G, **{"chat-text": said})
+        click(G, "#chat-form button")
+        ok(f"{H} has it under {G}'s name", until(lambda: chats(H)[:1] == [f"{G}: {said}"]), str(chats(H)))
+        ok(f"{G} has it as its own, and the box emptied", until(lambda: chats(G)[:1] == [f"ours you: {said}"] and js(G, '$("chat-text").value') == ""), str(chats(G)))
+        ok("it isn't in the feed", not any(said in line for n in (H, G) for line in feed(n)))
+        ok("no Patient chart has it", not any(js(n, f'$("log").textContent.includes({json.dumps(said)})') for n in (H, G)))
+        ok("no file has it", kept() == [], str(kept()))
+        for text in ("h1", "h2", "h3"):
+            fill(H, **{"chat-text": text})
+            click(H, "#chat-form button")
+            must(f"{H}'s {text} reached {G}", until(lambda: chats(G)[:1] == [f"{H}: {text}"]))
+        ok(f"{G} shows the latest three, the first under All messages, 4",
+           js(G, '[$("said-latest").children.length, $("said-more").hidden, $("said-count").textContent, $("said-rest").textContent.includes("popcorn")]') == [3, False, "4", True])
+
         part(f"[G14] {H}'s history has the real room and secret, and who came")
         store = js(H, '$("store-path").textContent')
         last = state(H)["history"][-1]
@@ -230,6 +256,15 @@ def gui_suite():
         ok(f"{H} paused and says why", until(lambda: get(H, "pause") is True and f"paused for {G}: left" in feed(H)), str(feed(H)))
         ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
         ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
+        ok(f"{G}'s chat went with its party", chats(G) == [] and js(G, '$("said-more").hidden'), str(chats(G)))
+        js(G, '$("chat-text").value = "too late"; $("chat-form").requestSubmit()')
+        ok("a message sent after the end stays in the box, and says why",
+           until(lambda: js(G, '[$("chat-text").value, $("chat-hint").textContent]') == ["too late", "Not sent: the party has ended."]), js(G, '$("chat-hint").textContent'))
+        js(G, '$("chat-text").value = ""; $("chat-text").dispatchEvent(new Event("input"))')
+        ok(f"{H}'s, still in it, kept it", f"{G}: {said}" in chats(H), str(chats(H)))
+        end(H)
+        ok(f"{H}'s went at its end", chats(H) == [], str(chats(H)))
+        ok("still no file has it", kept() == [], str(kept()))
 
     @case("[G16] a missing mpv is diagnosed as one")
     def _():
@@ -409,10 +444,12 @@ def gui_suite():
             ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
             ok(f"{n} plays on, and its feed says so", until(lambda: "lost the relay, reconnecting" in feed(n) and read_all(n))
                and get(n, "pause") is False, str(feed(n)[:3]))
+        ok(f"{G} can't chat meanwhile", js(G, '$("chat-text").disabled && $("chat-send").disabled'))
         own[0] = launch_relay({"CREATE_KEY": KEY}, port)
         until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
         for n in (H, G):
             must(f"{n} is back in", status(n).startswith("You're in"), status(n))
+        ok(f"{G} can chat again", js(G, '!$("chat-text").disabled && !$("chat-send").disabled'))
         must("the returns are over", quiet([H, G]))
         ok("nobody stopped", all(get(n, "pause") is False for n in (H, G)), str([feed(n)[:2] for n in (H, G)]))
 

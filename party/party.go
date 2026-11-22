@@ -60,6 +60,10 @@ type Config struct {
 	// name, and seconds into it. An entry no longer in the playlist starts as usual.
 	Entry string
 	Start float64
+	// Chat is what this node's person types to the party (the GUI's box), one message each.
+	// Heard is given each message mpv shows, and whether it is ours: chat is never logged.
+	Chat  <-chan string
+	Heard func(who, text string, ours bool)
 }
 
 var (
@@ -267,7 +271,7 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names, v.start, startAt)
+	}, conn, mpv.Config{Outgoing: outgoing, Incoming: incoming, Chat: cfg.Chat, Heard: cfg.Heard, Names: names, Start: v.start, At: startAt})
 	if err != nil {
 		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)

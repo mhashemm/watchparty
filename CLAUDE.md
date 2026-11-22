@@ -44,7 +44,7 @@ Only the node that generates an event broadcasts it, with its `stamp`: the newer
 once the safer. A peer's change reaches mpv as one set to the script, whose ack is compared with it; `seen` drops mpv's first reply to an observe.
 
 **Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
-the playlist entry go over the wire, besides a stalled stream's seconds ready, for people to judge. Anything that would put nodes out of step (a seek while
+the playlist entry go over the wire, besides what is only shown: a stalled stream's seconds ready, for people to judge, and chat (`mpv/chat.go`), never logged nor stored: `Config.Heard` hands it to the GUI. Anything that would put nodes out of step (a seek while
 playing, running out of cache, a mid-party join, a member leaving, a new playlist entry, a
 node that missed something, even while it had lost the relay) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
