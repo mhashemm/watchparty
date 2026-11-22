@@ -153,6 +153,12 @@ func TestALongChatMessageIsBrokenIntoLines(t *testing.T) {
 		{"short one", "[short one]"},
 		{strings.Repeat("ab ", 20), "[" + strings.TrimSpace(strings.Repeat("ab ", 16)) + " " + strings.TrimSpace(strings.Repeat("ab ", 4)) + "]"},
 		{"a " + long + " b", "[a " + strings.Repeat("x", chatWrap) + " xx b]"},
+		// two columns each: half as many to a line
+		{strings.Repeat("中", 30), "[" + strings.Repeat("中", 24) + " " + strings.Repeat("中", 6) + "]"},
+		{"a " + strings.Repeat("中", 24), "[a " + strings.Repeat("中", 24) + "]"},
+		{strings.Repeat("👍", 25), "[" + strings.Repeat("👍", 24) + " 👍]"},
+		// none for a mark: it stays with its letter
+		{strings.Repeat("e\u0301", 49), "[" + strings.Repeat("e\u0301", 48) + " e\u0301]"},
 	} {
 		if got := fmt.Sprint(wrapped(chatText(c.text))); got != c.want {
 			t.Errorf("%q: got %s, want %s", c.text, got, c.want)

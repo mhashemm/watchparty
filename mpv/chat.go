@@ -130,34 +130,65 @@ func chatText(s string) string {
 
 const zwj = '\u200d'
 
-// wrapped is a message's words in lines of at most chatWrap characters, a longer word cut,
-// each escaped for ASS.
+// wrapped is a message's words in lines chatWrap columns wide at most, a wider word cut, each
+// escaped for ASS.
 func wrapped(text string) []string {
 	var lines []string
-	line := []rune{}
+	var line []rune
+	used := 0
+	flush := func() {
+		if len(line) > 0 {
+			lines, line, used = append(lines, string(line)), nil, 0
+		}
+	}
 	for _, word := range strings.Fields(text) {
 		w := []rune(word)
-		for len(w) > chatWrap {
-			if len(line) > 0 {
-				lines, line = append(lines, string(line)), nil
+		for columns(w) > chatWrap {
+			flush()
+			cut, n := 0, 0
+			// a zero-width character stays with the one it marks
+			for cut < len(w) && n+cells(w[cut]) <= chatWrap {
+				n += cells(w[cut])
+				cut++
 			}
-			lines, w = append(lines, string(w[:chatWrap])), w[chatWrap:]
+			lines, w = append(lines, string(w[:cut])), w[cut:]
 		}
-		if len(line) > 0 && len(line)+1+len(w) > chatWrap {
-			lines, line = append(lines, string(line)), nil
+		if used > 0 && used+1+columns(w) > chatWrap {
+			flush()
 		}
-		if len(line) > 0 {
-			line = append(line, ' ')
+		if used > 0 {
+			line, used = append(line, ' '), used+1
 		}
-		line = append(line, w...)
+		line, used = append(line, w...), used+columns(w)
 	}
-	if len(line) > 0 {
-		lines = append(lines, string(line))
-	}
+	flush()
 	for i := range lines {
 		lines[i] = assText(lines[i])
 	}
 	return lines
+}
+
+func columns(w []rune) int {
+	n := 0
+	for _, r := range w {
+		n += cells(r)
+	}
+	return n
+}
+
+// cells is about how many columns r takes on screen: CJK and emoji take two, so 48 of them
+// would run twice as far as 48 letters, toward the notices. A mark, joiner or skin tone takes
+// none, being part of the character before it. Erring wide only breaks a line early.
+func cells(r rune) int {
+	switch {
+	case r == zwj, unicode.In(r, unicode.Mn, unicode.Me), r >= 0x1f3fb && r <= 0x1f3ff:
+		return 0
+	case r >= 0x1100 && r <= 0x115f, r >= 0x2e80 && r <= 0xa4cf && r != 0x303f, r >= 0xac00 && r <= 0xd7a3,
+		r >= 0xf900 && r <= 0xfaff, r >= 0xfe30 && r <= 0xfe4f, r >= 0xff00 && r <= 0xff60, r >= 0xffe0 && r <= 0xffe6,
+		r >= 0x1f300 && r <= 0x1f64f, r >= 0x1f680 && r <= 0x1f6ff, r >= 0x1f900 && r <= 0x1faff, r >= 0x20000 && r <= 0x3fffd:
+		return 2
+	}
+	return 1
 }
 
 // assText is text as ASS shows it, not as tags: a backslash can't start one (\N, \h), nor a
