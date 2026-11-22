@@ -97,7 +97,12 @@ end
 
 mp.register_script_message("watchparty-react", burst)
 
--- The picker. Sizes are for a 720 pixel high screen, scaled to the real one.
+-- The picker, unless the person turned it off: script-opts watchparty_reactions-picker=no as
+-- mpv starts, then watchparty-picker yes|no as they change the setting.
+local options = { picker = true }
+require("mp.options").read_options(options, "watchparty_reactions")
+
+-- Sizes are for a 720 pixel high screen, scaled to the real one.
 local button_size, button_right, button_bottom = 60, 16, 90
 local pick_size, pick_gap, pick_pad, pick_most = 52, 12, 14, 9
 -- the button hides once the mouse is still this long; the row closes once the mouse left it
@@ -261,16 +266,27 @@ hider = mp.add_periodic_timer(0.25, function()
 end)
 hider:kill()
 
+local function away()
+  mouse.x, mouse.y = -1, -1
+  shown, open = false, false
+  hovering = nil
+  grab(false)
+  render()
+end
+
+mp.register_script_message("watchparty-picker", function(on)
+  options.picker = on == "yes"
+  if not options.picker then
+    away()
+  end
+end)
+
 mp.observe_property("mouse-pos", "native", function(_, pos)
-  if not pos then
+  if not pos or not options.picker then
     return
   end
   if pos.hover == false then
-    mouse.x, mouse.y = -1, -1
-    shown, open = false, false
-    hovering = nil
-    grab(false)
-    render()
+    away()
     return
   end
   if pos.x == mouse.x and pos.y == mouse.y then

@@ -66,6 +66,10 @@ type Config struct {
 	Chat  <-chan string
 	React <-chan string
 	Heard func(mpv.Said)
+	// NoPicker starts mpv without its reaction picker (the GUI's Settings); Picker turns it on
+	// or off while the party runs
+	NoPicker bool
+	Picker   <-chan bool
 }
 
 var (
@@ -227,6 +231,9 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 	}
 	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
 	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script, "--script="+reactions)
+	if cfg.NoPicker {
+		args = append(args, "--script-opts-append="+mpv.PickerOff)
+	}
 	var names []string
 	if v.playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(v.start))
@@ -276,7 +283,7 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, mpv.Config{Outgoing: outgoing, Incoming: incoming, Chat: cfg.Chat, React: cfg.React, Heard: cfg.Heard, Names: names, Start: v.start, At: startAt})
+	}, conn, mpv.Config{Outgoing: outgoing, Incoming: incoming, Chat: cfg.Chat, React: cfg.React, Picker: cfg.Picker, Heard: cfg.Heard, Names: names, Start: v.start, At: startAt})
 	if err != nil {
 		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)

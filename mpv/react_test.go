@@ -166,6 +166,20 @@ func TestAReactionPickedWhileTheRelayIsLostIsNotSent(t *testing.T) {
 	})
 }
 
+// The person turning mpv's picker off or on in Settings reaches the script at once, mid-party.
+func TestThePickerFollowsTheSetting(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.mpvWasTold()
+		n.personSetsPicker(false)
+		n.personSetsPicker(true)
+		want := "[script-message-to " + reactionsScript + " watchparty-picker no script-message-to " + reactionsScript + " watchparty-picker yes]"
+		if got := fmt.Sprint(n.mpvWasTold()); got != want {
+			t.Fatalf("told mpv %s, want %s", got, want)
+		}
+	})
+}
+
 // Every reaction in the picker has its art, the script mpv loads parses with it, and the GUI's
 // SVG of each is well formed.
 func TestEveryReactionHasItsArt(t *testing.T) {

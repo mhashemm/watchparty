@@ -31,6 +31,7 @@ async function loadState() {
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) $(k).value = s[k] || "";
+  $("mpvPicker").checked = !s.hidePicker;
   $("mpv").placeholder = saved.defaultMpv;
   $("cacheDir").placeholder = saved.defaultCacheDir;
   $("set-relay").value = s.relay || "";
@@ -174,7 +175,7 @@ $("settings-form").addEventListener("submit", async e => {
   e.preventDefault();
   const body = { relay: $("set-relay").value };
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) body[k] = $(k).value;
-  const res = await api("/settings", body);
+  const res = await api("/settings", { ...body, hidePicker: !$("mpvPicker").checked });
   $("settings-saved").textContent = res.ok ? "Saved." : `Couldn't save: ${(await res.text()).trim()}`;
   $("settings-saved").hidden = false;
   setTimeout(() => $("settings-saved").hidden = true, 3000);
@@ -182,6 +183,7 @@ $("settings-form").addEventListener("submit", async e => {
   if (!res.ok) return;
   const mpvChanged = body.mpv.trim() !== (saved.settings.mpv || "");
   for (const [k, v] of Object.entries(body)) saved.settings[k] = v.trim();
+  saved.settings.hidePicker = !$("mpvPicker").checked;
   if (mpvChanged) checkTools();
 });
 

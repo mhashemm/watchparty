@@ -137,8 +137,10 @@ type gui struct {
 	// chatTo and reactTo are the running party's Config.Chat and React; said, the last saidKept messages mpv showed
 	// in it, saidGone the ones dropped before them. Kept only here, never in the log or on
 	// disk, and gone once the party ends.
-	chatTo    chan<- string
-	reactTo   chan<- string
+	chatTo  chan<- string
+	reactTo chan<- string
+	// pickerTo is the running party's Config.Picker: Settings turning mpv's picker on or off
+	pickerTo  chan bool
 	said      []said
 	saidGone  int
 	lastPoll  time.Time
@@ -224,6 +226,11 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	react := make(chan string, 4)
 	g.chatTo, cfg.Chat, cfg.Heard, g.said, g.saidGone = chat, chat, g.heard(g.run), nil, 0
 	g.reactTo, cfg.React = react, react
+	picker := make(chan bool, 1)
+	g.pickerTo, cfg.Picker = picker, picker
+	g.store.mu.Lock()
+	cfg.NoPicker = g.store.Settings.HidePicker
+	g.store.mu.Unlock()
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
 		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
@@ -335,14 +342,28 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.store.mu.Lock()
-	defer g.store.mu.Unlock()
 	s := &g.store.Settings
 	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
 	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
 	s.CacheDir = strings.TrimSpace(in.CacheDir)
+	s.HidePicker = in.HidePicker
 	err = g.store.saveSettings()
+	g.store.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+	// the running party's mpv follows at once; an earlier change it hasn't taken yet gives way
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cancel != nil {
+		select {
+		case <-g.pickerTo:
+		default:
+		}
+		select {
+		case g.pickerTo <- !in.HidePicker:
+		default:
+		}
 	}
 }
 

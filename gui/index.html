@@ -53,6 +53,7 @@
         <ul>
           <li>Press the smiley beside <b>Send</b>, or move the mouse over mpv and click the smiley in its bottom-right corner. Pick an emoji, scrolling for more: it bursts across everyone's mpv and shows under the box here.</li>
           <li>Each person can react once every 2 seconds. Like messages, reactions are never saved.</li>
+          <li>To keep mpv's screen clear, turn off <b>Show the reaction picker on mpv</b> in Settings.</li>
           <li>The emoji art is <b>Twemoji</b> (github.com/jdecked/twemoji, CC-BY 4.0), redrawn as shapes for mpv.</li>
         </ul>
         <h2>Slow networks</h2>
@@ -303,6 +304,10 @@
         <div class="field">
           <label for="mpvFlags">Extra mpv options</label>
           <input type="text" id="mpvFlags" placeholder="--fullscreen --volume=70">
+        </div>
+        <div class="field">
+          <label class="check"><input type="checkbox" id="mpvPicker" checked> Show the reaction picker on mpv</label>
+          <p class="hint">The smiley in mpv's corner while the mouse moves. The one beside Send stays.</p>
         </div>
         <div class="grid">
           <div class="field">

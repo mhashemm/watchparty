@@ -24,12 +24,13 @@ import (
 // broadcast" is a fact, not a timeout. The fake mpv runs the shipped watchparty.lua
 // (script_test.go): it models only mpv, and the script decides what it says.
 type node struct {
-	t     *testing.T
-	c     *Client
-	in    chan IncomingMessage
-	out   chan []byte
-	typed chan string
-	picks chan string
+	t      *testing.T
+	c      *Client
+	in     chan IncomingMessage
+	out    chan []byte
+	typed  chan string
+	picks  chan string
+	picker chan bool
 
 	writes chan string
 	// batch is held while one mpvSays (or mpvObeys step) writes its lines, and while mpv takes
@@ -112,7 +113,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), picks: make(chan string, 8), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), picks: make(chan string, 8), picker: make(chan bool, 1), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
 	if !s.noScript {
 		n.script = newScript(n)
 	}
@@ -137,7 +138,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	for _, m := range s.heard {
 		n.in <- m
 	}
-	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, React: n.picks, Names: s.names, Start: s.start, At: s.at, Heard: func(m Said) {
+	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, React: n.picks, Picker: n.picker, Names: s.names, Start: s.start, At: s.at, Heard: func(m Said) {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		if m.Ours {
@@ -697,6 +698,13 @@ func (n *node) personTypes(text string) {
 func (n *node) personPicks(code string) {
 	n.t.Helper()
 	n.picks <- code
+	synctest.Wait()
+}
+
+// personSetsPicker is the person turning mpv's reaction picker on or off in the GUI's Settings.
+func (n *node) personSetsPicker(on bool) {
+	n.t.Helper()
+	n.picker <- on
 	synctest.Wait()
 }
 

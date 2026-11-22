@@ -29,6 +29,18 @@ const (
 	reactPicked = "watchparty-reacted"
 )
 
+// PickerOff is the script-opts that start mpv with its reaction picker off.
+const PickerOff = reactionsScript + "-picker=no"
+
+// showPicker turns mpv's reaction picker on or off.
+func (c *Client) showPicker(on bool) error {
+	yes := "no"
+	if on {
+		yes = "yes"
+	}
+	return c.do("script-message-to", reactionsScript, "watchparty-picker", yes)
+}
+
 // reactNotSent is what this node's screen says of a reaction picked while it has lost the relay.
 const reactNotSent = "your reaction wasn't sent: lost the relay, reconnecting"
 

@@ -26,6 +26,8 @@ type settings struct {
 	PPort     string `json:"pport"`
 	Local     bool   `json:"local"`
 	Port      string `json:"port"`
+	// HidePicker turns mpv's reaction picker off (Settings); the GUI's stays
+	HidePicker bool `json:"hidePicker,omitempty"`
 }
 
 type session struct {

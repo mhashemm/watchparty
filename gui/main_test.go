@@ -336,6 +336,44 @@ func TestChatGoesToTheRunningParty(t *testing.T) {
 	}
 }
 
+// mpv's reaction picker is on unless Settings turns it off; a change reaches a running party at
+// once, the latest one if it hadn't taken the one before.
+func TestThePickerSettingReachesTheRunningParty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	g := newGUI(context.Background(), "127.0.0.1:1", openStore(dir+"/gui.json"))
+	save := func(body string) {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/settings", strings.NewReader(body))
+		r.Host = g.host
+		r.Header.Set("X-Token", g.token)
+		w := httptest.NewRecorder()
+		g.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("saving %s: %d %s", body, w.Code, w.Body)
+		}
+	}
+	if g.store.Settings.HidePicker {
+		t.Fatal("off before anyone turned it off")
+	}
+	save(`{"hidePicker":true}`)
+	if !openStore(dir + "/gui.json").Settings.HidePicker {
+		t.Fatal("turning it off wasn't saved")
+	}
+	picker := make(chan bool, 1)
+	g.cancel, g.pickerTo = func() {}, picker
+	save(`{"hidePicker":false}`)
+	save(`{"hidePicker":true}`)
+	select {
+	case got := <-picker:
+		if got != false || len(picker) != 0 {
+			t.Fatalf("the party got on=%v, then %d more; want only the latest, off", got, len(picker))
+		}
+	default:
+		t.Fatal("the change never reached the party")
+	}
+}
+
 // A reaction goes to the running party too, on its own channel, and only one of the picker's.
 func TestAReactionGoesToTheRunningParty(t *testing.T) {
 	t.Parallel()
