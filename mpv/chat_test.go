@@ -160,6 +160,25 @@ func TestALongChatMessageIsBrokenIntoLines(t *testing.T) {
 	}
 }
 
+// A message loses what can't be seen: a member could hide text, turn it around or send one
+// that looks empty. Any kind of space is one space; the joiner of an emoji stays.
+func TestAChatMessageLosesWhatCantBeSeen(t *testing.T) {
+	t.Parallel()
+	family := "👨\u200d👩\u200d👧"
+	for _, c := range []struct{ text, want string }{
+		{"hi\u202eereht", "hiereht"},
+		{"a\u200bb\u2066c\ufeffd", "abcd"},
+		{"a\u00a0b\u2028c\u3000d\u0085e", "a b c d e"},
+		{family + " ok", family + " ok"},
+		{"a \u200d b", "a b"},
+		{"\u200d \u200b\u202e \u0085", ""},
+	} {
+		if got := chatText(c.text); got != c.want {
+			t.Errorf("%+q: got %+q, want %+q", c.text, got, c.want)
+		}
+	}
+}
+
 // A message is cut to ChatLimit characters, not bytes, on both sides: a member's may not have
 // been. One with nothing in it is neither sent nor shown.
 func TestAChatMessageIsCutAndAnEmptyOneDropped(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ChatLimit is the most characters a chat message carries.
@@ -108,14 +109,26 @@ func (c *Client) drawChat() error {
 }
 
 // chatText is a message on one line, its runs of spaces and control characters made one
-// space, and cut to ChatLimit characters.
+// space, without the invisible format characters (unicode.Cf) a member could hide text with,
+// turn it around (U+202E) or send an empty-looking message with, and cut to ChatLimit
+// characters. The zero-width joiner stays: it makes one emoji of several, 👨‍👩‍👧.
 func chatText(s string) string {
-	s = strings.Join(strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r < 0x20 || r == 0x7f }), " ")
+	s = strings.Map(func(r rune) rune {
+		if r != zwj && unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	words := strings.FieldsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
+	words = slices.DeleteFunc(words, func(w string) bool { return strings.Trim(w, string(zwj)) == "" })
+	s = strings.Join(words, " ")
 	if r := []rune(s); len(r) > ChatLimit {
 		s = strings.TrimSpace(string(r[:ChatLimit]))
 	}
 	return s
 }
+
+const zwj = '\u200d'
 
 // wrapped is a message's words in lines of at most chatWrap characters, a longer word cut,
 // each escaped for ASS.
