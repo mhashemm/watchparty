@@ -211,6 +211,19 @@ def gui_suite():
         ok(f"{H}'s feed says you", feed(H)[:1] == ["paused by you"], str(feed(H)))
         ok(f"{G}'s feed credits {H}", f"paused by {H}" in feed(G), str(feed(G)))
 
+        part(f"[G13b] {G} says something: both feeds show it, and nothing keeps it")
+        said = "g13b-chat popcorn?"
+        # every file under a GUI's folder, its browser profile too, and its log, which a desktop can keep
+        kept = lambda: [f for n in (H, G) for f in [nodes[n]["log"], *glob.glob(f"{nodes[n]['home']}/**", recursive=True)]
+                        if os.path.isfile(f) and said.encode() in open(f, "rb").read()]
+        ok("a message holds 200 characters", js(G, '$("chat-text").maxLength') == 200)
+        fill(G, **{"chat-text": said})
+        click(G, "#chat-form button")
+        ok(f"{H}'s feed has it under {G}'s name", until(lambda: f"{G}: {said}" in feed(H)), str(feed(H)))
+        ok(f"{G}'s feed has it as yours, and the box emptied", until(lambda: f"you: {said}" in feed(G) and js(G, '$("chat-text").value') == ""), str(feed(G)))
+        ok("no Patient chart has it", not any(js(n, f'$("log").textContent.includes({json.dumps(said)})') for n in (H, G)))
+        ok("no file has it", kept() == [], str(kept()))
+
         part(f"[G14] {H}'s history has the real room and secret, and who came")
         store = js(H, '$("store-path").textContent')
         last = state(H)["history"][-1]
@@ -230,6 +243,11 @@ def gui_suite():
         ok(f"{H} paused and says why", until(lambda: get(H, "pause") is True and f"paused for {G}: left" in feed(H)), str(feed(H)))
         ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
         ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
+        ok(f"{G}'s feed let the chat go with its party", f"you: {said}" not in feed(G), str(feed(G)))
+        ok(f"{H}'s, still in it, kept it", f"{G}: {said}" in feed(H), str(feed(H)))
+        end(H)
+        ok(f"{H}'s went at its end", f"{G}: {said}" not in feed(H), str(feed(H)))
+        ok("still no file has it", kept() == [], str(kept()))
 
     @case("[G16] a missing mpv is diagnosed as one")
     def _():

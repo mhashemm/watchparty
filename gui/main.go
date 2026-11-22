@@ -399,6 +399,8 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 		Refusal  *party.NotTheSameFile `json:"refusal,omitempty"`
 	}{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom:]), g.cancel != nil, g.exitErr, g.refusal}
 	g.mu.Unlock()
+	// it carries chat, which nothing may keep: without this, Chromium writes it to its disk cache
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
 }
