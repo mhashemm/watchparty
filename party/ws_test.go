@@ -1,12 +1,17 @@
 package party
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -541,4 +546,79 @@ func TestHeldUntilTheRoomOpens(t *testing.T) {
 	if !errors.Is(err, errRejected) || !strings.Contains(err.Error(), "did not open") {
 		t.Fatalf("got %v, want errRejected saying the room did not open", err)
 	}
+}
+
+// A frame this node can't read is logged without its bytes: it may hold a chat message, and
+// the log goes to stderr, which a desktop can keep on disk. The frame after it is read, so
+// the line was written by then.
+func TestAnUnreadableFrameIsNotQuotedInTheLog(t *testing.T) {
+	t.Parallel()
+	const secret = "chat-in-a-broken-frame-4f1a"
+	logged.watch(secret, "relay: unmarshal")
+	addr := stub(t, func(_ int, w http.ResponseWriter, r *http.Request) {
+		conn := accept(t, w, r)
+		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"peer","from":"p1","event":{"name":"chat","data":"`+secret+`"}`))
+		conn.Write(r.Context(), websocket.MessageText, []byte(`{"hostname":"peer","from":"p1","event":{"name":"after"}}`))
+		conn.Read(r.Context())
+	})
+	incoming := make(chan mpv.IncomingMessage, 4)
+	c, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	go newRelayConn(addr, incoming).Connect(c, cancel)
+	for {
+		select {
+		case m := <-incoming:
+			if m.Lost || m.Back {
+				continue
+			}
+			if !logged.saw("relay: unmarshal") {
+				t.Fatal("the broken frame was never logged")
+			}
+			if logged.saw(secret) {
+				t.Fatal("the log quotes the broken frame")
+			}
+			return
+		case <-time.After(5 * time.Second):
+			t.Fatal("the frame after the broken one never arrived")
+		}
+	}
+}
+
+// logged is everything the package's tests logged, kept only as whether it held a text.
+var logged = &logSpy{seen: map[string]bool{}}
+
+func TestMain(m *testing.M) {
+	log.SetOutput(io.MultiWriter(os.Stderr, logged))
+	os.Exit(m.Run())
+}
+
+// logSpy remembers which of the texts it watches for were written.
+type logSpy struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+func (l *logSpy) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for text := range l.seen {
+		if bytes.Contains(p, []byte(text)) {
+			l.seen[text] = true
+		}
+	}
+	return len(p), nil
+}
+
+func (l *logSpy) watch(texts ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, text := range texts {
+		l.seen[text] = false
+	}
+}
+
+func (l *logSpy) saw(text string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seen[text]
 }
