@@ -562,6 +562,7 @@ function render(exitErr, refusal) {
   renderDetail(refusal?.detail || detail, pct);
   renderCompare(refusal);
   renderMembers(running && state.ready && !now);
+  $("chat").hidden = !(running && state.ready && !now);
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
   $("fields").hidden = running;
@@ -620,6 +621,17 @@ $("copy").addEventListener("click", async () => {
     $("copy").textContent = "Press Ctrl+C to copy";
   }
   setTimeout(() => $("copy").textContent = "Copy invite", 2000);
+});
+
+// a message goes on everyone's mpv; the feed shows it once this node's mpv does. Kept in the box
+// if the party didn't take it
+$("chat-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = $("chat-text").value;
+  if (!text.trim()) return;
+  try {
+    if ((await api("/chat", { text })).ok) $("chat-text").value = "";
+  } catch {}
 });
 
 $("save-chart").addEventListener("click", async () => {

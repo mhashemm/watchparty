@@ -331,6 +331,10 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .rows .ready .bar i { background: repeating-linear-gradient(-45deg, var(--porcini) 0 8px, #b97638 8px 16px); }
 .share { background: #f3eedf; border: 2px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 18px; }
 .share code { display: block; font: .9rem/1.4 ui-monospace, Consolas, monospace; word-break: break-all; margin: 6px 0 10px; color: var(--soil); }
+.chat { display: flex; gap: 8px; margin-bottom: 18px; }
+.chat input { flex: 1; min-width: 0; border-radius: 999px; padding-left: 16px; }
+.chat button { border-radius: 999px; display: flex; align-items: center; gap: 6px; }
+.chat .paw-icon { width: 18px; height: 18px; }
 #feed { margin: 0 0 18px; }
 #feed details { border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 0 0 8px; }
 #feed details[open] { background: #eef3df; border-color: var(--moss); }
