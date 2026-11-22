@@ -105,10 +105,20 @@ type IncomingMessage struct {
 	// delivers it to From alone.
 	Missed, Resend bool
 	Reply          chan<- []byte
-	// typed: a chat message this node's person typed (Config.Chat), say. Unexported, so no
-	// transport can make one: it rides the queue only to be handled in turn.
-	typed bool
-	say   string
+	// typed: a chat message this node's person typed (Config.Chat), say, or a reaction they
+	// picked (Config.React or mpv's picker), reaction. Unexported, so no transport can make
+	// one: it rides the queue only to be handled in turn.
+	typed    bool
+	say      string
+	reaction string
+}
+
+// Said is a chat message or a reaction mpv showed, as heard gets it: who, the text or the
+// reaction's code (Reactions), and whether it is this node's own (then who is "you"; a member
+// can be named so too).
+type Said struct {
+	Who, Text, React string
+	Ours             bool
 }
 
 // Config is what New needs besides mpv's connection.
@@ -116,11 +126,14 @@ type Config struct {
 	// Outgoing takes what this node sends the party; Incoming hands it the transport's messages.
 	Outgoing chan<- []byte
 	Incoming <-chan IncomingMessage
-	// Chat is what this node's person types to the party, one message each. Heard, if not nil,
-	// is given each chat message mpv shows: who, the text, and whether it is this node's own
-	// (then who is "you"; a member can be named so too).
+	// Chat is what this node's person types to the party, one message each, and React the
+	// reactions they pick. Heard, if not nil, is given each of either mpv shows.
 	Chat  <-chan string
-	Heard func(who, text string, ours bool)
+	React <-chan string
+	Heard func(Said)
+	// Picker sets when mpv's reaction picker shows (PickerModes) as the person changes the
+	// setting; it starts as mpv's script-opts say (PickerOpts)
+	Picker <-chan string
 	// Names are the playlist entries in order, nil for a single file. Start is the entry mpv
 	// opens on, needed because a peer's answer can arrive before mpv reports it. A continued
 	// party seeks that entry to At once it is open (join).
@@ -180,11 +193,15 @@ type Client struct {
 	incoming <-chan IncomingMessage
 	// offline: the relay connection is lost (Lost), until Back; a chat typed meanwhile isn't sent
 	offline bool
-	// chat: what the person types (Config.Chat); heard is given each chat message mpv shows;
-	// chatShown is the chat on mpv's screen now
+	// chat: what the person types (Config.Chat), react what they pick (Config.React); heard
+	// is given each chat message and reaction mpv shows; chatShown is the chat on mpv's screen
+	// now; reacted is when each member ("" this node) last reacted
 	chat      <-chan string
-	heard     func(who, text string, ours bool)
+	react     <-chan string
+	picker    <-chan string
+	heard     func(Said)
 	chatShown []onScreen
+	reacted   map[string]time.Time
 	inbox     *mailbox[input]
 	out       *mailbox[request]
 	// queue: transport messages waiting while another's change is applied (applying)
@@ -375,7 +392,10 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, cfg Config) 
 		conn:       conn,
 		outgoing:   cfg.Outgoing,
 		chat:       cfg.Chat,
+		react:      cfg.React,
+		picker:     cfg.Picker,
 		heard:      cfg.Heard,
+		reacted:    map[string]time.Time{},
 		paused:     true,
 		seen:       map[string]bool{},
 		missed:     map[string]bool{},

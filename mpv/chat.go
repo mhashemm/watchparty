@@ -71,7 +71,7 @@ func (c *Client) chatIn(e Event, m IncomingMessage) error {
 // showChat hands a message to heard and puts it on mpv's screen, under the ones before it.
 func (c *Client) showChat(who, text string, ours bool) error {
 	if c.heard != nil {
-		c.heard(who, text, ours)
+		c.heard(Said{Who: who, Text: text, Ours: ours})
 	}
 	c.chatShown = append(c.chatShown, onScreen{who, text, ours, time.Now().Add(chatOnScreen)})
 	c.chatShown = c.chatShown[max(0, len(c.chatShown)-chatLines):]

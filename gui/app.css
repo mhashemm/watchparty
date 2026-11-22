@@ -336,6 +336,16 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .chat button { border-radius: 999px; display: flex; align-items: center; gap: 6px; }
 .chat .paw-icon { width: 18px; height: 18px; }
 .chat-hint { margin: -12px 0 14px 16px; }
+.chat .react-open { all: unset; box-sizing: content-box; cursor: pointer; flex: none; width: 26px; height: 26px; padding: 9px; border: 2px solid var(--line); border-radius: 999px; display: inline-flex; background: #fff; color: var(--bark); }
+.chat .react-open:hover, .chat .react-open[aria-expanded="true"] { background: #f3eedf; }
+.chat .react-open:focus-visible, .react-strip button:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 2px; }
+.chat .react-open:disabled { opacity: .55; cursor: default; }
+.react-open svg { width: 100%; height: 100%; fill: currentColor; }
+.react-strip { display: flex; gap: 2px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 6px 8px; margin: -10px 0 14px; border: 2px solid var(--line); border-radius: 14px; background: #fffdf6; scrollbar-width: thin; }
+.react-strip button { all: unset; cursor: pointer; flex: none; width: 34px; height: 34px; padding: 4px; border-radius: 8px; display: inline-flex; scroll-snap-align: start; }
+.react-strip button:hover { background: var(--line); }
+.react-strip svg, .said .react svg { width: 100%; height: 100%; }
+.said .react { display: inline-flex; width: 22px; height: 22px; }
 .said { list-style: none; padding: 0; margin: -6px 0 12px; }
 .said li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
 .said li:last-child { border-bottom: 0; }

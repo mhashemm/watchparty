@@ -108,6 +108,13 @@ that.
     a pill field and a moss Send with the paw. Under it the chat, never in the feed (option A of
     three): rows like the feed's, newest first, yours in moss; the latest three, the rest under
     "All messages, N" (the user's own addition). On mpv, chat is top-right (option C of three).
+  - **Reactions:** an outlined smiley (icon 1 of three, like WhatsApp's) beside Send opens one
+    row of the 26 emoji that scrolls sideways, the wheel too; a pick closes it. On mpv the same
+    smiley shows bottom-right while the mouse moves and opens the row in the middle (C of
+    three, one row the user's own change). The art is Twemoji's, drawn the same on both.
+    Settings' "Reaction picker on mpv" (cards like the connection's, the user's ask): when the
+    mouse moves (default), near its corner, or never; applied at once. After a pick both smileys
+    rest 2s, mpv's faded, the GUI's disabled.
 - **Voice:** plain, active, sentence case. The title is "Hahas and Hehes Watch Party"
   with a small mushroom. The medical theme lives in names only: "Vitals", "Patient
   chart" (the raw log), and every error starts with "Diagnosis:" then what happened

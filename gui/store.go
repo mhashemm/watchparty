@@ -26,6 +26,9 @@ type settings struct {
 	PPort     string `json:"pport"`
 	Local     bool   `json:"local"`
 	Port      string `json:"port"`
+	// MpvPicker is when mpv's reaction picker shows (mpv.PickerModes, "" the default); the
+	// GUI's always does
+	MpvPicker string `json:"mpvPicker,omitempty"`
 }
 
 type session struct {

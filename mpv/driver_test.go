@@ -24,11 +24,13 @@ import (
 // broadcast" is a fact, not a timeout. The fake mpv runs the shipped watchparty.lua
 // (script_test.go): it models only mpv, and the script decides what it says.
 type node struct {
-	t     *testing.T
-	c     *Client
-	in    chan IncomingMessage
-	out   chan []byte
-	typed chan string
+	t      *testing.T
+	c      *Client
+	in     chan IncomingMessage
+	out    chan []byte
+	typed  chan string
+	picks  chan string
+	picker chan string
 
 	writes chan string
 	// batch is held while one mpvSays (or mpvObeys step) writes its lines, and while mpv takes
@@ -111,7 +113,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), picks: make(chan string, 8), picker: make(chan string, 1), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
 	if !s.noScript {
 		n.script = newScript(n)
 	}
@@ -136,13 +138,17 @@ func start(t *testing.T, s setup) (*node, error) {
 	for _, m := range s.heard {
 		n.in <- m
 	}
-	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, Names: s.names, Start: s.start, At: s.at, Heard: func(who, text string, ours bool) {
+	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, React: n.picks, Picker: n.picker, Names: s.names, Start: s.start, At: s.at, Heard: func(m Said) {
 		n.mu.Lock()
 		defer n.mu.Unlock()
-		if ours {
-			who += " (ours)"
+		if m.Ours {
+			m.Who += " (ours)"
 		}
-		n.chats = append(n.chats, who+": "+text)
+		if m.React != "" {
+			n.chats = append(n.chats, m.Who+" reacts "+m.React)
+		} else {
+			n.chats = append(n.chats, m.Who+": "+m.Text)
+		}
 	}})
 	if err != nil {
 		return nil, err
@@ -226,7 +232,7 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 			reply = fmt.Sprintf(`{"request_id":%d,"error":"error running command"}`+"\n", req.RequestId)
 		}
 		taken := !refused
-		if name != "observe_property_string" && name != "script-message-to" {
+		if name != "observe_property_string" && !(name == "script-message-to" && arg(1) == scriptName) {
 			n.told = append(n.told, said)
 			if name == setProperty && taken {
 				n.sets = append(n.sets, req.Command[1:])
@@ -688,6 +694,20 @@ func (n *node) personTypes(text string) {
 	synctest.Wait()
 }
 
+// personPicks is a reaction picked in this node's GUI.
+func (n *node) personPicks(code string) {
+	n.t.Helper()
+	n.picks <- code
+	synctest.Wait()
+}
+
+// personSetsPicker is the person setting when mpv's reaction picker shows, in the GUI's Settings.
+func (n *node) personSetsPicker(mode string) {
+	n.t.Helper()
+	n.picker <- mode
+	synctest.Wait()
+}
+
 // broadcasts is what it sent the party since the last call.
 func (n *node) broadcasts() []Event {
 	n.t.Helper()
@@ -714,7 +734,8 @@ func (n *node) mpvWasTold() []string {
 	return told
 }
 
-// heardChats is every chat message the node handed on since the last call, as "who: text".
+// heardChats is every chat message and reaction the node handed on since the last call, as
+// "who: text" or "who reacts code".
 func (n *node) heardChats() []string {
 	n.t.Helper()
 	synctest.Wait()

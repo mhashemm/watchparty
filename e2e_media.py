@@ -244,6 +244,124 @@ def media_suite():
         ok("nobody was told to stop", not any(s.startswith("paused") for s in osd("nodeEnd4"))
            and [s for s in osd("nodeEnd3") if s.startswith("paused")] == ["paused for nodeEnd4: joining"], f"{osd('nodeEnd4')[-3:]} {osd('nodeEnd3')[-3:]}")
 
+    @case("[R15j] mpv's reaction picker: its smiley opens the row, a click picks, it rests, and never means never")
+    def _():
+        # a window of its own: with --vo=null, mpv says the mouse is never over it. mpv is the
+        # node's child itself, not xvfb-run's, or the node's end would leave it running
+        x = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x720x24"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        display = x.stdout.readline().decode().strip()
+        xmpv = f"{RUN}/xmpv"
+        script(xmpv, f'DISPLAY=:{display} exec mpv "$@" --vo=x11 --geometry=1280x720 --no-border --no-osc')
+        launch("rxA", room="reacting", mpv=xmpv)
+        must("it is up", until(lambda: booted("rxA") and connected("rxA"), BOOT))
+        resolve("rxA")
+        sock = nodes["rxA"]["sock"]
+        dims = (ipc(sock, "get_property", "osd-dimensions") or {}).get("data") or {}
+        w, h = dims.get("w") or 1280, dims.get("h") or 720
+
+        u = h / 720
+        size, gap, pad = 52 * u, 12 * u, 14 * u
+        shown = max(1, min(9, int((w - 2 * pad - 32 * u + gap) // (size + gap))))
+        x0 = (w - (2 * pad + shown * size + (shown - 1) * gap)) / 2
+        button = (int(w - 16 * u - 30 * u), int(h - 90 * u - 30 * u))
+        row = lambda i: (int(x0 + pad + i * (size + gap) + size / 2), int(h / 2))
+        # what the picker says reaches every client of mpv's, this listener too
+        picked = []
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.connect(sock)
+
+        def listen():
+            for line in listener.makefile("rb"):
+                with contextlib.suppress(ValueError):
+                    m = json.loads(line)
+                    if m.get("event") == "client-message" and m["args"][:1] == ["watchparty-reacted"]:
+                        picked.append(m["args"][1])
+        threading.Thread(target=listen, daemon=True).start()
+
+        def holds():
+            """Whether the picker holds mpv's click: it takes clicks only while over itself."""
+            b = (ipc(sock, "get_property", "input-bindings") or {}).get("data") or []
+            return any(c.get("cmd", "").endswith("/watchparty-picker-MBTN_LEFT") for c in b)
+
+        def move(x, y):
+            ipc(sock, "mouse", x + 1, y)
+            ipc(sock, "mouse", x, y)
+
+        def over(x, y):
+            """Moves the mouse to x, y, a pixel off and back each try, until the picker holds."""
+            return until(lambda: move(x, y) or holds(), 5)
+
+        def not_over(x, y, why):
+            move(x, y)
+            hold(0.4, why)
+            return not holds()
+
+        def click(x, y):
+            ipc(sock, "mouse", x, y, 0, "single")
+
+        ipc(sock, "mouse", w // 3, h // 3)
+        must("the smiley shows and takes clicks", over(*button))
+        click(*button)
+        must("its row opens", over(*row(0)))
+        click(*row(0))
+        ok("the first emoji is picked", until(lambda: picked == ["1f602"]), str(picked))
+        must("the smiley is still there", over(*button))
+        click(*button)
+        ok("so a pick right after isn't made: the picker rests, its smiley opens nothing",
+           not_over(*row(1), "the row would open") and picked == ["1f602"], str(picked))
+        hold(1.6, "the rest ends")
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "off")
+        ipc(sock, "mouse", w // 3, h // 3)
+        ok("never means no smiley to click", not_over(*button, "the smiley would show"))
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "move")
+        ipc(sock, "mouse", w // 3, h // 3)
+        must("back on, it shows again", over(*button))
+        click(*button)
+        must("and opens", over(*row(1)))
+        click(*row(1))
+        ok("the second is picked", until(lambda: picked == ["1f602", "1f62d"]), str(picked))
+        listener.close()
+
+        # what the picker shows leaves no trace in mpv's properties: its areas on screen, against
+        # the same areas while it is off (the video is paused, so nothing else changes there)
+        shot = f"{RUN}/rxA.png"
+
+        def area(x, y, aw, ah):
+            ipc(sock, "screenshot-to-file", shot, "window")
+            return subprocess.run(["ffmpeg", "-v", "error", "-i", shot, "-vf", f"crop={int(aw)}:{int(ah)}:{int(x)}:{int(y)}",
+                                   "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True).stdout
+
+        def differs(a, b):
+            return len(a) != len(b) or sum(abs(p - q) for p, q in zip(a, b)) / max(1, len(a)) > 4
+        row_area = lambda: area(x0, (h - size) / 2 - pad, 2 * pad + shown * size + (shown - 1) * gap, size + 2 * pad)
+        button_area = lambda: area(w - 76 * u, h - 150 * u, 60 * u, 60 * u)
+        wiggled = itertools.count()
+
+        def wiggle(x, y):
+            ipc(sock, "mouse", x + next(wiggled) % 2, y)
+
+        hold(2.2, "the burst flies off and the rest ends")
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "off")
+        row_off, button_off = row_area(), button_area()
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "move")
+        must("the smiley shows", over(*button))
+        click(*button)
+        must("its row opens", over(*row(0)) and differs(row_area(), row_off))
+        ok("moving away closes the row", until(lambda: wiggle(w // 4, h // 4) or not differs(row_area(), row_off), 5))
+        ok("while the smiley stays, as the mouse moves", differs(button_area(), button_off))
+
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "off")
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "corner")
+        for _ in range(4):
+            wiggle(w // 4, h // 4)
+        hold(0.4, "a move far from the corner would show the smiley")
+        ok("near its corner: a move elsewhere doesn't show the smiley", not differs(button_area(), button_off))
+        ok("a move near it does", until(lambda: wiggle(w * 3 // 4, h * 3 // 4) or differs(button_area(), button_off), 5))
+        ok("no log has them", "watchparty-react" not in log("rxA"))
+        stop("rxA")
+        x.kill()
+        x.wait()
+
     run_cases()
     relay.kill()
     relay.wait(timeout=10)

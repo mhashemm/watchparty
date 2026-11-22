@@ -31,6 +31,7 @@ async function loadState() {
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) $(k).value = s[k] || "";
+  document.querySelector(`input[name=mpvPicker][value=${s.mpvPicker || "move"}]`).checked = true;
   $("mpv").placeholder = saved.defaultMpv;
   $("cacheDir").placeholder = saved.defaultCacheDir;
   $("set-relay").value = s.relay || "";
@@ -58,6 +59,10 @@ const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
 // how many chat messages show before "All messages" (renderSaid; reset() runs at load), and
 // the most kept, as gui/main.go keeps (saidKept)
 const SAID_SHOWN = 3, SAID_KEPT = 500;
+// the reactions (loadEmoji); each person bursts once every REACT_EVERY at most (mpv/react.go),
+// so the button rests that long after reactedAt
+const REACT_EVERY = 2000;
+let emoji = null, reactedAt = 0;
 function videoList(videos, hide) {
   const ul = document.createElement("ul");
   ul.className = "videos";
@@ -170,7 +175,8 @@ $("settings-form").addEventListener("submit", async e => {
   e.preventDefault();
   const body = { relay: $("set-relay").value };
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) body[k] = $(k).value;
-  const res = await api("/settings", body);
+  const mpvPicker = document.querySelector("input[name=mpvPicker]:checked").value;
+  const res = await api("/settings", { ...body, mpvPicker });
   $("settings-saved").textContent = res.ok ? "Saved." : `Couldn't save: ${(await res.text()).trim()}`;
   $("settings-saved").hidden = false;
   setTimeout(() => $("settings-saved").hidden = true, 3000);
@@ -178,6 +184,7 @@ $("settings-form").addEventListener("submit", async e => {
   if (!res.ok) return;
   const mpvChanged = body.mpv.trim() !== (saved.settings.mpv || "");
   for (const [k, v] of Object.entries(body)) saved.settings[k] = v.trim();
+  saved.settings.mpvPicker = mpvPicker;
   if (mpvChanged) checkTools();
 });
 
@@ -571,6 +578,8 @@ function render(exitErr, refusal) {
   // the relay would drop a message: the node says so on mpv's screen, and the box waits
   const away = running && state.reconnecting;
   $("chat-text").disabled = $("chat-send").disabled = away;
+  $("react-open").disabled = away || reactedAt > Date.now() - REACT_EVERY;
+  if (away) openStrip(false);
   $("chat-text").placeholder = away ? "Reconnecting to the relay…" : "Shows on everyone's mpv for a few seconds";
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
@@ -606,6 +615,7 @@ async function poll() {
     from = j.from + lines.length;
     // chat, kept apart from the log and only while the party runs: gone from the page at its end
     saidFrom = j.saidFrom + said.length;
+    for (const m of said) if (m.ours && m.react) rest(m.at);
     if (said.length || (!j.running && state.said.length)) {
       state.said = j.running ? state.said.concat(said).slice(-SAID_KEPT) : [];
       renderSaid();
@@ -645,7 +655,14 @@ function renderSaid() {
     const li = document.createElement("li"), time = document.createElement("time"), who = document.createElement("b"), text = document.createElement("span");
     time.textContent = clock(m.at);
     who.textContent = m.who;
-    text.textContent = m.text;
+    if (m.react) {
+      // drawn as mpv draws it: a system font may not have the emoji yet
+      text.className = "react";
+      text.innerHTML = emoji?.svg[m.react] || "";
+      text.setAttribute("aria-label", String.fromCodePoint(parseInt(m.react, 16)));
+    } else {
+      text.textContent = m.text;
+    }
     li.classList.toggle("ours", !!m.ours);
     li.append(time, who, text);
     return li;
@@ -659,6 +676,7 @@ function renderSaid() {
 
 // why a message stayed in the box, until it is changed or one goes
 const NOT_SENT = { 409: "Not sent: the party has ended.", 503: "Not sent: too many messages at once. Send it again in a moment." };
+const REACT_NOT_SENT = { 409: "Your reaction wasn't sent: the party has ended.", 503: "Your reaction wasn't sent: too many at once. Pick it again in a moment." };
 function chatHint(text) {
   $("chat-hint").textContent = text || "";
   $("chat-hint").hidden = !text;
@@ -683,6 +701,55 @@ $("chat-form").addEventListener("submit", async e => {
   try { res = await api("/chat", { text }); } catch {}
   if (res?.ok) $("chat-text").value = "";
   chatHint(res?.ok ? "" : NOT_SENT[res?.status] || "Not sent: the app didn't answer. Send it again.");
+});
+
+// reactions: the picker's emoji (GET /emoji, drawn as mpv draws them) in one row that scrolls
+// sideways, opened by the button beside Send. A pick bursts on everyone's mpv.
+async function loadEmoji() {
+  try { emoji = await (await api("/emoji")).json(); } catch { return; }
+  $("react-strip").replaceChildren(...emoji.order.map(code => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.code = code;
+    b.setAttribute("aria-label", String.fromCodePoint(parseInt(code, 16)));
+    b.innerHTML = emoji.svg[code];
+    return b;
+  }));
+  renderSaid();
+}
+loadEmoji();
+// rest: this node's person reacted at at (ms), here or in mpv's picker, so the button rests
+// REACT_EVERY: a pick meanwhile would be dropped
+function rest(at) {
+  reactedAt = Math.max(reactedAt, at);
+  openStrip(false);
+  $("react-open").disabled = true;
+  setTimeout(() => {
+    if (!state.reconnecting && reactedAt <= Date.now() - REACT_EVERY) $("react-open").disabled = false;
+  }, reactedAt + REACT_EVERY - Date.now());
+}
+function openStrip(open) {
+  $("react-strip").hidden = !open;
+  $("react-open").setAttribute("aria-expanded", open);
+  if (open) $("react-strip").scrollLeft = 0;
+}
+$("react-open").addEventListener("click", () => openStrip($("react-strip").hidden));
+$("react-strip").addEventListener("keydown", e => {
+  if (e.key === "Escape") { openStrip(false); $("react-open").focus(); }
+});
+// a mouse's wheel turns up and down: here it scrolls the row sideways
+$("react-strip").addEventListener("wheel", e => {
+  if (!e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  $("react-strip").scrollLeft += e.deltaY;
+}, { passive: false });
+$("react-strip").addEventListener("click", async e => {
+  const code = e.target.closest("button")?.dataset.code;
+  if (!code) return;
+  rest(Date.now());
+  let res = null;
+  try { res = await api("/react", { code }); } catch {}
+  chatHint(res?.ok ? "" : REACT_NOT_SENT[res?.status] || "Your reaction wasn't sent: the app didn't answer. Pick it again.");
 });
 
 $("save-chart").addEventListener("click", async () => {

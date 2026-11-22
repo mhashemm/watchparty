@@ -60,10 +60,16 @@ type Config struct {
 	// name, and seconds into it. An entry no longer in the playlist starts as usual.
 	Entry string
 	Start float64
-	// Chat is what this node's person types to the party (the GUI's box), one message each.
-	// Heard is given each message mpv shows, and whether it is ours: chat is never logged.
+	// Chat is what this node's person types to the party (the GUI's box), one message each,
+	// and React the reactions they pick there. Heard is given each message and reaction mpv
+	// shows: neither is ever logged.
 	Chat  <-chan string
-	Heard func(who, text string, ours bool)
+	React <-chan string
+	Heard func(mpv.Said)
+	// PickerMode is when mpv's reaction picker shows as it starts (mpv.PickerModes, "" the
+	// default), from the GUI's Settings; Picker changes it while the party runs
+	PickerMode string
+	Picker     <-chan string
 }
 
 var (
@@ -209,19 +215,25 @@ func joinRelay(c context.Context, stop context.CancelCauseFunc, cfg *Config, inc
 // runMpv starts mpv on the video with the sync script, joins it to the party and waits for
 // it to exit.
 func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v video, startAt float64, incoming chan mpv.IncomingMessage, outgoing chan []byte, playing *atomic.Pointer[mpv.Client]) error {
-	// the sync script: mpv reads it as it starts, and loads it even under the user's
-	// load-scripts=no
+	// the sync script, and the reactions': mpv reads them as it starts, and loads them even
+	// under the user's load-scripts=no
 	scripts, err := os.MkdirTemp("", "watchparty")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(scripts)
-	script := filepath.Join(scripts, mpv.ScriptFile)
+	script, reactions := filepath.Join(scripts, mpv.ScriptFile), filepath.Join(scripts, mpv.ReactionsFile)
 	if err := os.WriteFile(script, mpv.Script, 0o600); err != nil {
 		return err
 	}
+	if err := os.WriteFile(reactions, mpv.ReactionsScript(), 0o600); err != nil {
+		return err
+	}
 	mpvSocket := mpv.SocketPrefix + "mpv" + rand.Text()
-	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script)
+	args := append(mpvArgs(cfg.MpvFlags), "--pause", "--speed=1", "--hr-seek=yes", "--cache-pause=yes", "--no-resume-playback", "--quiet", "--input-ipc-server="+mpvSocket, "--script="+script, "--script="+reactions)
+	if cfg.PickerMode != "" {
+		args = append(args, "--script-opts-append="+mpv.PickerOpts(cfg.PickerMode))
+	}
 	var names []string
 	if v.playlist {
 		args = append(args, "--no-shuffle", "--playlist-start="+strconv.Itoa(v.start))
@@ -271,7 +283,7 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, mpv.Config{Outgoing: outgoing, Incoming: incoming, Chat: cfg.Chat, Heard: cfg.Heard, Names: names, Start: v.start, At: startAt})
+	}, conn, mpv.Config{Outgoing: outgoing, Incoming: incoming, Chat: cfg.Chat, React: cfg.React, Picker: cfg.Picker, Heard: cfg.Heard, Names: names, Start: v.start, At: startAt})
 	if err != nil {
 		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)
