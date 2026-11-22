@@ -95,7 +95,7 @@ def gui_suite():
         click(H, "#tip-button")
         ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
         sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
-        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Chat", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
         tip = js(H, '$("tip").textContent')
         ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
         click(H, "#tip h2")
