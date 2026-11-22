@@ -131,9 +131,6 @@ func Run(parent context.Context, cfg Config) error {
 		cfg.Hostname, _ = os.Hostname()
 	}
 
-	if cfg.Chat != nil {
-		go forwardChat(c, cfg.Chat, incoming)
-	}
 	if strings.TrimSpace(cfg.Relay) != "" {
 		joinRelay(c, stop, &cfg, incoming, outgoing, v.id, ours)
 	} else {
@@ -147,22 +144,6 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 	return refusedFile(runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing), v)
-}
-
-// forwardChat hands the node each message its person types, in the order typed.
-func forwardChat(c context.Context, chat <-chan string, incoming chan<- mpv.IncomingMessage) {
-	for {
-		select {
-		case <-c.Done():
-			return
-		case text := <-chat:
-			select {
-			case incoming <- mpv.IncomingMessage{Say: text}:
-			case <-c.Done():
-				return
-			}
-		}
-	}
 }
 
 // video is what the party plays: its entries, the one it starts on, and the fingerprint
@@ -290,7 +271,7 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names, v.start, startAt, cfg.Heard)
+	}, conn, mpv.Config{Outgoing: outgoing, Incoming: incoming, Chat: cfg.Chat, Heard: cfg.Heard, Names: names, Start: v.start, At: startAt})
 	if err != nil {
 		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)

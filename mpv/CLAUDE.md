@@ -17,7 +17,7 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
 ## The loop
 
 - **One goroutine owns a node's state** (`watch`, then `serve`). The rest only hand it inputs
-  (mpv's lines and close, `do()`'s timer and writer, `incoming`, read first), taken one at a
+  (mpv's lines and close, `do()`'s timer and writer, `incoming` and `Chat`, read first), taken one at a
   time in the order they came. No lock, no goroutine touching `Client`'s fields: an outcome
   would hang on which ready channel a `select` picks.
 - **`do()` takes inputs while it waits**: mpv's lines are handled, other replies kept by id,

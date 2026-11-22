@@ -105,9 +105,27 @@ type IncomingMessage struct {
 	// delivers it to From alone.
 	Missed, Resend bool
 	Reply          chan<- []byte
-	// Say is set only by this node's own process, never from the wire: a chat message this
-	// node's person typed, to send to the party.
-	Say string
+	// typed: a chat message this node's person typed (Config.Chat), say. Unexported, so no
+	// transport can make one: it rides the queue only to be handled in turn.
+	typed bool
+	say   string
+}
+
+// Config is what New needs besides mpv's connection.
+type Config struct {
+	// Outgoing takes what this node sends the party; Incoming hands it the transport's messages.
+	Outgoing chan<- []byte
+	Incoming <-chan IncomingMessage
+	// Chat is what this node's person types to the party, one message each. Heard, if not nil,
+	// is given each chat message mpv shows: who ("you" for this node's own) and the text.
+	Chat  <-chan string
+	Heard func(who, text string)
+	// Names are the playlist entries in order, nil for a single file. Start is the entry mpv
+	// opens on, needed because a peer's answer can arrive before mpv reports it. A continued
+	// party seeks that entry to At once it is open (join).
+	Names []string
+	Start int
+	At    float64
 }
 
 // Event is a line from mpv, or a message between nodes: raw mpv JSON plus the sender's state.
@@ -159,7 +177,8 @@ type Client struct {
 	// The loop: the only goroutine that reads or writes what follows. It takes the
 	// transport's messages from incoming, everything else from inbox, in the order they came.
 	incoming <-chan IncomingMessage
-	// heard is given each chat message once mpv shows it, never logged (chat.go)
+	// chat: what the person types (Config.Chat); heard is given each chat message mpv shows
+	chat  <-chan string
 	heard func(who, text string)
 	inbox *mailbox[input]
 	out   *mailbox[request]
@@ -338,12 +357,8 @@ func (c *Client) showText(text string) error {
 	return c.do(showText, text, showTextDurationSeconds*1000)
 }
 
-// New connects to one mpv and returns once its first file is open. names are the playlist
-// entries in order, nil for a single file; start is the entry mpv opens on, needed because a
-// peer's answer can arrive before mpv reports it. A continued party seeks that entry to at
-// once it is open (join). heard, if not nil, is given each chat message mpv shows: who
-// ("you" for this node's own) and the text.
-func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing chan<- []byte, incoming <-chan IncomingMessage, names []string, start int, at float64, heard func(who, text string)) (*Client, error) {
+// New connects to one mpv and returns once its first file is open.
+func New(c context.Context, cancel context.CancelFunc, nc net.Conn, cfg Config) (*Client, error) {
 	conn := &connection{
 		conn:    nc,
 		scanner: bufio.NewScanner(nc),
@@ -353,18 +368,19 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, outgoing cha
 		ctx:        c,
 		ready:      make(chan struct{}),
 		conn:       conn,
-		outgoing:   outgoing,
-		heard:      heard,
+		outgoing:   cfg.Outgoing,
+		chat:       cfg.Chat,
+		heard:      cfg.Heard,
 		paused:     true,
 		seen:       map[string]bool{},
 		missed:     map[string]bool{},
 		slowReport: slowReport{peerReadyOnScreen: map[string]int{}},
-		names:      names,
-		current:    start,
+		names:      cfg.Names,
+		current:    cfg.Start,
 		headingTo:  -1,
-		resumeAt:   at,
+		resumeAt:   cfg.At,
 		stamp:      unheard,
-		incoming:   incoming,
+		incoming:   cfg.Incoming,
 		inbox:      newMailbox[input](),
 		replies:    map[int64]outcome{},
 		waiting:    map[int64]bool{},

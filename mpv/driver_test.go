@@ -24,10 +24,11 @@ import (
 // broadcast" is a fact, not a timeout. The fake mpv runs the shipped watchparty.lua
 // (script_test.go): it models only mpv, and the script decides what it says.
 type node struct {
-	t   *testing.T
-	c   *Client
-	in  chan IncomingMessage
-	out chan []byte
+	t     *testing.T
+	c     *Client
+	in    chan IncomingMessage
+	out   chan []byte
+	typed chan string
 
 	writes chan string
 	// batch is held while one mpvSays (or mpvObeys step) writes its lines, and while mpv takes
@@ -110,7 +111,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
 	if !s.noScript {
 		n.script = newScript(n)
 	}
@@ -135,11 +136,11 @@ func start(t *testing.T, s setup) (*node, error) {
 	for _, m := range s.heard {
 		n.in <- m
 	}
-	c, err := New(ctx, cancel, ours, n.out, n.in, s.names, s.start, s.at, func(who, text string) {
+	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, Names: s.names, Start: s.start, At: s.at, Heard: func(who, text string) {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		n.chats = append(n.chats, who+": "+text)
-	})
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -670,6 +671,13 @@ func (n *node) peerSays(host, event string) {
 func (n *node) transportSays(m IncomingMessage) {
 	n.t.Helper()
 	n.in <- m
+	synctest.Wait()
+}
+
+// personTypes is a chat message typed in this node's GUI.
+func (n *node) personTypes(text string) {
+	n.t.Helper()
+	n.typed <- text
 	synctest.Wait()
 }
 

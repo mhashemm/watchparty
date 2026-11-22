@@ -212,8 +212,8 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	}
 	c, cancel := context.WithCancel(g.ctx)
 	g.cancel, g.lines, g.exitErr, g.refusal = cancel, nil, "", nil
-	// its own channel: a message the party never took dies with it
 	g.run++
+	// its own channel: a message the party never took dies with it
 	chat := make(chan string, 16)
 	g.chatTo, cfg.Chat, cfg.Heard, g.said = chat, chat, g.heard(g.run), nil
 	g.session = g.store.begin(f)

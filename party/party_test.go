@@ -221,21 +221,3 @@ func TestStopWhileMpvStartsIsANormalStop(t *testing.T) {
 		t.Fatal("Run never ended")
 	}
 }
-
-// What the person types reaches the node in order, and the forwarding ends with the party.
-func TestChatReachesTheNodeInOrder(t *testing.T) {
-	t.Parallel()
-	c, cancel := context.WithCancel(context.Background())
-	chat, incoming, done := make(chan string), make(chan mpv.IncomingMessage, 2), make(chan struct{})
-	go func() {
-		forwardChat(c, chat, incoming)
-		close(done)
-	}()
-	chat <- "a"
-	chat <- "b"
-	if a, b := <-incoming, <-incoming; a.Say != "a" || b.Say != "b" {
-		t.Fatalf("got %+v then %+v", a, b)
-	}
-	cancel()
-	<-done
-}

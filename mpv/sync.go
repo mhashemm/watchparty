@@ -211,8 +211,8 @@ func (c *Client) apply(e IncomingMessage) {
 		c.back()
 		return
 	}
-	if e.Say != "" {
-		if err := c.chatOut(e.Say); err != nil {
+	if e.typed {
+		if err := c.chatOut(e.say); err != nil {
 			log.Println("apply: chat:", err)
 		}
 		return

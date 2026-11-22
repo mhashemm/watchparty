@@ -57,7 +57,7 @@ func TestAChatMessageGoesOutAndShowsAsYours(t *testing.T) {
 		n := ready(t, setup{})
 		n.mpvSays(propertyChangeLine(pause, "no", 0))
 		resumed := n.broadcasts()
-		n.transportSays(IncomingMessage{Say: "  hi there \n"})
+		n.personTypes("  hi there \n")
 		if got := fmt.Sprint(said(n.broadcasts())); got != "[chat=hi there]" {
 			t.Fatalf("broadcast %s, want the message trimmed", got)
 		}
@@ -99,7 +99,7 @@ func TestAChatMessageIsCutAndAnEmptyOneDropped(t *testing.T) {
 		n := ready(t, setup{})
 		long, cut := strings.Repeat("é", ChatLimit+50), strings.Repeat("é", ChatLimit)
 		n.peerSays("z", `{"name":"chat","data":"`+long+`"}`)
-		n.transportSays(IncomingMessage{Say: long})
+		n.personTypes(long)
 		if got := said(n.broadcasts()); fmt.Sprint(got) != "[chat="+cut+"]" {
 			t.Fatalf("broadcast %q, want it cut", got)
 		}
@@ -107,7 +107,7 @@ func TestAChatMessageIsCutAndAnEmptyOneDropped(t *testing.T) {
 			t.Fatalf("told mpv %s, want both cut", got)
 		}
 		n.peerSays("z", `{"name":"chat","data":"  "}`)
-		n.transportSays(IncomingMessage{Say: " \t"})
+		n.personTypes(" \t")
 		if got := said(n.broadcasts()); len(got) != 0 {
 			t.Fatalf("broadcast %q", got)
 		}
@@ -124,7 +124,7 @@ func TestAChatMessageIsNeverLogged(t *testing.T) {
 		n := ready(t, setup{})
 		ours, theirs, refused, after := "chat-ours-5b1e", "chat-theirs-9c2d", "chat-refused-77af", "notice-after-3e0a"
 		logged.watch(ours, theirs, refused, after)
-		n.transportSays(IncomingMessage{Say: ours})
+		n.personTypes(ours)
 		n.peerSays("z", `{"name":"chat","data":"`+theirs+`"}`)
 		n.mpvRefuses("show-text", "error running command")
 		n.peerSays("z", `{"name":"chat","data":"`+refused+`"}`)

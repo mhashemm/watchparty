@@ -232,6 +232,8 @@ func (c *Client) next() (input, bool) {
 		select {
 		case m := <-c.incoming:
 			return input{msg: &m}, true
+		case text := <-c.chat:
+			return input{msg: &IncomingMessage{typed: true, say: text}}, true
 		default:
 		}
 		if in, ok := c.inbox.poll(); ok {
@@ -240,6 +242,8 @@ func (c *Client) next() (input, bool) {
 		select {
 		case m := <-c.incoming:
 			return input{msg: &m}, true
+		case text := <-c.chat:
+			return input{msg: &IncomingMessage{typed: true, say: text}}, true
 		case <-c.inbox.ready:
 		case <-c.ctx.Done():
 			return input{}, false
