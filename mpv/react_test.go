@@ -10,10 +10,13 @@ import (
 	"github.com/yuin/gopher-lua/parse"
 )
 
-// bursts is mpv told to burst code, by the reactions script.
+// bursts is mpv told to burst a member's code, by the reactions script; oursBursts this node's
+// own, for which the picker rests reactEvery.
 func bursts(code string) string {
 	return "script-message-to " + reactionsScript + " " + reactBurst + " " + code
 }
+
+func oursBursts(code string) string { return bursts(code) + " 2" }
 
 func reaction(code string) string { return `{"name":"react","data":"` + code + `"}` }
 
@@ -28,7 +31,7 @@ func TestAReactionGoesOutAndBurstsHere(t *testing.T) {
 		if got := fmt.Sprint(said(n.broadcasts())); got != "[react=1f602]" {
 			t.Fatalf("broadcast %s", got)
 		}
-		if got := fmt.Sprint(n.mpvWasTold()); got != "["+bursts("1f602")+"]" {
+		if got := fmt.Sprint(n.mpvWasTold()); got != "["+oursBursts("1f602")+"]" {
 			t.Fatalf("told mpv %s", got)
 		}
 		if got := fmt.Sprint(n.heardChats()); got != "[you (ours) reacts 1f602]" {
@@ -49,7 +52,7 @@ func TestAReactionPickedInMpvGoesOut(t *testing.T) {
 		if got := fmt.Sprint(said(n.broadcasts())); got != "[react=1f62d]" {
 			t.Fatalf("broadcast %s", got)
 		}
-		if got := fmt.Sprint(n.mpvWasTold()); got != "["+bursts("1f62d")+"]" {
+		if got := fmt.Sprint(n.mpvWasTold()); got != "["+oursBursts("1f62d")+"]" {
 			t.Fatalf("told mpv %s", got)
 		}
 	})
@@ -166,14 +169,14 @@ func TestAReactionPickedWhileTheRelayIsLostIsNotSent(t *testing.T) {
 	})
 }
 
-// The person turning mpv's picker off or on in Settings reaches the script at once, mid-party.
+// The person setting when mpv's picker shows, in Settings, reaches the script at once, mid-party.
 func TestThePickerFollowsTheSetting(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
 		n.mpvWasTold()
-		n.personSetsPicker(false)
-		n.personSetsPicker(true)
-		want := "[script-message-to " + reactionsScript + " watchparty-picker no script-message-to " + reactionsScript + " watchparty-picker yes]"
+		n.personSetsPicker(PickerOff)
+		n.personSetsPicker(PickerCorner)
+		want := "[script-message-to " + reactionsScript + " watchparty-picker off script-message-to " + reactionsScript + " watchparty-picker corner]"
 		if got := fmt.Sprint(n.mpvWasTold()); got != want {
 			t.Fatalf("told mpv %s, want %s", got, want)
 		}

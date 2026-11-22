@@ -139,8 +139,8 @@ type gui struct {
 	// disk, and gone once the party ends.
 	chatTo  chan<- string
 	reactTo chan<- string
-	// pickerTo is the running party's Config.Picker: Settings turning mpv's picker on or off
-	pickerTo  chan bool
+	// pickerTo is the running party's Config.Picker: Settings changing when mpv's picker shows
+	pickerTo  chan string
 	said      []said
 	saidGone  int
 	lastPoll  time.Time
@@ -226,10 +226,10 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	react := make(chan string, 4)
 	g.chatTo, cfg.Chat, cfg.Heard, g.said, g.saidGone = chat, chat, g.heard(g.run), nil, 0
 	g.reactTo, cfg.React = react, react
-	picker := make(chan bool, 1)
+	picker := make(chan string, 1)
 	g.pickerTo, cfg.Picker = picker, picker
 	g.store.mu.Lock()
-	cfg.NoPicker = g.store.Settings.HidePicker
+	cfg.PickerMode = g.store.Settings.MpvPicker
 	g.store.mu.Unlock()
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
@@ -341,12 +341,16 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if in.MpvPicker != "" && !slices.Contains(mpv.PickerModes, in.MpvPicker) {
+		http.Error(w, "no such picker mode", http.StatusBadRequest)
+		return
+	}
 	g.store.mu.Lock()
 	s := &g.store.Settings
 	s.Relay, s.Mpv, s.MpvFlags = strings.TrimSpace(in.Relay), strings.TrimSpace(in.Mpv), strings.TrimSpace(in.MpvFlags)
 	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
 	s.CacheDir = strings.TrimSpace(in.CacheDir)
-	s.HidePicker = in.HidePicker
+	s.MpvPicker = in.MpvPicker
 	err = g.store.saveSettings()
 	g.store.mu.Unlock()
 	if err != nil {
@@ -361,7 +365,7 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 		select {
-		case g.pickerTo <- !in.HidePicker:
+		case g.pickerTo <- cmp.Or(in.MpvPicker, mpv.PickerMove):
 		default:
 		}
 	}

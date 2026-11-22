@@ -53,7 +53,7 @@
         <ul>
           <li>Press the smiley beside <b>Send</b>, or move the mouse over mpv and click the smiley in its bottom-right corner. Pick an emoji, scrolling for more: it bursts across everyone's mpv and shows under the box here.</li>
           <li>Each person can react once every 2 seconds. Like messages, reactions are never saved.</li>
-          <li>To keep mpv's screen clear, turn off <b>Show the reaction picker on mpv</b> in Settings.</li>
+          <li><b>Reaction picker on mpv</b> in Settings sets when mpv's smiley shows: when the mouse moves, when it moves near its corner, or never.</li>
           <li>The emoji art is <b>Twemoji</b> (github.com/jdecked/twemoji, CC-BY 4.0), redrawn as shapes for mpv.</li>
         </ul>
         <h2>Slow networks</h2>
@@ -306,8 +306,13 @@
           <input type="text" id="mpvFlags" placeholder="--fullscreen --volume=70">
         </div>
         <div class="field">
-          <label class="check"><input type="checkbox" id="mpvPicker" checked> Show the reaction picker on mpv</label>
-          <p class="hint">The smiley in mpv's corner while the mouse moves. The one beside Send stays.</p>
+          <span class="label" id="picker-label">Reaction picker on mpv</span>
+          <div class="seg" role="radiogroup" aria-labelledby="picker-label">
+            <label><input type="radio" name="mpvPicker" value="move" checked><span><b>When the mouse moves</b><small>Anywhere on mpv</small></span></label>
+            <label><input type="radio" name="mpvPicker" value="corner"><span><b>Near its corner</b><small>When the mouse moves to the bottom right</small></span></label>
+            <label><input type="radio" name="mpvPicker" value="off"><span><b>Never</b><small>The one beside Send always shows</small></span></label>
+          </div>
+          <p class="hint">The smiley in mpv's bottom-right corner, which opens the reactions.</p>
         </div>
         <div class="grid">
           <div class="field">

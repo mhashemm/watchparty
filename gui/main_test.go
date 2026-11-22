@@ -336,38 +336,38 @@ func TestChatGoesToTheRunningParty(t *testing.T) {
 	}
 }
 
-// mpv's reaction picker is on unless Settings turns it off; a change reaches a running party at
-// once, the latest one if it hadn't taken the one before.
+// mpv's reaction picker shows when the mouse moves unless Settings says otherwise, one of its
+// modes; a change reaches a running party at once, the latest if it hadn't taken the one before.
 func TestThePickerSettingReachesTheRunningParty(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	g := newGUI(context.Background(), "127.0.0.1:1", openStore(dir+"/gui.json"))
-	save := func(body string) {
+	save := func(body string) int {
 		t.Helper()
 		r := httptest.NewRequest("POST", "/settings", strings.NewReader(body))
 		r.Host = g.host
 		r.Header.Set("X-Token", g.token)
 		w := httptest.NewRecorder()
 		g.ServeHTTP(w, r)
-		if w.Code != http.StatusOK {
-			t.Fatalf("saving %s: %d %s", body, w.Code, w.Body)
-		}
+		return w.Code
 	}
-	if g.store.Settings.HidePicker {
-		t.Fatal("off before anyone turned it off")
+	if g.store.Settings.MpvPicker != "" {
+		t.Fatal("not the default before anyone set it")
 	}
-	save(`{"hidePicker":true}`)
-	if !openStore(dir + "/gui.json").Settings.HidePicker {
-		t.Fatal("turning it off wasn't saved")
+	if got := save(`{"mpvPicker":"sometimes"}`); got != http.StatusBadRequest {
+		t.Fatalf("a mode that isn't one: %d", got)
 	}
-	picker := make(chan bool, 1)
+	if got := save(`{"mpvPicker":"off"}`); got != http.StatusOK || openStore(dir+"/gui.json").Settings.MpvPicker != "off" {
+		t.Fatalf("saving off: %d, saved %q", got, openStore(dir+"/gui.json").Settings.MpvPicker)
+	}
+	picker := make(chan string, 1)
 	g.cancel, g.pickerTo = func() {}, picker
-	save(`{"hidePicker":false}`)
-	save(`{"hidePicker":true}`)
+	save(`{"mpvPicker":"corner"}`)
+	save(`{}`)
 	select {
 	case got := <-picker:
-		if got != false || len(picker) != 0 {
-			t.Fatalf("the party got on=%v, then %d more; want only the latest, off", got, len(picker))
+		if got != mpv.PickerMove || len(picker) != 0 {
+			t.Fatalf("the party got %q, then %d more; want only the latest, the default", got, len(picker))
 		}
 	default:
 		t.Fatal("the change never reached the party")

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,16 +30,25 @@ const (
 	reactPicked = "watchparty-reacted"
 )
 
-// PickerOff is the script-opts that start mpv with its reaction picker off.
-const PickerOff = reactionsScript + "-picker=no"
+// When mpv's reaction picker shows (the GUI's Settings): when the mouse moves (the default),
+// when it moves near the picker's corner, or never.
+const (
+	PickerMove   = "move"
+	PickerCorner = "corner"
+	PickerOff    = "off"
+)
 
-// showPicker turns mpv's reaction picker on or off.
-func (c *Client) showPicker(on bool) error {
-	yes := "no"
-	if on {
-		yes = "yes"
-	}
-	return c.do("script-message-to", reactionsScript, "watchparty-picker", yes)
+// PickerModes are the picker's modes, the default first.
+var PickerModes = []string{PickerMove, PickerCorner, PickerOff}
+
+// PickerOpts is the script-opts that start mpv's picker in mode.
+func PickerOpts(mode string) string {
+	return reactionsScript + "-picker=" + mode
+}
+
+// showPicker sets when mpv's reaction picker shows.
+func (c *Client) showPicker(mode string) error {
+	return c.do("script-message-to", reactionsScript, "watchparty-picker", mode)
 }
 
 // reactNotSent is what this node's screen says of a reaction picked while it has lost the relay.
@@ -152,6 +162,11 @@ func (c *Client) burst(who, code string, ours bool) error {
 	if c.heard != nil {
 		c.heard(Said{Who: who, React: code, Ours: ours})
 	}
-	_, err := c.send(true, []any{"script-message-to", reactionsScript, reactBurst, code})
+	args := []any{"script-message-to", reactionsScript, reactBurst, code}
+	if ours {
+		// the picker rests as long, as a pick meanwhile would be dropped
+		args = append(args, strconv.Itoa(int(reactEvery/time.Second)))
+	}
+	_, err := c.send(true, args)
 	return err
 }

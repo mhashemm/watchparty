@@ -31,7 +31,7 @@ async function loadState() {
   if (!$("port").value) $("port").value = s.port || "";
   $("local").checked = s.local !== false;
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) $(k).value = s[k] || "";
-  $("mpvPicker").checked = !s.hidePicker;
+  document.querySelector(`input[name=mpvPicker][value=${s.mpvPicker || "move"}]`).checked = true;
   $("mpv").placeholder = saved.defaultMpv;
   $("cacheDir").placeholder = saved.defaultCacheDir;
   $("set-relay").value = s.relay || "";
@@ -175,7 +175,8 @@ $("settings-form").addEventListener("submit", async e => {
   e.preventDefault();
   const body = { relay: $("set-relay").value };
   for (const k of ["mpv", "mpvFlags", "createKey", "cacheDir", "pport"]) body[k] = $(k).value;
-  const res = await api("/settings", { ...body, hidePicker: !$("mpvPicker").checked });
+  const mpvPicker = document.querySelector("input[name=mpvPicker]:checked").value;
+  const res = await api("/settings", { ...body, mpvPicker });
   $("settings-saved").textContent = res.ok ? "Saved." : `Couldn't save: ${(await res.text()).trim()}`;
   $("settings-saved").hidden = false;
   setTimeout(() => $("settings-saved").hidden = true, 3000);
@@ -183,7 +184,7 @@ $("settings-form").addEventListener("submit", async e => {
   if (!res.ok) return;
   const mpvChanged = body.mpv.trim() !== (saved.settings.mpv || "");
   for (const [k, v] of Object.entries(body)) saved.settings[k] = v.trim();
-  saved.settings.hidePicker = !$("mpvPicker").checked;
+  saved.settings.mpvPicker = mpvPicker;
   if (mpvChanged) checkTools();
 });
 
@@ -614,6 +615,7 @@ async function poll() {
     from = j.from + lines.length;
     // chat, kept apart from the log and only while the party runs: gone from the page at its end
     saidFrom = j.saidFrom + said.length;
+    for (const m of said) if (m.ours && m.react) rest(m.at);
     if (said.length || (!j.running && state.said.length)) {
       state.said = j.running ? state.said.concat(said).slice(-SAID_KEPT) : [];
       renderSaid();
@@ -715,6 +717,16 @@ async function loadEmoji() {
   renderSaid();
 }
 loadEmoji();
+// rest: this node's person reacted at at (ms), here or in mpv's picker, so the button rests
+// REACT_EVERY: a pick meanwhile would be dropped
+function rest(at) {
+  reactedAt = Math.max(reactedAt, at);
+  openStrip(false);
+  $("react-open").disabled = true;
+  setTimeout(() => {
+    if (!state.reconnecting && reactedAt <= Date.now() - REACT_EVERY) $("react-open").disabled = false;
+  }, reactedAt + REACT_EVERY - Date.now());
+}
 function openStrip(open) {
   $("react-strip").hidden = !open;
   $("react-open").setAttribute("aria-expanded", open);
@@ -733,10 +745,7 @@ $("react-strip").addEventListener("wheel", e => {
 $("react-strip").addEventListener("click", async e => {
   const code = e.target.closest("button")?.dataset.code;
   if (!code) return;
-  openStrip(false);
-  reactedAt = Date.now();
-  $("react-open").disabled = true;
-  setTimeout(() => { if (!state.reconnecting) $("react-open").disabled = false; }, REACT_EVERY);
+  rest(Date.now());
   let res = null;
   try { res = await api("/react", { code }); } catch {}
   chatHint(res?.ok ? "" : NOT_SENT[res?.status] || "Not sent: the app didn't answer. Send it again.");

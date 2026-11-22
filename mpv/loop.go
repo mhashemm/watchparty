@@ -172,10 +172,10 @@ type input struct {
 	unsent  int64
 	err     error
 	msg     *IncomingMessage
-	// chatDue: a chat message on mpv's screen is due to go; picker: the person turned the
-	// reaction picker on or off
+	// chatDue: a chat message on mpv's screen is due to go; picker: the person set when the
+	// reaction picker shows
 	chatDue bool
-	picker  *bool
+	picker  *string
 }
 
 // watch runs the loop until mpv's socket closes. A reader goroutine posts mpv's lines in
@@ -240,8 +240,8 @@ func (c *Client) next() (input, bool) {
 			return input{msg: &IncomingMessage{typed: true, say: text}}, true
 		case code := <-c.react:
 			return input{msg: &IncomingMessage{typed: true, reaction: code}}, true
-		case on := <-c.picker:
-			return input{picker: &on}, true
+		case mode := <-c.picker:
+			return input{picker: &mode}, true
 		default:
 		}
 		if in, ok := c.inbox.poll(); ok {
@@ -254,8 +254,8 @@ func (c *Client) next() (input, bool) {
 			return input{msg: &IncomingMessage{typed: true, say: text}}, true
 		case code := <-c.react:
 			return input{msg: &IncomingMessage{typed: true, reaction: code}}, true
-		case on := <-c.picker:
-			return input{picker: &on}, true
+		case mode := <-c.picker:
+			return input{picker: &mode}, true
 		case <-c.inbox.ready:
 		case <-c.ctx.Done():
 			return input{}, false
@@ -282,9 +282,9 @@ func (c *Client) handle(in input) {
 			c.replies[in.unsent] = outcome{unsent: in.err}
 		}
 	case in.picker != nil:
-		on := *in.picker
+		mode := *in.picker
 		c.later = append(c.later, func() {
-			if err := c.showPicker(on); err != nil {
+			if err := c.showPicker(mode); err != nil {
 				log.Println("picker:", err)
 			}
 		})

@@ -131,9 +131,9 @@ type Config struct {
 	Chat  <-chan string
 	React <-chan string
 	Heard func(Said)
-	// Picker turns mpv's reaction picker on (true) or off as the person changes the setting;
-	// it starts as mpv's script-opts say (PickerOff)
-	Picker <-chan bool
+	// Picker sets when mpv's reaction picker shows (PickerModes) as the person changes the
+	// setting; it starts as mpv's script-opts say (PickerOpts)
+	Picker <-chan string
 	// Names are the playlist entries in order, nil for a single file. Start is the entry mpv
 	// opens on, needed because a peer's answer can arrive before mpv reports it. A continued
 	// party seeks that entry to At once it is open (join).
@@ -198,7 +198,7 @@ type Client struct {
 	// now; reacted is when each member ("" this node) last reacted
 	chat      <-chan string
 	react     <-chan string
-	picker    <-chan bool
+	picker    <-chan string
 	heard     func(Said)
 	chatShown []onScreen
 	reacted   map[string]time.Time

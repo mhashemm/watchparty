@@ -14,6 +14,12 @@ local from_size, to_size = 40, 120
 -- the most copies on screen at once, from all bursts
 local most = 64
 
+-- the picker's, below: rested_until is when this node's person may react again; resting starts
+-- a rest; render draws the picker
+local rested_until = 0
+local resting = function(_) end
+local render
+
 local ov = mp.create_osd_overlay("ass-events")
 local flying = {}
 local timer
@@ -68,13 +74,19 @@ local function frame()
   end
 end
 
-timer = mp.add_periodic_timer(1 / 60, frame)
+-- 30 frames a second, as most video plays: while paused each frame redraws the whole picture,
+-- which with software rendering took a core at 60 and half one at 30 (MPV.md)
+timer = mp.add_periodic_timer(1 / 30, frame)
 timer:kill()
 
--- burst sends code's copies flying.
-local function burst(code)
+-- burst sends code's copies flying. rest, on this node's own, is the seconds the picker rests
+-- before the person can react again (the node's reactEvery).
+local function burst(code, rest)
   if not art[code] then
     return
+  end
+  if rest then
+    resting(tonumber(rest) or 0)
   end
   local now = mp.get_time()
   local turn = math.random() * 2 * math.pi
@@ -97,9 +109,11 @@ end
 
 mp.register_script_message("watchparty-react", burst)
 
--- The picker, unless the person turned it off: script-opts watchparty_reactions-picker=no as
--- mpv starts, then watchparty-picker yes|no as they change the setting.
-local options = { picker = true }
+-- The picker, as the person set it (GUI Settings): it shows when the mouse moves, when it moves
+-- near its corner, or never: script-opts watchparty_reactions-picker=move|corner|off as mpv
+-- starts, then watchparty-picker <mode> as they change it. Not with mpv's own controls: mpv
+-- tells no script when they show (MPV.md).
+local options = { picker = "move" }
 require("mp.options").read_options(options, "watchparty_reactions")
 
 -- Sizes are for a 720 pixel high screen, scaled to the real one.
@@ -166,16 +180,28 @@ local function under()
   return nil
 end
 
-local function render()
+local function rests()
+  return mp.get_time() < rested_until
+end
+
+resting = function(secs)
+  rested_until = mp.get_time() + secs
+  open = false
+  render()
+end
+
+render = function()
   if not shown then
     ui:remove()
     return
   end
   local w, h, u, b, r = layout()
-  local out = { panel(b.x, b.y, b.size, b.size, 14 * u, "&H1E1A14&", hovering == "button" and 0x10 or 0x40) }
+  -- resting, the button fades: a pick now would be dropped
+  local alpha = rests() and 0xB0 or hovering == "button" and 0x10 or 0x40
+  local out = { panel(b.x, b.y, b.size, b.size, 14 * u, "&H1E1A14&", alpha) }
   local s = b.size * 0.6 / 24 * 100
-  out[#out + 1] = string.format("{\\an7\\pos(%.1f,%.1f)\\fscx%.1f\\fscy%.1f\\bord0\\shad0\\1c&HDCEFF6&\\p4}%s",
-    b.x + b.size * 0.2, b.y + b.size * 0.2, s, s, icon)
+  out[#out + 1] = string.format("{\\an7\\pos(%.1f,%.1f)\\fscx%.1f\\fscy%.1f\\bord0\\shad0\\1c&HDCEFF6&\\1a&H%02X&\\p4}%s",
+    b.x + b.size * 0.2, b.y + b.size * 0.2, s, s, rests() and 0x90 or 0, icon)
   if open then
     out[#out + 1] = panel(r.x, r.y, r.w, r.h, 14 * u, "&H1E1A14&", 0x40)
     local clip = string.format("\\clip(%.1f,%.1f,%.1f,%.1f)", r.x + r.pad / 2, r.y, r.x + r.w - r.pad / 2, r.y + r.h)
@@ -223,9 +249,9 @@ local function grab(on)
   local acts = {
     MBTN_LEFT = function()
       local what = under()
-      if what == "button" then
+      if what == "button" and not rests() then
         open, scrolled = not open, 0
-      elseif what and what ~= "row" then
+      elseif what and what ~= "row" and what ~= "button" then
         mp.commandv("script-message", "watchparty-reacted", what)
         open = false
       end
@@ -257,9 +283,14 @@ local function closing()
   end
 end
 
+local faded = false
 hider = mp.add_periodic_timer(0.25, function()
   closing()
   hide()
+  if faded ~= rests() then
+    faded = rests()
+    render()
+  end
   if not shown then
     hider:kill()
   end
@@ -274,15 +305,25 @@ local function away()
   render()
 end
 
-mp.register_script_message("watchparty-picker", function(on)
-  options.picker = on == "yes"
-  if not options.picker then
+mp.register_script_message("watchparty-picker", function(mode)
+  options.picker = mode
+  if mode == "off" then
     away()
   end
 end)
 
+-- wakes is whether a move to the mouse's place shows the button, or keeps it: anywhere, or in
+-- the screen's bottom-right quarter.
+local function wakes()
+  local w, h = screen()
+  if options.picker == "corner" then
+    return mouse.x >= w / 2 and mouse.y >= h / 2
+  end
+  return true
+end
+
 mp.observe_property("mouse-pos", "native", function(_, pos)
-  if not pos or not options.picker then
+  if not pos or options.picker == "off" then
     return
   end
   if pos.hover == false then
@@ -293,11 +334,15 @@ mp.observe_property("mouse-pos", "native", function(_, pos)
     return
   end
   mouse.x, mouse.y = pos.x, pos.y
-  moved = mp.get_time()
-  local was = hovering
+  if wakes() then
+    moved = mp.get_time()
+    if not shown then
+      shown = true
+      hider:resume()
+    end
+  end
   if not shown then
-    shown = true
-    hider:resume()
+    return
   end
   hovering = under()
   if was and not hovering then
