@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 )
 
 // logged is everything the package's tests logged, kept only as whether it held a text.
@@ -50,6 +52,19 @@ func (l *logSpy) saw(text string) bool {
 	return l.seen[text]
 }
 
+// shows is mpv told to show these lines of chat, in their own layer.
+func shows(lines ...string) string {
+	return "osd-overlay 1 ass-events " + chatStyle + strings.Join(lines, `\N`) + " 0 720 0"
+}
+
+// ourLine and theirLine are one message as shown: whose it is in the colour, never the name.
+func ourLine(text string) string { return `{\1c&HA6E3B8&}{\b1}you{\b0}: ` + text }
+func theirLine(who, text string) string {
+	return `{\1c&HFFFFFF&}{\b1}` + who + `{\b0}: ` + text
+}
+
+const noChat = "osd-overlay 1 none"
+
 // What the person types goes to the party and on their own screen; it holds no state, so
 // their next change takes the very next stamp.
 func TestAChatMessageGoesOutAndShowsAsYours(t *testing.T) {
@@ -57,14 +72,14 @@ func TestAChatMessageGoesOutAndShowsAsYours(t *testing.T) {
 		n := ready(t, setup{})
 		n.mpvSays(propertyChangeLine(pause, "no", 0))
 		resumed := n.broadcasts()
-		n.personTypes("  hi there \n")
+		n.personTypes("  hi \t there \n")
 		if got := fmt.Sprint(said(n.broadcasts())); got != "[chat=hi there]" {
-			t.Fatalf("broadcast %s, want the message trimmed", got)
+			t.Fatalf("broadcast %s, want the message on one line", got)
 		}
-		if got := fmt.Sprint(n.mpvWasTold()); got != "[show-text you: hi there 5000]" {
-			t.Fatalf("told mpv %s", got)
+		if got, want := n.mpvWasTold(), []string{shows(ourLine("hi there"))}; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("told mpv %q, want %q", got, want)
 		}
-		if got := fmt.Sprint(n.heardChats()); got != "[you: hi there]" {
+		if got := fmt.Sprint(n.heardChats()); got != "[you (ours): hi there]" {
 			t.Fatalf("handed on %s", got)
 		}
 		n.mpvSays(mpvAt(20), propertyChangeLine(pause, "yes", 0))
@@ -75,21 +90,74 @@ func TestAChatMessageGoesOutAndShowsAsYours(t *testing.T) {
 	})
 }
 
-// A member's message is only shown, under their name.
+// A member's message is only shown, under their name; one named "you" is still theirs, in
+// their colour, and what they wrote shows as written, never as ASS tags.
 func TestAMembersChatMessageIsOnlyShown(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := ready(t, setup{})
 		n.peerSays("z", `{"name":"chat","data":"brb"}`)
-		if got := fmt.Sprint(n.mpvWasTold()); got != "[show-text z: brb 5000]" {
-			t.Fatalf("told mpv %s", got)
+		n.peerSays("you", `{"name":"chat","data":"{\\an5}big\\N{\\fs99}"}`)
+		want := []string{shows(theirLine("z", "brb")), shows(theirLine("z", "brb"), theirLine("you", "\\{\\\ufeffan5\\}big\\\ufeffN\\{\\\ufefffs99\\}"))}
+		if got := n.mpvWasTold(); fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("told mpv %q, want %q", got, want)
 		}
-		if got := fmt.Sprint(n.heardChats()); got != "[z: brb]" {
+		if got := fmt.Sprint(n.heardChats()); got != `[z: brb you: {\an5}big\N{\fs99}]` {
 			t.Fatalf("handed on %s", got)
 		}
 		if got := said(n.broadcasts()); len(got) != 0 {
 			t.Fatalf("broadcast %q", got)
 		}
 	})
+}
+
+// mpv shows the last three messages, each for chatOnScreen, then none: it never covers the
+// notices, which have the screen's other corner.
+func TestChatShowsTheLastThreeForAWhile(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		for _, text := range []string{"one", "two", "three"} {
+			n.peerSays("z", `{"name":"chat","data":"`+text+`"}`)
+			time.Sleep(time.Second)
+		}
+		n.mpvWasTold()
+		n.personTypes("four")
+		if got, want := n.mpvWasTold(), []string{shows(theirLine("z", "two"), theirLine("z", "three"), ourLine("four"))}; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("with a fourth, told mpv %q, want %q", got, want)
+		}
+		// one came at 0s, two at 1s, three at 2s, four at 3s: one's time is up at 8s, but four
+		// had already pushed it off, so only two going at 9s changes the screen
+		for _, step := range []struct {
+			wait time.Duration
+			want []string
+		}{
+			{chatOnScreen - 3*time.Second, nil},
+			{time.Second, []string{shows(theirLine("z", "three"), ourLine("four"))}},
+			{time.Second, []string{shows(ourLine("four"))}},
+			{time.Second, []string{noChat}},
+		} {
+			time.Sleep(step.wait)
+			synctest.Wait()
+			if got := n.mpvWasTold(); fmt.Sprint(got) != fmt.Sprint(step.want) {
+				t.Fatalf("%v later, told mpv %q, want %q", step.wait, got, step.want)
+			}
+		}
+	})
+}
+
+// A long message is broken into lines of chatWrap characters at most, a word longer than one
+// cut: ASS would run it across the whole screen, over the notices.
+func TestALongChatMessageIsBrokenIntoLines(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", chatWrap+2)
+	for _, c := range []struct{ text, want string }{
+		{"short one", "[short one]"},
+		{strings.Repeat("ab ", 20), "[" + strings.TrimSpace(strings.Repeat("ab ", 16)) + " " + strings.TrimSpace(strings.Repeat("ab ", 4)) + "]"},
+		{"a " + long + " b", "[a " + strings.Repeat("x", chatWrap) + " xx b]"},
+	} {
+		if got := fmt.Sprint(wrapped(chatText(c.text))); got != c.want {
+			t.Errorf("%q: got %s, want %s", c.text, got, c.want)
+		}
+	}
 }
 
 // A message is cut to ChatLimit characters, not bytes, on both sides: a member's may not have
@@ -103,10 +171,11 @@ func TestAChatMessageIsCutAndAnEmptyOneDropped(t *testing.T) {
 		if got := said(n.broadcasts()); fmt.Sprint(got) != "[chat="+cut+"]" {
 			t.Fatalf("broadcast %q, want it cut", got)
 		}
-		if got := fmt.Sprint(n.mpvWasTold()); got != "[show-text z: "+cut+" 5000 show-text you: "+cut+" 5000]" {
-			t.Fatalf("told mpv %s, want both cut", got)
+		if got := fmt.Sprint(n.heardChats()); got != "[z: "+cut+" you (ours): "+cut+"]" {
+			t.Fatalf("handed on %s, want both cut", got)
 		}
-		n.peerSays("z", `{"name":"chat","data":"  "}`)
+		n.mpvWasTold()
+		n.peerSays("z", `{"name":"chat","data":" \u0007 "}`)
 		n.personTypes(" \t")
 		if got := said(n.broadcasts()); len(got) != 0 {
 			t.Fatalf("broadcast %q", got)
@@ -126,7 +195,7 @@ func TestAChatMessageIsNeverLogged(t *testing.T) {
 		logged.watch(ours, theirs, refused, after)
 		n.personTypes(ours)
 		n.peerSays("z", `{"name":"chat","data":"`+theirs+`"}`)
-		n.mpvRefuses("show-text", "error running command")
+		n.mpvRefuses("osd-overlay", "error running command")
 		n.peerSays("z", `{"name":"chat","data":"`+refused+`"}`)
 		n.mpvTakesAgain()
 		n.peerSays("z", `{"name":"pause-reason","data":"`+after+`"}`)

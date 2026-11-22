@@ -136,9 +136,12 @@ func start(t *testing.T, s setup) (*node, error) {
 	for _, m := range s.heard {
 		n.in <- m
 	}
-	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, Names: s.names, Start: s.start, At: s.at, Heard: func(who, text string) {
+	c, err := New(ctx, cancel, ours, Config{Outgoing: n.out, Incoming: n.in, Chat: n.typed, Names: s.names, Start: s.start, At: s.at, Heard: func(who, text string, ours bool) {
 		n.mu.Lock()
 		defer n.mu.Unlock()
+		if ours {
+			who += " (ours)"
+		}
 		n.chats = append(n.chats, who+": "+text)
 	}})
 	if err != nil {

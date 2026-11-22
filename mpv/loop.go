@@ -172,6 +172,8 @@ type input struct {
 	unsent  int64
 	err     error
 	msg     *IncomingMessage
+	// chatDue: a chat message on mpv's screen is due to go
+	chatDue bool
 }
 
 // watch runs the loop until mpv's socket closes. A reader goroutine posts mpv's lines in
@@ -269,6 +271,12 @@ func (c *Client) handle(in input) {
 		if c.waiting[in.unsent] {
 			c.replies[in.unsent] = outcome{unsent: in.err}
 		}
+	case in.chatDue:
+		c.later = append(c.later, func() {
+			if err := c.chatGoes(); err != nil {
+				log.Println("chat:", err)
+			}
+		})
 	case in.msg != nil:
 		if c.opening {
 			c.hear(*in.msg)

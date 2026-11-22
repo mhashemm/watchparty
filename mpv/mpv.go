@@ -117,9 +117,10 @@ type Config struct {
 	Outgoing chan<- []byte
 	Incoming <-chan IncomingMessage
 	// Chat is what this node's person types to the party, one message each. Heard, if not nil,
-	// is given each chat message mpv shows: who ("you" for this node's own) and the text.
+	// is given each chat message mpv shows: who, the text, and whether it is this node's own
+	// (then who is "you"; a member can be named so too).
 	Chat  <-chan string
-	Heard func(who, text string)
+	Heard func(who, text string, ours bool)
 	// Names are the playlist entries in order, nil for a single file. Start is the entry mpv
 	// opens on, needed because a peer's answer can arrive before mpv reports it. A continued
 	// party seeks that entry to At once it is open (join).
@@ -179,11 +180,13 @@ type Client struct {
 	incoming <-chan IncomingMessage
 	// offline: the relay connection is lost (Lost), until Back; a chat typed meanwhile isn't sent
 	offline bool
-	// chat: what the person types (Config.Chat); heard is given each chat message mpv shows
-	chat  <-chan string
-	heard func(who, text string)
-	inbox *mailbox[input]
-	out   *mailbox[request]
+	// chat: what the person types (Config.Chat); heard is given each chat message mpv shows;
+	// chatShown is the chat on mpv's screen now
+	chat      <-chan string
+	heard     func(who, text string, ours bool)
+	chatShown []onScreen
+	inbox     *mailbox[input]
+	out       *mailbox[request]
 	// queue: transport messages waiting while another's change is applied (applying)
 	queue    []IncomingMessage
 	applying int

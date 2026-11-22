@@ -228,12 +228,12 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 }
 
 // heard keeps a chat message mpv showed in run, while that party runs.
-func (g *gui) heard(run int) func(who, text string) {
-	return func(who, text string) {
+func (g *gui) heard(run int) func(who, text string, ours bool) {
+	return func(who, text string, ours bool) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		if g.run == run && g.cancel != nil {
-			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: who, Text: text})
+			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: who, Text: text, Ours: ours})
 			g.nudge()
 		}
 	}
@@ -281,11 +281,13 @@ func (g *gui) nudge() {
 	}
 }
 
-// said is a chat message mpv showed: who ("you" for this node's own), the text, and when (ms).
+// said is a chat message mpv showed: who, the text, when (ms), and whether it is this node's
+// own, which only that says: a member can be named "you".
 type said struct {
 	At   int64  `json:"at"`
 	Who  string `json:"who"`
 	Text string `json:"text"`
+	Ours bool   `json:"ours"`
 }
 
 func (g *gui) state(w http.ResponseWriter, r *http.Request) {

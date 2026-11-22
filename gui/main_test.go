@@ -340,7 +340,10 @@ func TestChatGoesToTheRunningParty(t *testing.T) {
 func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	t.Parallel()
 	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	type said struct{ Who, Text string }
+	type said struct {
+		Who, Text string
+		Ours      bool
+	}
 	poll := func(from int) (lines []string, chat []said) {
 		t.Helper()
 		r := httptest.NewRequest("GET", fmt.Sprintf("/log?run=%d&said=%d", g.run, from), nil)
@@ -359,17 +362,17 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	}
 	g.run, g.cancel = 1, func() {}
 	earlier, heard := g.heard(0), g.heard(1)
-	heard("you", "hi")
-	earlier("sam", "from before")
-	heard("sam", "yo")
-	if lines, chat := poll(0); fmt.Sprint(chat) != "[{you hi} {sam yo}]" || len(lines) != 0 {
+	heard("you", "hi", true)
+	earlier("sam", "from before", false)
+	heard("sam", "yo", false)
+	if lines, chat := poll(0); fmt.Sprint(chat) != "[{you hi true} {sam yo false}]" || len(lines) != 0 {
 		t.Fatalf("chat %v, lines %q", chat, lines)
 	}
-	if _, chat := poll(1); fmt.Sprint(chat) != "[{sam yo}]" {
+	if _, chat := poll(1); fmt.Sprint(chat) != "[{sam yo false}]" {
 		t.Fatalf("from the second: %v", chat)
 	}
 	g.ended(nil)
-	heard("sam", "after the end")
+	heard("sam", "after the end", false)
 	if _, chat := poll(0); len(chat) != 0 {
 		t.Fatalf("after the end: %v", chat)
 	}

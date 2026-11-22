@@ -61,9 +61,9 @@ type Config struct {
 	Entry string
 	Start float64
 	// Chat is what this node's person types to the party (the GUI's box), one message each.
-	// Heard is given each message mpv shows, "you" for this node's own: chat is never logged.
+	// Heard is given each message mpv shows, and whether it is ours: chat is never logged.
 	Chat  <-chan string
-	Heard func(who, text string)
+	Heard func(who, text string, ours bool)
 }
 
 var (
