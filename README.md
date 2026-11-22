@@ -5,7 +5,8 @@ When anyone pauses, resumes or seeks, everyone's player follows. There is no hos
 any of you can drive.
 
 Everyone needs their own copy of the same file, or the same URL. Nothing is streamed
-between you. Only pause and seek events are sent, so a slow connection is fine.
+between you. Only small messages are sent: pauses, seeks and chat, so a slow connection
+is fine.
 
 ## Install
 
