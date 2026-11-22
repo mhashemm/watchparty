@@ -335,6 +335,7 @@ body.alive .ecg path { stroke-dasharray: 90; animation: beat 1.6s linear infinit
 .chat input { flex: 1; min-width: 0; border-radius: 999px; padding-left: 16px; }
 .chat button { border-radius: 999px; display: flex; align-items: center; gap: 6px; }
 .chat .paw-icon { width: 18px; height: 18px; }
+.chat-hint { margin: -12px 0 14px 16px; }
 .said { list-style: none; padding: 0; margin: -6px 0 12px; }
 .said li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
 .said li:last-child { border-bottom: 0; }

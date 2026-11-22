@@ -247,6 +247,7 @@ function reset() {
     shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
     myAhead: null, aheadOf: {}, trailStep: null, trailAt: 0, trailShown: false, said: [] };
   renderSaid();
+  chatHint();
   $("log").textContent = "";
   $("feed").innerHTML = '<p class="empty">Nothing yet. Joins, pauses and seeks show up here.</p>';
   $("share").hidden = true;
@@ -656,12 +657,20 @@ function renderSaid() {
   $("said-more").hidden = newest.length <= SAID_SHOWN;
 }
 
+// why a message stayed in the box, until it is changed or one goes
+const NOT_SENT = { 409: "Not sent: the party has ended.", 503: "Not sent: too many messages at once. Send it again in a moment." };
+function chatHint(text) {
+  $("chat-hint").textContent = text || "";
+  $("chat-hint").hidden = !text;
+}
+
 // a message is ChatLimit characters at most, counted as the node does: maxlength counts an
 // emoji as two
 const CHAT_LIMIT = 200;
 $("chat-text").addEventListener("input", () => {
   const chars = [...$("chat-text").value];
   if (chars.length > CHAT_LIMIT) $("chat-text").value = chars.slice(0, CHAT_LIMIT).join("");
+  chatHint();
 });
 
 // a message goes on everyone's mpv, and under the box once this node's mpv shows it (said).
@@ -670,9 +679,10 @@ $("chat-form").addEventListener("submit", async e => {
   e.preventDefault();
   const text = $("chat-text").value;
   if (!text.trim()) return;
-  try {
-    if ((await api("/chat", { text })).ok) $("chat-text").value = "";
-  } catch {}
+  let res = null;
+  try { res = await api("/chat", { text }); } catch {}
+  if (res?.ok) $("chat-text").value = "";
+  chatHint(res?.ok ? "" : NOT_SENT[res?.status] || "Not sent: the app didn't answer. Send it again.");
 });
 
 $("save-chart").addEventListener("click", async () => {

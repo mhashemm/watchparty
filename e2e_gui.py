@@ -257,6 +257,10 @@ def gui_suite():
         ok(f"{H}'s feed doesn't blame {H}", feed(H)[0] != "paused by you", str(feed(H)))
         ok("Update and Restart are back on", js(G, '!$("update").disabled && !$("restart").disabled'))
         ok(f"{G}'s chat went with its party", chats(G) == [] and js(G, '$("said-more").hidden'), str(chats(G)))
+        js(G, '$("chat-text").value = "too late"; $("chat-form").requestSubmit()')
+        ok("a message sent after the end stays in the box, and says why",
+           until(lambda: js(G, '[$("chat-text").value, $("chat-hint").textContent]') == ["too late", "Not sent: the party has ended."]), js(G, '$("chat-hint").textContent'))
+        js(G, '$("chat-text").value = ""; $("chat-text").dispatchEvent(new Event("input"))')
         ok(f"{H}'s, still in it, kept it", f"{G}: {said}" in chats(H), str(chats(H)))
         end(H)
         ok(f"{H}'s went at its end", chats(H) == [], str(chats(H)))
