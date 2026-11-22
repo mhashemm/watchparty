@@ -173,6 +173,10 @@ func (n *node) mpv(conn net.Conn, observes int, s setup) {
 		name := fmt.Sprint(req.Command[0])
 		said := strings.TrimSpace(fmt.Sprintln(req.Command...))
 		reply := fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		if name == "osd-overlay" {
+			// as mpv answers it: data is an object, not a string
+			reply = fmt.Sprintf(`{"data":{},"request_id":%d,"error":"success"}`+"\n", req.RequestId)
+		}
 		arg := func(i int) string { return fmt.Sprint(req.Command[i]) }
 		n.mu.Lock()
 		n.listening = true

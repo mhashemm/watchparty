@@ -315,6 +315,12 @@ func (c *Client) runLater() {
 func (c *Client) mpvSaid(line []byte) {
 	event := Event{}
 	if err := json.Unmarshal(line, &event); err != nil {
+		// an answer whose data isn't a string, like osd-overlay's {}, still answers its request
+		r := Response{}
+		if json.Unmarshal(line, &r) == nil && r.RequestId > 0 && r.Error != "" && c.waiting[r.RequestId] {
+			c.replies[r.RequestId] = outcome{Response: r}
+			return
+		}
 		log.Println("Watch: unmarshal:", err, string(line))
 		return
 	}
