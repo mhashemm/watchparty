@@ -55,8 +55,9 @@ const fileName = path => /^magnet:/i.test(path || "")
   : (path || "").split(/[\\/]/).pop() || path;
 const names = a => a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a.at(-1);
 const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
-// how many chat messages show before "All messages" (renderSaid; reset() runs at load)
-const SAID_SHOWN = 3;
+// how many chat messages show before "All messages" (renderSaid; reset() runs at load), and
+// the most kept, as gui/main.go keeps (saidKept)
+const SAID_SHOWN = 3, SAID_KEPT = 500;
 function videoList(videos, hide) {
   const ul = document.createElement("ul");
   ul.className = "videos";
@@ -605,7 +606,7 @@ async function poll() {
     // chat, kept apart from the log and only while the party runs: gone from the page at its end
     saidFrom = j.saidFrom + said.length;
     if (said.length || (!j.running && state.said.length)) {
-      state.said = j.running ? state.said.concat(said) : [];
+      state.said = j.running ? state.said.concat(said).slice(-SAID_KEPT) : [];
       renderSaid();
     }
     if (running && !j.running) loadState();

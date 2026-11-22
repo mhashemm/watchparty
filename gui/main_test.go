@@ -376,4 +376,17 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	if _, chat := poll(0); len(chat) != 0 {
 		t.Fatalf("after the end: %v", chat)
 	}
+	// a member sending without end: only the last saidKept are kept, and a poll counts from
+	// the run's first message, dropped or not
+	g.run, g.cancel = 2, func() {}
+	heard = g.heard(2)
+	for i := range saidKept + 3 {
+		heard("sam", fmt.Sprint(i), false)
+	}
+	if _, chat := poll(0); len(chat) != saidKept || chat[0].Text != "3" || chat[len(chat)-1].Text != fmt.Sprint(saidKept+2) {
+		t.Fatalf("kept %d, from %v to %v", len(chat), chat[0], chat[len(chat)-1])
+	}
+	if _, chat := poll(saidKept + 1); fmt.Sprint(chat) != fmt.Sprintf("[{sam %d false} {sam %d false}]", saidKept+1, saidKept+2) {
+		t.Fatalf("from the %dth: %v", saidKept+1, chat)
+	}
 }

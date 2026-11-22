@@ -133,10 +133,12 @@ type gui struct {
 	exitErr   string
 	// refusal is what each side plays, when the party refused this node's file
 	refusal *party.NotTheSameFile
-	// chatTo is the running party's Config.Chat; said, the messages mpv showed in it. Kept
-	// only here, never in the log or on disk, and gone once the party ends.
+	// chatTo is the running party's Config.Chat; said, the last saidKept messages mpv showed
+	// in it, saidGone the ones dropped before them. Kept only here, never in the log or on
+	// disk, and gone once the party ends.
 	chatTo    chan<- string
 	said      []said
+	saidGone  int
 	lastPoll  time.Time
 	idleAfter time.Duration
 	pages     int
@@ -215,7 +217,7 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	g.run++
 	// its own channel: a message the party never took dies with it
 	chat := make(chan string, 16)
-	g.chatTo, cfg.Chat, cfg.Heard, g.said = chat, chat, g.heard(g.run), nil
+	g.chatTo, cfg.Chat, cfg.Heard, g.said, g.saidGone = chat, chat, g.heard(g.run), nil, 0
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
 		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
@@ -227,24 +229,31 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// heard keeps a chat message mpv showed in run, while that party runs.
+// heard keeps a chat message mpv showed in run, while that party runs: the last saidKept,
+// so a member sending without end can't fill this process.
 func (g *gui) heard(run int) func(who, text string, ours bool) {
 	return func(who, text string, ours bool) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		if g.run == run && g.cancel != nil {
 			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: who, Text: text, Ours: ours})
+			if over := len(g.said) - saidKept; over > 0 {
+				g.said, g.saidGone = slices.Clone(g.said[over:]), g.saidGone+over
+			}
 			g.nudge()
 		}
 	}
 }
+
+// saidKept is the most chat messages kept, and so the most the page lists (SAID_KEPT).
+const saidKept = 500
 
 // ended is the party gone, Run having returned err. Its chat goes with it.
 func (g *gui) ended(err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.store.end(g.session)
-	g.cancel, g.session, g.said = nil, -1, nil
+	g.cancel, g.session, g.said, g.saidGone = nil, -1, nil, 0
 	if err != nil {
 		g.exitErr = err.Error()
 	}
@@ -389,7 +398,8 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 		from, saidFrom = 0, 0
 	}
 	from = min(max(from, 0), len(g.lines))
-	saidFrom = min(max(saidFrom, 0), len(g.said))
+	// saidFrom counts every message of the run, those dropped too
+	saidFrom = min(max(saidFrom, g.saidGone), g.saidGone+len(g.said))
 	res := struct {
 		Run      int                   `json:"run"`
 		From     int                   `json:"from"`
@@ -399,7 +409,7 @@ func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 		Running  bool                  `json:"running"`
 		ExitErr  string                `json:"exitErr"`
 		Refusal  *party.NotTheSameFile `json:"refusal,omitempty"`
-	}{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom:]), g.cancel != nil, g.exitErr, g.refusal}
+	}{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom-g.saidGone:]), g.cancel != nil, g.exitErr, g.refusal}
 	g.mu.Unlock()
 	// it carries chat, which nothing may keep: without this, Chromium writes it to its disk cache
 	w.Header().Set("Cache-Control", "no-store")
