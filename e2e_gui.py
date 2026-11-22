@@ -427,10 +427,12 @@ def gui_suite():
             ok(f"{n} says it is reconnecting", status(n) == "Lost the relay. Reconnecting…", status(n))
             ok(f"{n} plays on, and its feed says so", until(lambda: "lost the relay, reconnecting" in feed(n) and read_all(n))
                and get(n, "pause") is False, str(feed(n)[:3]))
+        ok(f"{G} can't chat meanwhile", js(G, '$("chat-text").disabled && $("chat-send").disabled'))
         own[0] = launch_relay({"CREATE_KEY": KEY}, port)
         until(lambda: all(status(n).startswith("You're in") for n in (H, G)), 40)
         for n in (H, G):
             must(f"{n} is back in", status(n).startswith("You're in"), status(n))
+        ok(f"{G} can chat again", js(G, '!$("chat-text").disabled && !$("chat-send").disabled'))
         must("the returns are over", quiet([H, G]))
         ok("nobody stopped", all(get(n, "pause") is False for n in (H, G)), str([feed(n)[:2] for n in (H, G)]))
 

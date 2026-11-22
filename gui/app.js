@@ -563,6 +563,10 @@ function render(exitErr, refusal) {
   renderCompare(refusal);
   renderMembers(running && state.ready && !now);
   $("chat").hidden = !(running && state.ready && !now);
+  // the relay would drop a message: the node says so on mpv's screen, and the box waits
+  const away = running && state.reconnecting;
+  $("chat-text").disabled = $("chat-send").disabled = away;
+  $("chat-text").placeholder = away ? "Reconnecting to the relay…" : "Shows on everyone's mpv for a few seconds";
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
   $("fields").hidden = running;

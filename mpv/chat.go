@@ -13,11 +13,18 @@ const ChatLimit = 200
 // on disk (the systemd journal), so its show-text is unlogged and no line quotes it.
 const chat = "chat"
 
+// chatNotSent is what this node's screen says of a message typed while it has lost the relay.
+const chatNotSent = "your message wasn't sent: lost the relay, reconnecting"
+
 // chatOut sends what this node's person typed to the party, and shows it on its own screen.
 func (c *Client) chatOut(text string) error {
 	text = chatText(text)
 	if text == "" {
 		return nil
+	}
+	if c.offline {
+		// the relay would drop it, and the screen would say it went
+		return c.showText(chatNotSent)
 	}
 	b, _ := json.Marshal(Event{Name: chat, Data: text})
 	c.say(b)

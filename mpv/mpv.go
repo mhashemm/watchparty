@@ -177,6 +177,8 @@ type Client struct {
 	// The loop: the only goroutine that reads or writes what follows. It takes the
 	// transport's messages from incoming, everything else from inbox, in the order they came.
 	incoming <-chan IncomingMessage
+	// offline: the relay connection is lost (Lost), until Back; a chat typed meanwhile isn't sent
+	offline bool
 	// chat: what the person types (Config.Chat); heard is given each chat message mpv shows
 	chat  <-chan string
 	heard func(who, text string)

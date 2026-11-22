@@ -172,6 +172,7 @@ func (c *Client) announce() {
 // lost shows that the relay connection dropped. This node plays on, as the party most
 // likely does too, and says where it is once back in the room (back).
 func (c *Client) lost() error {
+	c.offline = true
 	return c.showText(lostRelay)
 }
 
@@ -180,6 +181,7 @@ func (c *Client) lost() error {
 // a state other than its own. A joiner that was never answered joins again. Nothing is sent
 // while this node plays out the end, or it would stop everyone just short of it.
 func (c *Client) back() {
+	c.offline = false
 	joiner, finishing := c.stamp < 0, !c.paused && c.ending()
 	var check []byte
 	if !joiner && !finishing {

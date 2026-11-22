@@ -140,3 +140,30 @@ func TestAChatMessageIsNeverLogged(t *testing.T) {
 		}
 	})
 }
+
+// A message typed while the relay is lost isn't sent, as the relay would drop it, nor shown as
+// sent: the screen says so. Once back, messages go out again.
+func TestAChatMessageTypedWhileTheRelayIsLostIsNotSent(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.transportSays(IncomingMessage{Lost: true})
+		n.mpvWasTold()
+		n.broadcasts()
+		n.personTypes("anyone there?")
+		if got := said(n.broadcasts()); len(got) != 0 {
+			t.Fatalf("broadcast %q while the relay was lost", got)
+		}
+		if got := fmt.Sprint(n.mpvWasTold()); got != "[show-text "+chatNotSent+" 5000]" {
+			t.Fatalf("told mpv %s", got)
+		}
+		if got := n.heardChats(); len(got) != 0 {
+			t.Fatalf("handed on %q as shown", got)
+		}
+		n.transportSays(IncomingMessage{Back: true})
+		n.broadcasts()
+		n.personTypes("back")
+		if got := fmt.Sprint(said(n.broadcasts())); got != "[chat=back]" {
+			t.Fatalf("once back, broadcast %s", got)
+		}
+	})
+}
