@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/party"
 )
 
@@ -335,6 +336,37 @@ func TestChatGoesToTheRunningParty(t *testing.T) {
 	}
 }
 
+// A reaction goes to the running party too, on its own channel, and only one of the picker's.
+func TestAReactionGoesToTheRunningParty(t *testing.T) {
+	t.Parallel()
+	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	post := func(body string) int {
+		r := httptest.NewRequest("POST", "/react", strings.NewReader(body))
+		r.Host = g.host
+		r.Header.Set("X-Token", g.token)
+		w := httptest.NewRecorder()
+		g.ServeHTTP(w, r)
+		return w.Code
+	}
+	if got := post(`{"code":"1f602"}`); got != http.StatusConflict {
+		t.Fatalf("with no party: %d", got)
+	}
+	react, chat := make(chan string, 1), make(chan string, 1)
+	g.cancel, g.reactTo, g.chatTo = func() {}, react, chat
+	if got := post(`{"code":"1f600"}`); got != http.StatusBadRequest || len(react) != 0 {
+		t.Fatalf("one not in the picker: %d, %d sent", got, len(react))
+	}
+	if got := post(`{"code":"1f602"}`); got != http.StatusOK {
+		t.Fatalf("a reaction: %d", got)
+	}
+	if got := post(`{"code":"1f62d"}`); got != http.StatusServiceUnavailable {
+		t.Fatalf("with the party's queue full: %d", got)
+	}
+	if got := <-react; got != "1f602" || len(chat) != 0 {
+		t.Fatalf("sent %q, and %d as chat", got, len(chat))
+	}
+}
+
 // Chat is kept only for the page, beside the log and never in it, and only while its party
 // runs: one from an earlier party is dropped, and the end takes them all.
 func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
@@ -362,9 +394,9 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	}
 	g.run, g.cancel = 1, func() {}
 	earlier, heard := g.heard(0), g.heard(1)
-	heard("you", "hi", true)
-	earlier("sam", "from before", false)
-	heard("sam", "yo", false)
+	heard(mpv.Said{Who: "you", Text: "hi", Ours: true})
+	earlier(mpv.Said{Who: "sam", Text: "from before", Ours: false})
+	heard(mpv.Said{Who: "sam", Text: "yo", Ours: false})
 	if lines, chat := poll(0); fmt.Sprint(chat) != "[{you hi true} {sam yo false}]" || len(lines) != 0 {
 		t.Fatalf("chat %v, lines %q", chat, lines)
 	}
@@ -372,7 +404,7 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 		t.Fatalf("from the second: %v", chat)
 	}
 	g.ended(nil)
-	heard("sam", "after the end", false)
+	heard(mpv.Said{Who: "sam", Text: "after the end", Ours: false})
 	if _, chat := poll(0); len(chat) != 0 {
 		t.Fatalf("after the end: %v", chat)
 	}
@@ -381,7 +413,7 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	g.run, g.cancel = 2, func() {}
 	heard = g.heard(2)
 	for i := range saidKept + 3 {
-		heard("sam", fmt.Sprint(i), false)
+		heard(mpv.Said{Who: "sam", Text: fmt.Sprint(i), Ours: false})
 	}
 	if _, chat := poll(0); len(chat) != saidKept || chat[0].Text != "3" || chat[len(chat)-1].Text != fmt.Sprint(saidKept+2) {
 		t.Fatalf("kept %d, from %v to %v", len(chat), chat[0], chat[len(chat)-1])

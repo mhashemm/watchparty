@@ -79,6 +79,8 @@ config still applies, for example `keep-open` (see "Ending").
 | `["set_property", name, value]` | A **no-op set emits nothing**: no `property-change`, so no echo to suppress. `time-pos` takes a string, so a peer's `data` is forwarded as is, and is an **absolute seek**. |
 | `["show-text", text, ms]` | OSD message for `ms` milliseconds (default `--osd-duration`). Replies `data: null`. Sent as a JSON array it expands no `${…}`; each replaces the last. Not echoed to a piped stdout under `--quiet`, even with `--vo=null`. |
 | `["osd-overlay", id, "ass-events", data, 0, 720, 0]` | A layer of its own, beside show-text's: chat's. Replies `"data":{}`, an object, not a string. Ids are per IPC connection; `"none"` removes it. `data` is ASS: a newline starts another event, so text is escaped (`\` + U+FEFF, `\{`, `\}`) and broken by hand with `\q2`, or one line runs across the screen. res_x 0 follows the window's shape, so place by `\an`, not `\pos`. Probed on 0.37 under Xvfb. |
+| Colour emoji | libass can't draw a colour emoji font: with Noto Color Emoji installed they are boxes (0.37). So reactions are Twemoji's art as ASS drawings (`\p4`, `mpv/emojigen`), any mpv, any OS. `overlay-add` (bitmaps) was rejected: no `dw`/`dh` scaling on 0.37, and Windows unknown. |
+| A script's picker | `mouse-pos` (`x`, `y`, `hover`) tracks the mouse; `mouse x y 0 single` and `mouse x y 4 single` (wheel) drive it in a probe. Forced `MBTN_LEFT`/`WHEEL_*` bindings only while over the picker, or a click there pauses and a wheel seeks. `--script` repeats. Probed on 0.37: pick, scroll, no seek. |
 
 ## Properties we watch
 

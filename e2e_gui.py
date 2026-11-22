@@ -36,7 +36,7 @@ def gui_suite():
     def chats(n):
         """The chat under the box, newest first, as "who: text", "ours " before this node's own."""
         return js(n, '[...document.querySelectorAll("#said-latest li, #said-rest li")]'
-                     '.map(li => (li.classList.contains("ours") ? "ours " : "") + li.children[1].textContent + ": " + li.children[2].textContent)')
+                     '.map(li => (li.classList.contains("ours") ? "ours " : "") + li.children[1].textContent + ": " + (li.children[2].getAttribute("aria-label") || li.children[2].textContent))')
 
     def press_continue(n):
         tab(n, "history")
@@ -100,7 +100,7 @@ def gui_suite():
         click(H, "#tip-button")
         ok("a click opens it", js(H, '!$("tip").hidden && $("tip-button").getAttribute("aria-expanded") == "true"'))
         sections = js(H, '[...$("tip").querySelectorAll("h2")].map(h => h.textContent)')
-        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Chat", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
+        ok("each topic has its own section", sections == ["Start a party", "Join a party", "Watch together", "Automatic pauses", "Who's in the party", "Chat", "Reactions", "Slow networks", "Links", "Playlists", "Torrents", "Connecting"], str(sections))
         tip = js(H, '$("tip").textContent')
         ok("it isn't tied to one kind of video", not COUPLED.search(tip), str(COUPLED.findall(tip)))
         click(H, "#tip h2")
@@ -224,7 +224,7 @@ def gui_suite():
         js(G, '$("chat-text").value = "😀".repeat(205); $("chat-text").dispatchEvent(new Event("input"))')
         ok("the box takes 200 characters, an emoji as one", js(G, '[...$("chat-text").value].length') == 200)
         fill(G, **{"chat-text": said})
-        click(G, "#chat-form button")
+        click(G, "#chat-send")
         ok(f"{H} has it under {G}'s name", until(lambda: chats(H)[:1] == [f"{G}: {said}"]), str(chats(H)))
         ok(f"{G} has it as its own, and the box emptied", until(lambda: chats(G)[:1] == [f"ours you: {said}"] and js(G, '$("chat-text").value') == ""), str(chats(G)))
         ok("it isn't in the feed", not any(said in line for n in (H, G) for line in feed(n)))
@@ -232,10 +232,16 @@ def gui_suite():
         ok("no file has it", kept() == [], str(kept()))
         for text in ("h1", "h2", "h3"):
             fill(H, **{"chat-text": text})
-            click(H, "#chat-form button")
+            click(H, "#chat-send")
             must(f"{H}'s {text} reached {G}", until(lambda: chats(G)[:1] == [f"{H}: {text}"]))
         ok(f"{G} shows the latest three, the first under All messages, 4",
            js(G, '[$("said-latest").children.length, $("said-more").hidden, $("said-count").textContent, $("said-rest").textContent.includes("popcorn")]') == [3, False, "4", True])
+        click(H, "#react-open")
+        click(H, '#react-strip button[data-code="1f602"]')
+        ok(f"{G} has {H}'s reaction", until(lambda: chats(G)[:1] == [f"{H}: 😂"]), str(chats(G)))
+        ok(f"{H} has it as its own, the row closed and the button rests",
+           until(lambda: chats(H)[:1] == ["ours you: 😂"]) and js(H, '$("react-strip").hidden && $("react-open").disabled'), str(chats(H)))
+        ok("no log has it", not any(b"watchparty-react" in open(nodes[n]["log"], "rb").read() for n in (H, G)))
 
         part(f"[G14] {H}'s history has the real room and secret, and who came")
         store = js(H, '$("store-path").textContent')

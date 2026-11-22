@@ -214,7 +214,13 @@ func (c *Client) apply(e IncomingMessage) {
 		return
 	}
 	if e.typed {
-		if err := c.chatOut(e.say); err != nil {
+		var err error
+		if e.reaction != "" {
+			err = c.reactOut(e.reaction)
+		} else {
+			err = c.chatOut(e.say)
+		}
+		if err != nil {
 			log.Println("apply: chat:", err)
 		}
 		return
@@ -259,6 +265,11 @@ func (c *Client) apply(e IncomingMessage) {
 			// on its own: the error line below would quote the message
 			if err := c.chatIn(event, e); err != nil {
 				log.Println("apply: chat:", err)
+			}
+			return
+		case react:
+			if err := c.reactIn(event, e); err != nil {
+				log.Println("apply: react:", err)
 			}
 			return
 		case joined:

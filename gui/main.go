@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/party"
 	"github.com/mhashemm/watchparty/update"
 )
@@ -133,10 +134,11 @@ type gui struct {
 	exitErr   string
 	// refusal is what each side plays, when the party refused this node's file
 	refusal *party.NotTheSameFile
-	// chatTo is the running party's Config.Chat; said, the last saidKept messages mpv showed
+	// chatTo and reactTo are the running party's Config.Chat and React; said, the last saidKept messages mpv showed
 	// in it, saidGone the ones dropped before them. Kept only here, never in the log or on
 	// disk, and gone once the party ends.
 	chatTo    chan<- string
+	reactTo   chan<- string
 	said      []said
 	saidGone  int
 	lastPoll  time.Time
@@ -162,6 +164,8 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
 	g.mux.HandleFunc("POST /chat", g.chat)
+	g.mux.HandleFunc("POST /react", g.react)
+	g.mux.HandleFunc("GET /emoji", g.emoji)
 	g.mux.HandleFunc("GET /log", g.log)
 	g.mux.HandleFunc("GET /alive", g.alive)
 	g.mux.HandleFunc("GET /update", g.checkUpdate)
@@ -217,7 +221,9 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	g.run++
 	// its own channel: a message the party never took dies with it
 	chat := make(chan string, 16)
+	react := make(chan string, 4)
 	g.chatTo, cfg.Chat, cfg.Heard, g.said, g.saidGone = chat, chat, g.heard(g.run), nil, 0
+	g.reactTo, cfg.React = react, react
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
 		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
@@ -231,12 +237,12 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 
 // heard keeps a chat message mpv showed in run, while that party runs: the last saidKept,
 // so a member sending without end can't fill this process.
-func (g *gui) heard(run int) func(who, text string, ours bool) {
-	return func(who, text string, ours bool) {
+func (g *gui) heard(run int) func(mpv.Said) {
+	return func(m mpv.Said) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		if g.run == run && g.cancel != nil {
-			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: who, Text: text, Ours: ours})
+			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: m.Who, Text: m.Text, React: m.React, Ours: m.Ours})
 			if over := len(g.said) - saidKept; over > 0 {
 				g.said, g.saidGone = slices.Clone(g.said[over:]), g.saidGone+over
 			}
@@ -290,13 +296,14 @@ func (g *gui) nudge() {
 	}
 }
 
-// said is a chat message mpv showed: who, the text, when (ms), and whether it is this node's
-// own, which only that says: a member can be named "you".
+// said is a chat message or reaction mpv showed: who, the text or the reaction's code, when
+// (ms), and whether it is this node's own, which only that says: a member can be named "you".
 type said struct {
-	At   int64  `json:"at"`
-	Who  string `json:"who"`
-	Text string `json:"text"`
-	Ours bool   `json:"ours"`
+	At    int64  `json:"at"`
+	Who   string `json:"who"`
+	Text  string `json:"text"`
+	React string `json:"react,omitempty"`
+	Ours  bool   `json:"ours"`
 }
 
 func (g *gui) state(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +374,27 @@ func (g *gui) chat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(in.Text) == "" {
 		return
 	}
+	g.toParty(w, func() chan<- string { return g.chatTo }, in.Text)
+}
+
+// react hands the running party a reaction the person picked, one of mpv.Reactions.
+func (g *gui) react(w http.ResponseWriter, r *http.Request) {
+	in := struct {
+		Code string `json:"code"`
+	}{}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !slices.Contains(mpv.Reactions(), in.Code) {
+		http.Error(w, "no such reaction", http.StatusBadRequest)
+		return
+	}
+	g.toParty(w, func() chan<- string { return g.reactTo }, in.Code)
+}
+
+// toParty hands the running party v on its channel, to (read under g.mu).
+func (g *gui) toParty(w http.ResponseWriter, to func() chan<- string, v string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cancel == nil {
@@ -374,10 +402,23 @@ func (g *gui) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	select {
-	case g.chatTo <- in.Text:
+	case to() <- v:
 	default:
 		http.Error(w, "too many messages at once", http.StatusServiceUnavailable)
 	}
+}
+
+// emoji is the reactions in the picker's order, each drawn as mpv draws it.
+func (g *gui) emoji(w http.ResponseWriter, r *http.Request) {
+	res := struct {
+		Order []string          `json:"order"`
+		SVG   map[string]string `json:"svg"`
+	}{mpv.Reactions(), map[string]string{}}
+	for _, code := range res.Order {
+		res.SVG[code] = mpv.EmojiSVG(code)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func (g *gui) stopParty() {

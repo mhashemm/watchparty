@@ -236,6 +236,8 @@ func (c *Client) next() (input, bool) {
 			return input{msg: &m}, true
 		case text := <-c.chat:
 			return input{msg: &IncomingMessage{typed: true, say: text}}, true
+		case code := <-c.react:
+			return input{msg: &IncomingMessage{typed: true, reaction: code}}, true
 		default:
 		}
 		if in, ok := c.inbox.poll(); ok {
@@ -246,6 +248,8 @@ func (c *Client) next() (input, bool) {
 			return input{msg: &m}, true
 		case text := <-c.chat:
 			return input{msg: &IncomingMessage{typed: true, say: text}}, true
+		case code := <-c.react:
+			return input{msg: &IncomingMessage{typed: true, reaction: code}}, true
 		case <-c.inbox.ready:
 		case <-c.ctx.Done():
 			return input{}, false
@@ -333,6 +337,12 @@ func (c *Client) mpvSaid(line []byte) {
 		}
 	}
 	if event.EventType == clientMessage {
+		if len(event.Args) == 2 && event.Args[0] == reactPicked {
+			// the person picked a reaction in mpv: in turn, like one picked in the GUI, and
+			// unlogged
+			c.post(input{msg: &IncomingMessage{typed: true, reaction: event.Args[1]}})
+			return
+		}
 		log.Printf("Watch: mpv said: %s\n", line)
 		for _, report := range c.scriptSaid(event.Args) {
 			line, _ := json.Marshal(report)

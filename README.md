@@ -5,8 +5,8 @@ When anyone pauses, resumes or seeks, everyone's player follows. There is no hos
 any of you can drive.
 
 Everyone needs their own copy of the same file, or the same URL. Nothing is streamed
-between you. Only small messages are sent: pauses, seeks and chat, so a slow connection
-is fine.
+between you. Only small messages are sent: pauses, seeks, chat and reactions, so a slow
+connection is fine.
 
 ## Install
 
@@ -122,3 +122,9 @@ make -j test     # unit tests and the end-to-end suite (needs mpv and ffmpeg)
 ```
 
 `CLAUDE.md` describes the architecture.
+
+## Credits
+
+The reaction emoji are [Twemoji](https://github.com/jdecked/twemoji) v17.0.3, by Twitter, Inc.
+and other contributors, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/),
+converted to drawings mpv renders (`mpv/emojigen`).

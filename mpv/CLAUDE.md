@@ -205,6 +205,6 @@ playing also pauses the party with a reason: nobody starts the next one until so
   answering and the script ack late: without it, breaking a guard passed every test.
 - **What nodes must agree on: `party_test.go`**, whole parties through every order a seed
   picks. A new rule nodes must agree on gets a check there.
-- **Both fakes run the shipped `watchparty.lua`** (`script_test.go`, gopher-lua) and model only mpv.
+- **Both fakes run the shipped `watchparty.lua`** (`script_test.go`, gopher-lua) and model only mpv; not `reactions.lua` (only shown), probed on real mpv (MPV.md).
   A file has started at its `playback-restart`, not `file-loaded`: a test that means so says both.
 - Never a real socket. mpv emits nothing for a no-op set, so a test counting events alternates values.

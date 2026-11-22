@@ -58,6 +58,10 @@ const clock = t => new Date(t).toLocaleTimeString([], { timeStyle: "short" });
 // how many chat messages show before "All messages" (renderSaid; reset() runs at load), and
 // the most kept, as gui/main.go keeps (saidKept)
 const SAID_SHOWN = 3, SAID_KEPT = 500;
+// the reactions (loadEmoji); each person bursts once every REACT_EVERY at most (mpv/react.go),
+// so the button rests that long after reactedAt
+const REACT_EVERY = 2000;
+let emoji = null, reactedAt = 0;
 function videoList(videos, hide) {
   const ul = document.createElement("ul");
   ul.className = "videos";
@@ -571,6 +575,8 @@ function render(exitErr, refusal) {
   // the relay would drop a message: the node says so on mpv's screen, and the box waits
   const away = running && state.reconnecting;
   $("chat-text").disabled = $("chat-send").disabled = away;
+  $("react-open").disabled = away || reactedAt > Date.now() - REACT_EVERY;
+  if (away) openStrip(false);
   $("chat-text").placeholder = away ? "Reconnecting to the relay…" : "Shows on everyone's mpv for a few seconds";
   document.body.dataset.mood = mood;
   document.body.classList.toggle("walking", walking);
@@ -645,7 +651,14 @@ function renderSaid() {
     const li = document.createElement("li"), time = document.createElement("time"), who = document.createElement("b"), text = document.createElement("span");
     time.textContent = clock(m.at);
     who.textContent = m.who;
-    text.textContent = m.text;
+    if (m.react) {
+      // drawn as mpv draws it: a system font may not have the emoji yet
+      text.className = "react";
+      text.innerHTML = emoji?.svg[m.react] || "";
+      text.setAttribute("aria-label", String.fromCodePoint(parseInt(m.react, 16)));
+    } else {
+      text.textContent = m.text;
+    }
     li.classList.toggle("ours", !!m.ours);
     li.append(time, who, text);
     return li;
@@ -682,6 +695,48 @@ $("chat-form").addEventListener("submit", async e => {
   let res = null;
   try { res = await api("/chat", { text }); } catch {}
   if (res?.ok) $("chat-text").value = "";
+  chatHint(res?.ok ? "" : NOT_SENT[res?.status] || "Not sent: the app didn't answer. Send it again.");
+});
+
+// reactions: the picker's emoji (GET /emoji, drawn as mpv draws them) in one row that scrolls
+// sideways, opened by the button beside Send. A pick bursts on everyone's mpv.
+async function loadEmoji() {
+  try { emoji = await (await api("/emoji")).json(); } catch { return; }
+  $("react-strip").replaceChildren(...emoji.order.map(code => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.code = code;
+    b.setAttribute("aria-label", String.fromCodePoint(parseInt(code, 16)));
+    b.innerHTML = emoji.svg[code];
+    return b;
+  }));
+  renderSaid();
+}
+loadEmoji();
+function openStrip(open) {
+  $("react-strip").hidden = !open;
+  $("react-open").setAttribute("aria-expanded", open);
+  if (open) $("react-strip").scrollLeft = 0;
+}
+$("react-open").addEventListener("click", () => openStrip($("react-strip").hidden));
+$("react-strip").addEventListener("keydown", e => {
+  if (e.key === "Escape") { openStrip(false); $("react-open").focus(); }
+});
+// a mouse's wheel turns up and down: here it scrolls the row sideways
+$("react-strip").addEventListener("wheel", e => {
+  if (!e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  $("react-strip").scrollLeft += e.deltaY;
+}, { passive: false });
+$("react-strip").addEventListener("click", async e => {
+  const code = e.target.closest("button")?.dataset.code;
+  if (!code) return;
+  openStrip(false);
+  reactedAt = Date.now();
+  $("react-open").disabled = true;
+  setTimeout(() => { if (!state.reconnecting) $("react-open").disabled = false; }, REACT_EVERY);
+  let res = null;
+  try { res = await api("/react", { code }); } catch {}
   chatHint(res?.ok ? "" : NOT_SENT[res?.status] || "Not sent: the app didn't answer. Send it again.");
 });
 

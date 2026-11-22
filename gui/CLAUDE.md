@@ -190,7 +190,7 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 `handle()` (`app.js`) and `observe` (`store.go`) read only log lines (root `CLAUDE.md`), **right after
 the 20-byte timestamp, never as a substring:** `refused <header>` and `upnp:` lines put a stranger's
-text mid-line, and it can spell any of them. Chat is never a line, nor on disk: `Heard` keeps it in
+text mid-line, and it can spell any of them. Chat and reactions are never a line, nor on disk: `Heard` keeps it in
 memory (`/log`'s `said`) until the party ends; `/log` is `no-store`, or Chromium caches it (`[G13b]`).
 
 ## On Windows
