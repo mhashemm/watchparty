@@ -676,6 +676,7 @@ function renderSaid() {
 
 // why a message stayed in the box, until it is changed or one goes
 const NOT_SENT = { 409: "Not sent: the party has ended.", 503: "Not sent: too many messages at once. Send it again in a moment." };
+const REACT_NOT_SENT = { 409: "Your reaction wasn't sent: the party has ended.", 503: "Your reaction wasn't sent: too many at once. Pick it again in a moment." };
 function chatHint(text) {
   $("chat-hint").textContent = text || "";
   $("chat-hint").hidden = !text;
@@ -748,7 +749,7 @@ $("react-strip").addEventListener("click", async e => {
   rest(Date.now());
   let res = null;
   try { res = await api("/react", { code }); } catch {}
-  chatHint(res?.ok ? "" : NOT_SENT[res?.status] || "Not sent: the app didn't answer. Send it again.");
+  chatHint(res?.ok ? "" : REACT_NOT_SENT[res?.status] || "Your reaction wasn't sent: the app didn't answer. Pick it again.");
 });
 
 $("save-chart").addEventListener("click", async () => {

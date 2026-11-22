@@ -2,8 +2,8 @@
 -- so the node sends one message for a whole burst; and the picker people choose one from,
 -- a button that shows while the mouse moves and opens a row of them in the middle.
 
--- art is each emoji's shapes, by code point: emoji.lua's, which mpv/reactions.go puts at the
--- end of this file
+-- art is each emoji's shapes, by code point: emoji.json's, which mpv/react.go puts at the end
+-- of this file
 local art = {}
 -- art_order is the picker's order
 local art_order = {}
@@ -19,6 +19,9 @@ local most = 64
 local rested_until = 0
 local resting = function(_) end
 local render
+
+-- unseeded, every mpv's first burst would fly the same way
+math.randomseed(os.time())
 
 local ov = mp.create_osd_overlay("ass-events")
 local flying = {}
@@ -334,6 +337,7 @@ mp.observe_property("mouse-pos", "native", function(_, pos)
     return
   end
   mouse.x, mouse.y = pos.x, pos.y
+  local was = hovering
   if wakes() then
     moved = mp.get_time()
     if not shown then
@@ -346,7 +350,7 @@ mp.observe_property("mouse-pos", "native", function(_, pos)
   end
   hovering = under()
   if was and not hovering then
-    left = moved
+    left = mp.get_time()
   end
   grab(hovering ~= nil)
   render()
