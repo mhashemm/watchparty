@@ -60,6 +60,8 @@ type Config struct {
 	// name, and seconds into it. An entry no longer in the playlist starts as usual.
 	Entry string
 	Start float64
+	// Chat is what this node's person types to the party (the GUI's box), one message each.
+	Chat <-chan string
 }
 
 var (
@@ -127,6 +129,9 @@ func Run(parent context.Context, cfg Config) error {
 		cfg.Hostname, _ = os.Hostname()
 	}
 
+	if cfg.Chat != nil {
+		go forwardChat(c, cfg.Chat, incoming)
+	}
 	if strings.TrimSpace(cfg.Relay) != "" {
 		joinRelay(c, stop, &cfg, incoming, outgoing, v.id, ours)
 	} else {
@@ -140,6 +145,22 @@ func Run(parent context.Context, cfg Config) error {
 		defer cleanup()
 	}
 	return refusedFile(runMpv(parent, c, cancel, cfg, v, startAt, incoming, outgoing, &playing), v)
+}
+
+// forwardChat hands the node each message its person types, in the order typed.
+func forwardChat(c context.Context, chat <-chan string, incoming chan<- mpv.IncomingMessage) {
+	for {
+		select {
+		case <-c.Done():
+			return
+		case text := <-chat:
+			select {
+			case incoming <- mpv.IncomingMessage{Say: text}:
+			case <-c.Done():
+				return
+			}
+		}
+	}
 }
 
 // video is what the party plays: its entries, the one it starts on, and the fingerprint

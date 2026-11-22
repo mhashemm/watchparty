@@ -105,6 +105,9 @@ type IncomingMessage struct {
 	// delivers it to From alone.
 	Missed, Resend bool
 	Reply          chan<- []byte
+	// Say is set only by this node's own process, never from the wire: a chat message this
+	// node's person typed, to send to the party.
+	Say string
 }
 
 // Event is a line from mpv, or a message between nodes: raw mpv JSON plus the sender's state.

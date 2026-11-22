@@ -211,6 +211,12 @@ func (c *Client) apply(e IncomingMessage) {
 		c.back()
 		return
 	}
+	if e.Say != "" {
+		if err := c.chatOut(e.Say); err != nil {
+			log.Println("apply: chat:", err)
+		}
+		return
+	}
 	if e.Missed || e.Resend {
 		if err := c.chase(e); err != nil {
 			log.Println("apply: a member missed something:", err)
@@ -247,6 +253,8 @@ func (c *Client) apply(e IncomingMessage) {
 					err = c.showText(fmt.Sprintf("%s's network is slow: %ds ready", e.HostName, secs))
 				}
 			}
+		case chat:
+			err = c.chatIn(event, e)
 		case joined:
 			delete(c.missed, e.From)
 			err = c.answer(e.HostName, "joining")

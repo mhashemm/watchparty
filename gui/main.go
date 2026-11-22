@@ -132,7 +132,9 @@ type gui struct {
 	lines     []string
 	exitErr   string
 	// refusal is what each side plays, when the party refused this node's file
-	refusal   *party.NotTheSameFile
+	refusal *party.NotTheSameFile
+	// chatTo is the running party's Config.Chat
+	chatTo    chan<- string
 	lastPoll  time.Time
 	idleAfter time.Duration
 	pages     int
@@ -155,6 +157,7 @@ func newGUI(ctx context.Context, host string, st *store) *gui {
 	g.mux.HandleFunc("POST /pick-folder", pick(pickFolder))
 	g.mux.HandleFunc("POST /start", g.start)
 	g.mux.HandleFunc("POST /stop", g.stop)
+	g.mux.HandleFunc("POST /chat", g.chat)
 	g.mux.HandleFunc("GET /log", g.log)
 	g.mux.HandleFunc("GET /alive", g.alive)
 	g.mux.HandleFunc("GET /update", g.checkUpdate)
@@ -207,6 +210,9 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	}
 	c, cancel := context.WithCancel(g.ctx)
 	g.cancel, g.lines, g.exitErr, g.refusal = cancel, nil, "", nil
+	// its own channel: a message the party never took dies with it
+	chat := make(chan string, 16)
+	g.chatTo, cfg.Chat = chat, chat
 	g.run++
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
@@ -305,6 +311,31 @@ func (g *gui) clearHistory(w http.ResponseWriter, r *http.Request) {
 
 func (g *gui) stop(w http.ResponseWriter, r *http.Request) {
 	g.stopParty()
+}
+
+// chat hands the running party a message the person typed.
+func (g *gui) chat(w http.ResponseWriter, r *http.Request) {
+	in := struct {
+		Text string `json:"text"`
+	}{}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cancel == nil {
+		http.Error(w, "no party is running", http.StatusConflict)
+		return
+	}
+	select {
+	case g.chatTo <- in.Text:
+	default:
+		http.Error(w, "too many messages at once", http.StatusServiceUnavailable)
+	}
 }
 
 func (g *gui) stopParty() {

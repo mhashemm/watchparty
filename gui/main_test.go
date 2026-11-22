@@ -301,3 +301,34 @@ func TestInstallStepsMatchTheInstaller(t *testing.T) {
 		t.Errorf("macOS steps: %q", steps)
 	}
 }
+
+// A message goes to the running party as typed; with no party, or nothing typed, it goes nowhere.
+func TestChatGoesToTheRunningParty(t *testing.T) {
+	t.Parallel()
+	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	post := func(body string) int {
+		r := httptest.NewRequest("POST", "/chat", strings.NewReader(body))
+		r.Host = g.host
+		r.Header.Set("X-Token", g.token)
+		w := httptest.NewRecorder()
+		g.ServeHTTP(w, r)
+		return w.Code
+	}
+	if got := post(`{"text":"hi"}`); got != http.StatusConflict {
+		t.Fatalf("with no party: %d", got)
+	}
+	chat := make(chan string, 1)
+	g.cancel, g.chatTo = func() {}, chat
+	if got := post(`{"text":"  "}`); got != http.StatusOK || len(chat) != 0 {
+		t.Fatalf("nothing typed: %d, %d sent", got, len(chat))
+	}
+	if got := post(`{"text":"hi there"}`); got != http.StatusOK {
+		t.Fatalf("a message: %d", got)
+	}
+	if got := post(`{"text":"again"}`); got != http.StatusServiceUnavailable {
+		t.Fatalf("with the party's queue full: %d", got)
+	}
+	if got := <-chat; got != "hi there" {
+		t.Fatalf("sent %q", got)
+	}
+}
