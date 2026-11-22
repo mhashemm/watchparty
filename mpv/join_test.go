@@ -50,7 +50,7 @@ func TestIncomingWhileLoadingKeepsOnlyTheLatest(t *testing.T) {
 	incoming := make(chan IncomingMessage)
 	loaded := make(chan error, 1)
 	go func() {
-		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil, 0, 0)
+		_, err := New(c, func() {}, ours, make(chan []byte, 8), incoming, nil, 0, 0, nil)
 		loaded <- err
 	}()
 	stamp := 0

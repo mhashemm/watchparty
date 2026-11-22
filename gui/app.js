@@ -238,7 +238,7 @@ async function startParty(extra) {
   if (res.ok) loadState();
 }
 
-let run = 0, from = 0, state = {}, plan = null;
+let run = 0, from = 0, saidFrom = 0, state = {}, plan = null;
 function reset() {
   state = { ready: false, relay: false, connected: false, reconnecting: false, waiting: false, busy: "", unreachable: false, leftPause: false, stopping: null,
     shared: false, torrent: false, found: false, check: null, router: false, mpvUp: false, swarm: null, buffering: null, inAt: null, members: [],
@@ -589,12 +589,16 @@ async function poll() {
   polling = true;
   clearTimeout(next);
   try {
-    const res = await api(`/log?from=${from}&run=${run}`);
+    const res = await api(`/log?from=${from}&said=${saidFrom}&run=${run}`);
     const j = await res.json();
     if (j.run !== run) { run = j.run; reset(); }
-    const lines = j.lines || [];
+    const lines = j.lines || [], said = j.said || [];
     lines.forEach(handle);
     from = j.from + lines.length;
+    // chat, kept apart from the log and only while the party runs: gone from the feed at its end
+    said.forEach(m => addFeed(`${m.who}: ${m.text}`, new Date(m.at)).classList.add("said"));
+    saidFrom = j.saidFrom + said.length;
+    if (!j.running) $("feed").querySelectorAll("li.said").forEach(li => li.remove());
     if (running && !j.running) loadState();
     running = j.running;
     if (run > 0) {
@@ -623,8 +627,8 @@ $("copy").addEventListener("click", async () => {
   setTimeout(() => $("copy").textContent = "Copy invite", 2000);
 });
 
-// a message goes on everyone's mpv; the feed shows it once this node's mpv does. Kept in the box
-// if the party didn't take it
+// a message goes on everyone's mpv; the feed shows it once this node's mpv does (said). Kept in
+// the box if the party didn't take it
 $("chat-form").addEventListener("submit", async e => {
   e.preventDefault();
   const text = $("chat-text").value;

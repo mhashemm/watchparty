@@ -278,7 +278,7 @@ func TestNewWaitsForTheFileToLoad(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0)
+		New(c, func() {}, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0, nil)
 		close(loaded)
 	}()
 	select {
@@ -307,7 +307,7 @@ func TestNewReturnsAtOnceWhenMpvGoesAway(t *testing.T) {
 		start := time.Now()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0)
+		_, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0, nil)
 		if !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 		}
@@ -421,7 +421,7 @@ func TestNewFailsWhenAnObserveIsRefusedAfterTheFileLoaded(t *testing.T) {
 		}()
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); err == nil || err.Error() != "property not found" {
+		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0, nil); err == nil || err.Error() != "property not found" {
 			t.Fatalf("got %v, want the refused observe", err)
 		}
 	})
@@ -451,7 +451,7 @@ func TestNewReturnsWhenMpvGoesAwayBeforeTheFileLoads(t *testing.T) {
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		start := time.Now()
-		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
+		if _, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0, nil); !errors.Is(err, ErrClosed) || time.Since(start) > time.Second {
 			t.Fatalf("got %v after %s, want ErrClosed at once", err, time.Since(start))
 		}
 	})
@@ -491,7 +491,7 @@ func TestNewWaitsForTheScriptsName(t *testing.T) {
 		defer cancel()
 		opened := make(chan error, 1)
 		go func() {
-			_, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0)
+			_, err := New(c, func() {}, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0, nil)
 			opened <- err
 		}()
 		synctest.Wait()
@@ -535,7 +535,7 @@ func TestNewSucceedsWhenMpvLoadsThenQuitsAtOnce(t *testing.T) {
 		cancelled := atomic.Bool{}
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if _, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0); err != nil {
+		if _, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 8), make(chan IncomingMessage), nil, 0, 0, nil); err != nil {
 			t.Fatalf("got %v, want the party started", err)
 		}
 		synctest.Wait()
@@ -556,7 +556,7 @@ func TestMpvHangingUpAfterLoadingEndsTheParty(t *testing.T) {
 		cancelled := atomic.Bool{}
 		c, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if _, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0); err != nil {
+		if _, err := New(c, func() { cancelled.Store(true) }, ours, make(chan []byte, 1), make(chan IncomingMessage), nil, 0, 0, nil); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()

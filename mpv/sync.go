@@ -254,7 +254,11 @@ func (c *Client) apply(e IncomingMessage) {
 				}
 			}
 		case chat:
-			err = c.chatIn(event, e)
+			// on its own: the error line below would quote the message
+			if err := c.chatIn(event, e); err != nil {
+				log.Println("apply: chat:", err)
+			}
+			return
 		case joined:
 			delete(c.missed, e.From)
 			err = c.answer(e.HostName, "joining")

@@ -188,8 +188,8 @@ The download, SHA-256 check and binary swap live in the `update` package
 
 ## Log lines
 
-`handle()` in `app.js` and `store.go`'s `observe` react only to log lines; the table
-of which lines, and who prints them, is in the root `CLAUDE.md`.
+`handle()` in `app.js` and `store.go`'s `observe` react only to log lines (root `CLAUDE.md`).
+Chat never is one, never on disk: `Heard` keeps it in memory, `/log`'s `said`, until the party ends.
 **Both read them only right after the 20-byte timestamp, never as a substring:** `refused
 <header>` and `upnp:` lines put a stranger's text mid-line, and it can spell any of them.
 

@@ -133,8 +133,10 @@ type gui struct {
 	exitErr   string
 	// refusal is what each side plays, when the party refused this node's file
 	refusal *party.NotTheSameFile
-	// chatTo is the running party's Config.Chat
+	// chatTo is the running party's Config.Chat; said, the messages mpv showed in it. Kept
+	// only here, never in the log or on disk, and gone once the party ends.
 	chatTo    chan<- string
+	said      []said
 	lastPoll  time.Time
 	idleAfter time.Duration
 	pages     int
@@ -211,9 +213,9 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	c, cancel := context.WithCancel(g.ctx)
 	g.cancel, g.lines, g.exitErr, g.refusal = cancel, nil, "", nil
 	// its own channel: a message the party never took dies with it
-	chat := make(chan string, 16)
-	g.chatTo, cfg.Chat = chat, chat
 	g.run++
+	chat := make(chan string, 16)
+	g.chatTo, cfg.Chat, cfg.Heard, g.said = chat, chat, g.heard(g.run), nil
 	g.session = g.store.begin(f)
 	if f.Continue != "" && f.Mode == "relay" {
 		cfg.Entry, cfg.Start = g.store.stoppedAt(g.session)
@@ -221,15 +223,32 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 	g.wg.Go(func() {
 		err := party.Run(c, cfg)
 		cancel()
+		g.ended(err)
+	})
+}
+
+// heard keeps a chat message mpv showed in run, while that party runs.
+func (g *gui) heard(run int) func(who, text string) {
+	return func(who, text string) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.store.end(g.session)
-		g.cancel, g.session = nil, -1
-		if err != nil {
-			g.exitErr = err.Error()
+		if g.run == run && g.cancel != nil {
+			g.said = append(g.said, said{At: time.Now().UnixMilli(), Who: who, Text: text})
+			g.nudge()
 		}
-		errors.As(err, &g.refusal)
-	})
+	}
+}
+
+// ended is the party gone, Run having returned err. Its chat goes with it.
+func (g *gui) ended(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.store.end(g.session)
+	g.cancel, g.session, g.said = nil, -1, nil
+	if err != nil {
+		g.exitErr = err.Error()
+	}
+	errors.As(err, &g.refusal)
 }
 
 func (g *gui) Write(p []byte) (int, error) {
@@ -241,13 +260,7 @@ func (g *gui) Write(p []byte) (int, error) {
 			dirty = true
 		}
 	}
-	for news := range g.news {
-		// one nudge waiting is enough: the page reads every line since its last poll
-		select {
-		case news <- struct{}{}:
-		default:
-		}
-	}
+	g.nudge()
 	g.mu.Unlock()
 	// the disk write waits until g.mu is free, which every page request needs. What it
 	// writes is the store as it is by then, so a party ending in between loses nothing.
@@ -255,6 +268,24 @@ func (g *gui) Write(p []byte) (int, error) {
 		g.store.save()
 	}
 	return len(p), nil
+}
+
+// nudge tells each page holding /alive open that there is something new; g.mu is held.
+func (g *gui) nudge() {
+	for news := range g.news {
+		// one nudge waiting is enough: the page reads everything since its last poll
+		select {
+		case news <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// said is a chat message mpv showed: who ("you" for this node's own), the text, and when (ms).
+type said struct {
+	At   int64  `json:"at"`
+	Who  string `json:"who"`
+	Text string `json:"text"`
 }
 
 func (g *gui) state(w http.ResponseWriter, r *http.Request) {
@@ -348,21 +379,25 @@ func (g *gui) stopParty() {
 
 func (g *gui) log(w http.ResponseWriter, r *http.Request) {
 	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+	saidFrom, _ := strconv.Atoi(r.URL.Query().Get("said"))
 	run, _ := strconv.Atoi(r.URL.Query().Get("run"))
 	g.mu.Lock()
 	g.lastPoll = time.Now()
 	if run != g.run {
-		from = 0
+		from, saidFrom = 0, 0
 	}
 	from = min(max(from, 0), len(g.lines))
+	saidFrom = min(max(saidFrom, 0), len(g.said))
 	res := struct {
-		Run     int                   `json:"run"`
-		From    int                   `json:"from"`
-		Lines   []string              `json:"lines"`
-		Running bool                  `json:"running"`
-		ExitErr string                `json:"exitErr"`
-		Refusal *party.NotTheSameFile `json:"refusal,omitempty"`
-	}{g.run, from, slices.Clone(g.lines[from:]), g.cancel != nil, g.exitErr, g.refusal}
+		Run      int                   `json:"run"`
+		From     int                   `json:"from"`
+		Lines    []string              `json:"lines"`
+		SaidFrom int                   `json:"saidFrom"`
+		Said     []said                `json:"said"`
+		Running  bool                  `json:"running"`
+		ExitErr  string                `json:"exitErr"`
+		Refusal  *party.NotTheSameFile `json:"refusal,omitempty"`
+	}{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom:]), g.cancel != nil, g.exitErr, g.refusal}
 	g.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)

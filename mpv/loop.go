@@ -30,6 +30,12 @@ func (c *Client) do(args ...any) error {
 
 // ask is do, and also returns the answer's data, such as get_property_string's value.
 func (c *Client) ask(args ...any) (string, error) {
+	return c.send(false, args)
+}
+
+// send is ask; an unlogged request never reaches the log, as a chat message must not
+// (chat.go).
+func (c *Client) send(unlogged bool, args []any) (string, error) {
 	if c.gone {
 		return "", ErrClosed
 	}
@@ -46,7 +52,7 @@ func (c *Client) ask(args ...any) (string, error) {
 		c.out = newMailbox[request]()
 		go c.writer(c.out)
 	}
-	c.out.put(request{id: id, body: body})
+	c.out.put(request{id: id, body: body, unlogged: unlogged})
 	return c.await(id, replyLimit)
 }
 
@@ -121,8 +127,9 @@ func (m *mailbox[T]) poll() (T, bool) {
 
 // request is one command on its way to mpv's socket.
 type request struct {
-	id   int64
-	body []byte
+	id       int64
+	body     []byte
+	unlogged bool
 }
 
 // writer writes requests to mpv's socket in order, so the loop never blocks on mpv reading
@@ -142,7 +149,9 @@ func (c *Client) writer(out *mailbox[request]) {
 			c.post(input{unsent: r.id, err: err})
 			continue
 		}
-		log.Printf("do: sent request: %s\n", r.body)
+		if !r.unlogged {
+			log.Printf("do: sent request: %s\n", r.body)
+		}
 	}
 }
 

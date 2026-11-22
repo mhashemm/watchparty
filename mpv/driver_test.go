@@ -40,6 +40,7 @@ type node struct {
 	// are. sets: what mpv was set and hasn't reported yet (mpvObeys). refuse: commands mpv
 	// answers with an error.
 	told   []string
+	chats  []string
 	sets   [][]any
 	refuse map[string]string
 	// late: mpv answers a set only after reporting it (mpvAnswersLate); held: those answers.
@@ -134,7 +135,11 @@ func start(t *testing.T, s setup) (*node, error) {
 	for _, m := range s.heard {
 		n.in <- m
 	}
-	c, err := New(ctx, cancel, ours, n.out, n.in, s.names, s.start, s.at)
+	c, err := New(ctx, cancel, ours, n.out, n.in, s.names, s.start, s.at, func(who, text string) {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.chats = append(n.chats, who+": "+text)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -692,6 +697,17 @@ func (n *node) mpvWasTold() []string {
 	told := n.told
 	n.told = nil
 	return told
+}
+
+// heardChats is every chat message the node handed on since the last call, as "who: text".
+func (n *node) heardChats() []string {
+	n.t.Helper()
+	synctest.Wait()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	chats := n.chats
+	n.chats = nil
+	return chats
 }
 
 // seeksIn is the seeks among what it told mpv.

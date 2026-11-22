@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -23,14 +25,14 @@ func TestConfig(t *testing.T) {
 	relay := form{Mode: "relay", File: " /m.mkv ", Mpv: "/bin/mpv", Relay: " ws://r ", Room: "a b", Secret: "s", Local: true, Port: "1", Addrs: "x:1"}
 	got, err := relay.config()
 	want := party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Room: "a b", Secret: "s"}
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("relay config = %+v, %v; want %+v", got, err, want)
 	}
 
 	direct := form{Mode: "direct", File: "/m.mkv", Mpv: "/bin/mpv", Relay: "ws://r", Local: true, Port: "6970", Addrs: "1.2.3.4:6969", Room: "r", Secret: " s "}
 	got, err = direct.config()
 	want = party.Config{File: "/m.mkv", Mpv: "/bin/mpv", Local: true, Port: 6970, PublicPort: party.DefaultPort, Addrs: "1.2.3.4:6969", Secret: "s"}
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("direct config = %+v, %v; want %+v", got, err, want)
 	}
 
@@ -330,5 +332,45 @@ func TestChatGoesToTheRunningParty(t *testing.T) {
 	}
 	if got := <-chat; got != "hi there" {
 		t.Fatalf("sent %q", got)
+	}
+}
+
+// Chat is kept only for the page, beside the log and never in it, and only while its party
+// runs: one from an earlier party is dropped, and the end takes them all.
+func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
+	t.Parallel()
+	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	type said struct{ Who, Text string }
+	poll := func(from int) (lines []string, chat []said) {
+		t.Helper()
+		r := httptest.NewRequest("GET", fmt.Sprintf("/log?run=%d&said=%d", g.run, from), nil)
+		r.Host = g.host
+		r.Header.Set("X-Token", g.token)
+		w := httptest.NewRecorder()
+		g.ServeHTTP(w, r)
+		res := struct {
+			Lines []string
+			Said  []said
+		}{}
+		if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+			t.Fatal(err)
+		}
+		return res.Lines, res.Said
+	}
+	g.run, g.cancel = 1, func() {}
+	earlier, heard := g.heard(0), g.heard(1)
+	heard("you", "hi")
+	earlier("sam", "from before")
+	heard("sam", "yo")
+	if lines, chat := poll(0); fmt.Sprint(chat) != "[{you hi} {sam yo}]" || len(lines) != 0 {
+		t.Fatalf("chat %v, lines %q", chat, lines)
+	}
+	if _, chat := poll(1); fmt.Sprint(chat) != "[{sam yo}]" {
+		t.Fatalf("from the second: %v", chat)
+	}
+	g.ended(nil)
+	heard("sam", "after the end")
+	if _, chat := poll(0); len(chat) != 0 {
+		t.Fatalf("after the end: %v", chat)
 	}
 }

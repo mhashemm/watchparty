@@ -61,7 +61,9 @@ type Config struct {
 	Entry string
 	Start float64
 	// Chat is what this node's person types to the party (the GUI's box), one message each.
-	Chat <-chan string
+	// Heard is given each message mpv shows, "you" for this node's own: chat is never logged.
+	Chat  <-chan string
+	Heard func(who, text string)
 }
 
 var (
@@ -288,7 +290,7 @@ func runMpv(parent, c context.Context, cancel context.CancelFunc, cfg Config, v 
 			mpvQuit.Store(true)
 		}
 		cancel()
-	}, conn, outgoing, incoming, names, v.start, startAt)
+	}, conn, outgoing, incoming, names, v.start, startAt, cfg.Heard)
 	if err != nil {
 		if errors.Is(err, mpv.ErrClosed) && !mpvQuit.Load() && c.Err() == nil {
 			err = waitExit(exited, mpvExitGrace)
