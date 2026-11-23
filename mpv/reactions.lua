@@ -122,6 +122,9 @@ require("mp.options").read_options(options, "watchparty_reactions")
 -- Sizes are for a 720 pixel high screen, scaled to the real one.
 local button_size, button_right, button_bottom = 60, 16, 90
 local pick_size, pick_gap, pick_pad, pick_most = 52, 12, 14, 9
+-- people didn't see the row scrolls: of the next emoji this much peeks in, faded, and each end
+-- with more has an arrow this wide (the user's pick: arrows and the fade, A and B)
+local pick_peek, pick_arrow = 0.55, 32
 -- the button hides once the mouse is still this long; the row closes once the mouse left it
 local hide_after, close_after = 2, 0.8
 -- the button's icon: an outlined smiley, 24 pixels square at \p4
@@ -154,11 +157,16 @@ local function layout()
   local b = { size = button_size * u }
   b.x, b.y = w - (button_right * u) - b.size, h - (button_bottom * u) - b.size
   local size, gap, pad = pick_size * u, pick_gap * u, pick_pad * u
-  local n = math.max(1, math.min(pick_most, #art_order, math.floor((w - 2 * pad - 32 * u + gap) / (size + gap))))
-  local r = { size = size, gap = gap, pad = pad, shown = n }
-  r.w, r.h = 2 * pad + n * size + (n - 1) * gap, size + 2 * pad
+  local peek = size * pick_peek + gap
+  local n = math.max(1, math.min(pick_most, #art_order, math.floor((w - 2 * pad - 32 * u + gap - peek) / (size + gap))))
+  if n == #art_order then
+    peek = 0
+  end
+  local r = { size = size, gap = gap, pad = pad, shown = n, arrow = pick_arrow * u }
+  r.w, r.h = 2 * pad + n * size + (n - 1) * gap + peek, size + 2 * pad
   r.x, r.y = (w - r.w) / 2, (h - r.h) / 2
-  r.most = math.max(0, (#art_order - n) * (size + gap))
+  -- scrolled to the end, the last emoji ends at the row's
+  r.most = math.max(0, (#art_order - n) * (size + gap) - peek)
   return w, h, u, b, r
 end
 
@@ -166,16 +174,41 @@ local function inside(x, y, w, h)
   return mouse.x >= x and mouse.x < x + w and mouse.y >= y and mouse.y < y + h
 end
 
--- under is what the mouse is over: "button", an emoji's code, "row" between them, or nil.
+-- arrows is which of the row's ends have more: back, on.
+local function arrows(r)
+  return scrolled > 0, scrolled < r.most
+end
+
+-- under is what the mouse is over: "button", an arrow ("back" or "on"), an emoji's code, "row"
+-- between them, or nil.
 local function under()
   local _, _, _, b, r = layout()
   if shown and inside(b.x, b.y, b.size, b.size) then
     return "button"
   end
+  if open then
+    local back, on = arrows(r)
+    local cy = r.y + r.h / 2
+    local function near(cx)
+      return (mouse.x - cx) ^ 2 + (mouse.y - cy) ^ 2 <= (r.arrow / 2) ^ 2
+    end
+    if back and near(r.x) then
+      return "back"
+    elseif on and near(r.x + r.w) then
+      return "on"
+    end
+  end
   if open and inside(r.x, r.y, r.w, r.h) then
     local at = mouse.x - r.x - r.pad + scrolled
     local i = math.floor(at / (r.size + r.gap))
     if inside(r.x + r.pad, r.y + r.pad, r.w - 2 * r.pad, r.size) and at - i * (r.size + r.gap) < r.size and art_order[i + 1] then
+      -- one an end cuts is that end's arrow: it scrolls, rather than picks what isn't all shown
+      local x = r.x + r.pad + i * (r.size + r.gap) - scrolled
+      if x < r.x + r.pad - 0.5 then
+        return "back"
+      elseif x + r.size > r.x + r.w - r.pad + 0.5 then
+        return "on"
+      end
       return art_order[i + 1]
     end
     return "row"
@@ -215,11 +248,27 @@ render = function()
           out[#out + 1] = panel(x - r.gap / 2, r.y + r.pad - r.gap / 2, r.size + r.gap, r.size + r.gap, 10 * u, "&HFFFFFF&", 0xB0)
         end
         local k = r.size / 36 * 100
+        -- one cut by an end fades: there is more that way
+        local cut = x < r.x + r.pad - 0.5 or x + r.size > r.x + r.w - r.pad + 0.5
         for _, shape in ipairs(art[code]) do
-          out[#out + 1] = string.format("{\\an7\\pos(%.1f,%.1f)%s\\fscx%.1f\\fscy%.1f\\bord0\\shad0\\1c%s\\p4}%s",
-            x, r.y + r.pad, clip, k, k, shape[1], shape[2])
+          out[#out + 1] = string.format("{\\an7\\pos(%.1f,%.1f)%s\\fscx%.1f\\fscy%.1f\\bord0\\shad0\\1c%s\\1a&H%02X&\\p4}%s",
+            x, r.y + r.pad, clip, k, k, shape[1], cut and 0xA0 or 0, shape[2])
         end
       end
+    end
+    local back, on = arrows(r)
+    local cy = r.y + r.h / 2
+    local function arrow(cx, name, chevron)
+      out[#out + 1] = panel(cx - r.arrow / 2, cy - r.arrow / 2, r.arrow, r.arrow, r.arrow / 2,
+        hovering == name and "&HDFEEF3&" or "&HF6FDFF&", 0)
+      out[#out + 1] = string.format("{\\an7\\pos(%.1f,%.1f)\\fscx%.1f\\fscy%.1f\\bord0\\shad0\\1c&H304B6E&\\p1}%s",
+        cx, cy, 100 * u, 100 * u, chevron)
+    end
+    if back then
+      arrow(r.x, "back", "m 3 -7 l -1 -7 l -7 0 l -1 7 l 3 7 l -3 0")
+    end
+    if on then
+      arrow(r.x + r.w, "on", "m -3 -7 l 1 -7 l 7 0 l 1 7 l -3 7 l 3 0")
     end
   end
   ui.res_x, ui.res_y = w, h
@@ -241,20 +290,36 @@ local function grab(on)
   if not on then
     return
   end
+  -- scroll moves the row by emoji (the wheel), or by a rowful less one (an arrow: by is nil)
+  -- now reads where the mouse is as mpv takes a click or a turn of the wheel, as osc.lua does:
+  -- the script hears a move a moment later, so a tap, a move and a click at once, would
+  -- otherwise land where the mouse was before (MPV.md)
+  local function now()
+    local pos = mp.get_property_native("mouse-pos")
+    if pos then
+      mouse.x, mouse.y = pos.x, pos.y
+      moved = mp.get_time()
+    end
+  end
   local function scroll(by)
-    return function()
+    return function(dir)
+      now()
       local _, _, _, _, r = layout()
-      scrolled = math.max(0, math.min(r.most, scrolled + by * (r.size + r.gap)))
+      local step = by or dir * math.max(1, r.shown - 1)
+      scrolled = math.max(0, math.min(r.most, scrolled + step * (r.size + r.gap)))
       hovering = under()
       render()
     end
   end
   local acts = {
     MBTN_LEFT = function()
+      now()
       local what = under()
       if what == "button" and not rests() then
         open, scrolled = not open, 0
-      elseif what and what ~= "row" and what ~= "button" then
+      elseif what == "back" or what == "on" then
+        scroll(nil)(what == "back" and -1 or 1)
+      elseif art[what] then
         mp.commandv("script-message", "watchparty-reacted", what)
         open = false
       end

@@ -237,6 +237,20 @@ def gui_suite():
         ok(f"{G} shows the latest three, the first under All messages, 4",
            js(G, '[$("said-latest").children.length, $("said-more").hidden, $("said-count").textContent, $("said-rest").textContent.includes("popcorn")]') == [3, False, "4", True])
         click(H, "#react-open")
+        ok("the row says it has more: an arrow and a fade at its end, none at its start",
+           js(H, '!$("react-more").hidden && $("react-back").hidden && $("react-strip").className == "react-strip more-on"'),
+           js(H, '[$("react-back").hidden, $("react-strip").className, $("react-strip").scrollLeft]'))
+        click(H, "#react-more")
+        ok("the arrow scrolls it, and then its start has them too",
+           until(lambda: js(H, '$("react-strip").scrollLeft > 100 && !$("react-back").hidden && $("react-strip").classList.contains("more-back")'), 5))
+        click(H, "#react-back")
+        must("the other scrolls it back", until(lambda: js(H, '$("react-strip").scrollLeft == 0'), 5))
+        # the emoji the end cuts
+        js(H, '[...$("react-strip").children].find(b => b.getBoundingClientRect().right > $("react-strip").getBoundingClientRect().right).click()')
+        ok("the emoji the end cuts scrolls it as its arrow does, and isn't picked",
+           until(lambda: js(H, '$("react-strip").scrollLeft > 100'), 5))
+        click(H, "#react-back")
+        must("it scrolls back", until(lambda: js(H, '$("react-strip").scrollLeft == 0'), 5))
         click(H, '#react-strip button[data-code="1f602"]')
         ok(f"{G} has {H}'s reaction", until(lambda: chats(G)[:1] == [f"{H}: 😂"]), str(chats(G)))
         ok(f"{H} has it as its own, the row closed and the button rests",

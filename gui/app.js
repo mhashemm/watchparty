@@ -729,12 +729,28 @@ function rest(at) {
   }, reactedAt + REACT_EVERY - Date.now());
 }
 function openStrip(open) {
-  $("react-strip").hidden = !open;
+  $("react-row").hidden = $("react-strip").hidden = !open;
   $("react-open").setAttribute("aria-expanded", open);
   if (open) $("react-strip").scrollLeft = 0;
+  showMore();
 }
+// people didn't see the row scrolls: each end with more gets an arrow and fades out
+function showMore() {
+  const s = $("react-strip");
+  const back = !s.hidden && s.scrollLeft > 1, on = !s.hidden && s.scrollLeft + s.clientWidth < s.scrollWidth - 1;
+  $("react-back").hidden = !back;
+  $("react-more").hidden = !on;
+  s.classList.toggle("more-back", back);
+  s.classList.toggle("more-on", on);
+}
+$("react-strip").addEventListener("scroll", showMore);
+window.addEventListener("resize", showMore);
+// an arrow scrolls a rowful, less one emoji for where it was
+const page = by => $("react-strip").scrollBy({ left: by * ($("react-strip").clientWidth - 72), behavior: "smooth" });
+$("react-back").addEventListener("click", () => page(-1));
+$("react-more").addEventListener("click", () => page(1));
 $("react-open").addEventListener("click", () => openStrip($("react-strip").hidden));
-$("react-strip").addEventListener("keydown", e => {
+$("react-row").addEventListener("keydown", e => {
   if (e.key === "Escape") { openStrip(false); $("react-open").focus(); }
 });
 // a mouse's wheel turns up and down: here it scrolls the row sideways
@@ -744,8 +760,12 @@ $("react-strip").addEventListener("wheel", e => {
   $("react-strip").scrollLeft += e.deltaY;
 }, { passive: false });
 $("react-strip").addEventListener("click", async e => {
-  const code = e.target.closest("button")?.dataset.code;
+  const b = e.target.closest("button"), code = b?.dataset.code;
   if (!code) return;
+  // one an end cuts is that end's arrow, as on mpv: it scrolls, rather than picks what isn't
+  // all shown (a key's focus scrolls one whole into view first)
+  const row = $("react-strip").getBoundingClientRect(), at = b.getBoundingClientRect();
+  if (at.left < row.left - 0.5 || at.right > row.right + 0.5) return page(at.left < row.left ? -1 : 1);
   rest(Date.now());
   let res = null;
   try { res = await api("/react", { code }); } catch {}
