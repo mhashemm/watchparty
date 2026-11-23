@@ -4,13 +4,13 @@ go 1.27.4
 
 require (
 	github.com/Microsoft/go-winio v0.6.4
-	github.com/anacrolix/torrent v1.62.0
+	github.com/anacrolix/torrent v1.63.0
 	github.com/coder/websocket v1.8.15
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/mhashemm/upnp v0.6.0
 	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/sys v0.50.0
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.62.0
 )
 
@@ -27,7 +27,7 @@ require (
 	github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb // indirect
 	github.com/anacrolix/missinggo v1.3.0 // indirect
 	github.com/anacrolix/missinggo/perf v1.0.0 // indirect
-	github.com/anacrolix/missinggo/v2 v2.11.0 // indirect
+	github.com/anacrolix/missinggo/v2 v2.12.0 // indirect
 	github.com/anacrolix/mmsg v1.0.1 // indirect
 	github.com/anacrolix/multiless v0.4.0 // indirect
 	github.com/anacrolix/stm v0.5.0 // indirect
@@ -37,7 +37,6 @@ require (
 	github.com/benbjohnson/immutable v0.4.1-0.20221220213129-8932b999621d // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
 	github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8 // indirect
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
