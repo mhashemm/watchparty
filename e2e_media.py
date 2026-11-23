@@ -368,10 +368,14 @@ def media_suite():
         click(*button)
         must("the row has an arrow at its end, as there is more", over(int(x0 + row_w), h // 2))
         click(int(x0 + row_w), h // 2)
-        must("which scrolled it", over(*row(0)))
+        # the dimmed emoji peeking in at that end, off the arrow, is the arrow too
+        peek_at = (int(x0 + row_w - pad - 14 * u), int(h / 2 - 20 * u))
+        must("as is the emoji cut by that end", over(*peek_at))
+        click(*peek_at)
+        must("which scrolled it twice", over(*row(0)))
         click(*row(0))
-        ok("by a rowful less one: its first is now the one that was last",
-           until(lambda: picked[2:] == [order[shown - 1]]), f"{picked} {order[shown - 1]}")
+        ok("by a rowful less one each: its first is now the one that was last, twice over",
+           until(lambda: picked[2:] == [order[2 * (shown - 1)]]), f"{picked} {order[2 * (shown - 1)]}")
         listener.close()
         ok("no log has them", "watchparty-react" not in log("rxA"))
         stop("rxA")

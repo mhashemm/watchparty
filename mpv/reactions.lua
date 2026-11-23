@@ -202,6 +202,13 @@ local function under()
     local at = mouse.x - r.x - r.pad + scrolled
     local i = math.floor(at / (r.size + r.gap))
     if inside(r.x + r.pad, r.y + r.pad, r.w - 2 * r.pad, r.size) and at - i * (r.size + r.gap) < r.size and art_order[i + 1] then
+      -- one an end cuts is that end's arrow: it scrolls, rather than picks what isn't all shown
+      local x = r.x + r.pad + i * (r.size + r.gap) - scrolled
+      if x < r.x + r.pad - 0.5 then
+        return "back"
+      elseif x + r.size > r.x + r.w - r.pad + 0.5 then
+        return "on"
+      end
       return art_order[i + 1]
     end
     return "row"
