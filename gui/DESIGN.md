@@ -114,7 +114,9 @@ that.
     three, one row the user's own change). The art is Twemoji's, drawn the same on both.
     Settings' "Reaction picker on mpv" (cards like the connection's, the user's ask): when the
     mouse moves (default), near its corner, or never; applied at once. After a pick both smileys
-    rest 2s, mpv's faded, the GUI's disabled.
+    rest 2s, mpv's faded, the GUI's disabled. People didn't see the row scrolls, so each end with
+    more has a round arrow that scrolls a rowful less one, and fades (mpv dims the emoji cut
+    there): A and B of three together, the user's pick over a position bar.
 - **Voice:** plain, active, sentence case. The title is "Hahas and Hehes Watch Party"
   with a small mushroom. The medical theme lives in names only: "Vitals", "Patient
   chart" (the raw log), and every error starts with "Diagnosis:" then what happened

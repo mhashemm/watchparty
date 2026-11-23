@@ -732,9 +732,25 @@ function openStrip(open) {
   $("react-strip").hidden = !open;
   $("react-open").setAttribute("aria-expanded", open);
   if (open) $("react-strip").scrollLeft = 0;
+  showMore();
+}
+// people didn't see the row scrolls: each end with more gets an arrow and fades out
+function showMore() {
+  const s = $("react-strip");
+  const back = !s.hidden && s.scrollLeft > 1, on = !s.hidden && s.scrollLeft + s.clientWidth < s.scrollWidth - 1;
+  $("react-back").hidden = !back;
+  $("react-more").hidden = !on;
+  s.classList.toggle("more-back", back);
+  s.classList.toggle("more-on", on);
+}
+$("react-strip").addEventListener("scroll", showMore);
+window.addEventListener("resize", showMore);
+// an arrow scrolls a rowful, less one emoji for where it was
+for (const [id, by] of [["react-back", -1], ["react-more", 1]]) {
+  $(id).addEventListener("click", () => $("react-strip").scrollBy({ left: by * ($("react-strip").clientWidth - 72), behavior: "smooth" }));
 }
 $("react-open").addEventListener("click", () => openStrip($("react-strip").hidden));
-$("react-strip").addEventListener("keydown", e => {
+$("react-row").addEventListener("keydown", e => {
   if (e.key === "Escape") { openStrip(false); $("react-open").focus(); }
 });
 // a mouse's wheel turns up and down: here it scrolls the row sideways

@@ -261,8 +261,11 @@ def media_suite():
 
         u = h / 720
         size, gap, pad = 52 * u, 12 * u, 14 * u
-        shown = max(1, min(9, int((w - 2 * pad - 32 * u + gap) // (size + gap))))
-        x0 = (w - (2 * pad + shown * size + (shown - 1) * gap)) / 2
+        peek = size * 0.55 + gap
+        shown = max(1, min(9, int((w - 2 * pad - 32 * u + gap - peek) // (size + gap))))
+        row_w = 2 * pad + shown * size + (shown - 1) * gap + peek
+        x0 = (w - row_w) / 2
+        order = json.load(open("mpv/emoji.json"))["order"]
         button = (int(w - 16 * u - 30 * u), int(h - 90 * u - 30 * u))
         row = lambda i: (int(x0 + pad + i * (size + gap) + size / 2), int(h / 2))
         # what the picker says reaches every client of mpv's, this listener too
@@ -320,7 +323,6 @@ def media_suite():
         must("and opens", over(*row(1)))
         click(*row(1))
         ok("the second is picked", until(lambda: picked == ["1f602", "1f62d"]), str(picked))
-        listener.close()
 
         # what the picker shows leaves no trace in mpv's properties: its areas on screen, against
         # the same areas while it is off (the video is paused, so nothing else changes there)
@@ -333,7 +335,7 @@ def media_suite():
 
         def differs(a, b):
             return len(a) != len(b) or sum(abs(p - q) for p, q in zip(a, b)) / max(1, len(a)) > 4
-        row_area = lambda: area(x0, (h - size) / 2 - pad, 2 * pad + shown * size + (shown - 1) * gap, size + 2 * pad)
+        row_area = lambda: area(x0, (h - size) / 2 - pad, row_w, size + 2 * pad)
         button_area = lambda: area(w - 76 * u, h - 150 * u, 60 * u, 60 * u)
         wiggled = itertools.count()
 
@@ -357,6 +359,17 @@ def media_suite():
         hold(0.4, "a move far from the corner would show the smiley")
         ok("near its corner: a move elsewhere doesn't show the smiley", not differs(button_area(), button_off))
         ok("a move near it does", until(lambda: wiggle(w * 3 // 4, h * 3 // 4) or differs(button_area(), button_off), 5))
+
+        ipc(sock, "script-message-to", "watchparty_reactions", "watchparty-picker", "move")
+        must("the smiley takes clicks", over(*button))
+        click(*button)
+        must("the row has an arrow at its end, as there is more", over(int(x0 + row_w), h // 2))
+        click(int(x0 + row_w), h // 2)
+        must("which scrolled it", over(*row(0)))
+        click(*row(0))
+        ok("by a rowful less one: its first is now the one that was last",
+           until(lambda: picked[2:] == [order[shown - 1]]), f"{picked} {order[shown - 1]}")
+        listener.close()
         ok("no log has them", "watchparty-react" not in log("rxA"))
         stop("rxA")
         x.kill()
