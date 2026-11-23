@@ -729,7 +729,7 @@ function rest(at) {
   }, reactedAt + REACT_EVERY - Date.now());
 }
 function openStrip(open) {
-  $("react-strip").hidden = !open;
+  $("react-row").hidden = $("react-strip").hidden = !open;
   $("react-open").setAttribute("aria-expanded", open);
   if (open) $("react-strip").scrollLeft = 0;
   showMore();
