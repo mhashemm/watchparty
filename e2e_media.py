@@ -300,7 +300,10 @@ def media_suite():
             return not holds()
 
         def click(x, y):
+            """A click where the mouse just moved, as a tap is. Then a rest, as a person's next
+            move comes after: the script reads a click's place as it hears it, a moment later."""
             ipc(sock, "mouse", x, y, 0, "single")
+            hold(0.2, "the script hears the click before the next move")
 
         ipc(sock, "mouse", w // 3, h // 3)
         must("the smiley shows and takes clicks", over(*button))
@@ -320,9 +323,9 @@ def media_suite():
         ipc(sock, "mouse", w // 3, h // 3)
         must("back on, it shows again", over(*button))
         click(*button)
-        must("and opens", over(*row(1)))
+        # a tap: the mouse goes there and clicks in one go, before the script hears it moved
         click(*row(1))
-        ok("the second is picked", until(lambda: picked == ["1f602", "1f62d"]), str(picked))
+        ok("the second is picked, by a tap", until(lambda: picked == ["1f602", "1f62d"]), str(picked))
 
         # what the picker shows leaves no trace in mpv's properties: its areas on screen, against
         # the same areas while it is off (the video is paused, so nothing else changes there)

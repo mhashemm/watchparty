@@ -284,8 +284,19 @@ local function grab(on)
     return
   end
   -- scroll moves the row by emoji (the wheel), or by a rowful less one (an arrow: by is nil)
+  -- now reads where the mouse is as mpv takes a click or a turn of the wheel, as osc.lua does:
+  -- the script hears a move a moment later, so a tap, a move and a click at once, would
+  -- otherwise land where the mouse was before (MPV.md)
+  local function now()
+    local pos = mp.get_property_native("mouse-pos")
+    if pos then
+      mouse.x, mouse.y = pos.x, pos.y
+      moved = mp.get_time()
+    end
+  end
   local function scroll(by)
     return function(dir)
+      now()
       local _, _, _, _, r = layout()
       local step = by or dir * math.max(1, r.shown - 1)
       scrolled = math.max(0, math.min(r.most, scrolled + step * (r.size + r.gap)))
@@ -295,6 +306,7 @@ local function grab(on)
   end
   local acts = {
     MBTN_LEFT = function()
+      now()
       local what = under()
       if what == "button" and not rests() then
         open, scrolled = not open, 0
