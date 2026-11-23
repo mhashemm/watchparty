@@ -746,9 +746,9 @@ function showMore() {
 $("react-strip").addEventListener("scroll", showMore);
 window.addEventListener("resize", showMore);
 // an arrow scrolls a rowful, less one emoji for where it was
-for (const [id, by] of [["react-back", -1], ["react-more", 1]]) {
-  $(id).addEventListener("click", () => $("react-strip").scrollBy({ left: by * ($("react-strip").clientWidth - 72), behavior: "smooth" }));
-}
+const page = by => $("react-strip").scrollBy({ left: by * ($("react-strip").clientWidth - 72), behavior: "smooth" });
+$("react-back").addEventListener("click", () => page(-1));
+$("react-more").addEventListener("click", () => page(1));
 $("react-open").addEventListener("click", () => openStrip($("react-strip").hidden));
 $("react-row").addEventListener("keydown", e => {
   if (e.key === "Escape") { openStrip(false); $("react-open").focus(); }
@@ -760,8 +760,12 @@ $("react-strip").addEventListener("wheel", e => {
   $("react-strip").scrollLeft += e.deltaY;
 }, { passive: false });
 $("react-strip").addEventListener("click", async e => {
-  const code = e.target.closest("button")?.dataset.code;
+  const b = e.target.closest("button"), code = b?.dataset.code;
   if (!code) return;
+  // one an end cuts is that end's arrow, as on mpv: it scrolls, rather than picks what isn't
+  // all shown (a key's focus scrolls one whole into view first)
+  const row = $("react-strip").getBoundingClientRect(), at = b.getBoundingClientRect();
+  if (at.left < row.left - 0.5 || at.right > row.right + 0.5) return page(at.left < row.left ? -1 : 1);
   rest(Date.now());
   let res = null;
   try { res = await api("/react", { code }); } catch {}
