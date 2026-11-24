@@ -188,7 +188,9 @@ func (c *Client) speedChanged(data string) bool {
 		return false
 	}
 	c.mpvSpeed = v
-	if v == c.speed {
+	// a joiner's key waits for its answer, which sets mpv back to the party's speed: a
+	// joiner syncs with the party, never the party with it
+	if v == c.speed || c.stamp < 0 {
 		return false
 	}
 	c.speed, c.speedStamp = v, c.speedStamp+1

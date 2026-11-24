@@ -199,3 +199,23 @@ func TestASetUndoingASpeedKeySaysSo(t *testing.T) {
 		}
 	})
 }
+
+// A joiner's speed key before its answer stays home: the party's answer sets mpv back.
+func TestAJoinersSpeedKeyWaitsForTheParty(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := newNode(t, setup{joiner: true})
+		n.broadcasts()
+		n.personSpeeds(1.5)
+		if got := n.broadcasts(); len(got) != 0 {
+			t.Fatalf("broadcast %+v, want nothing", got)
+		}
+		n.peerSays("a", `{"stamp":4,"paused":true,"at":40,"speed":1,"speedStamp":0,"event":"property-change","name":"time-pos","data":"40.000000"}`)
+		if told := n.mpvWasTold(); !slices.Contains(told, "set_property speed 1.000000") {
+			t.Fatalf("told mpv %q, want the party's speed back", told)
+		}
+		n.mpvObeys()
+		if got := n.broadcasts(); slices.ContainsFunc(got, func(e Event) bool { return e.SpeedStamp != 0 || *e.Speed != 1 }) {
+			t.Fatalf("broadcast %+v, want the party's speed", got)
+		}
+	})
+}
