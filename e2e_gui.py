@@ -425,7 +425,8 @@ def gui_suite():
         js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
         ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
         for why, who, text in (("joining", "someone joining", "paused for Sam: joining"), ("out of sync", "someone out of sync", "paused: out of sync with Sam"),
-                               ("speed changed", "a member's speed", "paused: speed changed by Sam")):
+                               ("speed changed", "a member's speed", "paused: speed changed by Sam"),
+                               ("speed changed", "a speed heard secondhand", "paused: speed changed")):
             js(G, f'handle({json.dumps(notice(text, "18:01:30"))}); handle({stops})')
             ok(f"stopping for {who} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
 

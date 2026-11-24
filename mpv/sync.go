@@ -302,7 +302,8 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	}
 	playing := !c.paused
 	c.pace(e, m.HostName)
-	return errors.Join(c.takeState(e, m, s), c.keepPace(m.HostName, playing))
+	// only a speed message names whoever changed it (pace)
+	return errors.Join(c.takeState(e, m, s), c.keepPace("", playing))
 }
 
 // pace takes the party's speed a message says, if it is newer than this node's: the higher
@@ -327,14 +328,18 @@ func (c *Client) pace(e Event, hostname string) {
 
 // keepPace sets mpv to the party's speed, unless a set has already. If mpv played before the
 // message (playing) and plays on, the party stops: each node takes the speed at another
-// moment, so playing on would leave them apart.
+// moment, so playing on would leave them apart. hostname: who changed it, if the message says.
 func (c *Client) keepPace(hostname string, playing bool) error {
 	if c.speed == c.mpvSpeed {
 		return nil
 	}
 	if playing && !c.paused {
 		// worded as for out of sync: the GUI's feed shows the pause that follows as this one
-		c.showText(fmt.Sprintf("paused: speed changed by %s", hostname))
+		text := "paused: speed changed"
+		if hostname != "" {
+			text += " by " + hostname
+		}
+		c.showText(text)
 		c.pausedByNode = true
 		return c.pauseReq(true)
 	}

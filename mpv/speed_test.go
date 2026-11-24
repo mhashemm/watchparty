@@ -219,3 +219,17 @@ func TestAJoinersSpeedKeyWaitsForTheParty(t *testing.T) {
 		}
 	})
 }
+
+// A newer speed reaching a player on a message that isn't a speed's stops the party naming
+// nobody: its sender passes on what it heard.
+func TestASpeedHeardSecondhandStopsNamingNobody(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.takesFrom("a", 5, false, 10)
+		n.peerSays("b", `{"stamp":5,"paused":false,"at":10,"speed":1.5,"speedStamp":1,"event":"property-change","name":"pause","data":"no"}`)
+		told := n.mpvWasTold()
+		if !slices.Contains(told, "show-text paused: speed changed 5000") || !slices.Contains(told, "set_property pause true") {
+			t.Fatalf("told mpv %q, want it stopped, naming nobody", told)
+		}
+	})
+}

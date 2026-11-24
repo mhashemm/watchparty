@@ -354,7 +354,7 @@ function handle(line) {
       if (/^resumed by /.test(text)) resumed();
       if (/^paused for .*: left$/.test(text)) state.leftPause = true;
       // if this node was playing it stops next, and that is this line, not a pause of its own
-      const why = text.match(/^paused for .*: (joining|catching up)$|^paused: (out of sync) with .*$|^paused: (speed changed) by .*$/);
+      const why = text.match(/^paused for .*: (joining|catching up)$|^paused: (out of sync) with .*$|^paused: (speed changed)( by .*)?$/);
       state.stopping = why ? { li, why: why[1] || why[2] || why[3] } : null;
     } catch {}
   }
