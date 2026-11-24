@@ -155,10 +155,7 @@ type Event struct {
 	Paused *bool    `json:"paused,omitempty"`
 	At     *float64 `json:"at,omitempty"`
 	Entry  *int     `json:"entry,omitempty"`
-	// Speed is the party's speed its sender held, and SpeedStamp orders it: the speed has a
-	// clock of its own, so changing it leads no stop (pace)
-	Speed      *float64 `json:"speed,omitempty"`
-	SpeedStamp int      `json:"speedStamp,omitempty"`
+	Speed  *float64 `json:"speed,omitempty"`
 	// Again: the sender's state, sent again to a member the mesh failed to reach.
 	// Check: the sender's state, sent when it is back in the room after losing the relay.
 	Again bool `json:"again,omitempty"`
@@ -280,10 +277,9 @@ type Client struct {
 	pausedByNode bool
 	// partyEntry: the entry of the stop this node took, wherever the person has moved since
 	partyEntry int
-	// speed: the party's speed, the newest by speedStamp, of the same the slower (pace);
-	// mpvSpeed: the speed mpv was last set to or said
-	speed, mpvSpeed float64
-	speedStamp      int
+	// speed: mpv's speed, or the one a set is taking it to; partySpeed: the speed of the stop
+	// this node took, whatever the person set since, as partyEntry
+	speed, partySpeed float64
 
 	// The playlist.
 	names []string
@@ -417,7 +413,7 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, cfg Config) 
 		resumeAt:   cfg.At,
 		stamp:      unheard,
 		speed:      1,
-		mpvSpeed:   1,
+		partySpeed: 1,
 		incoming:   cfg.Incoming,
 		inbox:      newMailbox[input](),
 		replies:    map[int64]outcome{},

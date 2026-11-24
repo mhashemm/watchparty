@@ -598,17 +598,25 @@ func speeds(n *simNode, speed float64) func() {
 	}
 }
 
-// sameSpeed is every node holding one party speed, and its mpv playing at it.
+// sameSpeed is every node at one speed: playing, its mpv's; stopped, the party's it holds,
+// as a follower's screen stays at whatever the person set until the party resumes.
 func (s *sim) sameSpeed(seed uint64) {
 	s.t.Helper()
-	want := s.nodes[0].c.speed
+	want := s.nodes[0].speedNow()
 	for _, n := range s.nodes {
-		n.mu.Lock()
-		if n.c.speed != want || n.speed != seconds(want) {
-			s.t.Errorf("seed %d: %s holds %g, its mpv %s; %s holds %g", seed, n.name, n.c.speed, n.speed, s.nodes[0].name, want)
+		if got := n.speedNow(); got != want {
+			s.t.Errorf("seed %d: %s is at %s, %s at %s", seed, n.name, got, s.nodes[0].name, want)
 		}
-		n.mu.Unlock()
 	}
+}
+
+func (n *simNode) speedNow() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.paused {
+		return n.speed
+	}
+	return seconds(n.c.held().speed)
 }
 
 func sets(n *simNode, paused bool) func() {

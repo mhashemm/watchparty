@@ -35,7 +35,7 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
 
 ## What gets broadcast (`handleEvent`)
 
-Only `pause`, the person's seek **while paused** and their speed go out, as the script says them:
+Only `pause`, and the person's seek and speed **while paused**, go out, as the script says them:
 
 - **A change with no `data`** (property unavailable: before load, while quitting) is ignored
   entirely and isn't the first change, or `seen` would swallow it and let the real first through.
@@ -44,11 +44,12 @@ Only `pause`, the person's seek **while paused** and their speed go out, as the 
   rewind everyone. The state is still recorded.
 - **`c.pos` is where mpv is:** each `time-pos` while playing, the script's snapshot once stopped
   (a playing second can be reported after the stop, `[R6c]`). It is what every pause carries (`at`).
-- **While paused only the leader seeks or moves** (`led`): a follower's seek or move stays on its
+- **While paused only the leader seeks, moves or sets the speed** (`led`): a follower's stays on its
   screen, told once a state ("only X can seek until resumed"); `held`/`Position` keep the party's
-  entry and second (`partyEntry`, `resumedFrom`). Its resume starts everyone from its screen; on another
-  file the party stops there instead, as everyone must load it. Only the person's own pause, seek
-  or move leads (`handleEvent`), not mpv's move at a file's end (`advancedAtEnd`): else `leaderless` (`pausedByNode`).
+  entry, second and speed (`partyEntry`, `resumedFrom`, `partySpeed`). Its resume starts everyone
+  from its screen; on another file the party stops there instead, as everyone must load it. Only
+  the person's own pause, seek, move or speed leads (`handleEvent`), not mpv's move at a file's
+  end (`advancedAtEnd`): else `leaderless` (`pausedByNode`).
 - **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
   (`pauseExtras`), even when the pause was an echo, so a seek that raced a peer's pause isn't lost.
 
@@ -108,7 +109,7 @@ change takes the next stamp, **written in the step that decided the event goes o
 (`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
 
 - **Newer is taken. The same stamp means made at once, and the safer wins for everyone**
-  (`over`): the higher entry, stopped over playing, the earlier second.
+  (`over`): the higher entry, stopped over playing, the earlier second, the slower.
 - **Older and saying another state means its sender missed something** (`answer`, "catching
   up"): the party stops as for a join and says where it is. Older and the same (`agrees`), or
   sent `again`, only crossed something newer. A tie's loser is told quietly: it may not have heard.
@@ -124,8 +125,6 @@ change takes the next stamp, **written in the step that decided the event goes o
   and the node `announce`s unless mpv is gone). Taken apart, it holds the party's stamp on its own
   entry or second, a tie it can win; so it speaks for the entry it is **heading** to, never mpv's
   (`held`). A newer resume on another entry stops the party: loading, it can't keep up.
-- **The speed has a clock of its own** (`pace`), so anyone changes it and a change leads no stop:
-  the newer wins, of two at once the slower. Taken while mpv plays, it stops the party (`keepPace`).
 - **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
   stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
 

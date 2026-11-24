@@ -35,19 +35,19 @@ func (d *dripReader) Read(p []byte) (int, error) {
 
 func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 	return &Client{
-		ctx:       context.Background(),
-		ready:     make(chan struct{}),
-		outgoing:  outgoing,
-		paused:    false,
-		headingTo: -1,
-		speed:     1,
-		mpvSpeed:  1,
-		seen:      map[string]bool{},
-		missed:    map[string]bool{},
-		conn:      &connection{scanner: sc, closed: make(chan struct{})},
-		inbox:     newMailbox[input](),
-		replies:   map[int64]outcome{},
-		waiting:   map[int64]bool{},
+		ctx:        context.Background(),
+		ready:      make(chan struct{}),
+		outgoing:   outgoing,
+		paused:     false,
+		headingTo:  -1,
+		speed:      1,
+		partySpeed: 1,
+		seen:       map[string]bool{},
+		missed:     map[string]bool{},
+		conn:       &connection{scanner: sc, closed: make(chan struct{})},
+		inbox:      newMailbox[input](),
+		replies:    map[int64]outcome{},
+		waiting:    map[int64]bool{},
 		// as New leaves it: the script said its name
 		script: scriptName,
 	}

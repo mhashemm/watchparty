@@ -275,10 +275,7 @@ func (c *Client) setState(paused bool, second *float64, entry *int, still bool) 
 	defer func() { c.applying-- }()
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
-	// held before the call, as the ack can say the person's speed after it (landed)
-	speed, was := c.speed, c.mpvSpeed
-	c.mpvSpeed = speed
-	err := c.do("script-message-to", c.script, scriptName+"-set", holds(paused), at, to, strconv.FormatInt(id, 10), c.lastScriptMsg, on, seconds(speed))
+	err := c.do("script-message-to", c.script, scriptName+"-set", holds(paused), at, to, strconv.FormatInt(id, 10), c.lastScriptMsg, on, seconds(c.speed))
 	if err == nil {
 		// a move is acked once its file starts, which can take far longer than 5s on a slow
 		// stream. The script acks when the file starts or mpv gives up on it
@@ -292,9 +289,6 @@ func (c *Client) setState(paused bool, second *float64, entry *int, still bool) 
 	}
 	if err != nil {
 		c.ground(id)
-		if c.mpvSpeed == speed {
-			c.mpvSpeed = was
-		}
 	}
 	return err
 }
