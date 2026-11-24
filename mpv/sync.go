@@ -307,7 +307,8 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 
 // pace takes the party's speed a message says, if it is newer than this node's: the higher
 // speedStamp, of the same the slower. The speed has a clock of its own, apart from the stamp,
-// so anyone changes it, and a change leads no stop.
+// so anyone changes it, and a change leads no stop. Only a speed message comes from whoever
+// changed it; any other passes on what its sender heard, so it names nobody.
 func (c *Client) pace(e Event, hostname string) {
 	if e.Speed == nil || !(*e.Speed >= minSpeed && *e.Speed <= maxSpeed) {
 		return
@@ -317,7 +318,11 @@ func (c *Client) pace(e Event, hostname string) {
 		return
 	}
 	c.speed, c.speedStamp = v, e.SpeedStamp
-	c.showText(fmt.Sprintf("speed %s× by %s", strconv.FormatFloat(v, 'f', -1, 64), hostname))
+	text := fmt.Sprintf("speed %s×", strconv.FormatFloat(v, 'f', -1, 64))
+	if e.Name == playSpeed {
+		text += " by " + hostname
+	}
+	c.showText(text)
 }
 
 // keepPace sets mpv to the party's speed, unless a set has already. If mpv played before the

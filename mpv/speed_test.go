@@ -105,7 +105,8 @@ func TestAStopWithANewSpeedIsOneSet(t *testing.T) {
 		n.plays()
 		n.peerSays("a", `{"stamp":3,"paused":true,"at":20,"speed":2,"speedStamp":1,"event":"property-change","name":"pause","data":"yes"}`)
 		told := n.mpvWasTold()
-		want := []string{"show-text speed 2× by a 5000", "set_property speed 2.000000", "set_property pause true", "set_property time-pos 20.000000", "show-text paused by a 5000"}
+		// a's stop says the speed it heard, maybe from someone else: it names nobody
+		want := []string{"show-text speed 2× 5000", "set_property speed 2.000000", "set_property pause true", "set_property time-pos 20.000000", "show-text paused by a 5000"}
 		if fmt.Sprint(told) != fmt.Sprint(want) {
 			t.Fatalf("told mpv %q, want %q", told, want)
 		}
@@ -160,8 +161,9 @@ func TestAJoinerTakesThePartysSpeed(t *testing.T) {
 		n := newNode(t, setup{joiner: true})
 		n.broadcasts()
 		n.peerSays("a", `{"stamp":4,"paused":true,"at":40,"speed":1.5,"speedStamp":2,"event":"property-change","name":"time-pos","data":"40.000000"}`)
-		if told := n.mpvWasTold(); !slices.Contains(told, "set_property speed 1.500000") {
-			t.Fatalf("told mpv %q, want the party's speed", told)
+		// an answer passes on the speed its sender heard: it names nobody
+		if told := n.mpvWasTold(); !slices.Contains(told, "set_property speed 1.500000") || !slices.Contains(told, "show-text speed 1.5× 5000") {
+			t.Fatalf("told mpv %q, want the party's speed, naming nobody", told)
 		}
 	})
 }
