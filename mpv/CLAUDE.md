@@ -22,7 +22,8 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
 - **`do()` takes inputs while it waits**: mpv's lines are handled, other replies kept by id,
   a transport message queued while a peer's change is in flight (`applying`). A command an mpv
   line starts (`pauseParty`) waits in `later` until that line's broadcast is out.
-- **So an action that waits more than once stops once this node has `moved`** (`adopt`, `answer`).
+- **So an action that waits more than once stops once this node has `moved`** (`adopt`, `answer`):
+  the person's change went out newer.
 - **`New` waits for `opened`**: the first `time-pos` with data, every observe taken and the script's name, or the close.
   - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's
     real exit status. Cancelling would kill the exiting mpv and turn "exit status 2" into
@@ -123,9 +124,8 @@ change takes the next stamp, **written in the step that decided the event goes o
   and the node `announce`s unless mpv is gone). Taken apart, it holds the party's stamp on its own
   entry or second, a tie it can win; so it speaks for the entry it is **heading** to, never mpv's
   (`held`). A newer resume on another entry stops the party: loading, it can't keep up.
-- **The speed has a clock of its own** (`speedStamp`, `pace`), so anyone changes it and a change
-  leads no stop: the newer wins, of two at once the slower. Taken while mpv plays, it stops the
-  party (`keepPace`): each node would take it at another moment. A set carries it.
+- **The speed has a clock of its own** (`pace`), so anyone changes it and a change leads no stop:
+  the newer wins, of two at once the slower. Taken while mpv plays, it stops the party (`keepPace`).
 - **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
   stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
 

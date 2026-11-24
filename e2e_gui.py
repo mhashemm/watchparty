@@ -424,9 +424,10 @@ def gui_suite():
         ok("stopping for someone who fell behind is one line, not also paused by you", feed(G)[0] == "paused by you: catching up" and not {"paused by you", "paused for Sam: catching up"} & set(feed(G)), str(feed(G)[:3]))
         js(G, f'handle({json.dumps(notice("paused for Sam: catching up", "18:01:10"))}); handle({json.dumps(notice("resumed by Sam", "18:01:20"))}); handle({stops})')
         ok("a party already stopped keeps the notice, and a later pause is your own", feed(G)[:3] == ["paused by you", "resumed by Sam", "paused for Sam: catching up"], str(feed(G)[:4]))
-        for why, text in (("joining", "paused for Sam: joining"), ("out of sync", "paused: out of sync with Sam"), ("speed changed", "paused: speed changed by Sam")):
+        for why, who, text in (("joining", "someone joining", "paused for Sam: joining"), ("out of sync", "someone out of sync", "paused: out of sync with Sam"),
+                               ("speed changed", "a member's speed", "paused: speed changed by Sam")):
             js(G, f'handle({json.dumps(notice(text, "18:01:30"))}); handle({stops})')
-            ok(f"stopping for someone {why} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
+            ok(f"stopping for {who} is one line too", feed(G)[0] == f"paused by you: {why}" and text not in feed(G), str(feed(G)[:3]))
 
     @case("[G18] a guest who comes first waits for the host, then gets in by itself")
     def _():
