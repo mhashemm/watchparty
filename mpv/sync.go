@@ -302,7 +302,7 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	}
 	playing := !c.paused
 	c.pace(e, m.HostName)
-	return errors.Join(c.follow(e, m, s), c.keepPace(m.HostName, playing))
+	return errors.Join(c.takeState(e, m, s), c.keepPace(m.HostName, playing))
 }
 
 // pace takes the party's speed a message says, if it is newer than this node's: the higher
@@ -341,8 +341,8 @@ func (c *Client) keepPace(hostname string, playing bool) error {
 	return c.pauseReq(c.paused)
 }
 
-// follow is take once the speed is taken.
-func (c *Client) follow(e Event, m IncomingMessage, s state) error {
+// takeState is take for the state, the speed aside.
+func (c *Client) takeState(e Event, m IncomingMessage, s state) error {
 	hostname := m.HostName
 	h := c.held()
 	over, told := s.over(h), c.leaderID == m.From
