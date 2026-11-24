@@ -16,15 +16,13 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
 
 ## The loop
 
-- **One goroutine owns a node's state** (`watch`, then `serve`). The rest only hand it inputs
-  (mpv's lines and close, `do()`'s timer and writer, `incoming` and `Chat`, read first), taken one at a
-  time in the order they came. No lock, no goroutine touching `Client`'s fields: an outcome
-  would hang on which ready channel a `select` picks.
+- **One goroutine owns a node's state** (`watch`, then `serve`). The rest only hand it inputs (mpv's
+  lines and close, `do()`'s timer and writer, `incoming` and `Chat`, read first), one at a time in
+  order. No lock, no goroutine touching `Client`'s fields: an outcome would hang on which `select` case fires.
 - **`do()` takes inputs while it waits**: mpv's lines are handled, other replies kept by id,
   a transport message queued while a peer's change is in flight (`applying`). A command an mpv
   line starts (`pauseParty`) waits in `later` until that line's broadcast is out.
-- **So an action that waits more than once stops once this node has `moved`** (`adopt`,
-  `answer`): the person's change went out newer.
+- **So an action that waits more than once stops once this node has `moved`** (`adopt`, `answer`).
 - **`New` waits for `opened`**: the first `time-pos` with data, every observe taken and the script's name, or the close.
   - Before that, a hang-up returns `ErrClosed` and cancels nothing, so `party.Run` reads mpv's
     real exit status. Cancelling would kill the exiting mpv and turn "exit status 2" into
@@ -36,11 +34,10 @@ never a peer's frame straight to the IPC; `SECURITY.md` (repo root) says why and
 
 ## What gets broadcast (`handleEvent`)
 
-Only `pause` and the person's seek **while paused** go out, as the script says them:
+Only `pause`, the person's seek **while paused** and their speed go out, as the script says them:
 
-- **A change with no `data`** (property unavailable: before load, while quitting) is
-  ignored entirely and doesn't count as the first change. Otherwise `seen` would
-  swallow it and let the real first value through.
+- **A change with no `data`** (property unavailable: before load, while quitting) is ignored
+  entirely and isn't the first change, or `seen` would swallow it and let the real first through.
 - **The first change per property is swallowed (`seen`).** An observe makes mpv send the
   current value at once; a fresh node is paused, so it would broadcast `time-pos=0` and
   rewind everyone. The state is still recorded.
@@ -75,7 +72,7 @@ state goes to the script as one set, applied whole (`watchparty.lua`), or a chan
 
 ### Seeking and buffering while playing pause the party (`pauseParty`)
 
-A seek while playing, or a node waiting on its cache, leaves the others out of step, so it pauses everyone with a reason:
+A seek or a speed change while playing, or a node waiting on its cache, leaves the others out of step, so it pauses everyone with a reason:
 
 - **`seek`**: a seek that isn't ours while playing (`seekWhilePlaying`). mpv folds seeks, so one carrying
   this node's id off its second is the person's too.
@@ -83,29 +80,29 @@ A seek while playing, or a node waiting on its cache, leaves the others out of s
   (`demuxer-via-network`) and until it plays, an untagged `buffered` says its whole seconds ready,
   next after that many (5s to a minute, `ahead`): network cost is the constraint. Peers log it; mpv's
   screens show only a number twice the last shown (`louder`), or it covers every other notice.
+- **`speed changed`**: the person's speed while playing (`speedChanged`); the stop carries it.
 - **`still buffering`**: a local resume while `waitingOnCache` is caught and not broadcast. A **peer's**
   never reaches mpv: the set stays stopped, and `refuseResume` sends pause, position and reason.
 
-`pauseParty` sends the stop after the line that started it (`later`); its ack's `pause=yes` isn't
-what the node holds, so it goes out as this node's own, then the extras; peers get pause before position (P2P
+`pauseParty` sends the stop after the line that started it (`later`); its ack's `pause=yes` isn't what
+the node holds, so it goes out as its own, then the extras; peers get pause before position (P2P
 `broadcast` waits per event, the relay keeps a FIFO per member). e2e `[R6b]`, `[R11f]`.
 
 ## Applying remote events (`apply`)
 
-**`incoming` is read from `New`, not from the load.** A slow load (a URL, a slow disk) must
-never make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked relay read
-fills the relay's 64-frame buffer and drops the member. While `opening`, `hear` keeps the
-notices in order and, of every `pause` and `time-pos`, only the newest **by stamp**: each
-says the party's whole state, and an older one applied after would be answered as behind.
-Then `join` seeks where a continued party stopped (`resumeAt`, a set like a peer's seek, so
-not broadcast), applies that one, announces `joined`, then the notices, all as one message:
-what comes meanwhile waits. e2e `[R11d]`.
+**`incoming` is read from `New`, not from the load.** A slow load (a URL, a slow disk) must never
+make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked relay read fills the
+relay's 64-frame buffer and drops the member. While `opening`, `hear` keeps the notices in order
+and, of every `pause` and `time-pos`, only the newest **by stamp**: each says the party's whole
+state, and an older one applied after would be answered as behind. Then `join` seeks where a
+continued party stopped (`resumeAt`, a set like a peer's seek, so not broadcast), applies that
+one, announces `joined`, then the notices, all as one message: what comes meanwhile waits. e2e `[R11d]`.
 
 ### One rule for who follows whom (`stamp`)
 
 Every message says the state it was sent from (`tag`, `held`): a `stamp` (a Lamport clock),
-`paused`, `at` (where it stopped, or resumes from), in a playlist `entry`; one missing any is
-refused (`stateOf`), and `take` compares it. A move while playing says stopped. A node's own
+`paused`, `at` (where it stopped, or resumes from), in a playlist `entry`, and the `speed`; one
+missing any is refused (`stateOf`), and `take` compares it. A move while playing says stopped. A node's own
 change takes the next stamp, **written in the step that decided the event goes out**
 (`handleEvent`): tagged afterwards, a peer's change adopted in between went out as its own.
 
@@ -123,9 +120,12 @@ change takes the next stamp, **written in the step that decided the event goes o
   joiners still order among themselves. `Opened` takes 1.
 - **A newer state is taken whole, in the step that compared it, before mpv is told** (`commit`:
   stamp, entry, the stop; `adopt` then sends one set; one mpv refuses is unmarked by `release`,
-  and the node `announce`s unless mpv is gone). Taken apart, it holds the party's stamp on its own entry or second, a tie it can win;
-  so it speaks for the entry it is **heading** to, never mpv's (`held`). A newer resume on
-  another entry stops the party: loading, it can't keep up.
+  and the node `announce`s unless mpv is gone). Taken apart, it holds the party's stamp on its own
+  entry or second, a tie it can win; so it speaks for the entry it is **heading** to, never mpv's
+  (`held`). A newer resume on another entry stops the party: loading, it can't keep up.
+- **The speed has a clock of its own** (`speedStamp`, `pace`), so anyone changes it and a change
+  leads no stop: the newer wins, of two at once the slower. Taken while mpv plays, it stops the
+  party (`keepPace`): each node would take it at another moment. A set carries it.
 - **A stamp, not a vector clock:** one winner, never a merge; changes at once with different
   stamps go by the stamp. Revisit only with a simulation or a party that ends split, and ask.
 

@@ -62,15 +62,17 @@ type node struct {
 	// it has begun, before its seek; undo, a space right after it. ranOutTo: mpv's own move
 	// there at the file's end, just before it.
 	first      bool
+	speedFirst string
 	seekTo     float64
 	moveTo     int
 	moveDuring int
 	undo       bool
 	ranOutTo   int
-	// what mpv holds: paused, pos, and entry, its playlist-pos; opened, the entry of the last
-	// start-file. seeking: a seek event the script hears once its second is known.
+	// what mpv holds: paused, pos, speed, and entry, its playlist-pos; opened, the entry of the
+	// last start-file. seeking: a seek event the script hears once its second is known.
 	paused  bool
 	pos     float64
+	speed   string
 	entry   int
 	opened  int
 	seeking bool
@@ -113,7 +115,7 @@ func start(t *testing.T, s setup) (*node, error) {
 	t.Helper()
 	ours, theirs := net.Pipe()
 	ctx, cancel := context.WithCancel(t.Context())
-	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), picks: make(chan string, 8), picker: make(chan string, 1), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, entry: s.start, opened: s.start, late: s.late}
+	n := &node{t: t, in: make(chan IncomingMessage, 64), out: make(chan []byte, 64), typed: make(chan string, 8), picks: make(chan string, 8), picker: make(chan string, 1), writes: make(chan string, 64), refuse: map[string]string{}, paused: true, speed: seconds(1), entry: s.start, opened: s.start, late: s.late}
 	if !s.noScript {
 		n.script = newScript(n)
 	}
@@ -262,6 +264,10 @@ func (n *node) goes(args []string) {
 		n.first, n.paused = false, !n.paused
 		n.script.pauseMarked()
 	}
+	if n.speedFirst != "" {
+		n.speed, n.speedFirst = n.speedFirst, ""
+		n.script.changeMarked(playSpeed)
+	}
 	if n.seekTo != 0 {
 		n.pos, n.seekTo = n.seekTo, 0
 		n.script.event(seek, nil)
@@ -298,6 +304,8 @@ func (n *node) get(name string) (string, bool) {
 		return fmt.Sprintf("%f", n.pos), true
 	case playlistPos:
 		return strconv.Itoa(n.entry), true
+	case playSpeed:
+		return n.speed, true
 	}
 	return "", false
 }
@@ -318,11 +326,17 @@ func (n *node) set(name, value string) {
 			return
 		}
 		v = e
+	case playSpeed:
+		if value == n.speed {
+			return
+		}
 	}
 	if !n.step(name, v) {
 		return
 	}
 	switch name {
+	case playSpeed:
+		n.speed = value
 	case pause:
 		n.paused = v.(bool)
 	case playlistPos:
@@ -443,7 +457,7 @@ func (n *node) writeLines(lines ...string) {
 			n.answerSeeksLocked()
 			n.pending, n.saying = append(n.pending, n.saying...), nil
 		}
-		if !(e.Name == pause && e.Data != "") {
+		if !((e.Name == pause || e.Name == playSpeed) && e.Data != "") {
 			n.pending = append(n.pending, line)
 		}
 		switch {
@@ -470,6 +484,10 @@ func (n *node) writeLines(lines ...string) {
 		case e.Name == pause && e.Data != "":
 			n.paused = e.paused()
 			n.script.pauseMarked()
+		case e.Name == playSpeed && e.Data != "":
+			// the person's speed key, which the node hears from the script alone
+			n.speed = e.Data
+			n.script.changeMarked(playSpeed)
 		case e.Name == playlistPos && e.Data != "":
 			entry, _ := strconv.Atoi(e.Data)
 			if entry != n.entry {
@@ -551,14 +569,15 @@ func (n *node) mpvObeys(then ...string) {
 	}
 }
 
-// reports is what mpv says once it has taken a set: a pause's change mark, which the script
-// hears; a seek with its events; a move opening the entry at 0, and its first frame ready.
+// reports is what mpv says once it has taken a set: a pause's or speed's change mark, which
+// the script hears; a seek with its events; a move opening the entry at 0, and its first
+// frame ready.
 func (n *node) reports(set []any) []string {
 	value := fmt.Sprint(set[1])
 	switch set[0] {
-	case pause:
+	case pause, playSpeed:
 		n.mu.Lock()
-		n.script.pauseMarked()
+		n.script.changeMarked(set[0].(string))
 		lines := n.pending
 		n.pending = nil
 		n.mu.Unlock()
@@ -600,6 +619,14 @@ func (n *node) personPressesFirst() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.first = true
+}
+
+// personSpeedsFirst is the person's speed key running just before the next set, which the
+// node hasn't read when it sends it.
+func (n *node) personSpeedsFirst(speed string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.speedFirst = speed
 }
 
 // personSeeksFirst is the person's seek to second running just before the next set, which the

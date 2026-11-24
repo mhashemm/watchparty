@@ -2,7 +2,7 @@
 -- else it does, and its messages reach the node as client-message events, which mpv never
 -- merges. It decides nothing; the rules are in Go. Every message says what mpv holds when
 -- it is sent, and carries a number:
--- watchparty <kind> <id> <pause> <time-pos> <n> <over|> <playlist-pos>.
+-- watchparty <kind> <id> <pause> <time-pos> <n> <over|> <playlist-pos> <speed>.
 
 -- said: what each recent message said, by number, so a set can tell what the node had read
 local n, said = 0, {}
@@ -15,14 +15,15 @@ local function say(kind, id, over, entry)
     local paused = mp.get_property("pause", "")
     entry = entry or mp.get_property("playlist-pos", "")
     local person = (id or "") == "" and (kind == "seek" or kind == "start")
-    said[n] = {pause = paused, entry = entry, person = person, auto = kind == "start" and id == "auto"}
+    local speed = mp.get_property("speed", "")
+    said[n] = {pause = paused, entry = entry, speed = speed, person = person, auto = kind == "start" and id == "auto"}
     said[n - 256] = nil
     local pos = mp.get_property("time-pos", "")
     -- moved to an entry that hasn't started: time-pos is still the old file's (0.42 keeps
     -- it while leaving; ORDER.md), and the new one opens at 0
     if opened and mp.get_property("playlist-pos") ~= opened then pos = "" end
     mp.commandv("script-message", "watchparty", kind, id or "", paused,
-        pos, tostring(n), over and "over" or "", entry)
+        pos, tostring(n), over and "over" or "", entry, speed)
 end
 
 -- hello: the node asks every script, to learn this one's name (a user's script with the same
@@ -33,12 +34,14 @@ mp.register_script_message("watchparty-hello", function() say("hello", mp.get_sc
 -- every change of pause, even one that ends where it began: mpv reports nothing at all for
 -- a set the person's key undid at once (ORDER.md)
 mp.observe_property("pause", "none", function() say("pause") end)
+-- the person's speed keys; a set's speed is said after its ack, the node compares it
+mp.observe_property("speed", "none", function() say("speed") end)
 
 -- A set is the whole state the node adopts, in one message, so a person's key lands before
--- it or after it, never between its steps: paused, on the entry, on the second, then playing
--- if asked. The ack comes once mpv has all of it, with what mpv holds then. A seek runs
--- async; its reply arrives in order with mpv's seek events, so the first seek event after it
--- is the one carrying the node's seek. A move waits for its file to start (heading, loaded),
+-- it or after it, never between its steps: the party's speed, paused, on the entry, on the
+-- second, then playing if asked. The ack comes once mpv has all of it, with what mpv holds
+-- then. A seek runs async; its reply arrives in order with mpv's seek events, so the first
+-- seek event after it is the one carrying the node's seek. A move waits for its file to start (heading, loaded),
 -- and a new set meanwhile replaces the one waiting.
 local replied, waiting, heading, loaded = {}, nil, nil, false
 -- moves: the entries sets moved to, with their ids, oldest first, until a start says which
@@ -50,15 +53,17 @@ local moves, ended, first = {}, nil, true
 local over, seeking = {}, nil
 
 -- overrules is whether a set undoes something the person did that the node hadn't read
--- (seen): a pause or seek the set's paused state overwrites. Another entry is also the
+-- (seen): a pause, speed or seek the set overwrites. Another entry is also the
 -- person's key, unless mpv moved there itself at a file's end: its start said auto, or is
 -- still to come after that file's end.
-local function overrules(seen, paused, entry)
+local function overrules(seen, paused, entry, speed)
     seen = tonumber(seen)
     local last = seen and said[seen]
     if not last then return false end
     local now = mp.get_property("pause")
     if now ~= last.pause and now ~= paused then return true end
+    now = mp.get_property("speed")
+    if now ~= last.speed and now ~= speed then return true end
     local own = ended == "eof" or ended == "error"
     for k = seen + 1, n do
         if said[k] and said[k].person then return true end
@@ -109,8 +114,9 @@ local function drop()
     if w then ack(w.id) end
 end
 
-mp.register_script_message("watchparty-set", function(paused, second, entry, id, seen, on)
-    if overrules(seen, paused, entry) then over[id] = true end
+mp.register_script_message("watchparty-set", function(paused, second, entry, id, seen, on, speed)
+    if overrules(seen, paused, entry, speed) then over[id] = true end
+    if mp.get_property("speed") ~= speed then mp.set_property("speed", speed) end
     if waiting then
         ack(waiting.id)
         waiting = nil

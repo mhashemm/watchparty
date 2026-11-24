@@ -83,7 +83,7 @@ func (c *Client) led() bool {
 // newer than its own. It must be done at the moment of sending: only then is it true.
 func (c *Client) tag(b []byte) []byte {
 	s := c.held()
-	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,`, s.stamp, s.paused, s.at)
+	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,"speed":%s,"speedStamp":%d,`, s.stamp, s.paused, s.at, seconds(c.speed), c.speedStamp)
 	if s.leaderless {
 		head = append(head, `"free":true,`...)
 	}
@@ -96,7 +96,7 @@ func (c *Client) tag(b []byte) []byte {
 // stateOf reads the state a peer's pause, seek or move was sent from. Every node sends it
 // whole (tag), so a message without it is refused rather than filled in from ours.
 func (c *Client) stateOf(e Event) (state, error) {
-	if e.Paused == nil || e.At == nil || len(c.names) > 0 && e.Entry == nil {
+	if e.Paused == nil || e.At == nil || e.Speed == nil || len(c.names) > 0 && e.Entry == nil {
 		return state{}, errors.New("no state")
 	}
 	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At, leaderless: e.Free && *e.Paused}
@@ -272,6 +272,10 @@ func (c *Client) apply(e IncomingMessage) {
 				log.Println("apply: react:", err)
 			}
 			return
+		case playSpeed:
+			playing := !c.paused
+			c.pace(event, e.HostName)
+			err = c.keepPace(e.HostName, playing)
 		case joined:
 			delete(c.missed, e.From)
 			err = c.answer(e.HostName, "joining")
@@ -296,6 +300,44 @@ func (c *Client) take(e Event, m IncomingMessage) error {
 	if err != nil {
 		return err
 	}
+	playing := !c.paused
+	c.pace(e, m.HostName)
+	return errors.Join(c.follow(e, m, s), c.keepPace(m.HostName, playing))
+}
+
+// pace takes the party's speed a message says, if it is newer than this node's: the higher
+// speedStamp, of the same the slower. The speed has a clock of its own, apart from the stamp,
+// so anyone changes it, and a change leads no stop.
+func (c *Client) pace(e Event, hostname string) {
+	if e.Speed == nil || !(*e.Speed >= minSpeed && *e.Speed <= maxSpeed) {
+		return
+	}
+	v := *e.Speed
+	if e.SpeedStamp < c.speedStamp || e.SpeedStamp == c.speedStamp && v >= c.speed {
+		return
+	}
+	c.speed, c.speedStamp = v, e.SpeedStamp
+	c.showText(fmt.Sprintf("speed %s× by %s", strconv.FormatFloat(v, 'f', -1, 64), hostname))
+}
+
+// keepPace sets mpv to the party's speed, unless a set has already. If mpv played before the
+// message (playing) and plays on, the party stops: each node takes the speed at another
+// moment, so playing on would leave them apart.
+func (c *Client) keepPace(hostname string, playing bool) error {
+	if c.speed == c.mpvSpeed {
+		return nil
+	}
+	if playing && !c.paused {
+		// worded as for out of sync: the GUI's feed shows the pause that follows as this one
+		c.showText(fmt.Sprintf("paused: speed changed by %s", hostname))
+		c.pausedByNode = true
+		return c.pauseReq(true)
+	}
+	return c.pauseReq(c.paused)
+}
+
+// follow is take once the speed is taken.
+func (c *Client) follow(e Event, m IncomingMessage, s state) error {
 	hostname := m.HostName
 	h := c.held()
 	over, told := s.over(h), c.leaderID == m.From

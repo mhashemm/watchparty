@@ -21,6 +21,7 @@ const (
 	viaNetwork     = "demuxer-via-network"
 	buffered       = "buffered"
 	playlistPos    = "playlist-pos"
+	playSpeed      = "speed"
 	filename       = "filename"
 	duration       = "duration"
 	propertyChange = "property-change"
@@ -51,6 +52,8 @@ const (
 	timePosTolerance        = 0.1
 	endGraceSeconds         = 5
 	maxSeeks                = 16
+	// mpv's speed takes 0.01 to 100; a peer's outside that is refused
+	minSpeed, maxSpeed = 0.01, 100
 )
 
 // How long the node waits on mpv before giving up (errTimeout): replyLimit for a reply or a
@@ -152,6 +155,10 @@ type Event struct {
 	Paused *bool    `json:"paused,omitempty"`
 	At     *float64 `json:"at,omitempty"`
 	Entry  *int     `json:"entry,omitempty"`
+	// Speed is the party's speed its sender held, and SpeedStamp orders it: the speed has a
+	// clock of its own, so changing it leads no stop (pace)
+	Speed      *float64 `json:"speed,omitempty"`
+	SpeedStamp int      `json:"speedStamp,omitempty"`
 	// Again: the sender's state, sent again to a member the mesh failed to reach.
 	// Check: the sender's state, sent when it is back in the room after losing the relay.
 	Again bool `json:"again,omitempty"`
@@ -273,6 +280,10 @@ type Client struct {
 	pausedByNode bool
 	// partyEntry: the entry of the stop this node took, wherever the person has moved since
 	partyEntry int
+	// speed: the party's speed, the newest by speedStamp, of the same the slower (pace);
+	// mpvSpeed: the speed mpv was last set to or said
+	speed, mpvSpeed float64
+	speedStamp      int
 
 	// The playlist.
 	names []string
@@ -405,6 +416,8 @@ func New(c context.Context, cancel context.CancelFunc, nc net.Conn, cfg Config) 
 		headingTo:  -1,
 		resumeAt:   cfg.At,
 		stamp:      unheard,
+		speed:      1,
+		mpvSpeed:   1,
 		incoming:   cfg.Incoming,
 		inbox:      newMailbox[input](),
 		replies:    map[int64]outcome{},

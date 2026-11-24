@@ -28,7 +28,7 @@ type pendingSet struct {
 }
 
 // scriptMsg is one message from watchparty.lua:
-// watchparty <kind> <id> <pause> <time-pos> <n> <over|> <playlist-pos>.
+// watchparty <kind> <id> <pause> <time-pos> <n> <over|> <playlist-pos> <speed>.
 type scriptMsg struct {
 	// id: a set's id, a start's label, or the script's name in hello
 	kind, id string
@@ -41,6 +41,7 @@ type scriptMsg struct {
 	read  string
 	over  bool
 	entry string
+	speed string
 }
 
 // readScript parses a client-message's args, if the script sent it.
@@ -57,7 +58,7 @@ func readScript(args []string) (scriptMsg, bool) {
 	at, err := strconv.ParseFloat(args[4], 64)
 	return scriptMsg{
 		kind: args[1], id: args[2], paused: args[3], at: at, known: err == nil,
-		read: arg(5), over: arg(6) == "over", entry: arg(7),
+		read: arg(5), over: arg(6) == "over", entry: arg(7), speed: arg(8),
 	}, true
 }
 
@@ -110,6 +111,12 @@ func (c *Client) scriptSaid(args []string) []Event {
 		return c.landed(id, m)
 	case "start":
 		return c.started(m.id, m.entry)
+	case playSpeed:
+		// a set's speed: the ack says it
+		if c.pending != nil {
+			return nil
+		}
+		return []Event{report(playSpeed, m.speed)}
 	case "pause":
 		if c.pending != nil {
 			return nil
@@ -192,6 +199,9 @@ func (c *Client) landed(id int64, m scriptMsg) []Event {
 	if m.paused != holds(c.paused) {
 		out = append(out, report(pause, m.paused))
 	}
+	if m.speed != "" && m.speed != seconds(c.speed) {
+		out = append(out, report(playSpeed, m.speed))
+	}
 	// mpv was stopped and the set didn't seek, so it should still be on the same second.
 	// Anywhere else, the person seeked just before the set (or into one of our seeks)
 	if m.known && f.still && !f.seek && len(c.ourSeeks) == 0 && math.Abs(m.at-f.at) > timePosTolerance {
@@ -265,7 +275,10 @@ func (c *Client) setState(paused bool, second *float64, entry *int, still bool) 
 	defer func() { c.applying-- }()
 	c.waiting[id] = true
 	defer delete(c.waiting, id)
-	err := c.do("script-message-to", c.script, scriptName+"-set", holds(paused), at, to, strconv.FormatInt(id, 10), c.lastScriptMsg, on)
+	// held before the call, as the ack can say the person's speed after it (landed)
+	speed, was := c.speed, c.mpvSpeed
+	c.mpvSpeed = speed
+	err := c.do("script-message-to", c.script, scriptName+"-set", holds(paused), at, to, strconv.FormatInt(id, 10), c.lastScriptMsg, on, seconds(speed))
 	if err == nil {
 		// a move is acked once its file starts, which can take far longer than 5s on a slow
 		// stream. The script acks when the file starts or mpv gives up on it
@@ -279,6 +292,9 @@ func (c *Client) setState(paused bool, second *float64, entry *int, still bool) 
 	}
 	if err != nil {
 		c.ground(id)
+		if c.mpvSpeed == speed {
+			c.mpvSpeed = was
+		}
 	}
 	return err
 }

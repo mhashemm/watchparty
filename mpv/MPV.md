@@ -20,7 +20,7 @@ mpv <user MpvFlags...> --pause --speed=1 --hr-seek=yes --cache-pause=yes --no-re
 | Flag | Why |
 |---|---|
 | `--pause` | Every node starts paused, so nobody plays ahead before the party is wired up. |
-| `--speed=1` | **Pinned.** A `speed=1.1` in someone's config would make their player drift away steadily. |
+| `--speed=1` | **Pinned** at the start: a `speed=1.1` in someone's config would make their player drift away steadily. A change in mpv goes to the party (`mpv/CLAUDE.md`). |
 | `--hr-seek=yes` | **Pinned.** Every seek is exact, arrow keys included. Without it, relative seeks snap to a keyframe (see "Seeking"). |
 | `--cache-pause=yes` | **Pinned.** When the cache runs dry, mpv waits and reports `paused-for-cache`, which pauses the party. With `no` it plays through stalls with no signal, and the node falls behind: `[R11f]` measured 16.9s without the pin. |
 | `--no-resume-playback` | **Pinned.** Every node opens the file at 0. This also skips the whole watch-later entry, which would otherwise restore a saved `speed` over our `--speed=1`. |

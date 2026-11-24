@@ -30,12 +30,13 @@ Join a party
   Everyone needs the same file. A renamed copy is fine; a different encode or cut is refused.
 
 Watch together
-  Pause, seek and resume in mpv as usual, and everyone follows. There is no host, so anyone
-  can drive.
+  Pause, seek, resume and change the speed in mpv as usual, and everyone follows. There is
+  no host, so anyone can drive.
 
 Automatic pauses
   The party pauses by itself, and anyone can resume, when someone:
     seeks while playing
+    changes the speed while playing
     runs out of loaded video
     joins, and they start where the party is
     leaves, unless the video is in its last few seconds

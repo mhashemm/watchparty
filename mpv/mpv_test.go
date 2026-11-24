@@ -40,6 +40,8 @@ func newTestClient(outgoing chan []byte, sc *bufio.Scanner) *Client {
 		outgoing:  outgoing,
 		paused:    false,
 		headingTo: -1,
+		speed:     1,
+		mpvSpeed:  1,
 		seen:      map[string]bool{},
 		missed:    map[string]bool{},
 		conn:      &connection{scanner: sc, closed: make(chan struct{})},
@@ -219,7 +221,7 @@ func scriptAnswers(conn net.Conn, req Request) bool {
 // set it is to mpv: its seek ("set_property time-pos 30.000000"), or its pause; ok is false for
 // any other request.
 func scriptAcks(conn net.Conn, req Request) (said string, ok bool) {
-	if req.Command[0] != "script-message-to" || len(req.Command) != 9 || req.Command[2] != "watchparty-set" {
+	if req.Command[0] != "script-message-to" || len(req.Command) != 10 || req.Command[2] != "watchparty-set" {
 		return "", false
 	}
 	paused, second, id := fmt.Sprint(req.Command[3]), fmt.Sprint(req.Command[4]), fmt.Sprint(req.Command[6])
@@ -609,6 +611,9 @@ func peer(host, event string) IncomingMessage {
 			if _, ok := m[k]; !ok {
 				m[k] = v
 			}
+		}
+		if shared(Event{Name: name}) {
+			or("speed", 1)
 		}
 		switch name {
 		case pause:

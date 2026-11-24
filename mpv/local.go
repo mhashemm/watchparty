@@ -26,9 +26,10 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 			out = append([][]byte{line}, out...)
 		}
 	}
-	if len(out) > 0 {
-		// our own change takes the next stamp. Only the person's own pause, seek or move
-		// leads the stop; any other stop is leaderless, and its first seek leads.
+	if len(out) > 0 && event.Name != playSpeed {
+		// our own change takes the next stamp; a speed has its own (speedChanged). Only the
+		// person's own pause, seek or move leads the stop; any other stop is leaderless, and its
+		// first seek leads.
 		lead := event.Name == timePos || event.Name == pause && event.paused() && !c.pausedByNode ||
 			event.Name == playlistPos && !c.advancedAtEnd
 		c.stamp, c.leaderID, c.leaderless = c.stamp+1, "", !lead
@@ -76,6 +77,11 @@ func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 	case viaNetwork:
 		c.onNetwork = event.Data == "yes"
 		return nil, false
+	case playSpeed:
+		if !event.fromScript {
+			return nil, false
+		}
+		return nil, c.speedChanged(event.Data)
 	case cacheAhead:
 		c.ahead(event.Data)
 		return nil, false
@@ -171,6 +177,28 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, bool) {
 		clear(c.peerReadyOnScreen)
 	}
 	return extra, true
+}
+
+// speedChanged handles the person changing mpv's speed: the party takes it, with the next
+// speedStamp. While playing it stops the party instead, as a seek does: each node would take
+// it at another moment. The stop says the speed, so only a paused node sends it alone.
+func (c *Client) speedChanged(data string) bool {
+	v, err := strconv.ParseFloat(data, 64)
+	if err != nil {
+		return false
+	}
+	c.mpvSpeed = v
+	if v == c.speed {
+		return false
+	}
+	c.speed, c.speedStamp = v, c.speedStamp+1
+	if !c.paused {
+		if c.stopReason == "" {
+			c.pauseParty("speed changed", true)
+		}
+		return false
+	}
+	return true
 }
 
 // positionChanged handles the person's seek, as the script reported where it landed
