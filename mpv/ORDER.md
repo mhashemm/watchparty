@@ -190,6 +190,7 @@ python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own tim
 python3 run.py 0 probe4.py over:840                       # the ack's over flag against lost keys
 python3 run.py 0 probe4.py starts:490 autos:40            # whose file each start is
 python3 run.py 0 probe4.py away:840                       # a go for the file a key is leaving
+python3 run.py 0 probe4.py speed:224                      # a speed key against a go's speed
 python3 -I slowswarm.py 30                                # two CLI nodes over a capped torrent, ~15 minutes
 ```
 
