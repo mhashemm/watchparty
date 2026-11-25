@@ -728,10 +728,15 @@ function rest(at) {
     if (!state.reconnecting && reactedAt <= Date.now() - REACT_EVERY) $("react-open").disabled = false;
   }, reactedAt + REACT_EVERY - Date.now());
 }
+// stripAt: where the row was scrolled when it closed, as it opens there again; a hidden row
+// loses its scroll
+let stripAt = 0;
 function openStrip(open) {
-  $("react-row").hidden = $("react-strip").hidden = !open;
+  const s = $("react-strip");
+  if (!open && !s.hidden) stripAt = s.scrollLeft;
+  $("react-row").hidden = s.hidden = !open;
   $("react-open").setAttribute("aria-expanded", open);
-  if (open) $("react-strip").scrollLeft = 0;
+  if (open) s.scrollLeft = stripAt;
   showMore();
 }
 // people didn't see the row scrolls: each end with more gets an arrow and fades out

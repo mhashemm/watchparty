@@ -376,6 +376,12 @@ def media_suite():
         click(*row(0))
         ok("by a rowful less one each: its first is now the one that was last, twice over",
            until(lambda: picked[2:] == [order[2 * (shown - 1)]]), f"{picked} {order[2 * (shown - 1)]}")
+        hold(2.2, "the smiley rests after a pick")
+        must("the smiley takes clicks again", over(*button))
+        click(*button)
+        must("its row opens", over(*row(0)))
+        click(*row(0))
+        ok("where it was left: its first is the same one", until(lambda: picked[3:] == [order[2 * (shown - 1)]]), str(picked))
         listener.close()
         ok("no log has them", "watchparty-react" not in log("rxA"))
         stop("rxA")

@@ -251,6 +251,15 @@ def gui_suite():
            until(lambda: js(H, '$("react-strip").scrollLeft > 100'), 5))
         click(H, "#react-back")
         must("it scrolls back", until(lambda: js(H, '$("react-strip").scrollLeft == 0'), 5))
+        click(H, "#react-more")
+        must("scrolled again", until(lambda: js(H, '$("react-strip").scrollLeft > 100'), 5))
+        click(H, "#react-open")
+        must("the smiley closes the row", js(H, '$("react-strip").hidden'))
+        click(H, "#react-open")
+        ok("opened again, the row is where it was left",
+           until(lambda: js(H, '$("react-strip").scrollLeft > 100 && !$("react-back").hidden'), 5), js(H, '$("react-strip").scrollLeft'))
+        click(H, "#react-back")
+        must("and scrolls back", until(lambda: js(H, '$("react-strip").scrollLeft == 0'), 5))
         click(H, '#react-strip button[data-code="1f602"]')
         ok(f"{G} has {H}'s reaction", until(lambda: chats(G)[:1] == [f"{H}: 😂"]), str(chats(G)))
         ok(f"{H} has it as its own, the row closed and the button rests",

@@ -316,7 +316,9 @@ local function grab(on)
       now()
       local what = under()
       if what == "button" and not rests() then
-        open, scrolled = not open, 0
+        -- the row opens where it was left, unless a smaller screen since leaves less to scroll
+        local _, _, _, _, r = layout()
+        open, scrolled = not open, math.min(scrolled, r.most)
       elseif what == "back" or what == "on" then
         scroll(nil)(what == "back" and -1 or 1)
       elseif art[what] then
