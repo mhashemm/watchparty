@@ -800,7 +800,7 @@ func (n *node) keepsTheSeek(leader string) {
 	if got := n.broadcasts(); len(got) != 0 {
 		n.t.Fatalf("broadcast %q, want the follower's seek kept on its screen", said(got))
 	}
-	want := fmt.Sprintf("show-text only %s can seek until resumed 5000", leader)
+	want := fmt.Sprintf("show-text only %s can seek or change the speed until resumed 5000", leader)
 	if told := n.mpvWasTold(); !slices.Contains(told, want) {
 		n.t.Fatalf("told mpv %q, want %q", told, want)
 	}

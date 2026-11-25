@@ -409,8 +409,14 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 		}
 	}()
 	from, plays := c.stamp, !a.paused && !a.still
+	// mpv shows only its last text, so a new speed rides on the one saying what else came
+	speed, told := "", !a.pace
+	if a.pace {
+		speed = fmt.Sprintf(", speed %s×", strconv.FormatFloat(a.speed, 'f', -1, 64))
+	}
 	show := func(text string) bool {
-		c.showText(text)
+		c.showText(text + speed)
+		told = true
 		return c.moved(from)
 	}
 	if a.tell {
@@ -429,17 +435,6 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 			return nil
 		}
 	}
-	if a.pace {
-		// only a speed message comes from whoever changed it; any other passes on what its
-		// sender heard
-		text := fmt.Sprintf("speed %s×", strconv.FormatFloat(a.speed, 'f', -1, 64))
-		if name == playSpeed {
-			text += " by " + hostname
-		}
-		if show(text) {
-			return nil
-		}
-	}
 	if a.stop && show(fmt.Sprintf("paused by %s", hostname)) {
 		return nil
 	}
@@ -449,6 +444,18 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	if a.seek && !a.there && name != pause && show(fmt.Sprintf("synced by %s", hostname)) {
 		return nil
 	}
+	if !told && !plays {
+		// only a speed message comes from whoever changed it; any other passes on what its
+		// sender heard
+		text := fmt.Sprintf("speed %s×", strconv.FormatFloat(a.speed, 'f', -1, 64))
+		if name == playSpeed {
+			text += " by " + hostname
+		}
+		c.showText(text)
+		if c.moved(from) {
+			return nil
+		}
+	}
 	switch {
 	case a.paused:
 		return nil
@@ -457,7 +464,7 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	case a.still:
 		return c.refuseResume()
 	case plays && a.tell:
-		return c.showText(fmt.Sprintf("resumed by %s", hostname))
+		return c.showText(fmt.Sprintf("resumed by %s%s", hostname, speed))
 	}
 	return nil
 }

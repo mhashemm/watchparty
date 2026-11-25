@@ -44,12 +44,12 @@ Only `pause`, and the person's seek and speed **while paused**, go out, as the s
   rewind everyone. The state is still recorded.
 - **`c.pos` is where mpv is:** each `time-pos` while playing, the script's snapshot once stopped
   (a playing second can be reported after the stop, `[R6c]`). It is what every pause carries (`at`).
-- **While paused only the leader seeks, moves or sets the speed** (`led`): a follower's stays on its
-  screen, told once a state ("only X can seek until resumed"); `held`/`Position` keep the party's
-  entry, second and speed (`partyEntry`, `resumedFrom`, `partySpeed`). Its resume starts everyone
-  from its screen; on another file the party stops there instead, as everyone must load it. Only
-  the person's own pause, seek, move or speed leads (`handleEvent`), not mpv's move at a file's
-  end (`advancedAtEnd`): else `leaderless` (`pausedByNode`).
+- **While paused only the leader seeks, moves or sets the speed** (`led`): a follower's stays on
+  its screen, told once a state ("only X can seek or change the speed until resumed");
+  `held`/`Position` keep the party's entry, second and speed (`partyEntry`, `resumedFrom`,
+  `partySpeed`). Its resume starts everyone from its screen; on another file the party stops there
+  instead, as everyone must load it. Only the person's own pause, seek, move or speed leads
+  (`handleEvent`), not mpv's move at a file's end (`advancedAtEnd`): else `leaderless` (`pausedByNode`).
 - **If `pauseParty` set a reason, a pause is followed by a `time-pos` and a `pause-reason`**
   (`pauseExtras`), even when the pause was an echo, so a seek that raced a peer's pause isn't lost.
 
@@ -95,7 +95,7 @@ the node holds, so it goes out as its own, then the extras; peers get pause befo
 **`incoming` is read from `New`, not from the load.** A slow load (a URL, a slow disk) must never
 make a peer wait: a blocked P2P `/event` counts as a strike, and a blocked relay read fills the
 relay's 64-frame buffer and drops the member. While `opening`, `hear` keeps the notices in order
-and, of every `pause` and `time-pos`, only the newest **by stamp**: each says the party's whole
+and, of every state (`shared`), only the newest **by stamp**: each says the party's whole
 state, and an older one applied after would be answered as behind. Then `join` seeks where a
 continued party stopped (`resumeAt`, a set like a peer's seek, so not broadcast), applies that
 one, announces `joined`, then the notices, all as one message: what comes meanwhile waits. e2e `[R11d]`.

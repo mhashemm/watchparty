@@ -226,7 +226,7 @@ func (c *Client) positionChanged() bool {
 func (c *Client) keepOnScreen() {
 	if !c.toldWhoLeads {
 		c.toldWhoLeads = true
-		text := fmt.Sprintf("only %s can seek until resumed", c.leaderName)
+		text := fmt.Sprintf("only %s can seek or change the speed until resumed", c.leaderName)
 		c.later = append(c.later, func() { c.showText(text) })
 	}
 }

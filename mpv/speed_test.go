@@ -106,13 +106,24 @@ func TestAStopWithANewSpeedIsOneSet(t *testing.T) {
 		n := ready(t, setup{})
 		n.plays()
 		n.peerSays("a", `{"stamp":5,"paused":true,"at":20,"speed":2,"event":"property-change","name":"pause","data":"yes"}`)
-		want := []string{"set_property speed 2.000000", "set_property pause true", "set_property time-pos 20.000000", "show-text speed 2× 5000", "show-text paused by a 5000"}
+		want := []string{"set_property speed 2.000000", "set_property pause true", "set_property time-pos 20.000000", "show-text paused by a, speed 2× 5000"}
 		if told := n.mpvWasTold(); fmt.Sprint(told) != fmt.Sprint(want) {
 			t.Fatalf("told mpv %q, want %q", told, want)
 		}
 		n.mpvObeys()
 		if got := n.broadcasts(); len(got) != 0 {
 			t.Fatalf("broadcast %q, want nothing", said(got))
+		}
+	})
+}
+
+// A resume at another speed says both on one text, as mpv shows only its last.
+func TestAResumeWithANewSpeedSaysBoth(t *testing.T) {
+	nodeTest(t, func(t *testing.T) {
+		n := ready(t, setup{})
+		n.peerSays("b", `{"stamp":5,"paused":false,"at":0,"speed":1.5,"event":"property-change","name":"pause","data":"no"}`)
+		if told := n.mpvWasTold(); !slices.Contains(told, "show-text resumed by b, speed 1.5× 5000") || slices.Contains(told, "show-text speed 1.5× 5000") {
+			t.Fatalf("told mpv %q, want the resume and the speed on one text", told)
 		}
 	})
 }
@@ -174,15 +185,14 @@ func TestAMessageWithoutTheSpeedIsRefused(t *testing.T) {
 	})
 }
 
-// A joiner takes the party's speed with where it is; the answer passes on the speed its
-// sender heard, so it names nobody.
+// A joiner takes the party's speed with where it is, told on one text: mpv shows only the last.
 func TestAJoinerTakesThePartysSpeed(t *testing.T) {
 	nodeTest(t, func(t *testing.T) {
 		n := newNode(t, setup{joiner: true})
 		n.broadcasts()
 		n.peerSays("a", `{"stamp":4,"paused":true,"at":40,"speed":1.5,"event":"property-change","name":"time-pos","data":"40.000000"}`)
-		if told := n.mpvWasTold(); !slices.Contains(told, "set_property speed 1.500000") || !slices.Contains(told, "show-text speed 1.5× 5000") {
-			t.Fatalf("told mpv %q, want the party's speed, naming nobody", told)
+		if told := n.mpvWasTold(); !slices.Contains(told, "set_property speed 1.500000") || !slices.Contains(told, "show-text synced by a, speed 1.5× 5000") {
+			t.Fatalf("told mpv %q, want the party's speed with where it is", told)
 		}
 	})
 }
