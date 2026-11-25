@@ -3,9 +3,9 @@ pause and time-pos, and the node hears the entry and the cache from mpv's own re
 snapshot here is the script's message with the entry and cache mpv last reported, and mpv's
 reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
 entry and to one mpv can't open.
-Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang|ahead> <rounds>. Under load:
+Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang|ahead|speed> <rounds>. Under load:
 python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
-import http.server, os, socketserver, sys, tempfile, threading, time
+import http.server, os, re, socketserver, sys, tempfile, threading, time
 from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +18,7 @@ _VIEW = {}
 
 class NodeMpv(M):
     sent = 0  # how many lines had come when the last go was sent (to)
+    speed = "1.000000"  # the speed the node holds, which every go sends; mpv starts at --speed=1
 
     def __init__(self, video, extra=()):
         super().__init__(video, extra)
@@ -39,7 +40,8 @@ def enrich(m):
             a = l["args"]
             st["pause"], st["pos"] = a[3], a[4]
             d = dict(kind=a[1], id=a[2], pause=a[3], pos=a[4], entry=st["entry"], cache=st["cache"],
-                     n=a[5] if len(a) > 5 else "", over=len(a) > 6 and a[6] == "over", at=a[7] if len(a) > 7 else "")
+                     n=a[5] if len(a) > 5 else "", over=len(a) > 6 and a[6] == "over", at=a[7] if len(a) > 7 else "",
+                     speed=a[8] if len(a) > 8 else "")
             l["_wp"], _VIEW[id(a)] = d, d
     st["done"] = start + len(lines)
 
@@ -126,7 +128,8 @@ class Shipped(Wp3):
                 m.sent = len(m.lines)
                 seen = next((l["args"][5] for l in reversed(m.lines) if l.get("event") == "client-message"
                              and l.get("args", [None])[0] == "watchparty" and len(l["args"]) > 5), "")
-            args = (*args[:4], seen, *args[4:])
+            # the node's go: paused, second, entry, id, seen, on (empty when not given), speed
+            args = (*args[:4], seen, *(args[4:5] or ("",)), m.speed)
         # the shipped script calls a go a set (watchparty-set); probe3's wp3.lua keeps wp-go
         name = "watchparty-set" if cmd == "wp-go" else cmd.replace("wp-", "watchparty-")
         return m.send("script-message-to", self.NAME, name, *[str(a) for a in args])
@@ -289,6 +292,67 @@ class Shipped(Wp3):
         m.stop()
         gaps(errors, rounds, lambda e: e[3])
         report("over", rounds, errors, shapes)
+
+    # A person's speed key -20..+20ms around a go, as over for pause and seek keys: the go sets the
+    # speed it carries first, the speed mpv holds or a new one, paused or playing, from either.
+    # The node drops the script's speed messages while a go is pending and compares its ack's
+    # speed with the go's (landed), so what it knows of mpv's speed is the ack's, then each later
+    # message. A key is lost when the go undid it (mpv ends on the go's speed) and the node hadn't
+    # read it when it sent the go. Errors: missed, a lost key with no flag; false, a flag with no
+    # key; unseen, mpv ends on a speed the node doesn't know; format, a speed not said with 6
+    # decimals, as the script compares them as text with the node's %.6f.
+    def speed(self, rounds):
+        m = self.M(os.path.join(HERE, "v120.mkv"), self.WP)
+        ready(m, [])
+        p = person_conn(m)
+        errors = {"missed": [], "false": [], "unseen": [], "format": [], "ack-late": []}
+        shapes = {}
+        for r in range(rounds):
+            want, new = ["yes", "no"][r % 2], (r // 2) % 2 == 1
+            pre = ["yes", "no"][(r // 4) % 2]
+            kind = ["none", "speed"][(r // 8) % 2]
+            off = OFFSETS_MS[(r // 16) % len(OFFSETS_MS)]
+            stopped(m)
+            m.wait(reply(m.send("set_property", "speed", "1")))
+            setpos(m, 20 + (r % 30) * 2)
+            if pre == "no":
+                m.wait(reply(m.send("set_property", "pause", False)))
+                time.sleep(0.05)
+            m.speed = "1.500000" if new else "1.000000"
+            tag = f"v{r}"
+            i = m.mark()
+            race(m, p, kind if kind != "none" else None, lambda: self.to(m, "wp-go", want, "-", "-", tag), off)
+            k = self.wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i)
+            if k is None:
+                errors["ack-late"].append((want, new, pre, kind, off))
+                continue
+            time.sleep(0.6)
+            sent, fs = m.sent, get(m, "speed")
+            msgs = self.snaps(m, i)
+            ack = self.W(m.lines[k]["args"])
+            for _, s in msgs:
+                if s["speed"] and not re.fullmatch(r"\d+\.\d{6}", s["speed"]):
+                    errors["format"].append(s["speed"])
+            heard = any(s["kind"] == "speed" and s["speed"] != "1.000000" for n, s in msgs if n < sent)
+            lost = kind == "speed" and fs == m.speed and not heard
+            known = [ack["speed"], *[s["speed"] for n, s in msgs if n > k and s["kind"] == "speed"]][-1]
+            if known != fs:
+                errors["unseen"].append((want, new, pre, kind, off, fs, known))
+            flag = ack["over"]
+            if lost and not flag:
+                errors["missed"].append((want, new, pre, off, [(s["kind"], s["id"], s["speed"]) for n, s in msgs if n <= k]))
+            if kind == "none" and flag:
+                errors["false"].append((want, new, pre, off))
+            if kind != "none" and flag and not lost:
+                errors.setdefault("spare", []).append((want, new, pre, off, "heard" if heard else "-"))
+            # where mpv's own speed message for the go's set lands: before its ack (dropped), after it, or none
+            said = [n for n, s in msgs if s["kind"] == "speed" and s["speed"] == m.speed and n >= sent]
+            echo = "no speed said" if not said else "said before the ack" if said[0] < k else "said after the ack"
+            tally(shapes, (kind, "new" if new else "same", "lost" if lost else "heard" if heard else "-",
+                           "flagged" if flag else "not flagged", echo if kind == "none" else ""))
+        m.stop()
+        gaps(errors, rounds, lambda e: e[3])
+        report("speed", rounds, errors, shapes)
 
     # Whose file each start is: the script says "start" with a go's id (ours), "auto" (mpv's own,
     # after a file's end or error) or nothing (the person's), and the entry it opened. Raced: next

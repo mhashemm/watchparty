@@ -255,6 +255,7 @@ def race(m, person, kind, ours, offset):
         "abskey": lambda: m.send("keypress", "F1", s=person),  # input.conf: seek 7 absolute
         "absipc": lambda: m.send("set_property", "time-pos", "9", s=person),  # a script, the OSC
         "space": lambda: m.send("keypress", "SPACE", s=person),  # built-in: cycle pause
+        "speed": lambda: m.send("keypress", "]", s=person),  # built-in: multiply speed 1.1
     }.get(kind)
     if act and offset < 0:
         act()
