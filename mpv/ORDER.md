@@ -177,6 +177,15 @@ which the node sent with the move, so the script says no position until a set en
 go's seek begun just before such a key is `refused` instead (once in `moves` on 0.40.0; twice in 56
 `away` rounds on Windows 0.42.0, key 0ms off), naming the key's file, where mpv ends.
 
+**A speed key against a go's speed** (`speed`, 224 rounds each: `]` -20..+20ms around a go that
+keeps mpv's speed or sets 1.5, paused or playing). The go sets the speed first. The node drops the
+script's speed messages while a go is pending, so it learns mpv's speed from the ack, then each later
+message: that matched where mpv ended in every round on 0.37.0, 0.41.0 and 0.42.0 (Arch, macOS,
+Windows). mpv says the speed with 6 decimals (`1.500000`), which the script compares as text with
+the node's. A set to the speed mpv has says nothing; a new one is said after the ack, matching what
+the node holds. Every key the go undid was flagged `over`, none without a key, but within 5ms on
+Windows: 7 `gap` of 224, the no read-and-set limit above.
+
 ## Re-running
 
 ```sh
