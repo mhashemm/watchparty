@@ -35,6 +35,7 @@ type simNode struct {
 	mu      sync.Mutex
 	paused  bool
 	pos     float64
+	speed   string
 	entry   int
 	notices []string
 	// seeks: queued in mpv's one slot, the node's (the script's) and the person's alike
@@ -88,7 +89,7 @@ func newSim(t *testing.T, seed uint64, entries int, names ...string) *sim {
 	t.Cleanup(cancel)
 	for _, name := range names {
 		ours, theirs := net.Pipe()
-		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true,
+		n := &simNode{name: name, out: make(chan []byte, 1024), in: make(chan IncomingMessage, 1024), writes: make(chan string, 1024), paused: true, speed: seconds(1),
 			late: strings.HasSuffix(t.Name(), "/"+lateRun), answered: make(chan struct{})}
 		n.script = newScript(n)
 		n.c = newTestClient(n.out, bufio.NewScanner(ours))
@@ -206,6 +207,8 @@ func (n *simNode) get(name string) (string, bool) {
 		return fmt.Sprintf("%f", n.pos), true
 	case playlistPos:
 		return strconv.Itoa(n.heading()), true
+	case playSpeed:
+		return n.speed, true
 	}
 	return "", false
 }
@@ -222,7 +225,23 @@ func (n *simNode) set(name, value string) {
 		if i != n.heading() {
 			n.request(i)
 		}
+	case playSpeed:
+		n.setSpeed(value, !n.late)
 	}
+}
+
+// setSpeed is the person's key or the script's set: the script hears its change mark, at once
+// or (later) once it is idle.
+func (n *simNode) setSpeed(speed string, later bool) {
+	if n.speed == speed {
+		return
+	}
+	n.speed = speed
+	if later {
+		n.script.whenIdle(func() { n.script.changeMarked(playSpeed) })
+		return
+	}
+	n.script.changeMarked(playSpeed)
 }
 
 // seek is the script's async seek: queued in mpv's slot, and answered at once.
@@ -568,6 +587,36 @@ func moves(n *simNode, i int) func() {
 		n.mu.Unlock()
 		n.landMove()
 	}
+}
+
+// speeds is the person at n changing mpv's speed.
+func speeds(n *simNode, speed float64) func() {
+	return func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.setSpeed(seconds(speed), false)
+	}
+}
+
+// sameSpeed is every node at one speed: playing, its mpv's; stopped, the party's it holds,
+// as a follower's screen stays at whatever the person set until the party resumes.
+func (s *sim) sameSpeed(seed uint64) {
+	s.t.Helper()
+	want := s.nodes[0].speedNow()
+	for _, n := range s.nodes {
+		if got := n.speedNow(); got != want {
+			s.t.Errorf("seed %d: %s is at %s, %s at %s", seed, n.name, got, s.nodes[0].name, want)
+		}
+	}
+}
+
+func (n *simNode) speedNow() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.paused {
+		return n.speed
+	}
+	return seconds(n.c.held().speed)
 }
 
 func sets(n *simNode, paused bool) func() {
@@ -1468,5 +1517,46 @@ func TestAnyoneActingAtAnyMomentEndsInStep(t *testing.T) {
 		s.run()
 		// each plays from when the resume reached it, at worst after every tick
 		s.inStep(seed, 3)
+	})
+}
+
+// A speed change while playing stops the party, everyone on one second and at that speed,
+// whichever way the messages go.
+func TestASpeedChangeWhilePlayingStopsEveryoneAtIt(t *testing.T) {
+	forManySeeds(t, 200, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		play(30, s.nodes...)
+		s.ticks = 20
+		s.script = []func(){speeds(s.nodes[0], 2)}
+		s.run()
+		s.together(seed)
+		s.sameSpeed(seed)
+	})
+}
+
+// Speed changes, resumes, stops and seeks from anyone at any moment: the party ends on one
+// speed, in step, whatever crossed what.
+func TestSpeedChangesAtAnyMomentEndOnOneSpeed(t *testing.T) {
+	forManySeeds(t, 500, func(t *testing.T, seed uint64) {
+		s := newSim(t, seed, 0, "a", "b", "c")
+		stopped(30, s.nodes...)
+		rng := rand.New(rand.NewPCG(seed, 1))
+		for range 6 {
+			n := s.nodes[rng.IntN(len(s.nodes))]
+			switch rng.IntN(4) {
+			case 0:
+				s.script = append(s.script, sets(n, true))
+			case 1:
+				s.script = append(s.script, sets(n, false))
+			case 2:
+				s.script = append(s.script, seeks(n, float64(rng.IntN(100))))
+			default:
+				s.script = append(s.script, speeds(n, []float64{0.5, 1, 1.25, 1.5, 2}[rng.IntN(5)]))
+			}
+		}
+		s.ticks = 30
+		s.run()
+		s.inStep(seed, 3)
+		s.sameSpeed(seed)
 	})
 }

@@ -12,20 +12,21 @@ import (
 )
 
 // state is what the party shares, and what every message says its sender held when it sent
-// it: a stamp (a Lamport clock), the entry, paused or playing, and the second it is paused
-// at or resumed from.
+// it: a stamp (a Lamport clock), the entry, paused or playing, the second it is paused at or
+// resumed from, and the speed.
 type state struct {
 	stamp  int
 	entry  int
 	paused bool
 	at     float64
+	speed  float64
 	// leaderless: a stop nobody leads (Event.Free); over ignores it
 	leaderless bool
 }
 
 // over orders two states the same way on every node: the higher stamp wins. The same stamp
 // means both were made at once, and the safer wins: the higher entry, then paused over
-// playing, then the earlier second. 0 means the same state.
+// playing, then the earlier second, then the slower. 0 means the same state.
 func (s state) over(h state) int {
 	switch {
 	case s.stamp != h.stamp:
@@ -37,10 +38,10 @@ func (s state) over(h state) int {
 			return 1
 		}
 		return -1
-	case !s.paused || math.Abs(s.at-h.at) <= timePosTolerance:
-		return 0
+	case s.paused && math.Abs(s.at-h.at) > timePosTolerance:
+		return cmp.Compare(h.at, s.at)
 	}
-	return cmp.Compare(h.at, s.at)
+	return cmp.Compare(h.speed, s.speed)
 }
 
 // agrees is whether s is the same state as h, ignoring their stamps.
@@ -55,13 +56,13 @@ func (s state) agrees(h state) bool {
 // a file still loading, unless a seek is queued for it. It is paused as soon as this node
 // starts stopping the party (pauseParty), before mpv has stopped.
 func (c *Client) held() state {
-	at, entry := c.target(), c.heading()
+	at, entry, speed := c.target(), c.heading(), c.speed
 	if c.onAStop() {
-		// the party's entry and second, wherever the person has taken this node's screen
-		at, entry = c.resumedFrom, c.partyEntry
+		// the party's entry, second and speed, wherever the person has taken this node's screen
+		at, entry, speed = c.resumedFrom, c.partyEntry, c.partySpeed
 	}
 	paused := c.paused || c.stopReason != ""
-	return state{stamp: c.stamp, entry: entry, paused: paused, at: at, leaderless: paused && c.leaderless}
+	return state{stamp: c.stamp, entry: entry, paused: paused, at: at, speed: speed, leaderless: paused && c.leaderless}
 }
 
 // onAStop is whether this node is paused on a stop it took from a member (leaderID). Not a
@@ -72,9 +73,9 @@ func (c *Client) onAStop() bool {
 }
 
 // led is whether this node follows the leader of a stop: the member whose pause or seek it
-// took. Only the leader seeks for the party; a follower's seek stays on its own screen until
-// the party resumes, from the resumer's screen. A leaderless stop has no leader: anyone's
-// seek goes out, and the first one leads.
+// took. Only the leader seeks or changes the speed for the party; a follower's stays on its
+// own screen until the party resumes, from the resumer's screen. A leaderless stop has no
+// leader: anyone's goes out, and the first one leads.
 func (c *Client) led() bool {
 	return c.onAStop() && !c.leaderless
 }
@@ -83,7 +84,7 @@ func (c *Client) led() bool {
 // newer than its own. It must be done at the moment of sending: only then is it true.
 func (c *Client) tag(b []byte) []byte {
 	s := c.held()
-	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,`, s.stamp, s.paused, s.at)
+	head := fmt.Appendf(nil, `{"stamp":%d,"paused":%t,"at":%.6f,"speed":%s,`, s.stamp, s.paused, s.at, seconds(s.speed))
 	if s.leaderless {
 		head = append(head, `"free":true,`...)
 	}
@@ -96,10 +97,13 @@ func (c *Client) tag(b []byte) []byte {
 // stateOf reads the state a peer's pause, seek or move was sent from. Every node sends it
 // whole (tag), so a message without it is refused rather than filled in from ours.
 func (c *Client) stateOf(e Event) (state, error) {
-	if e.Paused == nil || e.At == nil || len(c.names) > 0 && e.Entry == nil {
+	if e.Paused == nil || e.At == nil || e.Speed == nil || len(c.names) > 0 && e.Entry == nil {
 		return state{}, errors.New("no state")
 	}
-	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At, leaderless: e.Free && *e.Paused}
+	if !(*e.Speed >= minSpeed && *e.Speed <= maxSpeed) {
+		return state{}, errors.New("no such speed")
+	}
+	s := state{stamp: e.Stamp, paused: *e.Paused, at: *e.At, speed: *e.Speed, leaderless: e.Free && *e.Paused}
 	if len(c.names) > 0 {
 		if s.entry = *e.Entry; s.entry < 0 || s.entry >= len(c.names) {
 			return s, errors.New("no such entry")
@@ -282,9 +286,9 @@ func (c *Client) apply(e IncomingMessage) {
 	}
 }
 
-// shared is whether a message carries its sender's state: a pause, seek or move.
+// shared is whether a message carries its sender's state: a pause, seek, move or speed.
 func shared(e Event) bool {
-	return e.Name == pause || e.Name == timePos || e.Name == playlistPos
+	return e.Name == pause || e.Name == timePos || e.Name == playlistPos || e.Name == playSpeed
 }
 
 // take compares a peer's state with this node's. A newer one is adopted. An older one means
@@ -357,7 +361,8 @@ type adoption struct {
 	// still: mpv stays paused, as the state plays on another entry or mpv waits on its
 	// cache. tell: mpv must be told any of it. was: mpv was paused before. there: mpv was
 	// on the second already.
-	stop, moving, seek, still, tell, was, there bool
+	// pace: mpv must take the state's speed
+	stop, moving, seek, still, tell, was, there, pace bool
 }
 
 // commit takes a newer state in the same step that compared it: the stamp together with
@@ -365,7 +370,7 @@ type adoption struct {
 // would hold the party's stamp on its own entry or second, a tie it could win. Recorded
 // first, anything it says meanwhile already names where it is going.
 func (c *Client) commit(s state, from string) adoption {
-	a := adoption{state: s, moving: s.entry != c.heading(), from: c.entryName(c.heading()), was: c.paused}
+	a := adoption{state: s, moving: s.entry != c.heading(), from: c.entryName(c.heading()), was: c.paused, pace: s.speed != c.speed}
 	a.stop = (a.moving || s.paused) && !c.paused
 	if a.moving {
 		// the other file opens at its start, so this file's second and seeks are gone
@@ -375,8 +380,9 @@ func (c *Client) commit(s state, from string) adoption {
 	a.seek = a.stop && !a.moving || !a.there && (a.moving || c.paused)
 	a.still = !s.paused && (a.moving || c.waitingOnCache)
 	paused := s.paused || a.still
-	a.tell = a.seek || a.moving || paused != c.paused
+	a.tell = a.seek || a.moving || a.pace || paused != c.paused
 	c.stamp, c.leaderID, c.resumedFrom, c.tookResume, c.leaderless, c.partyEntry = s.stamp, from, s.at, !s.paused, s.leaderless, s.entry
+	c.speed, c.partySpeed = s.speed, s.speed
 	if a.moving {
 		c.headingTo = s.entry
 	}
@@ -403,8 +409,14 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 		}
 	}()
 	from, plays := c.stamp, !a.paused && !a.still
+	// mpv shows only its last text, so a new speed rides on the one saying what else came
+	speed, told := "", !a.pace
+	if a.pace {
+		speed = fmt.Sprintf(", speed %s×", strconv.FormatFloat(a.speed, 'f', -1, 64))
+	}
 	show := func(text string) bool {
-		c.showText(text)
+		c.showText(text + speed)
+		told = true
 		return c.moved(from)
 	}
 	if a.tell {
@@ -432,6 +444,18 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	if a.seek && !a.there && name != pause && show(fmt.Sprintf("synced by %s", hostname)) {
 		return nil
 	}
+	if !told && !plays {
+		// only a speed message comes from whoever changed it; any other passes on what its
+		// sender heard
+		text := fmt.Sprintf("speed %s×", strconv.FormatFloat(a.speed, 'f', -1, 64))
+		if name == playSpeed {
+			text += " by " + hostname
+		}
+		c.showText(text)
+		if c.moved(from) {
+			return nil
+		}
+	}
 	switch {
 	case a.paused:
 		return nil
@@ -440,7 +464,7 @@ func (c *Client) adopt(a adoption, name, hostname string) (err error) {
 	case a.still:
 		return c.refuseResume()
 	case plays && a.tell:
-		return c.showText(fmt.Sprintf("resumed by %s", hostname))
+		return c.showText(fmt.Sprintf("resumed by %s%s", hostname, speed))
 	}
 	return nil
 }

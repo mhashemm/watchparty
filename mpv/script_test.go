@@ -17,19 +17,19 @@ type script struct {
 	l   *lua.LState
 	mpv scriptMpv
 	// queue: what the script still has to hear; applying: it is hearing one now; idle: what it
-	// hears once the queue is empty, as mpv sends a property's change then; marked: a pause
-	// change mark it hasn't heard yet, which another one folds into
+	// hears once the queue is empty, as mpv sends a property's change then; marked: the change
+	// marks it hasn't heard yet, by property, which another one folds into
 	queue  []func()
 	busy   bool
 	idle   []func()
-	marked bool
-	// what it registered: script messages, events, the pause observer, and the async seeks
-	// waiting for their reply, by the number mpv's seek was given
-	messages map[string]*lua.LFunction
-	events   map[string][]*lua.LFunction
-	pause    []*lua.LFunction
-	replies  map[int]*lua.LFunction
-	seeks    int
+	marked map[string]bool
+	// what it registered: script messages, events, the pause and speed observers, and the
+	// async seeks waiting for their reply, by the number mpv's seek was given
+	messages  map[string]*lua.LFunction
+	events    map[string][]*lua.LFunction
+	observers map[string][]*lua.LFunction
+	replies   map[int]*lua.LFunction
+	seeks     int
 }
 
 // scriptMpv is mpv as the script reaches it through mp. The fake answers each call at once, as
@@ -56,9 +56,9 @@ var compiled = sync.OnceValues(func() (*lua.FunctionProto, error) {
 })
 
 // newScript loads the script for m, as mpv does at its start: its main chunk runs, and its
-// pause observer fires once.
+// pause and speed observers fire once.
 func newScript(m scriptMpv) *script {
-	s := &script{l: lua.NewState(lua.Options{SkipOpenLibs: true, CallStackSize: 16, RegistrySize: 128, RegistryMaxSize: 1 << 14}), mpv: m, messages: map[string]*lua.LFunction{}, events: map[string][]*lua.LFunction{}, replies: map[int]*lua.LFunction{}}
+	s := &script{l: lua.NewState(lua.Options{SkipOpenLibs: true, CallStackSize: 16, RegistrySize: 128, RegistryMaxSize: 1 << 14}), mpv: m, messages: map[string]*lua.LFunction{}, events: map[string][]*lua.LFunction{}, observers: map[string][]*lua.LFunction{}, marked: map[string]bool{}, replies: map[int]*lua.LFunction{}}
 	for name, open := range map[string]lua.LGFunction{lua.BaseLibName: lua.OpenBase, lua.TabLibName: lua.OpenTable, lua.StringLibName: lua.OpenString} {
 		s.l.Push(s.l.NewFunction(open))
 		s.l.Push(lua.LString(name))
@@ -106,13 +106,14 @@ func newScript(m scriptMpv) *script {
 			return 1
 		},
 		"observe_property": func(l *lua.LState) int {
-			if name := l.CheckString(1); name != pause {
-				l.RaiseError("the fake observes only pause, not %s", name)
+			name := l.CheckString(1)
+			if name != pause && name != playSpeed {
+				l.RaiseError("the fake observes only pause and speed, not %s", name)
 			}
 			fn := l.CheckFunction(3)
-			s.pause = append(s.pause, fn)
+			s.observers[name] = append(s.observers[name], fn)
 			// mpv says what a property holds as it is observed
-			s.post(func() { s.call(fn, lua.LString(pause)) })
+			s.post(func() { s.call(fn, lua.LString(name)) })
 			return 0
 		},
 		"register_script_message": func(l *lua.LState) int {
@@ -175,14 +176,19 @@ func (s *script) event(name string, fields map[string]lua.LValue) {
 // pauseMarked is mpv marking pause changed: the observer fires, also when the value ends
 // where it was (format "none"); marked again before it fires, it fires once.
 func (s *script) pauseMarked() {
-	if s.marked {
+	s.changeMarked(pause)
+}
+
+// changeMarked is mpv marking a property changed, as pauseMarked.
+func (s *script) changeMarked(name string) {
+	if s.marked[name] {
 		return
 	}
-	s.marked = true
+	s.marked[name] = true
 	s.post(func() {
-		s.marked = false
-		for _, fn := range s.pause {
-			s.call(fn, lua.LString(pause))
+		s.marked[name] = false
+		for _, fn := range s.observers[name] {
+			s.call(fn, lua.LString(name))
 		}
 	})
 }

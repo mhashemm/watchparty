@@ -120,7 +120,7 @@ func TestAChangeMadeWhileTakingAStateIsNotUndone(t *testing.T) {
 			if got := seeksIn(told); fmt.Sprint(got) != "[set_property time-pos 40.000000]" {
 				t.Fatalf("seeks %q, want the member's second", got)
 			}
-			if !slices.Contains(told, "show-text only a can seek until resumed 5000") {
+			if !slices.Contains(told, "show-text only a can seek or change the speed until resumed 5000") {
 				t.Fatalf("told mpv %q, want the person told who holds the seek", told)
 			}
 			if got := said(n.broadcasts()); len(got) != 0 {

@@ -27,9 +27,9 @@ func (c *Client) handleEvent(event Event, line []byte) [][]byte {
 		}
 	}
 	if len(out) > 0 {
-		// our own change takes the next stamp. Only the person's own pause, seek or move
+		// our own change takes the next stamp. Only the person's own pause, seek, move or speed
 		// leads the stop; any other stop is leaderless, and its first seek leads.
-		lead := event.Name == timePos || event.Name == pause && event.paused() && !c.pausedByNode ||
+		lead := event.Name == timePos || event.Name == playSpeed || event.Name == pause && event.paused() && !c.pausedByNode ||
 			event.Name == playlistPos && !c.advancedAtEnd
 		c.stamp, c.leaderID, c.leaderless = c.stamp+1, "", !lead
 	}
@@ -76,6 +76,11 @@ func (c *Client) propertyChanged(event Event) (extra [][]byte, send bool) {
 	case viaNetwork:
 		c.onNetwork = event.Data == "yes"
 		return nil, false
+	case playSpeed:
+		if !event.fromScript {
+			return nil, false
+		}
+		return nil, c.speedChanged(event.Data)
 	case cacheAhead:
 		c.ahead(event.Data)
 		return nil, false
@@ -173,6 +178,28 @@ func (c *Client) pauseChanged(paused bool, extra [][]byte) ([][]byte, bool) {
 	return extra, true
 }
 
+// speedChanged handles the person changing mpv's speed, as a seek: while paused it goes out,
+// a follower's staying on its screen; while playing it stops the party, as each node would
+// take it at another moment, and the stop says it.
+func (c *Client) speedChanged(data string) bool {
+	v, err := strconv.ParseFloat(data, 64)
+	if err != nil || v == c.speed {
+		return false
+	}
+	c.speed = v
+	if c.paused && c.led() {
+		c.keepOnScreen()
+		return false
+	}
+	if c.paused {
+		return true
+	}
+	if c.stopReason == "" {
+		c.pauseParty("speed changed", true)
+	}
+	return false
+}
+
 // positionChanged handles the person's seek, as the script reported where it landed
 // (wentTo). While paused it goes out; while playing it pauses the party.
 func (c *Client) positionChanged() bool {
@@ -199,7 +226,7 @@ func (c *Client) positionChanged() bool {
 func (c *Client) keepOnScreen() {
 	if !c.toldWhoLeads {
 		c.toldWhoLeads = true
-		text := fmt.Sprintf("only %s can seek until resumed", c.leaderName)
+		text := fmt.Sprintf("only %s can seek or change the speed until resumed", c.leaderName)
 		c.later = append(c.later, func() { c.showText(text) })
 	}
 }

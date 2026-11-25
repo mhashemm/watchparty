@@ -69,6 +69,22 @@ def p2p_suite():
             hold(QUIET, "a second broadcast would come right behind the first")
             ok(f"{b} broadcast one position for one seek", sent() - before == 1, f"{sent() - before} sent")
 
+    @case("[5e] a speed change reaches everyone; while playing it first stops the party")
+    def _():
+        with mesh("p5e", 2) as P:
+            a, b = P
+            speeds = lambda: {n: get(n, "speed") for n in P}
+            setp(b, "speed", 1.5)
+            ok("everyone plays at 1.5x", until(lambda: all(num(n, "speed") == 1.5 for n in P)), speeds())
+            ok(f"{a} was told who", until(lambda: f"speed 1.5× by {b}" in osd(a)), str(osd(a)))
+            ok("nobody started", stopped(P), where(P))
+            setp(a, "pause", False)
+            must("everyone plays", until(lambda: playing(P) and all(num(n, "time-pos") > 1 for n in P)), where(P))
+            setp(a, "speed", 2.0)
+            ok("everyone stops on one second", until(lambda: stopped(P) and in_step(P)), where(P))
+            ok("everyone plays at 2x", until(lambda: all(num(n, "speed") == 2 for n in P)), speeds())
+            ok(f"{b} was told why", until(lambda: f"paused for {a}: speed changed" in osd(b)), str(osd(b)))
+
     @case("[5c] an applied event is not echoed back (the a->b->a rebound)")
     def _():
         with mesh("p5c") as P:
@@ -305,7 +321,7 @@ def p2p_suite():
             ok(f"{a} stopped nobody for it: the state lands where it is behind", get(a, "pause") is False and
                not any("out of sync" in t for t in osd(a)), osd(a)[-3:])
             # the stub plays out of step now, and resumes: newer than anything a holds
-            resume = {"stamp": 1 << 20, "paused": False, "at": max(num(a, "time-pos") - 10, 0), "event": "property-change",
+            resume = {"stamp": 1 << 20, "paused": False, "at": max(num(a, "time-pos") - 10, 0), "speed": 1, "event": "property-change",
                       "name": "pause", "data": "no"}
             code = raw(nodes[a]["addr"], "/event", {"hit-me-up": at, "counter": "999999", "hostname": STUB_HOST, "secret": SECRET},
                        json.dumps(resume).encode())

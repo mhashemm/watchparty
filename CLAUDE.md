@@ -38,13 +38,13 @@ and the GUI (`gui/`, form → `Config`, in-process) both call it. It wires:
 - **Two channels:** `outgoing` (mpv → transport), `incoming` (transport → mpv): raw mpv JSON, never parsed.
 
 **No master, but a stop has a leader:** anyone pauses and resumes; while paused only the node whose
-own pause, seek or move (also while playing) the party holds seeks or moves for it (`led`); any other
-stop (a join, a leave, a file's end, buffering) is led by its first seek. Another's seek or move stays on its screen until a resume, from the resumer's screen (another file: the party stops there).
+own pause, seek, move or speed (also while playing) the party holds seeks, moves or sets the speed for it (`led`); any other
+stop (a join, a leave, a file's end, buffering) is led by its first seek. Another's seek, move or speed stays on its screen until a resume, from the resumer's screen (another file: the party stops there).
 Only the node that generates an event broadcasts it, with its `stamp`: the newer wins, of two at
 once the safer. A peer's change reaches mpv as one set to the script, whose ack is compared with it; `seen` drops mpv's first reply to an observe.
 
-**Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused) and
-the playlist entry go over the wire, besides what is only shown: a stalled stream's seconds ready, for people to judge, and chat and reactions (`mpv/chat.go`, `react.go`), never logged nor stored: `Config.Heard` hands them to the GUI. Anything that would put nodes out of step (a seek while
+**Playback is never synced, only paused.** Only `pause`, `time-pos` (while paused), the
+playlist entry and the speed go over the wire, besides what is only shown: a stalled stream's seconds ready, for people to judge, and chat and reactions (`mpv/chat.go`, `react.go`), never logged nor stored: `Config.Heard` hands them to the GUI. Anything that would put nodes out of step (a seek or a speed change while
 playing, running out of cache, a mid-party join, a member leaving, a new playlist entry, a
 node that missed something, even while it had lost the relay) pauses the whole party, and someone resumes it by hand. Every pause carries where it stopped. **Same file,
 or no party:** a joiner whose fingerprint differs is refused with 409. `-playlist` loads the file's folder.
