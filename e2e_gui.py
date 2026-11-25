@@ -533,7 +533,9 @@ def gui_suite():
         must(f"{G} followed to 3s", until(lambda: near(get(G, "time-pos"), 3, 0.2)), get(G, "time-pos"))
         end(G)
         setp(H, "time-pos", 6)
-        until(lambda: near(get(H, "time-pos"), 6, 0.2))
+        # mpv is there before the node reads the script's seek; stopped in between, the node
+        # records the 3s it knew (jitter seed 45678502851-1)
+        must(f"{H} took its seek", until(lambda: any("broadcasted event" in l and '"at":6.000000' in l for l in log(H).splitlines())), log(H)[-300:])
         end(H)
         parties = len(state(H)["history"])
         ok("each remembers where it stopped", [state(n)["history"][-1].get("stopped") for n in (H, G)] == [{"entry": "e2.mkv", "at": 6}, {"entry": "e2.mkv", "at": 3}], str([state(n)["history"][-1].get("stopped") for n in (H, G)]))
