@@ -729,14 +729,17 @@ function rest(at) {
   }, reactedAt + REACT_EVERY - Date.now());
 }
 // stripAt: where the row was scrolled when it closed, as it opens there again; a hidden row
-// loses its scroll
-let stripAt = 0;
+// loses its scroll. stripTo: where an arrow's smooth scroll is heading, until it ends (snapped to
+// an emoji), kept if it closes on the way. shownAt: where it is, as a focus's scroll can't be
+// undone from its new place
+let stripAt = 0, stripTo = null, shownAt = 0;
 function openStrip(open) {
   const s = $("react-strip");
-  if (!open && !s.hidden) stripAt = s.scrollLeft;
+  if (!open && !s.hidden) stripAt = stripTo ?? s.scrollLeft;
+  stripTo = null;
   $("react-row").hidden = s.hidden = !open;
   $("react-open").setAttribute("aria-expanded", open);
-  if (open) s.scrollLeft = stripAt;
+  if (open) s.scrollLeft = shownAt = stripAt;
   showMore();
 }
 // people didn't see the row scrolls: each end with more gets an arrow and fades out
@@ -748,10 +751,29 @@ function showMore() {
   s.classList.toggle("more-back", back);
   s.classList.toggle("more-on", on);
 }
-$("react-strip").addEventListener("scroll", showMore);
+$("react-strip").addEventListener("scroll", () => {
+  shownAt = $("react-strip").scrollLeft;
+  showMore();
+});
+$("react-strip").addEventListener("scrollend", () => { stripTo = null; });
 window.addEventListener("resize", showMore);
 // an arrow scrolls a rowful, less one emoji for where it was
-const page = by => $("react-strip").scrollBy({ left: by * ($("react-strip").clientWidth - 72), behavior: "smooth" });
+const page = by => {
+  const s = $("react-strip");
+  stripTo = Math.max(0, Math.min(s.scrollWidth - s.clientWidth, (stripTo ?? s.scrollLeft) + by * (s.clientWidth - 72)));
+  s.scrollTo({ left: stripTo, behavior: "smooth" });
+};
+// Tab into the row lands on its first emoji in view (Shift+Tab: its last), where focusing the
+// first of all would scroll it back to its start
+$("react-strip").addEventListener("focusin", e => {
+  const s = $("react-strip");
+  if (s.contains(e.relatedTarget)) return;
+  s.scrollLeft = shownAt;
+  const row = s.getBoundingClientRect();
+  const whole = [...s.children].filter(b => { const at = b.getBoundingClientRect(); return at.left >= row.left - 0.5 && at.right <= row.right + 0.5; });
+  const to = e.target === s.lastElementChild ? whole.at(-1) : whole[0];
+  if (to && !whole.includes(e.target)) to.focus({ preventScroll: true });
+});
 $("react-back").addEventListener("click", () => page(-1));
 $("react-more").addEventListener("click", () => page(1));
 $("react-open").addEventListener("click", () => openStrip($("react-strip").hidden));
@@ -762,6 +784,7 @@ $("react-row").addEventListener("keydown", e => {
 $("react-strip").addEventListener("wheel", e => {
   if (!e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
   e.preventDefault();
+  stripTo = null;
   $("react-strip").scrollLeft += e.deltaY;
 }, { passive: false });
 $("react-strip").addEventListener("click", async e => {

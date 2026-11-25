@@ -258,8 +258,38 @@ def gui_suite():
         click(H, "#react-open")
         ok("opened again, the row is where it was left",
            until(lambda: js(H, '$("react-strip").scrollLeft > 100 && !$("react-back").hidden'), 5), js(H, '$("react-strip").scrollLeft'))
+        # a real Tab from Send, the last before the row, as a keyboard reaches it
+        at = js(H, '$("react-strip").scrollLeft')
+        js(H, '$("chat-send").focus()')
+        for t in ("rawKeyDown", "keyUp"):
+            nodes[H]["page"].call("Input.dispatchKeyEvent", type=t, key="Tab", code="Tab", windowsVirtualKeyCode=9)
+        ok("Tab lands on its first emoji in view, and the row stays where it was",
+           until(lambda: js(H, f'(() => {{ const s = $("react-strip"), b = document.activeElement, r = s.getBoundingClientRect(), a = b.getBoundingClientRect(); '
+                               f'return s.contains(b) && a.left >= r.left - 0.5 && a.left < r.left + 80 && Math.abs(s.scrollLeft - {at}) < 1 }})()'), 5),
+           js(H, '[document.activeElement.dataset.code, $("react-strip").scrollLeft]'))
         click(H, "#react-back")
         must("and scrolls back", until(lambda: js(H, '$("react-strip").scrollLeft == 0'), 5))
+
+        def settled():
+            """Where the row's scroll comes to rest: the same for 8 reads in a row, ~0.4s."""
+            seen = []
+            until(lambda: seen.append(js(H, '$("react-strip").scrollLeft')) or len(seen) >= 8 and len(set(seen[-8:])) == 1, 10)
+            return seen[-1]
+        click(H, "#react-more")
+        lands = settled()
+        click(H, "#react-back")
+        must("and back once more", settled() == 0)
+        js(H, '$("react-more").click(); $("react-open").click()')
+        must("the row closes as its arrow starts scrolling it", js(H, '$("react-strip").hidden'))
+        click(H, "#react-open")
+        ok("it opens where the arrow was taking it", settled() == lands, str([js(H, '$("react-strip").scrollLeft'), lands]))
+        click(H, "#react-more")
+        must("the arrow scrolls on", settled() > lands)
+        js(H, '$("react-strip").scrollLeft = 0')  # as a finger drags it back
+        must("dragged back to its start", settled() == 0)
+        click(H, "#react-open")
+        click(H, "#react-open")
+        ok("an arrow's scroll that ended is forgotten: it opens where it was dragged", settled() == 0, str(js(H, '$("react-strip").scrollLeft')))
         click(H, '#react-strip button[data-code="1f602"]')
         ok(f"{G} has {H}'s reaction", until(lambda: chats(G)[:1] == [f"{H}: 😂"]), str(chats(G)))
         ok(f"{H} has it as its own, the row closed and the button rests",

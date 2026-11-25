@@ -382,6 +382,23 @@ def media_suite():
         must("its row opens", over(*row(0)))
         click(*row(0))
         ok("where it was left: its first is the same one", until(lambda: picked[3:] == [order[2 * (shown - 1)]]), str(picked))
+        hold(2.2, "the smiley rests after a pick")
+        # a smaller window draws smaller emoji: the row still opens on that one, lined up
+        ipc(sock, "set_property", "geometry", "640x360")
+        dims = lambda: (ipc(sock, "get_property", "osd-dimensions") or {}).get("data") or {}
+        must("the window is smaller", until(lambda: dims().get("h") == 360, 5), str(dims()))
+        w2, h2 = dims()["w"], dims()["h"]
+        u2 = h2 / 720
+        size2, gap2, pad2 = 52 * u2, 12 * u2, 14 * u2
+        peek2 = size2 * 0.55 + gap2
+        shown2 = max(1, min(9, int((w2 - 2 * pad2 - 32 * u2 + gap2 - peek2) // (size2 + gap2))))
+        x2 = (w2 - (2 * pad2 + shown2 * size2 + (shown2 - 1) * gap2 + peek2)) / 2
+        must("its smiley takes clicks", over(int(w2 - 46 * u2), int(h2 - 120 * u2)))
+        click(int(w2 - 46 * u2), int(h2 - 120 * u2))
+        first2 = (int(x2 + pad2 + size2 / 2), int(h2 / 2))
+        must("its row opens", over(*first2))
+        click(*first2)
+        ok("its first is the same one", until(lambda: picked[4:] == [order[2 * (shown - 1)]]), str(picked))
         listener.close()
         ok("no log has them", "watchparty-react" not in log("rxA"))
         stop("rxA")
