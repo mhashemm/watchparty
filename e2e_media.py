@@ -399,6 +399,37 @@ def media_suite():
         must("its row opens", over(*first2))
         click(*first2)
         ok("its first is the same one", until(lambda: picked[4:] == [order[2 * (shown - 1)]]), str(picked))
+
+        def window(gw, gh):
+            """mpv's window resized, and the picker's places in it: its smiley, the row's ith emoji, how many it shows."""
+            ipc(sock, "set_property", "geometry", f"{gw}x{gh}")
+            must(f"the window is {gw}x{gh}", until(lambda: dims().get("h") == gh, 5), str(dims()))
+            ww, wh = dims()["w"], dims()["h"]
+            wu = wh / 720
+            ws, wg, wp = 52 * wu, 12 * wu, 14 * wu
+            wpeek = ws * 0.55 + wg
+            n = max(1, min(9, int((ww - 2 * wp - 32 * wu + wg - wpeek) // (ws + wg))))
+            wx = (ww - (2 * wp + n * ws + (n - 1) * wg + wpeek)) / 2
+            return (int(ww - 46 * wu), int(wh - 120 * wu)), lambda i: (int(wx + wp + i * (ws + wg) + ws / 2), int(wh / 2)), n
+        hold(2.2, "the smiley rests after a pick")
+        # a narrow window shows fewer emoji, so its row scrolls further: to its end, then wider
+        smiley, at, n = window(360, 640)
+        must("narrow, its smiley takes clicks", over(*smiley))
+        click(*smiley)
+        must("its row opens", over(*at(0)))
+        for _ in range(len(order)):
+            ipc(sock, "mouse", *at(0), 4, "single")
+        hold(0.3, "the wheel's last turn lands")
+        click(*smiley)
+        smiley, at, n = window(1280, 720)
+        must("wide again, its smiley takes clicks", over(*smiley))
+        click(*smiley)
+        must("its row opens", over(*at(0)))
+        ipc(sock, "mouse", *at(0), 3, "single")
+        must("a wheel turn back lands", over(*at(0)))
+        click(*at(0))
+        ok("it opens at the end the wider row allows, so one turn back moves it",
+           until(lambda: picked[5:] == [order[len(order) - n - 1]]), f"{picked} {order[len(order) - n - 1]}")
         listener.close()
         ok("no log has them", "watchparty-react" not in log("rxA"))
         stop("rxA")

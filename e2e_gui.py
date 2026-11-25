@@ -267,6 +267,14 @@ def gui_suite():
            until(lambda: js(H, f'(() => {{ const s = $("react-strip"), b = document.activeElement, r = s.getBoundingClientRect(), a = b.getBoundingClientRect(); '
                                f'return s.contains(b) && a.left >= r.left - 0.5 && a.left < r.left + 80 && Math.abs(s.scrollLeft - {at}) < 1 }})()'), 5),
            js(H, '[document.activeElement.dataset.code, $("react-strip").scrollLeft]'))
+        # and Shift+Tab from All messages, the first after the row
+        js(H, '$("said-more").querySelector("summary").focus()')
+        for t in ("rawKeyDown", "keyUp"):
+            nodes[H]["page"].call("Input.dispatchKeyEvent", type=t, key="Tab", code="Tab", windowsVirtualKeyCode=9, modifiers=8)
+        ok("Shift+Tab lands on its last emoji in view, and the row stays where it was",
+           until(lambda: js(H, f'(() => {{ const s = $("react-strip"), b = document.activeElement, r = s.getBoundingClientRect(), a = b.getBoundingClientRect(); '
+                               f'return s.contains(b) && a.right <= r.right + 0.5 && a.right > r.right - 80 && Math.abs(s.scrollLeft - {at}) < 1 }})()'), 5),
+           js(H, '[document.activeElement.dataset.code, $("react-strip").scrollLeft]'))
         click(H, "#react-back")
         must("and scrolls back", until(lambda: js(H, '$("react-strip").scrollLeft == 0'), 5))
 
@@ -279,6 +287,17 @@ def gui_suite():
         lands = settled()
         click(H, "#react-back")
         must("and back once more", settled() == 0)
+        # a mouse press on an emoji as an arrow scrolls the row, released away so nothing is picked:
+        # the focus handler puts the row back where it is, which must not stop the scroll
+        r = js(H, '(() => { const b = $("react-strip").children[1].getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2] })()')
+        js(H, '$("react-more").click()')
+        must("the arrow is scrolling it", until(lambda: 20 < js(H, '$("react-strip").scrollLeft') < lands - 60, 2))
+        nodes[H]["page"].call("Input.dispatchMouseEvent", type="mousePressed", x=r[0], y=r[1], button="left", clickCount=1)
+        nodes[H]["page"].call("Input.dispatchMouseEvent", type="mouseReleased", x=5, y=5, button="left", clickCount=1)
+        must("the press focused an emoji", js(H, '$("react-strip").contains(document.activeElement)'), js(H, 'document.activeElement.outerHTML.slice(0, 80)'))
+        ok("a click's focus doesn't stop the arrow's scroll", settled() == lands, str([js(H, '$("react-strip").scrollLeft'), lands]))
+        click(H, "#react-back")
+        must("and back", settled() == 0)
         js(H, '$("react-more").click(); $("react-open").click()')
         must("the row closes as its arrow starts scrolling it", js(H, '$("react-strip").hidden'))
         click(H, "#react-open")

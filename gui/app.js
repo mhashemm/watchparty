@@ -751,8 +751,13 @@ function showMore() {
   s.classList.toggle("more-back", back);
   s.classList.toggle("more-on", on);
 }
+// a scroll has ended at scrollend, or for a browser without it (older Safari, as the default
+// browser's tab) once it has been still a moment
+let still;
 $("react-strip").addEventListener("scroll", () => {
   shownAt = $("react-strip").scrollLeft;
+  clearTimeout(still);
+  still = setTimeout(() => { stripTo = null; }, 150);
   showMore();
 });
 $("react-strip").addEventListener("scrollend", () => { stripTo = null; });
@@ -764,7 +769,8 @@ const page = by => {
   s.scrollTo({ left: stripTo, behavior: "smooth" });
 };
 // Tab into the row lands on its first emoji in view (Shift+Tab: its last), where focusing the
-// first of all would scroll it back to its start
+// first of all would scroll it back to its start. Putting it back where it is (shownAt follows
+// every scroll) doesn't stop an arrow's scroll under a mouse press
 $("react-strip").addEventListener("focusin", e => {
   const s = $("react-strip");
   if (s.contains(e.relatedTarget)) return;
