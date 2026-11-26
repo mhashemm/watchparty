@@ -137,7 +137,9 @@ local icon = "m 96 16 b 140 16 176 52 176 96 176 140 140 176 96 176 52 176 16 14
 local ui = mp.create_osd_overlay("ass-events")
 ui.z = 1
 local mouse = { x = -1, y = -1 }
-local shown, open, scrolled, hovering = false, false, 0, nil
+-- first: the emoji the row starts at. An emoji, not pixels: the row's size follows the
+-- window's, so after a resize (fullscreen) it opens where it was left, still lined up
+local shown, open, first, hovering = false, false, 0, nil
 local moved, left = 0, nil
 local grabbed = false
 local hider
@@ -174,9 +176,15 @@ local function inside(x, y, w, h)
   return mouse.x >= x and mouse.x < x + w and mouse.y >= y and mouse.y < y + h
 end
 
+-- offset is how far the row is scrolled: to its first emoji, or to its end.
+local function offset(r)
+  return math.min(first * (r.size + r.gap), r.most)
+end
+
 -- arrows is which of the row's ends have more: back, on.
 local function arrows(r)
-  return scrolled > 0, scrolled < r.most
+  local o = offset(r)
+  return o > 0, o < r.most
 end
 
 -- under is what the mouse is over: "button", an arrow ("back" or "on"), an emoji's code, "row"
@@ -199,11 +207,11 @@ local function under()
     end
   end
   if open and inside(r.x, r.y, r.w, r.h) then
-    local at = mouse.x - r.x - r.pad + scrolled
+    local at = mouse.x - r.x - r.pad + offset(r)
     local i = math.floor(at / (r.size + r.gap))
     if inside(r.x + r.pad, r.y + r.pad, r.w - 2 * r.pad, r.size) and at - i * (r.size + r.gap) < r.size and art_order[i + 1] then
       -- one an end cuts is that end's arrow: it scrolls, rather than picks what isn't all shown
-      local x = r.x + r.pad + i * (r.size + r.gap) - scrolled
+      local x = r.x + r.pad + i * (r.size + r.gap) - offset(r)
       if x < r.x + r.pad - 0.5 then
         return "back"
       elseif x + r.size > r.x + r.w - r.pad + 0.5 then
@@ -242,7 +250,7 @@ render = function()
     out[#out + 1] = panel(r.x, r.y, r.w, r.h, 14 * u, "&H1E1A14&", 0x40)
     local clip = string.format("\\clip(%.1f,%.1f,%.1f,%.1f)", r.x + r.pad / 2, r.y, r.x + r.w - r.pad / 2, r.y + r.h)
     for i, code in ipairs(art_order) do
-      local x = r.x + r.pad + (i - 1) * (r.size + r.gap) - scrolled
+      local x = r.x + r.pad + (i - 1) * (r.size + r.gap) - offset(r)
       if x + r.size > r.x and x < r.x + r.w then
         if hovering == code then
           out[#out + 1] = panel(x - r.gap / 2, r.y + r.pad - r.gap / 2, r.size + r.gap, r.size + r.gap, 10 * u, "&HFFFFFF&", 0xB0)
@@ -306,7 +314,7 @@ local function grab(on)
       now()
       local _, _, _, _, r = layout()
       local step = by or dir * math.max(1, r.shown - 1)
-      scrolled = math.max(0, math.min(r.most, scrolled + step * (r.size + r.gap)))
+      first = math.max(0, math.min(#art_order - r.shown, first + step))
       hovering = under()
       render()
     end
@@ -316,7 +324,9 @@ local function grab(on)
       now()
       local what = under()
       if what == "button" and not rests() then
-        open, scrolled = not open, 0
+        -- the row opens where it was left (first), no further than a window grown since lets it
+        local _, _, _, _, r = layout()
+        open, first = not open, math.min(first, math.max(0, #art_order - r.shown))
       elseif what == "back" or what == "on" then
         scroll(nil)(what == "back" and -1 or 1)
       elseif art[what] then

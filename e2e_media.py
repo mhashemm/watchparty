@@ -376,6 +376,60 @@ def media_suite():
         click(*row(0))
         ok("by a rowful less one each: its first is now the one that was last, twice over",
            until(lambda: picked[2:] == [order[2 * (shown - 1)]]), f"{picked} {order[2 * (shown - 1)]}")
+        hold(2.2, "the smiley rests after a pick")
+        must("the smiley takes clicks again", over(*button))
+        click(*button)
+        must("its row opens", over(*row(0)))
+        click(*row(0))
+        ok("where it was left: its first is the same one", until(lambda: picked[3:] == [order[2 * (shown - 1)]]), str(picked))
+        hold(2.2, "the smiley rests after a pick")
+        # a smaller window draws smaller emoji: the row still opens on that one, lined up
+        ipc(sock, "set_property", "geometry", "640x360")
+        dims = lambda: (ipc(sock, "get_property", "osd-dimensions") or {}).get("data") or {}
+        must("the window is smaller", until(lambda: dims().get("h") == 360, 5), str(dims()))
+        w2, h2 = dims()["w"], dims()["h"]
+        u2 = h2 / 720
+        size2, gap2, pad2 = 52 * u2, 12 * u2, 14 * u2
+        peek2 = size2 * 0.55 + gap2
+        shown2 = max(1, min(9, int((w2 - 2 * pad2 - 32 * u2 + gap2 - peek2) // (size2 + gap2))))
+        x2 = (w2 - (2 * pad2 + shown2 * size2 + (shown2 - 1) * gap2 + peek2)) / 2
+        must("its smiley takes clicks", over(int(w2 - 46 * u2), int(h2 - 120 * u2)))
+        click(int(w2 - 46 * u2), int(h2 - 120 * u2))
+        first2 = (int(x2 + pad2 + size2 / 2), int(h2 / 2))
+        must("its row opens", over(*first2))
+        click(*first2)
+        ok("its first is the same one", until(lambda: picked[4:] == [order[2 * (shown - 1)]]), str(picked))
+
+        def window(gw, gh):
+            """mpv's window resized, and the picker's places in it: its smiley, the row's ith emoji, how many it shows."""
+            ipc(sock, "set_property", "geometry", f"{gw}x{gh}")
+            must(f"the window is {gw}x{gh}", until(lambda: dims().get("h") == gh, 5), str(dims()))
+            ww, wh = dims()["w"], dims()["h"]
+            wu = wh / 720
+            ws, wg, wp = 52 * wu, 12 * wu, 14 * wu
+            wpeek = ws * 0.55 + wg
+            n = max(1, min(9, int((ww - 2 * wp - 32 * wu + wg - wpeek) // (ws + wg))))
+            wx = (ww - (2 * wp + n * ws + (n - 1) * wg + wpeek)) / 2
+            return (int(ww - 46 * wu), int(wh - 120 * wu)), lambda i: (int(wx + wp + i * (ws + wg) + ws / 2), int(wh / 2)), n
+        hold(2.2, "the smiley rests after a pick")
+        # a narrow window shows fewer emoji, so its row scrolls further: to its end, then wider
+        smiley, at, n = window(360, 640)
+        must("narrow, its smiley takes clicks", over(*smiley))
+        click(*smiley)
+        must("its row opens", over(*at(0)))
+        for _ in range(len(order)):
+            ipc(sock, "mouse", *at(0), 4, "single")
+        hold(0.3, "the wheel's last turn lands")
+        click(*smiley)
+        smiley, at, n = window(1280, 720)
+        must("wide again, its smiley takes clicks", over(*smiley))
+        click(*smiley)
+        must("its row opens", over(*at(0)))
+        ipc(sock, "mouse", *at(0), 3, "single")
+        must("a wheel turn back lands", over(*at(0)))
+        click(*at(0))
+        ok("it opens at the end the wider row allows, so one turn back moves it",
+           until(lambda: picked[5:] == [order[len(order) - n - 1]]), f"{picked} {order[len(order) - n - 1]}")
         listener.close()
         ok("no log has them", "watchparty-react" not in log("rxA"))
         stop("rxA")
