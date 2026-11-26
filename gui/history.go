@@ -59,9 +59,11 @@ func (v *view) historyTab(gtx C) D {
 	var kids []layout.FlexChild
 	kids = append(kids, layout.Rigid(func(gtx C) D { return v.heading(gtx, "Recent parties") }))
 	if len(parties) == 0 {
-		// its 6dp above folds into the heading's 10
+		// its 6dp above folds into the heading's 10; the empty list's 18 under stays
 		kids = append(kids, layout.Rigid(func(gtx C) D {
-			return v.th.text(gtx, tHint, "No parties yet. Each one shows up here after you start it, with the video and everyone who joined.")
+			return layout.Inset{Bottom: 18}.Layout(gtx, func(gtx C) D {
+				return v.th.text(gtx, tHint, "No parties yet. Each one shows up here after you start it, with the video and everyone who joined.")
+			})
 		}))
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, kids...)
 	}

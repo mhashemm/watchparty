@@ -49,6 +49,7 @@ type view struct {
 	updateDot bool
 	tip       widget.Clickable
 	tipOpen   bool
+	tips      tipsState
 
 	history historyTab
 	hist    historyActions
@@ -163,10 +164,12 @@ func (v *view) t(gtx C) float64 { return gtx.Now.Sub(v.start).Seconds() }
 
 // frame lays out the whole window. It asks for the next frame: the cat and the turtles move.
 func (v *view) frame(gtx C) {
+	v.closeTips(gtx)
 	v.bg.paint(gtx)
 	v.list.Layout(gtx, 1, func(gtx C, _ int) D { return v.page(gtx) })
 	v.paintGround(gtx)
 	v.paintDialog(gtx)
+	v.watchPresses(gtx)
 	gtx.Execute(op.InvalidateCmd{})
 }
 
@@ -198,6 +201,7 @@ func (v *view) page(gtx C) D {
 
 	v.paintCat(gtx, W)
 	v.paintHearts(gtx, x, mainW)
+	v.paintTips(gtx, x, mainW)
 	return D{Size: image.Pt(W, top+cd.Size.Y+gtx.Dp(150))}
 }
 

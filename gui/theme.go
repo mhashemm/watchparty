@@ -137,7 +137,7 @@ func (th *theme) text(gtx C, st textStyle, s string) D {
 func (lb lineBox) place(gtx C, w func(gtx C, size, lineHeight unit.Sp) D, size unit.Sp) D {
 	m := op.Record(gtx.Ops)
 	d := exact(gtx, size, func(gtx C, size unit.Sp, k float32) D {
-		return w(gtx, size, unit.Sp(float32(lb.height)*k/gtx.Metric.PxPerSp))
+		return w(gtx, size, unit.Sp(lb.exact*k/gtx.Metric.PxPerSp))
 	})
 	call := m.Stop()
 	o := op.Offset(image.Pt(0, lb.shift)).Push(gtx.Ops)
@@ -179,7 +179,12 @@ func exact(gtx C, size unit.Sp, w func(gtx C, size unit.Sp, k float32) D) D {
 
 // lineBox is where Gio's glyphs go in a CSS line box: shift them down by shift; the box is
 // height tall, its baseline below from its bottom; glyphs is Gio's own one-line height.
-type lineBox struct{ height, shift, below, glyphs int }
+type lineBox struct {
+	height, shift, below, glyphs int
+	// exact is the line height unrounded: lines after the first are this far apart, as
+	// Chromium keeps the fraction (14.4px at 1.4 is 20.16)
+	exact float32
+}
 
 // fontMetrics are the ascent and descent of each bundled family, in em (hhea; no line gap).
 var fontMetrics = map[font.Typeface][2]float64{
@@ -209,18 +214,20 @@ func (th *theme) lineBox(gtx C, st textStyle) lineBox {
 		am = [2]float64{float64(gioAscent) / px, float64(d.Baseline) / px}
 	}
 	asc, desc := int(math.Round(am[0]*px)), int(math.Round(am[1]*px))
-	h := asc + desc
+	h, exact := asc+desc, float32(asc+desc)
 	if st.lineHeight > 0 {
-		h = int(math.Round(px * float64(st.lineHeight)))
+		exact = float32(px * float64(st.lineHeight))
+		h = int(math.Round(float64(exact)))
 	}
 	top := (h - asc - desc) / 2
-	lb := lineBox{height: h, shift: top + asc - gioAscent, below: h - top - asc, glyphs: d.Size.Y}
+	lb := lineBox{height: h, shift: top + asc - gioAscent, below: h - top - asc, glyphs: d.Size.Y, exact: exact}
 	if st.strut != nil {
 		sb := th.lineBox(gtx, *st.strut)
 		baseline := max(sb.height-sb.below, top+asc)
 		lb.below = max(sb.below, h-top-asc)
 		lb.height = baseline + lb.below
 		lb.shift = baseline - gioAscent
+		lb.exact = float32(lb.height)
 	}
 	if st.strut == nil {
 		th.lines[k] = lb

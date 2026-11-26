@@ -227,6 +227,11 @@ func scenes() map[string]scene {
 				v.prefs.steps["ffmpeg"] = &widget.Bool{Value: true}
 				v.prefs.saved, v.prefs.savedAt = "Saved.", t0.Add(26*time.Second)
 			}},
+		"tips": {at: 27 * time.Second, settings: savedSettings, js: `showTip(true)`, setup: func(v *view) { v.tipOpen = true }},
+		"tips-end": {at: 27 * time.Second, settings: savedSettings, js: `showTip(true); $("tip").scrollTop = 1e6`, setup: func(v *view) {
+			v.tipOpen = true
+			v.tips.list.Position.First, v.tips.list.Position.Offset = 1, 0
+		}},
 		"history-empty": {at: 27 * time.Second, settings: savedSettings, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
 		"history":       {height: 1300, at: 27 * time.Second, settings: savedSettings, parties: parties, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
 		"dialog-restart": {at: 27 * time.Second, settings: savedSettings,
