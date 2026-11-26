@@ -172,9 +172,8 @@ go's seek begun just before such a key is `refused` instead (once in `moves` on 
 **A speed key against a go's speed** (`speed`, 224 rounds each: `]` -20..+20ms around a go keeping
 or changing the speed, with or without a seek, paused or playing): 0 errors on 0.37.0 to 0.42.0,
 every go landed, Windows' 2 `gap` aside. mpv says the speed with 6 decimals (`1.500000`), as the
-script compares it; a set to the speed mpv has says nothing, a new one is said after the ack. The
-ack and later messages always told the node mpv's final speed; every key the go undid was flagged
-`over`.
+script compares it; a set to mpv's speed says nothing, a new one is said after the ack. The ack and
+later messages always gave the node mpv's final speed; each key a go undid was flagged `over`.
 
 ## Re-running
 
