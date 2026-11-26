@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gioui.org/gpu/headless"
+	"gioui.org/io/input"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -68,6 +69,8 @@ type scene struct {
 	refusal  *party.NotTheSameFile
 	js       string
 	setup    func(v *view)
+	// parties is the saved history, oldest first
+	parties []session
 }
 
 // fixture is what the stand-in server feeds the page: /state, /log and the scene's script.
@@ -82,7 +85,7 @@ func (s scene) fixture() any {
 	}
 	return map[string]any{
 		"height": s.size().Y,
-		"state":  map[string]any{"settings": s.settings, "history": []any{}, "path": "/home/you/.config/watchparty", "version": "dev", "defaultMpv": "/usr/bin/mpv", "defaultCacheDir": "/home/you/.cache/watchparty"},
+		"state":  map[string]any{"settings": s.settings, "history": append([]session{}, s.parties...), "path": "/home/you/.config/watchparty", "version": "dev", "defaultMpv": "/usr/bin/mpv", "defaultCacheDir": "/home/you/.cache/watchparty"},
 		"log":    map[string]any{"run": run, "from": 0, "lines": lines, "saidFrom": 0, "said": s.said, "running": s.running, "exitErr": s.exitErr, "refusal": s.refusal},
 		"js":     s.js,
 	}
@@ -98,7 +101,7 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 	}
 	defer win.Release()
 	v := newView(th, t0)
-	v.mood, v.settings = s.mood, s.settings
+	v.mood, v.settings, v.parties = s.mood, s.settings, s.parties
 	t := v.party
 	t.hostname.SetText(s.settings.Hostname)
 	t.relay.SetText(s.settings.Relay)
@@ -121,11 +124,14 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 		s.setup(v)
 	}
 	var ops op.Ops
-	// three frames: the first lays out what the next ones measure, scroll and open
+	// an input router, as a window has: focus and the like carry from frame to frame
+	var router input.Router
+	// three frames: the first lays out what the next ones measure, scroll, open and focus
 	for range 3 {
 		ops.Reset()
-		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size)}
+		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: router.Source()}
 		v.frame(gtx)
+		router.Frame(&ops)
 	}
 	if err := win.Frame(&ops); err != nil {
 		return nil, err
@@ -179,7 +185,24 @@ func scenes() map[string]scene {
 		{At: at(22).UnixMilli(), Who: "Sam", Text: "wait for me, still loading"},
 		{At: at(23).UnixMilli(), Who: "Mo", Text: "ok, paused", Ours: true},
 	}
+	day := func(h, m int) time.Time { return t0.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute) }
+	parties := []session{
+		{Started: day(-50, 0), Ended: day(-48, 30), File: "/home/you/Videos/Trip/01 Arrival.mkv", Playlist: true, Mode: "relay", Relay: savedSettings.Relay, Room: "B3XQ7", Secret: "Q8WE2", Finished: true, People: []string{},
+			Videos: []played{{Name: "01 Arrival.mkv", Started: day(-50, 0), Ended: day(-49, 20)}, {Name: "02 The Market.mkv", Started: day(-49, 20), Ended: day(-48, 50)}, {Name: "03 Home.mkv", Started: day(-48, 50), Ended: day(-48, 30)}}},
+		{Started: day(-26, 0), Ended: day(-25, 10), File: "/home/you/Videos/Sintel.mkv", Mode: "direct", Addrs: "192.168.1.5:6969", Secret: "ZP4M1", People: []string{"Sam"},
+			Videos: []played{{Name: "Sintel.mkv", Started: day(-26, 0), Ended: day(-25, 10)}}},
+		{Started: day(-2, 0), Ended: day(-1, 0), File: video, Mode: "relay", Relay: savedSettings.Relay, Room: "K7Q2M9", Secret: "4XJ8T2PLW3", People: []string{"Ana", "Sam"},
+			Videos: []played{{Name: "Big Buck Bunny.mkv", Started: day(-2, 0), Ended: day(-1, 0)}}},
+	}
 	return map[string]scene{
+		"history-empty": {at: 27 * time.Second, settings: savedSettings, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
+		"history":       {height: 1300, at: 27 * time.Second, settings: savedSettings, parties: parties, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
+		"dialog-restart": {at: 27 * time.Second, settings: savedSettings,
+			js: `pendingRestart("v0.0.59"); $("restart-dialog").showModal()`,
+			setup: func(v *view) {
+				v.updateDot = true
+				v.dialog = &modal{title: "Update installed", text: "Version v0.0.59 is installed. A restart is required to start using it.", later: "Restart later", now: "Restart now"}
+			}},
 		"party-form":   {height: 1350, at: 27 * time.Second, settings: savedSettings},
 		"party-direct": {height: 1350, at: 27 * time.Second, settings: savedSettings, js: `setMode("direct")`, setup: func(v *view) { v.party.mode.Value = "direct" }},
 		"party-starting": {at: 27 * time.Second, settings: savedSettings, form: relay, ran: true, running: true, lines: func(w *watch) []string {

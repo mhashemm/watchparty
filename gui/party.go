@@ -63,18 +63,15 @@ type partyTab struct {
 	saved                         string
 	chartList                     widget.List
 
-	chat              widget.Editor
-	send, reactOpen   widget.Clickable
-	stripOpen         bool
-	strip             widget.List
-	back, more        widget.Clickable
-	emoji             []emojiButton
-	hint              string
-	reactedAt         time.Time
-	feed              map[*feedGroup]*widget.Clickable
-	confirmStop       bool
-	confirm, keepOn   widget.Clickable
-	inviteHintChanged bool
+	chat            widget.Editor
+	send, reactOpen widget.Clickable
+	stripOpen       bool
+	strip           widget.List
+	back, more      widget.Clickable
+	emoji           []emojiButton
+	hint            string
+	reactedAt       time.Time
+	feed            map[*feedGroup]*widget.Clickable
 }
 
 type emojiButton struct {
@@ -186,7 +183,11 @@ func (v *view) partyForm(gtx C, t *partyTab, running bool) D {
 	t.mode.Update(gtx)
 	if t.goButton.Clicked(gtx) {
 		if running {
-			t.confirmStop = true
+			v.ask(confirm{title: "End the party?", text: "mpv closes for you, and everyone else keeps watching.", ok: "End the party", do: func() {
+				if v.act != nil {
+					v.act.stop()
+				}
+			}})
 		} else if v.act != nil {
 			t.err = ""
 			if strings.TrimSpace(t.file.Text()) == "" {

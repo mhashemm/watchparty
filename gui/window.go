@@ -49,6 +49,13 @@ type view struct {
 	updateDot bool
 	tip       widget.Clickable
 	tipOpen   bool
+
+	history historyTab
+	hist    historyActions
+	// parties is the saved history, oldest first
+	parties []session
+	// dialog is the one open, over everything
+	dialog *modal
 }
 
 var tabNames = [3]string{"party", "history", "settings"}
@@ -71,7 +78,9 @@ func (v *view) body(gtx C) D {
 		layout.Rigid(v.tabRow),
 		layout.Rigid(func(gtx C) D {
 			switch v.tab {
-			case "history", "settings":
+			case "history":
+				return v.historyTab(gtx)
+			case "settings":
 				return D{}
 			}
 			p := v.now
@@ -151,6 +160,7 @@ func (v *view) frame(gtx C) {
 	v.bg.paint(gtx)
 	v.list.Layout(gtx, 1, func(gtx C, _ int) D { return v.page(gtx) })
 	v.paintGround(gtx)
+	v.paintDialog(gtx)
 	gtx.Execute(op.InvalidateCmd{})
 }
 

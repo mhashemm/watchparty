@@ -12,6 +12,7 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/clipboard"
+	gioevent "gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
@@ -415,6 +416,10 @@ func (th *theme) pressable(gtx C, c *widget.Clickable, s buttonStyle, disabled b
 		s.box.bg = s.hover
 	}
 	focused := gtx.Focused(c) && !disabled
+	if focused {
+		// :focus-visible: a moss border inside the ring
+		s.box.border = art.Moss
+	}
 	b := s.box
 	b.middle, b.shadow, b.ring = true, 0, false
 	m := op.Record(gtx.Ops)
@@ -632,6 +637,34 @@ func dashed(gtx C, width int) D {
 	paint.FillShape(gtx.Ops, art.Rule, s.Op(gtx.Ops))
 	return D{Size: image.Pt(width, int(h))}
 }
+
+// dashedDown is dashed standing up: a 2dp dashed line height tall (border-left).
+func dashedDown(gtx C, height int) D {
+	w := float32(gtx.Dp(2))
+	s := stroke.Stroke{
+		Path:   stroke.Path{Segments: []stroke.Segment{stroke.MoveTo(f32.Pt(w/2, 0)), stroke.LineTo(f32.Pt(w/2, float32(height)))}},
+		Width:  w,
+		Cap:    stroke.FlatCap,
+		Dashes: stroke.Dashes{Dashes: []float32{3 * w, 3 * w}},
+	}
+	paint.FillShape(gtx.Ops, art.Rule, s.Op(gtx.Ops))
+	return D{Size: image.Pt(int(w), height)}
+}
+
+// blockInput takes every pointer event over size, so nothing under it gets them (a modal's
+// backdrop).
+func blockInput(gtx C, size image.Point) {
+	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+	gioevent.Op(gtx.Ops, &blocked)
+	for {
+		if _, ok := gtx.Event(pointer.Filter{Target: &blocked, Kinds: pointer.Press | pointer.Release | pointer.Scroll | pointer.Move}); !ok {
+			break
+		}
+	}
+}
+
+// blocked is the tag of blockInput's area
+var blocked int
 
 // rule is a 1dp solid line across the width (a list's divider).
 func rule(gtx C) D {
