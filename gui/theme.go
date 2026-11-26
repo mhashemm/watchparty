@@ -603,26 +603,39 @@ func (th *theme) option(gtx C, e *widget.Enum, key, title, sub string) D {
 
 // options lays out a .seg: its cards side by side, 8dp apart, all as tall as the tallest.
 func (th *theme) options(gtx C, e *widget.Enum, opts ...[3]string) D {
+	return th.optionGrid(gtx, e, len(opts), opts...)
+}
+
+// optionGrid lays out a .seg's cards in cols columns, 8dp apart both ways, each row as tall
+// as its tallest card, as a grid row stretches its items.
+func (th *theme) optionGrid(gtx C, e *widget.Enum, cols int, opts ...[3]string) D {
 	e.Update(gtx)
 	gap := gtx.Dp(8)
-	w := (gtx.Constraints.Max.X - gap*(len(opts)-1)) / len(opts)
+	w := (gtx.Constraints.Max.X - gap*(cols-1)) / cols
 	card := func(gtx C, o [3]string, minY int) D {
-		gtx.Constraints = layout.Constraints{Min: image.Pt(w, minY), Max: image.Pt(w, gtx.Constraints.Max.Y)}
+		gtx.Constraints = layout.Constraints{Min: image.Pt(w, minY), Max: image.Pt(w, 1<<24)}
 		return th.option(gtx, e, o[0], o[1], o[2])
 	}
-	// as tall as the tallest, as a grid row stretches its items: measured first
-	tallest := 0
-	for _, o := range opts {
-		m := op.Record(gtx.Ops)
-		tallest = max(tallest, card(gtx, o, 0).Size.Y)
-		m.Stop()
+	y := 0
+	for row := 0; row*cols < len(opts); row++ {
+		cards := opts[row*cols : min(len(opts), (row+1)*cols)]
+		tallest := 0
+		for _, o := range cards {
+			m := op.Record(gtx.Ops)
+			tallest = max(tallest, card(gtx, o, 0).Size.Y)
+			m.Stop()
+		}
+		if row > 0 {
+			y += gap
+		}
+		for i, o := range cards {
+			t := op.Offset(image.Pt(i*(w+gap), y)).Push(gtx.Ops)
+			card(gtx, o, tallest)
+			t.Pop()
+		}
+		y += tallest
 	}
-	for i, o := range opts {
-		t := op.Offset(image.Pt(i*(w+gap), 0)).Push(gtx.Ops)
-		card(gtx, o, tallest)
-		t.Pop()
-	}
-	return D{Size: image.Pt(gtx.Constraints.Max.X, tallest)}
+	return D{Size: image.Pt(gtx.Constraints.Max.X, y)}
 }
 
 // dashed is a horizontal dashed rule, 2dp of the line color (details' border-top).

@@ -112,9 +112,7 @@ func (v *view) partyRow(gtx C, p session, c *widget.Clickable, running bool) D {
 							layout.Flexed(1, func(gtx C) D {
 								return fill(gtx, layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 									layout.Rigid(func(gtx C) D {
-										st := tBold
-										st.anywhere = true
-										return v.th.text(gtx, st, partyTitle(p, partyFiles(p)))
+										return v.th.text(gtx, tBold, partyTitle(p, partyFiles(p)))
 									}),
 									layout.Rigid(layout.Spacer{Height: 2}.Layout),
 									layout.Rigid(func(gtx C) D { return v.th.text(gtx, tHint, when+", "+who+", "+how) }),
@@ -159,9 +157,7 @@ func (v *view) videoList(gtx C, videos []played, hide string) D {
 							if x.Name == hide {
 								return D{}
 							}
-							st := tVideos
-							st.anywhere = true
-							return v.th.text(gtx, st, x.Name)
+							return v.th.text(gtx, tVideos, x.Name)
 						}),
 						layout.Rigid(func(gtx C) D { return v.th.text(gtx, tHint, when) }),
 					)

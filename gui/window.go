@@ -56,6 +56,12 @@ type view struct {
 	parties []session
 	// dialog is the one open, over everything
 	dialog *modal
+
+	prefs  *settingsTab
+	setAct settingsActions
+	about  about
+	// checkTools asks for About's tools again (after the mpv path changed)
+	checkTools func()
 }
 
 var tabNames = [3]string{"party", "history", "settings"}
@@ -81,7 +87,7 @@ func (v *view) body(gtx C) D {
 			case "history":
 				return v.historyTab(gtx)
 			case "settings":
-				return D{}
+				return v.settingsTab(gtx)
 			}
 			p := v.now
 			if p == nil {
@@ -147,7 +153,7 @@ type heart struct {
 }
 
 func newView(th *theme, now time.Time) *view {
-	v := &view{th: th, cat: art.Cat(), ground: art.Ground(), start: now, rnd: rand.New(rand.NewPCG(uint64(now.UnixNano()), 1)), party: newPartyTab()}
+	v := &view{th: th, cat: art.Cat(), ground: art.Ground(), start: now, rnd: rand.New(rand.NewPCG(uint64(now.UnixNano()), 1)), party: newPartyTab(), prefs: newSettingsTab()}
 	v.list.Axis = layout.Vertical
 	return v
 }

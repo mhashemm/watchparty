@@ -15,6 +15,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
+	"gioui.org/widget"
 
 	"github.com/mhashemm/watchparty/gui/art"
 	"github.com/mhashemm/watchparty/party"
@@ -71,6 +72,9 @@ type scene struct {
 	setup    func(v *view)
 	// parties is the saved history, oldest first
 	parties []session
+	// update and tools are what About shows: GET /update and GET /tools
+	update map[string]any
+	tools  []tool
 }
 
 // fixture is what the stand-in server feeds the page: /state, /log and the scene's script.
@@ -88,6 +92,8 @@ func (s scene) fixture() any {
 		"state":  map[string]any{"settings": s.settings, "history": append([]session{}, s.parties...), "path": "/home/you/.config/watchparty", "version": "dev", "defaultMpv": "/usr/bin/mpv", "defaultCacheDir": "/home/you/.cache/watchparty"},
 		"log":    map[string]any{"run": run, "from": 0, "lines": lines, "saidFrom": 0, "said": s.said, "running": s.running, "exitErr": s.exitErr, "refusal": s.refusal},
 		"js":     s.js,
+		"update": s.update,
+		"tools":  append([]tool{}, s.tools...),
 	}
 }
 
@@ -102,6 +108,15 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 	defer win.Release()
 	v := newView(th, t0)
 	v.mood, v.settings, v.parties = s.mood, s.settings, s.parties
+	v.prefs.load(s.settings)
+	v.about = about{version: "dev", tools: s.tools, storePath: "/home/you/.config/watchparty", defaultMpv: "/usr/bin/mpv", defaultCacheDir: "/home/you/.cache/watchparty"}
+	if cur, ok := s.update["current"].(string); ok {
+		v.about.version = cur
+	}
+	if l, ok := s.update["latest"].(string); ok && s.update["available"] == true {
+		v.about.latest = l
+		v.updateDot = true
+	}
 	t := v.party
 	t.hostname.SetText(s.settings.Hostname)
 	t.relay.SetText(s.settings.Relay)
@@ -156,7 +171,10 @@ const (
 	invite = "-relay wss://relay.example.com -room K7Q2M9 -secret 4XJ8T2PLW3"
 )
 
-var savedSettings = settings{Hostname: "Mo", Relay: "wss://relay.example.com", Local: true}
+var (
+	savedSettings = settings{Hostname: "Mo", Relay: "wss://relay.example.com", Local: true}
+	withKey       = settings{Hostname: "Mo", Relay: "wss://relay.example.com", Local: true, CreateKey: "k3y", PPort: "7000", MpvFlags: "--fullscreen", MpvPicker: "corner"}
+)
 
 func scenes() map[string]scene {
 	relay := form{Mode: "relay", File: video, Relay: savedSettings.Relay, Hostname: "Mo"}
@@ -195,6 +213,20 @@ func scenes() map[string]scene {
 			Videos: []played{{Name: "Big Buck Bunny.mkv", Started: day(-2, 0), Ended: day(-1, 0)}}},
 	}
 	return map[string]scene{
+		"settings": {height: 1500, at: 27 * time.Second, settings: savedSettings, js: `show("settings")`, setup: func(v *view) { v.tab = "settings" }},
+		"settings-update": {height: 1900, at: 27 * time.Second, settings: withKey,
+			update: map[string]any{"current": "v0.0.58", "latest": "v0.0.59", "available": true},
+			tools: []tool{
+				{Name: "mpv", Version: "0.40.0", Path: `C:\Program Files\Watch Party\mpv\mpv.exe`},
+				{Name: "ffmpeg", Update: "Not found.", Steps: []string{"Download the latest build from gyan.dev (ffmpeg-release-essentials.zip).", `Unzip it and copy bin\ffmpeg.exe into C:\Program Files\Watch Party.`}},
+				{Name: "yt-dlp", Version: "2026.11.20", Path: `C:\Program Files\Watch Party\yt-dlp.exe`, Update: "Run yt-dlp -U in a terminal."},
+			},
+			js: `show("settings"); setTimeout(() => { document.querySelectorAll("#tools .info")[0].click(); $("settings-saved").textContent = "Saved."; $("settings-saved").hidden = false }, 300)`,
+			setup: func(v *view) {
+				v.tab = "settings"
+				v.prefs.steps["ffmpeg"] = &widget.Bool{Value: true}
+				v.prefs.saved, v.prefs.savedAt = "Saved.", t0.Add(26*time.Second)
+			}},
 		"history-empty": {at: 27 * time.Second, settings: savedSettings, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
 		"history":       {height: 1300, at: 27 * time.Second, settings: savedSettings, parties: parties, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
 		"dialog-restart": {at: 27 * time.Second, settings: savedSettings,
