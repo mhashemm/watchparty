@@ -37,6 +37,99 @@ type view struct {
 	rnd    *rand.Rand
 	// card lays out what the card holds
 	card layout.Widget
+
+	party    *partyTab
+	act      partyActions
+	settings settings
+	// now is the latest party, as the app last saw it
+	now *partyNow
+	tab string
+	// tabs are Party, History and Settings; updateDot marks Settings when an update is out
+	tabs      [3]widget.Clickable
+	updateDot bool
+	tip       widget.Clickable
+	tipOpen   bool
+}
+
+var tabNames = [3]string{"party", "history", "settings"}
+
+// body is the card: the title, the lede, the tabs and the tab shown.
+func (v *view) body(gtx C) D {
+	for i := range v.tabs {
+		if v.tabs[i].Clicked(gtx) {
+			v.tab = tabNames[i]
+		}
+	}
+	if v.tip.Clicked(gtx) {
+		v.tipOpen = !v.tipOpen
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(v.title),
+		layout.Rigid(func(gtx C) D {
+			return v.lede(gtx, "Pick a video and start the party. When anyone pauses or seeks, everyone's player follows.")
+		}),
+		layout.Rigid(v.tabRow),
+		layout.Rigid(func(gtx C) D {
+			switch v.tab {
+			case "history", "settings":
+				return D{}
+			}
+			p := v.now
+			if p == nil {
+				p = &partyNow{}
+			}
+			return v.partyTab(gtx, p)
+		}),
+	)
+}
+
+// tabRow is .tabs: three pills, centred, 6dp apart, the one shown in moss.
+func (v *view) tabRow(gtx C) D {
+	label := [3]string{"Party", "History", "Settings"}
+	var kids []layout.FlexChild
+	for i := range v.tabs {
+		if i > 0 {
+			kids = append(kids, layout.Rigid(layout.Spacer{Width: 6}.Layout))
+		}
+		kids = append(kids, layout.Rigid(func(gtx C) D {
+			s := bTab
+			if tabNames[i] == v.tab || v.tab == "" && i == 0 {
+				s = bTabOn
+			}
+			d := v.th.button(gtx, &v.tabs[i], s, false, label[i])
+			if i == 2 && v.updateDot {
+				// .dot: 8dp berry, 6dp after the word, its middle a little over the text's
+				r := gtx.Dp(8)
+				x, y := d.Size.X-gtx.Dp(16)-r+gtx.Dp(2), d.Size.Y/2-r/2-gtx.Dp(1)
+				rrect(gtx, image.Rect(x, y, x+r, y+r), r/2, art.Berry)
+			}
+			return d
+		}))
+	}
+	return layout.Inset{Top: -6, Bottom: 24}.Layout(gtx, func(gtx C) D {
+		return layout.Center.Layout(gtx, func(gtx C) D { return layout.Flex{}.Layout(gtx, kids...) })
+	})
+}
+
+// tipButton is the "?" in the card's top-right corner, 14dp in, that opens the tips.
+func (v *view) tipButton(gtx C) D {
+	sz := gtx.Dp(30)
+	gtx.Constraints = layout.Exact(image.Pt(sz, sz))
+	return v.tip.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		bg := art.Paper
+		if v.tip.Hovered() {
+			bg = hoverBg
+		}
+		rrect(gtx, image.Rect(0, 0, sz, sz), sz/2, art.Bark)
+		rrect(gtx, image.Rect(0, 0, sz, sz).Inset(gtx.Dp(2)), sz/2, bg)
+		if gtx.Focused(&v.tip) {
+			ring(gtx, image.Rect(0, 0, sz, sz), sz/2)
+		}
+		return layout.Center.Layout(gtx, func(gtx C) D {
+			return v.th.text(gtx, textStyle{font: displayFont, size: 16, color: art.Bark}, "?")
+		})
+	})
 }
 
 type heart struct {
@@ -45,7 +138,7 @@ type heart struct {
 }
 
 func newView(th *theme, now time.Time) *view {
-	v := &view{th: th, cat: art.Cat(), ground: art.Ground(), start: now, rnd: rand.New(rand.NewPCG(uint64(now.UnixNano()), 1))}
+	v := &view{th: th, cat: art.Cat(), ground: art.Ground(), start: now, rnd: rand.New(rand.NewPCG(uint64(now.UnixNano()), 1)), party: newPartyTab()}
 	v.list.Axis = layout.Vertical
 	return v
 }
@@ -75,13 +168,16 @@ func (v *view) page(gtx C) D {
 	m := op.Record(gtx.Ops)
 	cd := v.th.box(cg, boxStyle{bg: art.Paper, border: art.Bark, borderW: 2, radius: 22, shadow: 6, shadowColor: art.Bark, inset: layout.Inset{Top: 34, Left: 28, Right: 28, Bottom: 28}, wide: true}, func(gtx C) D {
 		if v.card == nil {
-			return D{}
+			return v.body(gtx)
 		}
 		return v.card(gtx)
 	})
 	card := m.Stop()
 	t := op.Offset(image.Pt(x, top)).Push(gtx.Ops)
 	card.Add(gtx.Ops)
+	tb := op.Offset(image.Pt(mainW-gtx.Dp(14+30), gtx.Dp(14))).Push(gtx.Ops)
+	v.tipButton(gtx)
+	tb.Pop()
 	t.Pop()
 
 	v.paintCat(gtx, W)
@@ -227,18 +323,21 @@ func (v *view) title(gtx C) D {
 	line := func(mush bool, s string) layout.FlexChild {
 		return layout.Rigid(func(gtx C) D {
 			return layout.Center.Layout(gtx, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
+				// on the baseline, as inline boxes are: the mushroom 3dp under it (vertical-align)
+				return baselineRow(gtx,
+					func(gtx C) D {
 						if !mush {
 							return D{}
 						}
-						return iconWith(gtx, art.Mushroom, art.FillStyle(art.Porcini), 30, 8)
-					}),
-					layout.Rigid(func(gtx C) D {
+						d := iconWith(gtx, art.Mushroom, art.FillStyle(art.Porcini), 30, 8)
+						d.Baseline = gtx.Dp(3)
+						return d
+					},
+					func(gtx C) D {
 						st := tTitle
 						st.align = text.Start
 						return v.th.text(gtx, st, s)
-					}),
+					},
 				)
 			})
 		})
@@ -257,8 +356,10 @@ const ch = 16 * .648
 // lede is the line under the title, 40ch wide at most.
 func (v *view) lede(gtx C, s string) D {
 	return layout.Inset{Bottom: 24}.Layout(gtx, func(gtx C) D {
-		gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Sp(40*ch))
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return layout.Center.Layout(gtx, func(gtx C) D { return v.th.text(gtx, tLede, s) })
+		return layout.N.Layout(gtx, func(gtx C) D {
+			gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Sp(40*ch))
+			return v.th.text(gtx, tLede, s)
+		})
 	})
 }

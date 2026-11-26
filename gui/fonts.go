@@ -23,22 +23,36 @@ var (
 	notoEmoji []byte
 )
 
-// The two typefaces. Each falls back to Noto Color Emoji before any system font, or a
+// The two typefaces. Each falls back to the bundled emoji before any system font, or a
 // system font's black-and-white smileys would draw an emoji; other scripts still come from
-// the system's fonts.
+// the system's fonts. The bundled faces go by names of their own (bundled): a system font of
+// the same family would otherwise be picked instead, its emoji space as wide as an emoji.
 var (
-	bodyFont    = font.Font{Typeface: "Atkinson Hyperlegible, Noto Color Emoji"}
-	boldFont    = font.Font{Typeface: "Atkinson Hyperlegible, Noto Color Emoji", Weight: font.Bold}
-	displayFont = font.Font{Typeface: "Gluten, Noto Color Emoji", Weight: font.Bold}
+	bodyFont    = font.Font{Typeface: "wp Atkinson, wp Emoji"}
+	boldFont    = font.Font{Typeface: "wp Atkinson, wp Emoji", Weight: font.Bold}
+	displayFont = font.Font{Typeface: "wp Gluten, wp Emoji", Weight: font.Bold}
 )
+
+// bundled is each embedded font and the family it goes by here.
+var bundled = []struct {
+	ttf    *[]byte
+	family font.Typeface
+}{{&atkinsonRegular, "wp Atkinson"}, {&atkinsonBold, "wp Atkinson"}, {&glutenBold, "wp Gluten"}, {&notoEmoji, "wp Emoji"}}
 
 // newShaper is the window's text shaper: the bundled fonts, then the system's.
 func newShaper() (*text.Shaper, error) {
 	var faces []font.FontFace
-	for _, ttf := range [][]byte{atkinsonRegular, atkinsonBold, glutenBold, narrowSpace(notoEmoji, 0.28)} {
+	for _, b := range bundled {
+		ttf := *b.ttf
+		if b.ttf == &notoEmoji {
+			ttf = narrowSpace(ttf, 0.28)
+		}
 		f, err := opentype.ParseCollection(ttf)
 		if err != nil {
 			return nil, err
+		}
+		for i := range f {
+			f[i].Font.Typeface = b.family
 		}
 		faces = append(faces, f...)
 	}

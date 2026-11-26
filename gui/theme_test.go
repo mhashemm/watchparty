@@ -2,21 +2,15 @@ package main
 
 import (
 	"encoding/binary"
-	"flag"
 	"image"
-	"image/png"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"gioui.org/font/opentype"
-	"gioui.org/gpu/headless"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
-
-	"github.com/mhashemm/watchparty/gui/art"
+	"gioui.org/widget"
 )
 
 // advance reads glyph r's advance in font units, as withAdvance finds it.
@@ -57,6 +51,24 @@ func TestEmojiSpaceIsNarrowed(t *testing.T) {
 	}
 }
 
+// TestSpaceAfterEmoji measures it as the window shapes it: a system Noto Color Emoji, if the
+// computer has one, must not stand in for the bundled one, whose space is narrowed.
+func TestSpaceAfterEmoji(t *testing.T) {
+	t.Parallel()
+	sh, err := newShaper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(1000, 100)}}
+	width := func(s string) int {
+		return widget.Label{MaxLines: 1}.Layout(gtx, sh, bodyFont, 16, s, op.CallOp{}).Size.X
+	}
+	if gap := width("😂 b") - width("😂b"); gap > 6 {
+		t.Fatalf("a space after an emoji is %dpx at 16px, want Atkinson's 4.5", gap)
+	}
+}
+
 func TestFontsAreTheFamiliesNamed(t *testing.T) {
 	t.Parallel()
 	for ttf, want := range map[*[]byte]string{&atkinsonRegular: "Atkinson Hyperlegible", &atkinsonBold: "Atkinson Hyperlegible", &glutenBold: "Gluten", &notoEmoji: "Noto Color Emoji"} {
@@ -91,79 +103,4 @@ func TestClock(t *testing.T) {
 	if a, b := (clock{hour12: true}).format(at), (clock{}).format(at); a != "9:04 PM" || b != "21:04" {
 		t.Fatalf("%q %q", a, b)
 	}
-}
-
-var renderTo = flag.String("render", "", "draw the window's screens into this folder as PNGs at 560×940 (gui/DESIGN.md)")
-
-// TestRender draws each screen without a window, for looking at (gui/DESIGN.md). It needs a
-// GPU or Mesa's software one, and runs only when asked: go test ./gui -run TestRender -render <dir>.
-func TestRender(t *testing.T) {
-	t.Parallel()
-	if *renderTo == "" {
-		t.Skip("draws screens only with -render <dir>")
-	}
-	th, err := newShaper()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, s := range renders {
-		img, err := renderScreen(&theme{shaper: th, clock: clock{}}, s)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		f, err := os.Create(filepath.Join(*renderTo, name+".png"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		png.Encode(f, img)
-		f.Close()
-	}
-}
-
-// aRender is a screen to draw: how to set up the view, and how far into its animations
-// (27s puts the turtles where the page's reduced motion keeps them).
-type aRender struct {
-	at    time.Duration
-	mood  art.Mood
-	setup func(v *view)
-}
-
-var renders = map[string]aRender{
-	"frame": {at: 27 * time.Second, setup: func(v *view) {
-		v.card = func(gtx C) D {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(v.title),
-				layout.Rigid(func(gtx C) D {
-					return v.lede(gtx, "Pick a video and start the party. When anyone pauses or seeks, everyone's player follows.")
-				}),
-			)
-		}
-	}},
-}
-
-func renderScreen(th *theme, s aRender) (*image.RGBA, error) {
-	size := image.Pt(560, 940)
-	w, err := headless.NewWindow(size.X, size.Y)
-	if err != nil {
-		return nil, err
-	}
-	defer w.Release()
-	start := time.Date(2026, 11, 26, 21, 4, 0, 0, time.Local)
-	v := newView(th, start)
-	v.mood = s.mood
-	if s.setup != nil {
-		s.setup(v)
-	}
-	var ops op.Ops
-	// two frames: the first one lays out what the second one scrolls and measures
-	for range 2 {
-		ops.Reset()
-		gtx := layout.Context{Ops: &ops, Now: start.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size)}
-		v.frame(gtx)
-	}
-	if err := w.Frame(&ops); err != nil {
-		return nil, err
-	}
-	img := image.NewRGBA(image.Rectangle{Max: size})
-	return img, w.Screenshot(img)
 }
