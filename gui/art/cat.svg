@@ -1,0 +1,70 @@
+  <svg class="cat" viewBox="0 0 200 220" role="img" aria-label="Fosdo2 the cat">
+    <title>Fosdo2</title>
+    <defs>
+      <radialGradient id="hazel" cx=".5" cy=".55" r=".6">
+        <stop offset="0" style="stop-color: var(--eye-in)"/>
+        <stop offset=".45" style="stop-color: var(--eye-mid)"/>
+        <stop offset=".78" style="stop-color: var(--eye-gold)"/>
+        <stop offset="1" style="stop-color: var(--eye-out)"/>
+      </radialGradient>
+    </defs>
+    <g class="tail">
+      <path class="fur o" d="M134 194 C182 198 194 160 180 136 C174 125 156 125 152 138 C158 150 164 172 134 180 Z"/>
+      <path class="stripe" d="M176 140 q-9 1 -13 7 M182 158 q-10 -1 -15 4 M174 178 q-8 -3 -14 0"/>
+    </g>
+    <path class="fur o" d="M76 120 C54 136 48 170 56 192 Q100 204 144 192 C152 170 146 136 124 120 Z"/>
+    <path class="stripe" d="M60 158 q8 -2 12 2 M58 174 q8 -2 13 2 M140 158 q-8 -2 -12 2 M142 174 q-8 -2 -13 2"/>
+    <path class="light" d="M80 120 Q100 128 120 120 Q126 146 116 172 Q111 166 106 174 Q100 166 94 174 Q89 166 84 172 Q74 146 80 120 Z"/>
+    <path class="seam" d="M100 176 V193"/>
+    <ellipse class="paw" cx="88.5" cy="194" rx="12" ry="7"/>
+    <path class="toes" d="M84.5 191 v4 M92.5 191 v4"/>
+    <g class="paw-rest">
+      <ellipse class="paw" cx="111.5" cy="194" rx="12" ry="7"/>
+      <path class="toes" d="M107.5 191 v4 M115.5 191 v4"/>
+    </g>
+    <path class="steth" d="M84 121 C82 140 92 148 100 148 C108 148 118 140 116 121"/>
+    <circle class="bell" cx="100" cy="153" r="5.5"/>
+    <circle class="bell-in" cx="100" cy="153" r="2.4"/>
+    <g class="head-move">
+      <g transform="translate(100 86) scale(1.05) translate(-80 -72)">
+        <path class="fur ruff" d="M80 76 L44.6 97.9 Q31.9 101.8 37.1 91.9 Q24.2 92.9 32.1 84.9 Q19.9 83.0 30.0 77.4 Q19.2 72.6 31.0 69.7 Q22.2 62.5 35.0 62.5 Q28.8 53.2 41.7 56.1 Z"/>
+        <path class="fur ruff" d="M80 76 L118.3 56.1 Q131.2 53.2 125.0 62.5 Q137.8 62.5 129.0 69.7 Q140.8 72.6 130.0 77.4 Q140.1 83.0 127.9 84.9 Q135.8 92.9 122.9 91.9 Q128.1 101.8 115.4 97.9 Z"/>
+        <path class="fur head" d="M42 20 L64 44 L96 44 L118 20 L124 70 L120 80 L40 80 L36 70 Z"/>
+        <path class="tuft" d="M42 20 q-1 -5 1 -8 M118 20 q1 -5 -1 -8"/>
+        <path class="ear" d="M46 32 L60 46 L48 52 Z"/>
+        <path class="ear" d="M114 32 L100 46 L112 52 Z"/>
+        <path class="wisp" d="M49 50 q2 -8 -1 -15 M53 50 q3 -7 1 -12 M111 50 q-2 -8 1 -15 M107 50 q-3 -7 -1 -12"/>
+        <ellipse class="fur" cx="80" cy="72" rx="46" ry="34"/>
+        <path class="stripe" d="M70 42 l3 9 M80 40 v11 M90 42 l-3 9"/>
+        <path class="stripe" d="M62 46 q2 4 6 6 M98 46 q-2 4 -6 6" style="stroke-width:2.2"/>
+        <path class="stripe" d="M38 70 q6 1 10 4 M37 79 q6 0 10 2 M122 70 q-6 1 -10 4 M123 79 q-6 0 -10 2"/>
+        <ellipse class="light" cx="80" cy="86" rx="14" ry="9"/>
+        <path class="light" d="M66 92 l5 -6 l4 5 l5 -7 l5 7 l4 -5 l5 6 Q80 106 66 92 z"/>
+        <g class="eyes-open">
+          <ellipse class="eye" cx="61" cy="72" rx="9" ry="9.5"/>
+          <ellipse class="pupil" cx="61" cy="72.5" rx="3.4" ry="6.2"/>
+          <circle class="glint" cx="64" cy="68" r="2.6"/>
+          <circle class="glint" cx="58.2" cy="76.5" r="1.2"/>
+          <ellipse class="eye" cx="99" cy="72" rx="9" ry="9.5"/>
+          <ellipse class="pupil" cx="99" cy="72.5" rx="3.4" ry="6.2"/>
+          <circle class="glint" cx="102" cy="68" r="2.6"/>
+          <circle class="glint" cx="96.2" cy="76.5" r="1.2"/>
+        </g>
+        <g class="eyes-closed">
+          <path class="line" d="M52 73 q9 6 18 0 M90 73 q9 6 18 0"/>
+        </g>
+        <ellipse class="cheek" cx="49" cy="84" rx="7.5" ry="4.5"/>
+        <ellipse class="cheek" cx="111" cy="84" rx="7.5" ry="4.5"/>
+        <path class="nose" d="M76.5 82 h7 q0 3 -3.5 4 q-3.5 -1 -3.5 -4 z"/>
+        <path class="line" d="M80 86 q-2.5 4 -6 1.5 M80 86 q2.5 4 6 1.5"/>
+        <path class="whisker" d="M50 86 l-20 -3 M50 90 l-19 4 M110 86 l20 -3 M110 90 l19 4"/>
+      </g>
+    </g>
+    <g class="paw-lick lick">
+      <path class="fur o" d="M106 152 Q101 130 104 112 L120 110 Q125 130 122 152 Z"/>
+      <ellipse class="paw" cx="112" cy="108" rx="9.5" ry="7" transform="rotate(-18 112 108)"/>
+    </g>
+    <ellipse class="tongue lick" cx="103.2" cy="103.6" rx="2.8" ry="2"/>
+    <g class="zzz"><text x="150" y="40">z</text><text x="162" y="26">z</text><text x="174" y="12">z</text></g>
+  </svg>
+
