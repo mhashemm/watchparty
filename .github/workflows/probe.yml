@@ -28,10 +28,10 @@ jobs:
       run:
         shell: bash
     env:
-      # go and over cycle 112 cases, starts 49, moves 35, away and buffering 28: each runs
-      # its cycle twice, buffering once; the full counts are in ORDER.md's re-run commands.
+      # go and over cycle 112 cases, speed 224, starts 49, moves 35, away and buffering 28: each
+      # runs its cycle twice, speed and buffering once; the full counts are in ORDER.md's re-run commands.
       # slow: 20, ~4 minutes, to catch its rare dropped seek with mpv's log
-      EXPERIMENTS: go:224 over:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:20 broken:4 brokenlast:4 ahead:4
+      EXPERIMENTS: go:224 over:224 speed:224 starts:98 moves:70 away:56 buffering:28 autos:8 slow:20 broken:4 brokenlast:4 ahead:4
     steps:
       - uses: actions/checkout@v7
 

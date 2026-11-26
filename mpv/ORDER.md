@@ -1,12 +1,10 @@
 # mpv/ORDER.md
 
-What mpv guarantees about the order of what it says, why plain JSON IPC can't tell the
-person's change from ours, and the script route built on it. From mpv's source (the v0.37.0
-tag; the IPC, client and seek paths are unchanged through master as of 2026-11-15) and from
-probes on 0.37.0 (this machine) and 0.40.0 (the e2e image), each with mpv pinned to a core
-with three busy loops, the person's action fired -20 to +20ms around ours (2026-11-17/18). The
-shipped script's probes ran on 0.42.0 too (Arch's, the release the installers fetch): 0 errors.
-`MPV.md` holds how mpv behaves over the wire; `probe/` re-runs every number here.
+What mpv guarantees about the order of what it says, and the script route built on it. From mpv's
+source (v0.37.0; its IPC, client and seek paths unchanged through 2026-11-15) and probes, mpv
+pinned to a core beside three busy loops and the person's action -20 to +20ms around ours: 0.37.0
+(this machine), 0.40.0 (the e2e image), and for the shipped script 0.41.0 and 0.42.0 (CI's
+`probe`). `MPV.md` holds how mpv behaves over the wire; `probe/` re-runs every number here.
 
 ## Why plain IPC can't tell who did what
 
@@ -39,18 +37,12 @@ shipped script's probes ran on 0.42.0 too (Arch's, the release the installers fe
   reports; there is no format `none`, and the `pause`/`unpause` events are gone. **No other
   protocol exists:** the only endpoints are `--input-ipc-server` and `--input-ipc-client=fd://N`,
   both this JSON.
-- `[R6c]` (a playing `time-pos` after our `pause=yes`, seen once in CI) was never reproduced:
-  about 1,400 rounds on both versions with e2e's video and the node's flags (2026-11-15), 0 of
-  340 on 0.37.0 in either observe order, then 0 of 300 on each version.
-
-### The IPC seek fence (probed, not used)
-
-Our seek sent `async:true`; after its reply, the first `seek` event is the seek that carries
-ours, and the `playback-restart` after that is where it landed: at our target means ours,
-anywhere else the person's (their relative key added to ours, or their absolute one replaced
-it). 0 errors in 420 rounds each, against relative and absolute keys, an absolute seek from a
-second connection, a seek to the same second and to where mpv stood. **Trap:** the first
-`playback-restart` after the reply can belong to the person's earlier seek.
+- `[R6c]` (a playing `time-pos` after our `pause=yes`, seen once in CI) was never reproduced, in
+  over 2,000 rounds on every version, with e2e's video and flags and in either observe order.
+- **An IPC seek fence (probed, not used):** after our `async:true` seek's reply, the first `seek`
+  event carries ours, and the `playback-restart` after it is where it landed: at our target ours,
+  else the person's too (0 errors in 420 rounds each, against keys and a second connection's
+  seeks). **Trap:** the first `playback-restart` after the reply can be the person's earlier seek.
 
 ## Scripts
 
@@ -177,6 +169,12 @@ which the node sent with the move, so the script says no position until a set en
 go's seek begun just before such a key is `refused` instead (once in `moves` on 0.40.0; twice in 56
 `away` rounds on Windows 0.42.0, key 0ms off), naming the key's file, where mpv ends.
 
+**A speed key against a go's speed** (`speed`, 224 rounds each: `]` -20..+20ms around a go keeping
+or changing the speed, with or without a seek, paused or playing): 0 errors on 0.37.0 to 0.42.0,
+every go landed, Windows' 2 `gap` aside. mpv says the speed with 6 decimals (`1.500000`), as the
+script compares it; a set to mpv's speed says nothing, a new one is said after the ack. The ack and
+later messages always gave the node mpv's final speed; each key a go undid was flagged `over`.
+
 ## Re-running
 
 ```sh
@@ -190,6 +188,7 @@ python3 -I probe4.py hang 2                         # ~10 minutes: mpv's own tim
 python3 run.py 0 probe4.py over:840                       # the ack's over flag against lost keys
 python3 run.py 0 probe4.py starts:490 autos:40            # whose file each start is
 python3 run.py 0 probe4.py away:840                       # a go for the file a key is leaving
+python3 run.py 0 probe4.py speed:224                      # a speed key against a go's speed
 python3 -I slowswarm.py 30                                # two CLI nodes over a capped torrent, ~15 minutes
 ```
 
