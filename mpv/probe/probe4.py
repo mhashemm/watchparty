@@ -1,10 +1,10 @@
-"""Probe the shipped script (../watchparty.lua) as the node sees it: its messages carry only
-pause and time-pos, and the node hears the entry and the cache from mpv's own reports, so a
-snapshot here is the script's message with the entry and cache mpv last reported, and mpv's
-reports of those two count as snapshots too. Runs probe3's experiments, plus a move to a slow
-entry and to one mpv can't open.
+"""Probe the shipped script (../watchparty.lua) as the node sees it: its messages carry pause,
+time-pos and the speed, and the node hears the cache from mpv's own reports (the entry too, for
+this probe's checks), so a snapshot here is the script's message with the entry and cache mpv last
+reported, and mpv's reports of those two count as snapshots too, with the speed last said. Runs
+probe3's experiments, plus a move to a slow entry and to one mpv can't open, and speed keys.
 Usage: python3 -I probe4.py <go|moves|buffering|slow|broken|brokenlast|hang|ahead|speed> <rounds>. Under load:
-python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20"""
+python3 run.py 0 probe4.py go:420 moves:280 buffering:40 slow:12 broken:20 brokenlast:20 speed:224"""
 import http.server, os, re, socketserver, sys, tempfile, threading, time
 from typing import Any
 
@@ -28,20 +28,20 @@ class NodeMpv(M):
 
 
 def enrich(m):
-    st = m.__dict__.setdefault("_st", {"done": 0, "entry": None, "cache": None, "pause": None, "pos": None})
+    st = m.__dict__.setdefault("_st", {"done": 0, "entry": None, "cache": None, "pause": None, "pos": None, "speed": ""})
     with m.cv:
         start, lines = st["done"], m.lines[st["done"]:]
     for l in lines:
         if l.get("event") == "property-change" and l.get("name") in ("playlist-pos", "paused-for-cache") and l.get("data") is not None:
             key = "entry" if l["name"] == "playlist-pos" else "cache"
             st[key] = l["data"]
-            l["_wp"] = dict(kind=key, id="", pause=st["pause"], pos=st["pos"], entry=st["entry"], cache=st["cache"])
+            l["_wp"] = dict(kind=key, id="", pause=st["pause"], pos=st["pos"], entry=st["entry"], cache=st["cache"], speed=st["speed"])
         elif l.get("event") == "client-message" and l.get("args", [None])[0] == "watchparty" and len(l["args"]) >= 5:
             a = l["args"]
-            st["pause"], st["pos"] = a[3], a[4]
+            st["pause"], st["pos"], st["speed"] = a[3], a[4], a[8] if len(a) > 8 else ""
             d = dict(kind=a[1], id=a[2], pause=a[3], pos=a[4], entry=st["entry"], cache=st["cache"],
                      n=a[5] if len(a) > 5 else "", over=len(a) > 6 and a[6] == "over", at=a[7] if len(a) > 7 else "",
-                     speed=a[8] if len(a) > 8 else "")
+                     speed=st["speed"])
             l["_wp"], _VIEW[id(a)] = d, d
     st["done"] = start + len(lines)
 
@@ -295,40 +295,48 @@ class Shipped(Wp3):
         report("over", rounds, errors, shapes)
 
     # A person's speed key -20..+20ms around a go, as over for pause and seek keys: the go sets the
-    # speed it carries first, the speed mpv holds or a new one, paused or playing, from either.
+    # speed it carries first, the speed mpv holds or a new one, paused or playing, from either,
+    # with or without a seek (a stop for a peer's speed change seeks too, and is acked once the
+    # seek has landed, not at once).
     # The node drops the script's speed messages while a go is pending and compares its ack's
     # speed with the go's (landed), so what it knows of mpv's speed is the ack's, then each later
     # message. A key is lost when the go undid it (mpv ends on the go's speed) and the node hadn't
     # read it when it sent the go. Errors: missed, a lost key with no flag; false, a flag with no
     # key; unseen, mpv ends on a speed the node doesn't know; format, a speed not said with 6
-    # decimals, as the script compares them as text with the node's %.6f.
+    # decimals, as the script compares them as text with the node's %.6f; away, with no key, mpv
+    # not as sent: its pause, speed and (stopped) second.
     def speed(self, rounds):
         m = self.M(os.path.join(HERE, "v120.mkv"), self.WP)
         ready(m, [])
         p = person_conn(m)
-        errors = {"missed": [], "false": [], "unseen": [], "format": [], "ack-late": []}
+        errors = {"missed": [], "false": [], "unseen": [], "format": [], "away": [], "ack-late": []}
         shapes = {}
         for r in range(rounds):
             want, new = ["yes", "no"][r % 2], (r // 2) % 2 == 1
             pre = ["yes", "no"][(r // 4) % 2]
             kind = ["none", "speed"][(r // 8) % 2]
-            off = OFFSETS_MS[(r // 16) % len(OFFSETS_MS)]
+            seek = (r // 16) % 2 == 1
+            off = OFFSETS_MS[(r // 32) % len(OFFSETS_MS)]
             stopped(m)
             m.wait(reply(m.send("set_property", "speed", "1")))
-            setpos(m, 20 + (r % 30) * 2)
+            base = 20 + (r % 30) * 2
+            setpos(m, base)
             if pre == "no":
                 m.wait(reply(m.send("set_property", "pause", False)))
                 time.sleep(0.05)
             m.speed = "1.500000" if new else "1.000000"
             tag = f"v{r}"
             i = m.mark()
-            race(m, p, kind if kind != "none" else None, lambda: self.to(m, "wp-go", want, "-", "-", tag), off)
+            second = base + 40 if seek else None
+            race(m, p, kind if kind != "none" else None, lambda: self.to(m, "wp-go", want, second if second else "-", "-", tag), off)
             k = self.wsnap(m, lambda s: s["kind"] == "ack" and s["id"] == tag, i)
             if k is None:
-                errors["ack-late"].append((want, new, pre, kind, off))
+                errors["ack-late"].append((want, new, pre, kind, seek, off))
                 continue
             time.sleep(0.6)
-            sent, fs = m.sent, get(m, "speed")
+            sent, fs, fp, fpos = m.sent, get(m, "speed"), get(m, "pause"), get(m, "time-pos")
+            if kind == "none" and (fs != m.speed or fp != want or second and want == "yes" and not fnear(fpos, second, 0.15)):
+                errors["away"].append((want, new, pre, off, seek, fs, fp, fpos))
             msgs = self.snaps(m, i)
             ack = self.W(m.lines[k]["args"])
             for _, s in msgs:
@@ -338,18 +346,18 @@ class Shipped(Wp3):
             lost = kind == "speed" and fs == m.speed and not heard
             known = [ack["speed"], *[s["speed"] for n, s in msgs if n > k and s["kind"] == "speed"]][-1]
             if known != fs:
-                errors["unseen"].append((want, new, pre, kind, off, fs, known))
+                errors["unseen"].append((want, new, pre, kind, off, seek, fs, known))
             flag = ack["over"]
             if lost and not flag:
-                errors["missed"].append((want, new, pre, off, [(s["kind"], s["id"], s["speed"]) for n, s in msgs if n <= k]))
+                errors["missed"].append((want, new, pre, off, seek, [(s["kind"], s["id"], s["speed"]) for n, s in msgs if n <= k]))
             if kind == "none" and flag:
-                errors["false"].append((want, new, pre, off))
+                errors["false"].append((want, new, pre, off, seek))
             if kind != "none" and flag and not lost:
-                errors.setdefault("spare", []).append((want, new, pre, off, "heard" if heard else "-"))
+                errors.setdefault("spare", []).append((want, new, pre, off, seek, "heard" if heard else "-"))
             # where mpv's own speed message for the go's set lands: before its ack (dropped), after it, or none
             said = [n for n, s in msgs if s["kind"] == "speed" and s["speed"] == m.speed and n >= sent]
             echo = "no speed said" if not said else "said before the ack" if said[0] < k else "said after the ack"
-            tally(shapes, (kind, "new" if new else "same", "lost" if lost else "heard" if heard else "-",
+            tally(shapes, (kind, "new" if new else "same", "seek" if seek else "-", "lost" if lost else "heard" if heard else "-",
                            "flagged" if flag else "not flagged", echo if kind == "none" else ""))
         m.stop()
         gaps(errors, rounds, lambda e: e[3])
