@@ -4,3 +4,4 @@
 .e2e
 relay.db*
 __pycache__/
+gui/fonts/NotoColorEmoji.ttf

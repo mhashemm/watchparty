@@ -109,8 +109,8 @@ func Ground() *Scene { return &Scene{root: parse(groundSVG), rules: groundRules,
 
 type stop struct{ at, v float64 }
 
-// bezier is CSS's cubic-bezier() timing function.
-func bezier(x1, y1, x2, y2 float64) func(float64) float64 {
+// Bezier is CSS's cubic-bezier() timing function.
+func Bezier(x1, y1, x2, y2 float64) func(float64) float64 {
 	return func(x float64) float64 {
 		t := x
 		for range 8 { // Newton's method on x(t) = x
@@ -126,8 +126,8 @@ func bezier(x1, y1, x2, y2 float64) func(float64) float64 {
 }
 
 var (
-	ease      = bezier(.25, .1, .25, 1)
-	easeInOut = bezier(.42, 0, .58, 1)
+	ease      = Bezier(.25, .1, .25, 1)
+	easeInOut = Bezier(.42, 0, .58, 1)
 	linear    = func(x float64) float64 { return x }
 )
 
