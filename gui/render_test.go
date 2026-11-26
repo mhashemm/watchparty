@@ -245,6 +245,15 @@ func scenes() map[string]scene {
 		"party-starting": {at: 27 * time.Second, settings: savedSettings, form: relay, ran: true, running: true, lines: func(w *watch) []string {
 			return recorded(w, 0, `checking 1 of 1: "Big Buck Bunny.mkv"`, "file fingerprint: 9f2c4e", "your address to share is "+invite)
 		}},
+		"confirm-stop": {at: 27 * time.Second, settings: savedSettings, form: relay, ran: true, running: true, lines: in, said: said,
+			setup: func(v *view) {
+				v.ask(confirm{title: "End the party?", text: "mpv closes for you, and everyone else keeps watching.", ok: "End the party"})
+			}},
+		"confirm-clear": {at: 27 * time.Second, settings: savedSettings, parties: parties, js: `show("history")`,
+			setup: func(v *view) {
+				v.tab = "history"
+				v.ask(confirm{title: "Clear the whole party history?", ok: "Clear history"})
+			}},
 		"party-in": {height: 2000, at: 27 * time.Second, settings: savedSettings, form: relay, ran: true, running: true, lines: in, said: said},
 		"party-open": {height: 2600, at: 27 * time.Second, settings: savedSettings, form: relay, ran: true, running: true, lines: in, said: said,
 			js: `$("members").open = true; $("said-more").open = true; $("chart").open = true; openStrip(true)`,
