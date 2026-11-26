@@ -93,6 +93,25 @@ func colorOp(gtx C, c color.NRGBA) op.CallOp {
 	return m.Stop()
 }
 
+// ink is the material for text: c painted once here, then the widget's own PaintOp after
+// its material paints a second coat, inkAgain opaque. Gio blends in linear light, so a
+// glyph's anti-aliased edges came out lighter than Chromium draws them (17% less ink in
+// regular text, 9% in bold); a second full coat (an edge covering c covers 1-(1-c)², near
+// the 1-(1-c)^2.2 that blending in sRGB gives) overshot by 10-16%.
+func ink(gtx C, c color.NRGBA) op.CallOp {
+	m := op.Record(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	again := c
+	again.A = uint8(float32(c.A)*inkAgain + .5)
+	paint.ColorOp{Color: again}.Add(gtx.Ops)
+	return m.Stop()
+}
+
+// inkAgain is how opaque text's second coat is: measured against the page's text, .6 puts
+// regular, bold and display text within 5% of Chromium's ink (TestRender's scenes)
+const inkAgain = .6
+
 // text lays out s in st, wrapping at the constraint's width, each line in CSS's line box:
 // line-height tall (normal: the font's ascent and descent, each rounded, as Chromium has it),
 // the baseline half the leading plus the ascent down. Gio's own lines stop at the glyphs.
@@ -108,7 +127,7 @@ func (th *theme) text(gtx C, st textStyle, s string) D {
 		if st.anywhere {
 			l.WrapPolicy = text.WrapGraphemes
 		}
-		return l.Layout(gtx, th.shaper, st.font, size, s, colorOp(gtx, st.color))
+		return l.Layout(gtx, th.shaper, st.font, size, s, ink(gtx, st.color))
 	}, st.size)
 }
 
@@ -220,7 +239,7 @@ func (th *theme) selectable(gtx C, sel *widget.Selectable, st textStyle, s strin
 	gtx.Constraints.Min.X = 0
 	return th.lineBox(gtx, st).place(gtx, func(gtx C, size, lineHeight unit.Sp) D {
 		sel.LineHeight, sel.LineHeightScale = lineHeight, 1
-		return sel.Layout(gtx, th.shaper, st.font, size, colorOp(gtx, st.color), colorOp(gtx, selection))
+		return sel.Layout(gtx, th.shaper, st.font, size, ink(gtx, st.color), colorOp(gtx, selection))
 	}, st.size)
 }
 
@@ -487,7 +506,7 @@ func (th *theme) input(gtx C, e *widget.Editor, hint string, radius unit.Dp, min
 		e.LineHeight, e.LineHeightScale = 24, 1
 		var d D
 		if e.Len() > 0 {
-			d = e.Layout(gtx, th.shaper, bodyFont, 16, colorOp(gtx, art.Forest), colorOp(gtx, selection))
+			d = e.Layout(gtx, th.shaper, bodyFont, 16, ink(gtx, art.Forest), colorOp(gtx, selection))
 		} else {
 			// the hint under an empty editor, which still takes the clicks and the caret
 			l := widget.Label{LineHeight: 24, LineHeightScale: 1}
@@ -496,14 +515,14 @@ func (th *theme) input(gtx C, e *widget.Editor, hint string, radius unit.Dp, min
 				hg := gtx
 				hg.Constraints.Max.X = 1 << 20
 				cl := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, 1<<20)}.Push(gtx.Ops)
-				d = l.Layout(hg, th.shaper, bodyFont, 16, hint, colorOp(gtx, placeholder))
+				d = l.Layout(hg, th.shaper, bodyFont, 16, hint, ink(gtx, placeholder))
 				cl.Pop()
 			} else {
-				d = l.Layout(gtx, th.shaper, bodyFont, 16, hint, colorOp(gtx, placeholder))
+				d = l.Layout(gtx, th.shaper, bodyFont, 16, hint, ink(gtx, placeholder))
 			}
 			eg := gtx
 			eg.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(d.Size.Y, minY-lead)))
-			e.Layout(eg, th.shaper, bodyFont, 16, colorOp(gtx, art.Forest), colorOp(gtx, selection))
+			e.Layout(eg, th.shaper, bodyFont, 16, ink(gtx, art.Forest), colorOp(gtx, selection))
 		}
 		o.Pop()
 		d.Size.X = gtx.Constraints.Max.X

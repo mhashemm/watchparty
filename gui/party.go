@@ -517,7 +517,15 @@ func (v *view) boldText(gtx C, state *richtext.InteractiveText, parts []bold, si
 		}
 		rt := richtext.Text(state, v.th.shaper, spans...)
 		rt.LineHeight, rt.LineHeightScale = lineHeight, 1
-		return rt.Layout(gtx)
+		// a second coat, as ink gives the other text: richtext takes colours, not a material
+		m := op.Record(gtx.Ops)
+		d := rt.Layout(gtx)
+		call := m.Stop()
+		call.Add(gtx.Ops)
+		o := paint.PushOpacity(gtx.Ops, inkAgain)
+		call.Add(gtx.Ops)
+		o.Pop()
+		return d
 	}, size)
 	// richtext's height is its lines' already, where a Label's ends at the last glyphs
 	d.Size.Y -= lb.height - lb.glyphs
