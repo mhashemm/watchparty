@@ -51,9 +51,9 @@ EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>
 | `Ochre` | `#e0b452` | focus ring |
 
 **Dark** (`darkPalette` in `palette.go`, "soil at night", the user's pick of three): while
-the OS's appearance is dark, each colour above turns into a warm brown-black one: `Lichen`
-`#1c1712`, `Paper` `#28211a`, `Forest` `#d9cfbc` (dimmer than white text needs: brighter
-tired the user's eyes), `Bark` `#d0ab7e`, `Moss` `#93c06c`. Moss
+the window is dark (Settings' Theme, or the OS's appearance under System), each colour above
+turns into a warm brown-black one: `Lichen` `#1c1712`, `Paper` `#28211a`, `Forest` `#d9cfbc`
+(dimmer than white text needs: brighter tired the user's eyes), `Bark` `#d0ab7e`, `Moss` `#93c06c`. Moss
 gets lighter and white darker, so text and ticks on moss turn dark. Shadows and the dialog
 backdrop turn black. Drawings keep their own colours: Fosdo2, the ground, the mushrooms,
 shells and emoji. Check a visual change in both: every scene has a `-dark` twin.

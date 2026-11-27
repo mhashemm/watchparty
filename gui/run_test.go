@@ -30,6 +30,7 @@ func (f *fakeApp) react(string) error                     { return nil }
 func (f *fakeApp) pick(string) (string, error)            { return "", nil }
 func (f *fakeApp) saveChart() (string, error)             { return "", nil }
 func (f *fakeApp) saveSettings(settings) error            { return nil }
+func (f *fakeApp) saveTheme(string) error                 { return nil }
 func (f *fakeApp) clearHistory() error                    { return nil }
 func (f *fakeApp) install() (string, error)               { return "", nil }
 func (f *fakeApp) restart() error                         { return nil }

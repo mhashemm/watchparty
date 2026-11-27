@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"image"
 	"strconv"
 	"strings"
@@ -32,7 +33,7 @@ type about struct {
 // settingsTab is the Settings tab's widgets.
 type settingsTab struct {
 	relay, mpv, mpvFlags, createKey, pport, cacheDir widget.Editor
-	picker                                           widget.Enum
+	picker, theme                                    widget.Enum
 	browseMpv, browseCache, save                     widget.Clickable
 	saved                                            string
 	savedAt                                          time.Time
@@ -51,6 +52,7 @@ func newSettingsTab() *settingsTab {
 	}
 	t.createKey.Mask = '•'
 	t.picker.Value = mpv.PickerMove
+	t.theme.Value = "system"
 	return t
 }
 
@@ -66,6 +68,7 @@ func (t *settingsTab) load(s settings) {
 	if t.picker.Value == "" {
 		t.picker.Value = mpv.PickerMove
 	}
+	t.theme.Value = cmp.Or(s.Theme, "system")
 }
 
 // savedFor is how long "Saved." stays
@@ -131,6 +134,18 @@ func (v *view) settingsTab(gtx C) D {
 			return v.field(gtx, "Extra mpv options", func(gtx C) D { return v.th.input(gtx, &t.mpvFlags, "--fullscreen --volume=70", 12, 1, false) }, "")
 		}),
 		layout.Rigid(func(gtx C) D {
+			return v.field(gtx, "Theme", func(gtx C) D {
+				d := v.th.optionGrid(gtx, &t.theme, 3,
+					[3]string{"system", "System", "As your computer is"},
+					[3]string{"light", "Light", "Forest by day"},
+					[3]string{"dark", "Dark", "Soil at night"})
+				if t.theme.Value != cmp.Or(v.settings.Theme, "system") {
+					v.pickTheme(gtx, t.theme.Value)
+				}
+				return d
+			}, "")
+		}),
+		layout.Rigid(func(gtx C) D {
 			return v.field(gtx, "Reaction picker on mpv", func(gtx C) D {
 				return v.th.optionGrid(gtx, &t.picker, 2,
 					[3]string{mpv.PickerMove, "When the mouse moves", "Anywhere on mpv"},
@@ -177,6 +192,31 @@ func (v *view) browseRow(gtx C, e *widget.Editor, hint string, browse *widget.Cl
 			return v.th.button(gtx, browse, bPlain, false, "Browse")
 		}),
 	)
+}
+
+// pickTheme applies a theme as it is picked, without Save, and remembers it. The next frame
+// paints it: this one is half drawn in the palette it started with.
+func (v *view) pickTheme(gtx C, theme string) {
+	v.settings.Theme = theme
+	v.themed()
+	gtx.Execute(op.InvalidateCmd{})
+	if v.app != nil {
+		if err := v.app.saveTheme(theme); err != nil {
+			v.prefs.saved, v.prefs.savedAt = "Couldn't save: "+strings.TrimSpace(err.Error()), gtx.Now
+		}
+	}
+}
+
+// themed sets dark from the theme picked in Settings, or the OS's appearance under System.
+func (v *view) themed() {
+	switch v.settings.Theme {
+	case "light":
+		v.dark = false
+	case "dark":
+		v.dark = true
+	default:
+		v.dark = v.osDark
+	}
 }
 
 func (v *view) saveSettings(gtx C) {

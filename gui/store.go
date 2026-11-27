@@ -29,7 +29,13 @@ type settings struct {
 	// MpvPicker is when mpv's reaction picker shows (mpv.PickerModes, "" the default); the
 	// GUI's always does
 	MpvPicker string `json:"mpvPicker,omitempty"`
+	// Theme is the window's look (themes): "system" ("" until one is picked) follows the OS's
+	// appearance
+	Theme string `json:"theme,omitempty"`
 }
+
+// themes are the looks Settings offers
+var themes = []string{"system", "light", "dark"}
 
 // windowSize is the window as it was left: its size in dp when not maximized, and whether it
 // was. Gio can't place a window (and Wayland won't let an app), so not where.

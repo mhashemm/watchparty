@@ -280,6 +280,8 @@ func (v *view) fill(name, val string) error {
 		t.mode.Value = val
 	case name == "picker":
 		p.picker.Value = val
+	case name == "theme":
+		p.theme.Value = val
 	default:
 		return fmt.Errorf("no field called %q", name)
 	}
@@ -392,7 +394,7 @@ func (v *view) ui() map[string]any {
 		"go":      goLabel(running),
 		"history": history,
 		"settings": map[string]any{"relay": p.relay.Text(), "mpv": p.mpv.Text(), "mpvFlags": p.mpvFlags.Text(),
-			"createKey": p.createKey.Text(), "pport": p.pport.Text(), "cacheDir": p.cacheDir.Text(), "picker": p.picker.Value,
+			"createKey": p.createKey.Text(), "pport": p.pport.Text(), "cacheDir": p.cacheDir.Text(), "picker": p.picker.Value, "theme": p.theme.Value,
 			"saved": p.saved, "mpvDefault": a.defaultMpv, "cacheDirDefault": a.defaultCacheDir, "picking": p.picking},
 		"about": map[string]any{"version": v.versionText(), "button": v.aboutButton(), "buttonOff": running || p.updating,
 			"dot": v.updateDot, "storePath": a.storePath, "tools": a.tools},

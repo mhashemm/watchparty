@@ -307,6 +307,18 @@ func (g *gui) lastWindow() windowSize {
 	return g.store.Window
 }
 
+// saveTheme remembers the theme as it is picked. The Settings tab's Save leaves it alone, so
+// that tab's copy of the settings can't put an older one back.
+func (g *gui) saveTheme(theme string) error {
+	if !slices.Contains(themes, theme) {
+		return errors.New("no such theme")
+	}
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.Settings.Theme = theme
+	return g.store.saveSettings()
+}
+
 // saveWindow remembers the window as it is left, for the next start.
 func (g *gui) saveWindow(w windowSize) error {
 	g.store.mu.Lock()

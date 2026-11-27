@@ -75,8 +75,8 @@ type view struct {
 	// still: the OS asks for reduced motion, so the scenes rest and the window draws only on
 	// changes
 	still bool
-	// dark: the OS's appearance is dark, so the window paints in darkPalette
-	dark bool
+	// dark: the window paints in darkPalette (themed); osDark: the OS's appearance is dark
+	dark, osDark bool
 	// pace spaces the scenes' frames by what one costs here
 	pace pacer
 	// values is every frame's gtx.Values: the palette and the path cache
@@ -99,6 +99,7 @@ type backend interface {
 	pick(field string) (string, error)
 	saveChart() (string, error)
 	saveSettings(s settings) error
+	saveTheme(theme string) error
 	clearHistory() error
 	install() (string, error)
 	restart() error

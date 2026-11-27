@@ -739,6 +739,17 @@ def gui_suite():
         ok("a window opened while it is set starts dark", until(lambda: ui(G3)["dark"], 5))
         portal_set("org.freedesktop.appearance", "color-scheme", 2)
         ok("prefer light turns it light again", until(lambda: not ui(H)["dark"] and not ui(G3)["dark"], 5))
+        tab(H, "settings")
+        ok("its theme is System at first", ui(H)["settings"]["theme"] == "system")
+        fill(H, theme="dark")
+        ok("Dark turns it dark at once, though the desktop is light", until(lambda: ui(H)["dark"], 5))
+        ok("and is saved without Save", until(lambda: state(H)["settings"].get("theme") == "dark", 5), str(state(H)["settings"]))
+        portal_set("org.freedesktop.appearance", "color-scheme", 1)
+        fill(H, theme="light")
+        ok("Light keeps it light, though the desktop is dark", until(lambda: not ui(H)["dark"], 5) and not until(lambda: ui(H)["dark"], 3))
+        fill(H, theme="system")
+        ok("System follows the desktop again", until(lambda: ui(H)["dark"], 5))
+        portal_set("org.freedesktop.appearance", "color-scheme", 2)
 
     @case("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
     def _():

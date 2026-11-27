@@ -164,6 +164,26 @@ func TestStoreKeepsTheWindow(t *testing.T) {
 	}
 }
 
+// The theme is saved as it's picked, and the Settings tab's Save, whose copy of the settings
+// was taken before, doesn't put the old one back.
+func TestTheThemeOutlivesSaveAndARestart(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "gui.json")
+	g := newGUI(context.Background(), openStore(path))
+	if err := g.saveTheme("dusk"); err == nil {
+		t.Fatal("a theme that isn't one was saved")
+	}
+	if err := g.saveTheme("dark"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.saveSettings(settings{Relay: "ws://r", Theme: "light"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := openStore(path).Settings.Theme; got != "dark" {
+		t.Fatalf("theme after Save and a restart: %q, want dark", got)
+	}
+}
+
 func TestStoreOpensABrokenHistoryEmpty(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

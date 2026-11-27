@@ -56,7 +56,7 @@ func (g *gui) window(w *app.Window) error {
 		defer g.wg.Done()
 		watchLook(ctx, func(l look) {
 			select {
-			case v.results <- func(gtx C) { v.still, v.dark = l.still, l.dark }:
+			case v.results <- func(gtx C) { v.still, v.osDark = l.still, l.dark; v.themed() }:
 				v.wake()
 			case <-ctx.Done():
 			}
@@ -217,6 +217,7 @@ func (v *view) load() {
 	t.port.SetText(st.settings.Port)
 	t.local.Value = st.settings.Local
 	v.prefs.load(st.settings)
+	v.themed()
 	v.about = about{version: version, storePath: st.path, defaultMpv: st.defaultMpv, defaultCacheDir: st.defaultCacheDir}
 	v.checkTools()
 	v.async(func() func(gtx C) {
