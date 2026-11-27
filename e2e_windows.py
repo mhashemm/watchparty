@@ -478,7 +478,7 @@ def gui_suite():
     ok(f"{H} plays", get(H, "pause") is False)
     ok("the feeds", f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"], f"{feed(H)} / {feed(G)}")
 
-    print(f"\n[W16] {H} follows the app mode to dark and back, its own title bar and frame too")
+    print(f"\n[W17] {H} follows the app mode to dark and back, its own title bar and frame too")
     was = app_mode(True)
     try:
         ok(f"{H} turned dark", until(lambda: ui(H)["dark"], 10))
