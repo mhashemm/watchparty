@@ -117,7 +117,24 @@ func (r rule) match(e *elem) bool {
 // Mood is the window's state: the cat sleeps when no party runs, and the turtles
 // hurry while the party starts or reconnects. Still is the OS asking for reduced motion:
 // everything at rest.
-type Mood struct{ Awake, Walking, Still bool }
+type Mood struct {
+	Awake, Walking, Still bool
+	// Width is the ground's, in its viewBox's units (560 when narrower): the soil stretches
+	// across it and the turtles stroll across it. Layer is the part of it drawn.
+	Width float64
+	Layer Layer
+}
+
+// Layer is a part of the ground, drawn in this order so a wide window repeats the plants
+// between the stretched soil and the turtles.
+type Layer int
+
+const (
+	AllOfIt Layer = iota
+	SoilLayer
+	PlantLayer // the mushrooms and grass, one 560 wide tile of them
+	TurtleLayer
+)
 
 // animation is a CSS animation on an element at t seconds: a transform before its own,
 // an opacity, and whether it shows at all.

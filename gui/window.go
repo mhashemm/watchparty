@@ -345,8 +345,22 @@ func (v *view) paintGround(gtx C) {
 	r.Pop()
 	paint.FillShape(gtx.Ops, art.Soil, clip.Rect{Min: image.Pt(0, H-gtx.Dp(22)), Max: image.Pt(W, H)}.Op())
 	px := float64(gtx.Metric.PxPerDp)
-	base := art.Translate(float64(W)/2-280*px, float64(H)-130*px).Mul(art.Scale(px, px))
-	paintArt(asDrawn(gtx), v.ground.Frame(v.t(gtx), v.scene(), base))
+	at := func(x float64) art.Mat { return art.Translate(x, float64(H)-130*px).Mul(art.Scale(px, px)) }
+	// wider than the strip: the soil stretches from the left edge, the turtles stroll the
+	// whole width, and the plants repeat every 560 from the middle out
+	m, middle := v.scene(), float64(W)/2-280*px
+	m.Width = max(float64(W)/px, 560)
+	left := min(0, middle)
+	n := int(math.Ceil((m.Width/2 - 280) / 560))
+	draw := func(l art.Layer, x float64) {
+		m.Layer = l
+		paintArt(asDrawn(gtx), v.ground.Frame(v.t(gtx), m, at(x)))
+	}
+	draw(art.SoilLayer, left)
+	for k := -n; k <= n; k++ {
+		draw(art.PlantLayer, middle+float64(k)*560*px)
+	}
+	draw(art.TurtleLayer, left)
 }
 
 // background is body's: lichen under three soft glows (radial-gradients, fixed to the

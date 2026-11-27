@@ -166,6 +166,10 @@ what is asked, and show options before changing his face.**
 - Fixed at the bottom (`paintGround`), 560×130, centred, drawn after the card: content
   scrolls *under* it and **covering it is intended**; a separate non-overlapping strip was
   tried and reverted. The card ends 150dp above the window's bottom.
+- **A wider window** (the user's pick, the `party-wide` scene): the soil path stretches across
+  it, the mushrooms and grass repeat every 560 from the middle out, and the turtles stroll
+  the whole width at the same pace, so resizing mid-stroll moves them. Layers: soil, plants,
+  turtles, the SVG's own order.
 - Under it a 90dp lichen fade, and a 22dp soil strip for wide windows, matching the soil
   path's height at the SVG edges. Order: card < fade and soil < ground < Fosdo2 and hearts.
 - **Turtles:** a mother and a baby (same markup at `scale(.55)`, 40px behind), on one

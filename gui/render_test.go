@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"flag"
 	"image"
@@ -77,6 +78,8 @@ type scene struct {
 	tools  []tool
 	// bar: the window's own title bar above it, as GNOME on Wayland needs
 	bar bool
+	// width is the window's, 560 when unset
+	width int
 }
 
 // fixture is what the stand-in server feeds the page: /state, /log and the scene's script.
@@ -99,7 +102,7 @@ func (s scene) fixture() any {
 	}
 }
 
-func (s scene) size() image.Point { return image.Pt(560, max(s.height, 940)) }
+func (s scene) size() image.Point { return image.Pt(cmp.Or(s.width, 560), max(s.height, 940)) }
 
 func (s scene) draw(th *theme) (*image.RGBA, error) {
 	size := s.size()
@@ -290,6 +293,10 @@ func scenes() map[string]scene {
 				return recorded(w, 0, `checking 1 of 1: "Big Buck Bunny.mkv"`, "file fingerprint: 9f2c4e")
 			}},
 	}
+	// a wide window: the ground's plants repeated, the turtles strolling the whole width
+	wide := m["party-in"]
+	wide.width, wide.height = 1280, 0
+	m["party-wide"] = wide
 	// in the dark palette, as with the OS's appearance dark
 	for _, name := range []string{"party-in", "settings", "confirm-stop", "title-bar"} {
 		d, setup := m[name], m[name].setup
