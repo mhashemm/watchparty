@@ -51,11 +51,20 @@ var darkPalette = palette{
 	rgb(glowLight):          art.Hex("#3a2f22"),
 }
 
-// painted is gtx in the palette the OS's appearance asks for.
+// painted is gtx in the palette the OS's appearance asks for, with the window's path cache.
 func (v *view) painted(gtx C) C {
-	if v.dark {
-		gtx.Values = map[string]any{paletteKey: darkPalette}
+	if v.values == nil {
+		c := newPathCache()
+		v.values = map[string]any{pathsKey: c}
+		v.values[drawnKey] = map[string]any{pathsKey: c}
 	}
+	v.values[pathsKey].(*pathCache).begin()
+	if v.dark {
+		v.values[paletteKey] = darkPalette
+	} else {
+		delete(v.values, paletteKey)
+	}
+	gtx.Values = v.values
 	return gtx
 }
 
@@ -93,8 +102,15 @@ func asDrawn(gtx C) C {
 	if palOf(gtx) == nil {
 		return gtx
 	}
+	if drawn, ok := gtx.Values[drawnKey].(map[string]any); ok {
+		gtx.Values = drawn
+		return gtx
+	}
 	vals := maps.Clone(gtx.Values)
 	delete(vals, paletteKey)
 	gtx.Values = vals
 	return gtx
 }
+
+// drawnKey is where painted keeps asDrawn's values, the palette left out, in gtx.Values
+const drawnKey = "drawn"

@@ -291,8 +291,13 @@ func fill(gtx C, d D) D {
 
 // rrect fills a rounded rectangle.
 func rrect(gtx C, r image.Rectangle, radius int, c color.NRGBA) {
-	radius = min(radius, r.Dx()/2, r.Dy()/2)
-	paint.FillShape(gtx.Ops, shade(gtx, c), clip.UniformRRect(r, max(radius, 0)).Op(gtx.Ops))
+	radius = max(min(radius, r.Dx()/2, r.Dy()/2), 0)
+	if radius == 0 { // a rectangle: Gio's fast path, no outline to keep
+		paint.FillShape(gtx.Ops, shade(gtx, c), clip.Rect(r).Op())
+		return
+	}
+	key := newShapeKey('r').i(r.Min.X).i(r.Min.Y).i(r.Max.X).i(r.Max.Y).i(radius).sum()
+	paint.FillShape(gtx.Ops, shade(gtx, c), shape(gtx, key, func(ops *op.Ops) clip.Op { return clip.UniformRRect(r, radius).Op(ops) }))
 }
 
 // boxStyle is a bordered, rounded block: a card, a field, a button.
@@ -664,7 +669,8 @@ func dashed(gtx C, width int) D {
 		Cap:    stroke.FlatCap,
 		Dashes: stroke.Dashes{Dashes: []float32{3 * h, 3 * h}},
 	}
-	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), s.Op(gtx.Ops))
+	key := newShapeKey('-').i(width).f(float64(h)).sum()
+	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), shape(gtx, key, s.Op))
 	return D{Size: image.Pt(width, int(h))}
 }
 
@@ -677,7 +683,8 @@ func dashedDown(gtx C, height int) D {
 		Cap:    stroke.FlatCap,
 		Dashes: stroke.Dashes{Dashes: []float32{3 * w, 3 * w}},
 	}
-	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), s.Op(gtx.Ops))
+	key := newShapeKey('|').i(height).f(float64(w)).sum()
+	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), shape(gtx, key, s.Op))
 	return D{Size: image.Pt(int(w), height)}
 }
 

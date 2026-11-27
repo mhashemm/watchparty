@@ -77,6 +77,8 @@ type view struct {
 	still bool
 	// dark: the OS's appearance is dark, so the window paints in darkPalette
 	dark bool
+	// values is every frame's gtx.Values: the palette and the path cache
+	values map[string]any
 	// focused: the window has the keyboard; frozen, when the scenes' time stopped (zero
 	// while they move)
 	focused bool
@@ -236,6 +238,7 @@ func (v *view) frame(gtx C) {
 	if v.moving() {
 		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(frameGap)})
 	}
+	gtx.Values[pathsKey].(*pathCache).next()
 	for _, f := range v.after {
 		f()
 	}

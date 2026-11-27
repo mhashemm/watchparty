@@ -66,10 +66,14 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   window isn't focused or the OS asks for reduced motion; the scenes' clock stops meanwhile.
   So anything that changes with time (a label going back, the trail's half second) must ask
   for its own frame with `op.InvalidateCmd{At: …}`; nothing else will come.
-- **A frame redraws the whole window**: Gio has no partial redraw. `BenchmarkFrame` (llvmpipe):
-  ~1.5 ms layout, ~16 ms drawing, half of it the card that doesn't move. Gio's path cache
-  keys on the op list's version, which every frame's `Reset` bumps; ops recorded once and
-  replayed keep it, but that saved only ~13%: the cost is filling pixels. Cut frames instead.
+- **A frame redraws the whole window**: Gio has no partial redraw, and a patched Gio was
+  declined. `BenchmarkFrame`, mid-party, CPU per frame: ~3 ms on a GPU, ~80 ms on llvmpipe
+  (filling pixels, half of it the card that doesn't move).
+- **Draw shapes through `shape`** (`paths.go`): Gio caches a path's vertices by its op list
+  and that list's version, which every frame's `Reset` bumps, so a path built in the frame's
+  ops is outlined again each frame. `pathCache` keeps repeated ones in a list of its own
+  (−30% CPU on a GPU). It starts over only in `begin`: the frame refers to it until Gio
+  has drawn it and routed its input, after `frame` returns.
 - **Closing the window ends everything:** `DestroyEvent` → the party's context cancelled,
   `Run` waited for, exit. A signal or a restart cancels the app's context, which closes the
   window the same way. No goroutine outlives `wg.Wait()`.
