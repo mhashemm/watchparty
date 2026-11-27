@@ -115,8 +115,9 @@ func (r rule) match(e *elem) bool {
 }
 
 // Mood is the window's state: the cat sleeps when no party runs, and the turtles
-// hurry while the party starts or reconnects.
-type Mood struct{ Awake, Walking bool }
+// hurry while the party starts or reconnects. Still is the OS asking for reduced motion:
+// everything at rest.
+type Mood struct{ Awake, Walking, Still bool }
 
 // animation is a CSS animation on an element at t seconds: a transform before its own,
 // an opacity, and whether it shows at all.

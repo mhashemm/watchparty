@@ -72,6 +72,9 @@ type view struct {
 	started form
 	// toolsAsked counts About's checks, so a slow earlier one doesn't overwrite a later one
 	toolsAsked int
+	// still: the OS asks for reduced motion, so the scenes rest and the window draws only on
+	// changes
+	still bool
 }
 
 // backend is the app as the window sees it. pick, saveChart, install, latest and tools wait
@@ -202,7 +205,27 @@ func (v *view) frame(gtx C) {
 	v.paintGround(gtx)
 	v.paintDialog(gtx)
 	v.watchPresses(gtx)
-	gtx.Execute(op.InvalidateCmd{})
+	if v.moving() {
+		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(frameGap)})
+	}
+}
+
+// frameGap is how often the window draws while something moves: 30 fps, half of what
+// software rendering (no GPU) would otherwise spend
+const frameGap = time.Second / 30
+
+// moving is whether the next frame differs from this one by itself: the scenes animate unless
+// the OS asks for reduced motion, and hearts float up either way. Everything else that changes
+// with time asks for its own frame.
+func (v *view) moving() bool {
+	return !v.still || len(v.hearts) > 0
+}
+
+// scene is the mood the scenes are drawn in this frame.
+func (v *view) scene() art.Mood {
+	m := v.mood
+	m.Still = v.still
+	return m
 }
 
 // page is main: 520dp wide at most, the card 190dp down with Fosdo2 over its top edge.
@@ -243,9 +266,13 @@ func (v *view) paintCat(gtx C, W int) {
 	w := 180 * px
 	left, top := float64(W)/2-w/2, 9*px
 	base := art.Translate(left, top).Mul(art.Scale(w/200, w/200))
-	paintArt(gtx.Ops, v.cat.Frame(v.t(gtx), v.mood, base))
+	paintArt(gtx.Ops, v.cat.Frame(v.t(gtx), v.scene(), base))
 	if !v.mood.Awake {
-		for _, z := range art.Zzz(v.t(gtx)) {
+		zs := art.Zzz(v.t(gtx))
+		if v.still {
+			zs = art.ZzzStill()
+		}
+		for _, z := range zs {
 			if z.O <= 0 {
 				continue
 			}
@@ -310,7 +337,7 @@ func (v *view) paintGround(gtx C) {
 	paint.FillShape(gtx.Ops, art.Soil, clip.Rect{Min: image.Pt(0, H-gtx.Dp(22)), Max: image.Pt(W, H)}.Op())
 	px := float64(gtx.Metric.PxPerDp)
 	base := art.Translate(float64(W)/2-280*px, float64(H)-130*px).Mul(art.Scale(px, px))
-	paintArt(gtx.Ops, v.ground.Frame(v.t(gtx), v.mood, base))
+	paintArt(gtx.Ops, v.ground.Frame(v.t(gtx), v.scene(), base))
 }
 
 // background is body's: lichen under three soft glows (radial-gradients, fixed to the

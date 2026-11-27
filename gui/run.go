@@ -35,6 +35,10 @@ func (g *gui) window(w *app.Window) error {
 	}
 	w.Option(opts...)
 	v.load()
+	v.async(func() func(gtx C) {
+		still := reduceMotion()
+		return func(gtx C) { v.still = v.still || still }
+	})
 	go func() {
 		<-g.ctx.Done()
 		w.Perform(system.ActionClose)
@@ -121,6 +125,10 @@ func (v *view) sync(gtx C) {
 	p.running = n.Running
 	p.scr = p.w.render(n.Running, n.ExitErr, n.Refusal, v.started.Playlist, gtx.Now)
 	v.mood = art.Mood{Awake: !p.scr.sleep, Walking: p.scr.walking}
+	// the trail shows once a step has waited: a frame then, as nothing else may come
+	if p.w.trailStep != "" && !p.w.trailShown {
+		gtx.Execute(op.InvalidateCmd{At: p.w.trailAt.Add(trailAfter)})
+	}
 }
 
 // startParty starts a party from f: Start the party, or Continue.

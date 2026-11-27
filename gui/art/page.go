@@ -161,6 +161,9 @@ func lickShow(t float64) float64 {
 }
 
 func catAnim(e *elem, t float64, m Mood) (Mat, float64, bool) {
+	if m.Still {
+		return catAtRest(e, m)
+	}
 	switch {
 	case e.has("tail"):
 		dur := 3.2
@@ -207,6 +210,29 @@ func catAnim(e *elem, t float64, m Mood) (Mat, float64, bool) {
 	return Identity, 1, true
 }
 
+// catAtRest is the cat with reduced motion: eyes open awake and closed asleep, the paw down,
+// nothing moving.
+func catAtRest(e *elem, m Mood) (Mat, float64, bool) {
+	switch {
+	case e.has("eyes-open"):
+		return Identity, 1, m.Awake
+	case e.has("eyes-closed"):
+		return Identity, 1, !m.Awake
+	case e.has("paw-lick"), e.has("lick"), e.has("zzz"):
+		return Identity, 0, false
+	}
+	return Identity, 1, true
+}
+
+// ZzzStill is the z's with reduced motion: where they rest, a little faded.
+func ZzzStill() [3]struct{ X, Y, O float64 } {
+	var z [3]struct{ X, Y, O float64 }
+	for i, p := range [3]Pt{{150, 40}, {162, 26}, {174, 12}} {
+		z[i].X, z[i].Y, z[i].O = p.X, p.Y, .8
+	}
+	return z
+}
+
 // Zzz is where the sleeping cat's three z's are (viewBox units, the text's baseline) and
 // how opaque, t seconds in (@keyframes snooze).
 func Zzz(t float64) [3]struct{ X, Y, O float64 } {
@@ -222,6 +248,16 @@ func Zzz(t float64) [3]struct{ X, Y, O float64 } {
 }
 
 func groundAnim(e *elem, t float64, m Mood) (Mat, float64, bool) {
+	if m.Still {
+		// parked mid-ground, legs still
+		switch {
+		case e.has("turtle") && e.has("baby"):
+			return Translate(196, 0), 1, true
+		case e.has("turtle"):
+			return Translate(230, 0), 1, true
+		}
+		return Identity, 1, true
+	}
 	switch {
 	case e.has("turtle"):
 		return Translate(key(t, 60, 0, false, linear, stop{0, -90}, stop{1, 620}), 0), 1, true

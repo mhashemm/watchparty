@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"image"
 	"strings"
 	"testing"
 	"time"
 
+	"gioui.org/io/input"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -85,5 +87,43 @@ func TestAsyncResultsWaitForAFrame(t *testing.T) {
 	v.sync(layout.Context{Ops: new(op.Ops)})
 	if got != "done" {
 		t.Fatal("not applied in the frame")
+	}
+}
+
+// A still window asks for no frame by itself: only hearts floating up, and timed changes (the
+// copied label going back) wake it, each when due; moving scenes ask at 30 fps.
+func TestTheWindowDrawsOnlyWhatChanges(t *testing.T) {
+	t.Parallel()
+	sh, err := newShaper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := newView(&theme{shaper: sh}, time.Unix(0, 0))
+	now := time.Unix(100, 0)
+	wakeup := func() (time.Duration, bool) {
+		var router input.Router
+		var ops op.Ops
+		gtx := layout.Context{Ops: &ops, Now: now, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(560, 940)), Source: router.Source()}
+		v.frame(gtx)
+		router.Frame(&ops)
+		at, ok := router.WakeupTime()
+		return at.Sub(now), ok
+	}
+	if d, ok := wakeup(); !ok || d != frameGap {
+		t.Fatalf("moving: next frame in %v (%v), want %v", d, ok, frameGap)
+	}
+	v.still = true
+	if d, ok := wakeup(); ok {
+		t.Fatalf("still: asked for a frame in %v", d)
+	}
+	v.hearts = []heart{{at: now, x: .5}}
+	if d, ok := wakeup(); !ok || d != frameGap {
+		t.Fatalf("still with a heart: next frame in %v (%v), want %v", d, ok, frameGap)
+	}
+	v.hearts = nil
+	v.now = &partyNow{ran: true, running: true, scr: screen{running: true, invite: "-relay ws://r -room R -secret S"}, w: newWatch(form{})}
+	v.party.copyLabel, v.party.copiedAt = "Copied", now.Add(-time.Second)
+	if d, ok := wakeup(); !ok || d != time.Second {
+		t.Fatalf("copied a second ago: next frame in %v (%v), want 1s", d, ok)
 	}
 }

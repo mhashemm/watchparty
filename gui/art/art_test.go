@@ -1,6 +1,7 @@
 package art
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -220,5 +221,23 @@ func TestKeyframes(t *testing.T) {
 	z := Zzz(1.08) // the first z at 30% of its 3.6s: most opaque
 	if math.Abs(z[0].O-.9) > 1e-9 || z[2].O != 0 {
 		t.Errorf("zzz %+v", z)
+	}
+}
+
+// With reduced motion nothing moves: the cat and the turtles draw the same at any moment, the
+// cat in its mood, the turtles parked mid-ground.
+func TestStillScenesDoNotMove(t *testing.T) {
+	t.Parallel()
+	for _, m := range []Mood{{Still: true}, {Awake: true, Still: true}, {Awake: true, Walking: true, Still: true}} {
+		for name, s := range map[string]*Scene{"cat": Cat(), "ground": Ground()} {
+			a, b := s.Frame(1, m, Identity), s.Frame(13.6, m, Identity)
+			if fmt.Sprint(a) != fmt.Sprint(b) {
+				t.Errorf("%s in %+v moved between 1s and 13.6s", name, m)
+			}
+		}
+	}
+	moving := Ground()
+	if fmt.Sprint(moving.Frame(1, Mood{}, Identity)) == fmt.Sprint(moving.Frame(13.6, Mood{}, Identity)) {
+		t.Error("without Still the turtles don't move: the test proves nothing")
 	}
 }

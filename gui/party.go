@@ -403,8 +403,11 @@ func (v *view) ecg(gtx C, alive bool) D {
 	st := art.StrokeStyle(art.Porcini, 2, true)
 	items := art.Icon(art.ECG, st, art.Scale(px, px))
 	if alive {
-		// stroke-dasharray 90, its offset from 180 to 0 every 1.6s
+		// stroke-dasharray 90, its offset from 180 to 0 every 1.6s; at rest with reduced motion
 		off := 180 * (1 - float32(mod(v.t(gtx), 1.6)/1.6))
+		if v.still {
+			off = 0
+		}
 		paintArt(gtx.Ops, items, float32(90*px), float32(90*px), off*float32(px))
 	} else {
 		paintArt(gtx.Ops, items)
@@ -674,8 +677,12 @@ func (v *view) share(gtx C, invite string) D {
 		gtx.Execute(clipboardWrite(invite))
 		t.copyLabel, t.copiedAt = "Copied", gtx.Now
 	}
-	if t.copyLabel != "Copy invite" && gtx.Now.Sub(t.copiedAt) > 2*time.Second {
-		t.copyLabel = "Copy invite"
+	if t.copyLabel != "Copy invite" {
+		if back := t.copiedAt.Add(2 * time.Second); gtx.Now.Before(back) {
+			gtx.Execute(op.InvalidateCmd{At: back})
+		} else {
+			t.copyLabel = "Copy invite"
+		}
 	}
 	return layout.Inset{Bottom: 18}.Layout(gtx, func(gtx C) D {
 		return v.th.box(gtx, boxStyle{bg: paleBg, border: art.Rule, borderW: 2, radius: 14, inset: layout.UniformInset(12), wide: true}, func(gtx C) D {
