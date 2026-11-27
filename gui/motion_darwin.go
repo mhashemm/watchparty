@@ -1,12 +1,24 @@
 package main
 
-import (
-	"os/exec"
-	"strings"
-)
+/*
+#cgo CFLAGS: -x objective-c
+#cgo LDFLAGS: -framework AppKit
+#import <AppKit/AppKit.h>
+
+static int reduceMotion(void) {
+	@autoreleasepool {
+		return [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldReduceMotion] ? 1 : 0;
+	}
+}
+*/
+import "C"
+
+import "context"
 
 // reduceMotion is System Settings' Accessibility > Display > Reduce motion.
-func reduceMotion() bool {
-	out, err := exec.Command("defaults", "read", "com.apple.universalaccess", "reduceMotion").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "1"
+func reduceMotion() bool { return C.reduceMotion() == 1 }
+
+// watchMotion calls set with reduceMotion now and whenever it changes, until ctx ends.
+func watchMotion(ctx context.Context, set func(still bool)) {
+	pollMotion(ctx, reduceMotion, set)
 }

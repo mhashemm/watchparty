@@ -970,12 +970,27 @@ def private_bus():
                 '<allow own="*"/></policy></busconfig>')
     relays.append(subprocess.Popen(["dbus-daemon", f"--config-file={RUN}/bus.conf", "--nofork"]))
     until(lambda: os.path.exists(path))
-    p = subprocess.Popen([PORTAL_BIN, MEDIA], env={"DBUS_SESSION_BUS_ADDRESS": f"unix:path={path}"}, stdout=subprocess.PIPE, text=True)
+    p = subprocess.Popen([PORTAL_BIN, MEDIA], env={"DBUS_SESSION_BUS_ADDRESS": f"unix:path={path}"},
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     relays.append(p)
     assert p.stdout  # stdout=PIPE
     if p.stdout.readline() != "ready\n":
         sys.exit("the fake portal could not start")
+    portal.append(p)
     return f"unix:path={path}"
+
+
+portal = []  # the fake portal private_bus started
+
+
+def portal_set(namespace, key, value):
+    """Change one of the fake portal's Settings, which every GUI on the bus is told of. Only
+    a serial case may: the phase's GUIs all share it."""
+    p = portal[0]
+    p.stdin.write(f"set {namespace} {key} {json.dumps(value)}\n")
+    p.stdin.flush()
+    while (line := p.stdout.readline()) and not line.startswith(f"set {namespace} {key}"):
+        pass  # what it printed for pickers since
 
 
 marks = [("", time.time())]

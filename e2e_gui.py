@@ -691,6 +691,25 @@ def gui_suite():
         res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
         ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
 
+    @case("[G37] the window follows the desktop's reduced motion as it changes", serial=True)
+    def _():
+        H = gui("g37")
+        ok("it animates with nothing set", not ui(H)["still"])
+        portal_set("org.gnome.desktop.interface", "enable-animations", False)
+        ok("animations turned off rest it", until(lambda: ui(H)["still"], 5))
+        portal_set("org.gnome.desktop.interface", "enable-animations", True)
+        ok("and on again move it", until(lambda: not ui(H)["still"], 5))
+        portal_set("org.kde.kdeglobals.KDE", "AnimationDurationFactor", 0.0)
+        ok("so does KDE's animation speed at 0", until(lambda: ui(H)["still"], 5))
+        portal_set("org.kde.kdeglobals.KDE", "AnimationDurationFactor", 1.0)
+        ok("and back", until(lambda: not ui(H)["still"], 5))
+        G = gui("g37Later")
+        portal_set("org.kde.kdeglobals.KDE", "AnimationDurationFactor", 0.0)
+        G2 = gui("g37Started")
+        ok("a window opened while it is set starts still", until(lambda: ui(G2)["still"] and ui(G)["still"], 5))
+        portal_set("org.kde.kdeglobals.KDE", "AnimationDurationFactor", 1.0)
+        ok("and moves once it's unset", until(lambda: not ui(G2)["still"], 5))
+
     @case("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
     def _():
         install_suite()

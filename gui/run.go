@@ -38,10 +38,20 @@ func (g *gui) window(w *app.Window) error {
 	if e2eHook != nil {
 		e2eHook(v)
 	}
-	v.async(func() func(gtx C) {
-		still := reduceMotion()
-		return func(gtx C) { v.still = v.still || still }
-	})
+	// the OS's reduced motion, followed while the window is open
+	ctx, cancel := context.WithCancel(g.ctx)
+	defer cancel()
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		watchMotion(ctx, func(still bool) {
+			select {
+			case v.results <- func(gtx C) { v.still = still }:
+				v.wake()
+			case <-ctx.Done():
+			}
+		})
+	}()
 	go func() {
 		<-g.ctx.Done()
 		w.Perform(system.ActionClose)
