@@ -100,7 +100,8 @@ The look was matched to the old page row by row; these traps look like simplific
 - **Every painted colour goes through `shade`** (`palette.go`), which swaps it for the
   dark palette's by RGB; `rrect`, `ink`, `colorOp` and `paintArt` already do. Paint a
   shadow with `shadow`, and a drawing with `asDrawn(gtx)`, or the palette repaints it. One
-  RGB can't take two dark colours, so a new role needs its own colour.
+  RGB can't take two dark colours, so a new role needs its own colour. A colour named in the
+  code without a dark one fails `TestEveryColourHasADarkOne`.
 - **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system Noto
   Color Emoji shadows the bundled one; system fonts stay on so any script renders.
 

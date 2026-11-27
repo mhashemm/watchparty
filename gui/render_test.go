@@ -6,8 +6,10 @@ import (
 	"flag"
 	"image"
 	"image/png"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -298,7 +300,7 @@ func scenes() map[string]scene {
 	wide.width, wide.height = 1280, 0
 	m["party-wide"] = wide
 	// in the dark palette, as with the OS's appearance dark
-	for _, name := range []string{"party-in", "settings", "confirm-stop", "title-bar"} {
+	for _, name := range slices.Collect(maps.Keys(m)) {
 		d, setup := m[name], m[name].setup
 		d.setup = func(v *view) {
 			if setup != nil {
