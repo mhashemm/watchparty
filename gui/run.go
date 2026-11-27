@@ -72,6 +72,10 @@ func (g *gui) window(w *app.Window) error {
 		// left is the window as it is now, saved when it closes; pxPerDp converts its size
 		left    windowSize
 		pxPerDp float32
+		// hwnd is the Windows window's handle; framed, whether its frame was told frameDark
+		hwnd      uintptr
+		framed    bool
+		frameDark bool
 	)
 	for {
 		switch e := w.Event().(type) {
@@ -112,8 +116,13 @@ func (g *gui) window(w *app.Window) error {
 				gtx.Constraints = layout.Exact(gtx.Constraints.Max.Sub(image.Pt(0, d.Size.Y)))
 			}
 			v.frame(gtx)
+			if hwnd != 0 && (!framed || frameDark != v.dark) {
+				darkFrame(hwnd, v.dark)
+				framed, frameDark = true, v.dark
+			}
 			e.Frame(gtx.Ops)
-		default:
+		case app.ViewEvent:
+			hwnd, framed = viewHandle(e), false
 			viewEvent(e, g.exe)
 		}
 	}

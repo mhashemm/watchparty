@@ -124,6 +124,37 @@ func viewEvent(e gioevent.Event, exe string) {
 	}()
 }
 
+// viewHandle is the window's HWND once Gio has one, 0 before and after.
+func viewHandle(e gioevent.Event) uintptr {
+	if v, ok := e.(app.Win32ViewEvent); ok {
+		return v.HWND
+	}
+	return 0
+}
+
+var (
+	dwmSetWindowAttribute = windows.NewLazySystemDLL("dwmapi.dll").NewProc("DwmSetWindowAttribute")
+	setWindowPos          = windows.NewLazySystemDLL("user32.dll").NewProc("SetWindowPos")
+)
+
+// DWMWA_USE_IMMERSIVE_DARK_MODE: 20 since Windows 10 20H1, 19 on the builds before it
+const dwmDarkMode, dwmDarkModeBefore20H1 = 20, 19
+
+// darkFrame turns the native title bar and frame dark or light: Windows leaves an app's in
+// light unless the app asks. The frame repaints at once (SWP_FRAMECHANGED), posted to the
+// window's thread rather than waited for (SWP_ASYNCWINDOWPOS).
+func darkFrame(hwnd uintptr, dark bool) {
+	var on int32 // a BOOL
+	if dark {
+		on = 1
+	}
+	if r, _, _ := dwmSetWindowAttribute.Call(hwnd, dwmDarkMode, uintptr(unsafe.Pointer(&on)), 4); r != 0 {
+		dwmSetWindowAttribute.Call(hwnd, dwmDarkModeBefore20H1, uintptr(unsafe.Pointer(&on)), 4)
+	}
+	const flags = 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020 | 0x4000 // NOMOVE NOSIZE NOZORDER NOACTIVATE FRAMECHANGED ASYNCWINDOWPOS
+	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, flags)
+}
+
 func recordVersion(exe, tag string) {
 	recordVersionAt(uninstallKey, exe, tag)
 }

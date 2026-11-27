@@ -79,7 +79,9 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   X11's class, which the desktop matches to the entry's name and icon.
 - **Windows:** `viewEvent` gives the window's handle the AppUserModelID `setup.nsi` puts on
   the shortcuts, plus relaunch properties naming `watchparty-gui.exe`; without it a pinned
-  shortcut gets a second taskbar button. The icon is resource 1, which Gio loads.
+  shortcut gets a second taskbar button. The icon is resource 1, which Gio loads. Windows
+  keeps an app's own title bar light in dark mode unless asked: `darkFrame` sets
+  `DWMWA_USE_IMMERSIVE_DARK_MODE` (20, or 19 before 20H1) whenever `dark` changes.
 - **In-window dialogs** (`modal`): the first button has the focus when one opens, Escape
   cancels, and the backdrop takes every click under it.
 

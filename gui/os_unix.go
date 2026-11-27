@@ -127,4 +127,11 @@ func hide(_ *exec.Cmd) {}
 // viewEvent is a window's handle once it has one: nothing to do with it here.
 func viewEvent(gioevent.Event, string) {}
 
+// viewHandle is a Windows window's handle: none here.
+func viewHandle(gioevent.Event) uintptr { return 0 }
+
+// darkFrame: macOS's title bar follows the appearance by itself, and a Linux desktop draws
+// its own (the themed one is the palette's).
+func darkFrame(uintptr, bool) {}
+
 func recordVersion(string, string) {}
