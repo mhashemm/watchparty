@@ -7,6 +7,11 @@
 # each go build already uses every core and unbounded -j compiles the std lib 15
 # times over. Names and flags match the release assets (publisher.yml), in .bin/.
 #
+# The GUI needs cgo on Linux and macOS (Gio), so it builds only on its own OS: Linux for
+# this machine's arch, macOS for both; Windows from anywhere. Others are skipped, saying so.
+# Linux needs Gio's headers: libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev
+# libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev.
+#
 # make setup        the Windows installer, from gui/setup.nsi (needs makensis)
 # make fonts        Noto Color Emoji, which the GUI embeds: fetched, not in git (10 MB)
 # make [-j] test    unit tests (-race) and ./e2e.py in docker; -j runs the two together
@@ -44,15 +49,23 @@ $(NOTO):
 	echo "$(NOTO_SHA256)  $@.part" | shasum -a 256 -c -
 	mv $@.part $@
 
+# cgo: the GUI off Windows; buildable: what this machine can build (os/arch)
+cgo = $(if $(and $(filter gui,$(1)),$(filter-out windows,$(2))),1,0)
+buildable = $(or $(filter-out gui,$(1)),$(filter windows,$(2)),$(and $(filter $(2),$(word 1,$(subst /, ,$(HOST)))),$(or $(filter darwin,$(2)),$(filter $(3),$(word 2,$(subst /, ,$(HOST)))))))
+
 define rule
 $(call bin,$(1),$(2),$(3)): FORCE $(if $(filter gui,$(1)),$(NOTO))
-	CGO_ENABLED=0 GOOS=$(2) GOARCH=$(3) go build -ldflags='$(call ldflags,$(1),$(2))' -o $$@ $(pkg_$(1))
+	CGO_ENABLED=$(call cgo,$(1),$(2)) GOOS=$(2) GOARCH=$(3) go build -ldflags='$(call ldflags,$(1),$(2))' -o $$@ $(pkg_$(1))
 endef
 $(foreach c,$(COMPONENTS),$(foreach o,$(OSES),$(foreach a,$(sort $(ARCHS_$(o))),$(eval $(call rule,$(c),$(o),$(a))))))
 
 components := $(or $(filter $(COMPONENTS),$(MAKECMDGOALS)),$(COMPONENTS))
 platforms := $(or $(foreach o,$(filter $(OSES),$(MAKECMDGOALS)),$(addprefix $(o)/,$(ARCHS_$(o)))),$(HOST))
-targets := $(foreach c,$(components),$(foreach p,$(platforms),$(call bin,$(c),$(word 1,$(subst /, ,$(p))),$(word 2,$(subst /, ,$(p))))))
+pairs := $(foreach c,$(components),$(foreach p,$(platforms),$(c)/$(p)))
+split = $(call $(1),$(word 1,$(subst /, ,$(2))),$(word 2,$(subst /, ,$(2))),$(word 3,$(subst /, ,$(2))))
+targets := $(foreach t,$(pairs),$(if $(call split,buildable,$(t)),$(call split,bin,$(t))))
+skipped := $(strip $(foreach t,$(pairs),$(if $(call split,buildable,$(t)),,$(t))))
+$(if $(skipped),$(info skipped, as the GUI builds only on its own OS: $(skipped)))
 
 all $(COMPONENTS) $(OSES): $(targets)
 
@@ -70,7 +83,7 @@ unit: $(NOTO)
 # bus or display. The last run's logs land in .e2e/<phase>. E2E="--mode gui" passes flags.
 # It compiles into this machine's Go caches, which setup-go restores in CI. CI builds the
 # image beforehand, from a layer cache kept between runs, and says so with E2E_IMAGE_BUILT=1.
-e2e:
+e2e: $(NOTO)
 ifndef E2E_IMAGE_BUILT
 	docker build -q -t watchparty-e2e --build-arg UID="$$(id -u)" --build-arg GID="$$(id -g)" - < e2e.Dockerfile > /dev/null
 endif
