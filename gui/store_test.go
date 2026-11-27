@@ -250,12 +250,12 @@ func TestStoreKeepsWhereToContinue(t *testing.T) {
 	}
 }
 
-// Write notes a line under g.mu and saves once it has let go, so no page request waits
-// on the disk. Dropping that save would keep the history in memory until the party ends.
+// Write notes a line under g.mu and saves once it has let go, so the window's frames don't
+// wait on the disk. Dropping that save would keep the history in memory until the party ends.
 func TestALoggedLineReachesTheHistoryFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "gui.json")
-	g := &gui{store: openStore(path)}
+	g := newGUI(t.Context(), openStore(path))
 	g.session = g.store.begin(form{Mode: "relay", File: "/m/a.mkv", Relay: "ws://r"})
 	g.Write([]byte("2026/10/30 18:00:00 your address to share is -relay ws://r -room ROOM1 -secret SEC1\n"))
 	if got := openStore(path).History; len(got) != 1 || got[0].Room != "ROOM1" {

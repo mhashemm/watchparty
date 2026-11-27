@@ -2,7 +2,6 @@ package main
 
 import (
 	"image"
-	"strings"
 	"time"
 
 	"gioui.org/io/key"
@@ -14,17 +13,10 @@ import (
 	"github.com/mhashemm/watchparty/gui/art"
 )
 
-// historyActions is what the History tab asks of the app.
-type historyActions interface {
-	clearHistory() error
-}
-
 // historyTab is the History tab's widgets: per party, by when it started, its buttons.
 type historyTab struct {
 	again map[time.Time]*widget.Clickable
 	clear widget.Clickable
-	// confirm opens the dialog that asks before clearing
-	confirm bool
 }
 
 func (t *historyTab) button(started time.Time) *widget.Clickable {
@@ -51,8 +43,9 @@ func (v *view) historyTab(gtx C) D {
 	parties := v.parties
 	if t.clear.Clicked(gtx) {
 		v.ask(confirm{title: "Clear the whole party history?", ok: "Clear history", do: func() {
-			if v.hist != nil {
-				v.hist.clearHistory()
+			if v.app != nil {
+				v.app.clearHistory()
+				v.reload()
 			}
 		}})
 	}
@@ -193,15 +186,13 @@ func (v *view) resume(p session) {
 	}
 	t.room.SetText(p.Room)
 	t.secret.SetText(p.Secret)
-	if v.act == nil {
+	if v.app == nil {
 		return
 	}
 	f := t.form(v.settings)
 	f.Continue = p.Started.Format(time.RFC3339Nano)
 	t.err = ""
-	if err := v.act.start(f); err != nil {
-		t.err = "Diagnosis: " + strings.TrimSpace(err.Error()) + "."
-	}
+	v.startParty(f)
 }
 
 // confirm is a question asked in the window before something that can't be undone.

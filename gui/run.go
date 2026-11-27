@@ -1,0 +1,182 @@
+package main
+
+import (
+	"context"
+	"image"
+	"runtime"
+	"strings"
+	"time"
+
+	"gioui.org/app"
+	"gioui.org/io/system"
+	"gioui.org/layout"
+	"gioui.org/op"
+
+	"github.com/mhashemm/watchparty/gui/art"
+)
+
+// window runs the window until it closes: it draws the view, and closes when the app's
+// context ends (a signal, a restart).
+func (g *gui) window(w *app.Window) error {
+	sh, err := newShaper()
+	if err != nil {
+		return err
+	}
+	v := newView(&theme{shaper: sh, clock: systemClock()}, time.Now())
+	v.app, v.wake = g, w.Invalidate
+	g.mu.Lock()
+	g.changed = w.Invalidate
+	g.mu.Unlock()
+	opts := []app.Option{app.Title(windowTitle), app.Size(560, 940)}
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		// the desktop draws the title bar when it will (KDE, COSMIC, any X11 window manager),
+		// and ConfigEvent says when it won't (GNOME on Wayland): then the window draws its own
+		opts = append(opts, app.Decorated(false))
+	}
+	w.Option(opts...)
+	v.load()
+	go func() {
+		<-g.ctx.Done()
+		w.Perform(system.ActionClose)
+	}()
+	var (
+		ops op.Ops
+		bar titleBar
+		own bool
+	)
+	for {
+		switch e := w.Event().(type) {
+		case app.DestroyEvent:
+			return e.Err
+		case app.ConfigEvent:
+			own = !e.Config.Decorated
+			bar.deco.Maximized = e.Config.Mode == app.Maximized
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			if own {
+				if a := bar.deco.Update(gtx); a != 0 {
+					w.Perform(a)
+				}
+				d := v.titleBar(gtx, &bar, windowTitle)
+				op.Offset(image.Pt(0, d.Size.Y)).Add(gtx.Ops)
+				gtx.Constraints = layout.Exact(gtx.Constraints.Max.Sub(image.Pt(0, d.Size.Y)))
+			}
+			v.frame(gtx)
+			e.Frame(gtx.Ops)
+		default:
+			viewEvent(e, g.exe)
+		}
+	}
+}
+
+// async runs work off the window's goroutine (a dialog, the network), and its result on it,
+// in the next frame.
+func (v *view) async(work func() func(gtx C)) {
+	go func() {
+		v.results <- work()
+		v.wake()
+	}()
+}
+
+// sync applies what async work left, then reads what the app has new: the lines into the
+// party's watch, its chat, and how it stands.
+func (v *view) sync(gtx C) {
+	for {
+		select {
+		case f := <-v.results:
+			f(gtx)
+			continue
+		default:
+		}
+		break
+	}
+	if v.app == nil {
+		return
+	}
+	n := v.app.news(v.run, v.from, v.saidFrom)
+	if n.Run != v.run {
+		v.run, v.now = n.Run, &partyNow{ran: true, w: newWatch(v.started)}
+	}
+	if v.run == 0 {
+		return
+	}
+	p := v.now
+	for _, l := range n.Lines {
+		p.w.line(l)
+	}
+	p.lines = append(p.lines, n.Lines...)
+	v.from, v.saidFrom = n.From+len(n.Lines), n.SaidFrom+len(n.Said)
+	// chat is only while the party runs: gone from the window at its end
+	if n.Running {
+		p.said = append(p.said, n.Said...)
+		if over := len(p.said) - saidKept; over > 0 {
+			p.said = p.said[over:]
+		}
+	} else {
+		p.said = nil
+	}
+	if p.running && !n.Running {
+		v.reload()
+	}
+	p.running = n.Running
+	p.scr = p.w.render(n.Running, n.ExitErr, n.Refusal, v.started.Playlist, gtx.Now)
+	v.mood = art.Mood{Awake: !p.scr.sleep, Walking: p.scr.walking}
+}
+
+// startParty starts a party from f: Start the party, or Continue.
+func (v *view) startParty(f form) {
+	v.started = f
+	if err := v.app.start(f); err != nil {
+		v.party.err = "Diagnosis: " + strings.TrimSpace(err.Error()) + "."
+		return
+	}
+	v.reload()
+}
+
+// load fills the window from the store once it opens, and asks about updates and the tools.
+func (v *view) load() {
+	st := v.app.state()
+	v.settings, v.parties = st.settings, st.history
+	t := v.party
+	t.hostname.SetText(st.settings.Hostname)
+	t.relay.SetText(st.settings.Relay)
+	t.port.SetText(st.settings.Port)
+	t.local.Value = st.settings.Local
+	v.prefs.load(st.settings)
+	v.about = about{version: version, storePath: st.path, defaultMpv: st.defaultMpv, defaultCacheDir: st.defaultCacheDir}
+	v.checkTools()
+	v.async(func() func(gtx C) {
+		tag, _ := v.app.latest(context.Background())
+		return func(gtx C) {
+			if tag != "" && v.about.installed == "" {
+				v.about.latest, v.updateDot = tag, true
+			}
+		}
+	})
+}
+
+// reload reads the store again: a party began or ended, the history was cleared or shown.
+func (v *view) reload() {
+	if v.app == nil {
+		return
+	}
+	st := v.app.state()
+	v.settings, v.parties = st.settings, st.history
+}
+
+// checkTools asks for About's tools; only the latest ask's answer is shown.
+func (v *view) checkTools() {
+	if v.app == nil {
+		return
+	}
+	v.toolsAsked++
+	asked := v.toolsAsked
+	v.async(func() func(gtx C) {
+		list := v.app.tools(context.Background())
+		return func(gtx C) {
+			if asked == v.toolsAsked {
+				v.about.tools = list
+			}
+		}
+	})
+}

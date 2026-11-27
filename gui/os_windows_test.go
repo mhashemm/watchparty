@@ -1,14 +1,12 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"os"
 	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -61,45 +59,6 @@ func TestSetAppIDIsWhatTheTaskbarReads(t *testing.T) {
 		if got := property(hwnd, pid); got != want {
 			t.Errorf("property %d is %q, want %q", pid, got, want)
 		}
-	}
-}
-
-func TestGroupWindowKeepsLookingAfterAnotherGUIsWindow(t *testing.T) {
-	t.Parallel()
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
-	defer windows.CoUninitialize()
-	class, _ := windows.UTF16PtrFromString("Chrome_WidgetWin_1")
-	wc := struct {
-		size, style                        uint32
-		proc                               uintptr
-		clsExtra, wndExtra                 int32
-		instance, icon, cursor, background uintptr
-		menu, class                        *uint16
-		iconSm                             uintptr
-	}{proc: user32.NewProc("DefWindowProcW").Addr(), class: class}
-	wc.size = uint32(unsafe.Sizeof(wc))
-	user32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&wc)))
-	title := "watchparty-test-" + rand.Text()
-	wait := func(hwnd uintptr) bool {
-		for range 5000 {
-			if property(hwnd, 5) == appID {
-				return true
-			}
-			time.Sleep(time.Millisecond)
-		}
-		return false
-	}
-	c, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	other := newWindow(t, "Chrome_WidgetWin_1", title)
-	go groupWindow(c, filepath.Join(t.TempDir(), "watchparty-gui.exe"), title, time.Millisecond)
-	if !wait(other) {
-		t.Fatal("the window that was already open never got the id")
-	}
-	if !wait(newWindow(t, "Chrome_WidgetWin_1", title)) {
-		t.Error("a window opened after another GUI's was matched never got the id")
 	}
 }
 

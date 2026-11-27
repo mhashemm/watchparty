@@ -1,21 +1,12 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"os/exec"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/party"
@@ -54,237 +45,6 @@ func TestConfig(t *testing.T) {
 	}
 }
 
-func TestGuard(t *testing.T) {
-	t.Parallel()
-	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	cases := []struct {
-		method, path, host, token string
-		want                      int
-	}{
-		{"GET", "/", "127.0.0.1:1", "", http.StatusOK},
-		{"GET", "/", "evil.com", "", http.StatusForbidden},
-		{"GET", "/log", "127.0.0.1:1", "", http.StatusForbidden},
-		{"GET", "/log", "127.0.0.1:1", "wrong", http.StatusForbidden},
-		{"GET", "/log", "127.0.0.1:1", g.token, http.StatusOK},
-		{"POST", "/start", "evil.com", g.token, http.StatusForbidden},
-		{"POST", "/start", "127.0.0.1:1", "", http.StatusForbidden},
-		{"POST", "/start", "127.0.0.1:1", g.token, http.StatusBadRequest},
-	}
-	for _, c := range cases {
-		r := httptest.NewRequest(c.method, c.path, nil)
-		r.Host = c.host
-		r.Header.Set("X-Token", c.token)
-		w := httptest.NewRecorder()
-		g.ServeHTTP(w, r)
-		if w.Code != c.want {
-			t.Errorf("%s %s host=%s token=%q: %d, want %d", c.method, c.path, c.host, c.token, w.Code, c.want)
-		}
-	}
-}
-
-// The browser can't fetch app.css or app.js: only GET / is open without the token, so a tag
-// inline didn't replace would serve a page with no style or no script.
-func TestPageInlinesItsStyleAndScript(t *testing.T) {
-	t.Parallel()
-	// a Windows checkout has CRLF line endings (CI's windows job)
-	crlf := inline(strings.ReplaceAll(pageHTML, "\n", "\r\n"), pageCSS, pageJS)
-	for _, tag := range []string{`href="app.css"`, `src="app.js"`} {
-		if bytes.Contains(page, []byte(tag)) {
-			t.Errorf("the page still loads %s instead of inlining it", tag)
-		}
-		if bytes.Contains(crlf, []byte(tag)) {
-			t.Errorf("with CRLF line endings, the page still loads %s instead of inlining it", tag)
-		}
-	}
-}
-
-// One syntax error anywhere in the page's script kills every button, and nothing
-// on the Go side notices. vm.Script parses it the way a browser parses a classic
-// <script>: no top-level await, no top-level return.
-func TestPageScriptParses(t *testing.T) {
-	t.Parallel()
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not installed")
-	}
-	_, script, ok := bytes.Cut(page, []byte("<script>"))
-	script, _, ok2 := bytes.Cut(script, []byte("</script>"))
-	if !ok || !ok2 {
-		t.Fatal("no <script> in index.html")
-	}
-	cmd := exec.Command(node, "-e", `new (require("vm").Script)(require("fs").readFileSync(0, "utf8"), { filename: "index.html" })`)
-	cmd.Stdin = bytes.NewReader(script)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("the page script does not parse:\n%s", out)
-	}
-}
-
-// Chromium ignores a Preferences file it can't parse, so one typo would bring back both the
-// password manager and the clipped download bubble
-func TestTheProfileTurnsOffPasswordsAndTheDownloadBubble(t *testing.T) {
-	t.Parallel()
-	var p struct {
-		Credentials bool `json:"credentials_enable_service"`
-		Profile     struct {
-			Passwords *bool `json:"password_manager_enabled"`
-		} `json:"profile"`
-		Downloads struct {
-			Bubble *bool `json:"partial_view_enabled"`
-		} `json:"download_bubble"`
-	}
-	if err := json.Unmarshal([]byte(profilePrefs), &p); err != nil {
-		t.Fatal(err)
-	}
-	if p.Credentials || p.Profile.Passwords == nil || *p.Profile.Passwords || p.Downloads.Bubble == nil || *p.Downloads.Bubble {
-		t.Fatalf("profilePrefs = %s", profilePrefs)
-	}
-}
-
-func TestOnlyEdgeGetsTheEdgeFlag(t *testing.T) {
-	t.Parallel()
-	for browser, want := range map[string]bool{
-		"google-chrome":                 false,
-		"chromium":                      false,
-		"brave-browser":                 false,
-		"org.chromium.Chromium.desktop": false,
-		"com.microsoft.Edge.desktop":    true,
-		`C:\Program Files\Google\Chrome\Application\chrome.exe`: false,
-		"microsoft-edge": true,
-		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`: true,
-	} {
-		if got := slices.Contains(browserArgs(browser, "u", "p"), "--disable-features=msImplicitSignin"); got != want {
-			t.Errorf("%s: Edge flag = %v, want %v", browser, got, want)
-		}
-	}
-}
-
-func TestIdle(t *testing.T) {
-	t.Parallel()
-	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	g.idleAfter = 0
-	if g.idle() {
-		t.Fatal("idle before the page's first poll, which gets a grace period")
-	}
-	g.idleAfter = time.Hour
-	g.lastPoll = time.Now().Add(-2 * time.Hour)
-	if !g.idle() {
-		t.Fatal("not idle with no party and no poll for longer than idleAfter")
-	}
-	req := httptest.NewRequest("GET", "/log", nil)
-	req.Host = g.host
-	req.Header.Set("X-Token", g.token)
-	g.ServeHTTP(httptest.NewRecorder(), req)
-	if g.idle() {
-		t.Fatal("still idle after the page polled")
-	}
-	g.lastPoll = time.Now().Add(-2 * time.Hour)
-	g.cancel = func() {}
-	if g.idle() {
-		t.Fatal("idle during a party")
-	}
-	g.cancel, g.pages = nil, 1
-	if g.idle() {
-		t.Fatal("idle with a page connected")
-	}
-}
-
-func TestTheLastPageGoingEndsTheGUI(t *testing.T) {
-	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	g := newGUI(t.Context(), ln.Addr().String(), openStore(t.TempDir()+"/gui.json"))
-	quit := make(chan struct{})
-	g.quit = func() { close(quit) }
-	g.closeGrace = 0
-	srv := &http.Server{Handler: g}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-
-	open := func() io.ReadCloser {
-		req, _ := http.NewRequest("GET", "http://"+g.host+"/alive", nil)
-		req.Header.Set("X-Token", g.token)
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ct := res.Header.Get("Content-Type"); res.StatusCode != 200 || ct != "text/event-stream" {
-			t.Fatalf("GET /alive = %d %q, want 200 text/event-stream", res.StatusCode, ct)
-		}
-		buf := make([]byte, 3)
-		if _, err := io.ReadFull(res.Body, buf); err != nil || string(buf) != ":\n\n" {
-			t.Fatalf("first heartbeat = %q, %v", buf, err)
-		}
-		return res.Body
-	}
-	open().Close()
-	<-quit
-}
-
-func TestTheGUIStaysWhileAPageIsConnected(t *testing.T) {
-	t.Parallel()
-	g := newGUI(t.Context(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	quits := 0
-	g.quit = func() { quits++ }
-	g.pages = 2
-	g.pageGone()
-	g.checkPages()
-	if quits != 0 {
-		t.Fatal("quit with a page still connected")
-	}
-	g.pages = 1
-	g.checkPages()
-	if quits != 0 {
-		t.Fatal("quit although the page reconnected within the grace")
-	}
-	g.pages = 0
-	g.checkPages()
-	if quits != 1 {
-		t.Fatal("didn't quit with no page back after the grace")
-	}
-}
-
-// A page holding /alive hears of new log lines at once, so it reads them without waiting for
-// its next poll; the heartbeat stays a comment, which the page doesn't answer.
-func TestAPageHearsOfNewLinesAtOnce(t *testing.T) {
-	t.Parallel()
-	g := newGUI(t.Context(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	g.quit = func() {}
-	srv := httptest.NewServer(http.HandlerFunc(g.alive))
-	defer srv.Close()
-	res, err := http.Get(srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	stream := bufio.NewReader(res.Body)
-	read := func() string {
-		line, err := stream.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		stream.ReadString('\n') // the blank line ending the event
-		return line
-	}
-	if got := read(); got != ":\n" {
-		t.Fatalf("first said %q, want the heartbeat", got)
-	}
-	g.Write([]byte("2026/11/21 00:00:00 init done\n"))
-	if got := read(); got != "data: lines\n" {
-		t.Fatalf("after a line said %q, want the news", got)
-	}
-}
-
-func TestShuttingDownIsNotAClosedWindow(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithCancel(t.Context())
-	g := newGUI(ctx, "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	g.quit = func() { t.Fatal("quit") }
-	cancel()
-	g.checkPages()
-}
-
 func TestInstallStepsMatchTheInstaller(t *testing.T) {
 	t.Parallel()
 	app := `C:\Users\me\AppData\Local\Programs\watchparty`
@@ -308,28 +68,20 @@ func TestInstallStepsMatchTheInstaller(t *testing.T) {
 // A message goes to the running party as typed; with no party, or nothing typed, it goes nowhere.
 func TestChatGoesToTheRunningParty(t *testing.T) {
 	t.Parallel()
-	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	post := func(body string) int {
-		r := httptest.NewRequest("POST", "/chat", strings.NewReader(body))
-		r.Host = g.host
-		r.Header.Set("X-Token", g.token)
-		w := httptest.NewRecorder()
-		g.ServeHTTP(w, r)
-		return w.Code
-	}
-	if got := post(`{"text":"hi"}`); got != http.StatusConflict {
-		t.Fatalf("with no party: %d", got)
+	g := newGUI(context.Background(), openStore(t.TempDir()+"/gui.json"))
+	if err := g.chat("hi"); !errors.Is(err, errNoParty) {
+		t.Fatalf("with no party: %v", err)
 	}
 	chat := make(chan string, 1)
 	g.cancel, g.chatTo = func() {}, chat
-	if got := post(`{"text":"  "}`); got != http.StatusOK || len(chat) != 0 {
-		t.Fatalf("nothing typed: %d, %d sent", got, len(chat))
+	if err := g.chat("  "); err != nil || len(chat) != 0 {
+		t.Fatalf("nothing typed: %v, %d sent", err, len(chat))
 	}
-	if got := post(`{"text":"hi there"}`); got != http.StatusOK {
-		t.Fatalf("a message: %d", got)
+	if err := g.chat("hi there"); err != nil {
+		t.Fatalf("a message: %v", err)
 	}
-	if got := post(`{"text":"again"}`); got != http.StatusServiceUnavailable {
-		t.Fatalf("with the party's queue full: %d", got)
+	if err := g.chat("again"); !errors.Is(err, errBusy) {
+		t.Fatalf("with the party's queue full: %v", err)
 	}
 	if got := <-chat; got != "hi there" {
 		t.Fatalf("sent %q", got)
@@ -341,29 +93,20 @@ func TestChatGoesToTheRunningParty(t *testing.T) {
 func TestThePickerSettingReachesTheRunningParty(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	g := newGUI(context.Background(), "127.0.0.1:1", openStore(dir+"/gui.json"))
-	save := func(body string) int {
-		t.Helper()
-		r := httptest.NewRequest("POST", "/settings", strings.NewReader(body))
-		r.Host = g.host
-		r.Header.Set("X-Token", g.token)
-		w := httptest.NewRecorder()
-		g.ServeHTTP(w, r)
-		return w.Code
-	}
+	g := newGUI(context.Background(), openStore(dir+"/gui.json"))
 	if g.store.Settings.MpvPicker != "" {
 		t.Fatal("not the default before anyone set it")
 	}
-	if got := save(`{"mpvPicker":"sometimes"}`); got != http.StatusBadRequest {
-		t.Fatalf("a mode that isn't one: %d", got)
+	if err := g.saveSettings(settings{MpvPicker: "sometimes"}); err == nil {
+		t.Fatal("a mode that isn't one was saved")
 	}
-	if got := save(`{"mpvPicker":"off"}`); got != http.StatusOK || openStore(dir+"/gui.json").Settings.MpvPicker != "off" {
-		t.Fatalf("saving off: %d, saved %q", got, openStore(dir+"/gui.json").Settings.MpvPicker)
+	if err := g.saveSettings(settings{MpvPicker: "off"}); err != nil || openStore(dir+"/gui.json").Settings.MpvPicker != "off" {
+		t.Fatalf("saving off: %v, saved %q", err, openStore(dir+"/gui.json").Settings.MpvPicker)
 	}
 	picker := make(chan string, 1)
 	g.cancel, g.pickerTo = func() {}, picker
-	save(`{"mpvPicker":"corner"}`)
-	save(`{}`)
+	g.saveSettings(settings{MpvPicker: "corner"})
+	g.saveSettings(settings{})
 	select {
 	case got := <-picker:
 		if got != mpv.PickerMove || len(picker) != 0 {
@@ -377,58 +120,42 @@ func TestThePickerSettingReachesTheRunningParty(t *testing.T) {
 // A reaction goes to the running party too, on its own channel, and only one of the picker's.
 func TestAReactionGoesToTheRunningParty(t *testing.T) {
 	t.Parallel()
-	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
-	post := func(body string) int {
-		r := httptest.NewRequest("POST", "/react", strings.NewReader(body))
-		r.Host = g.host
-		r.Header.Set("X-Token", g.token)
-		w := httptest.NewRecorder()
-		g.ServeHTTP(w, r)
-		return w.Code
-	}
-	if got := post(`{"code":"1f602"}`); got != http.StatusConflict {
-		t.Fatalf("with no party: %d", got)
+	g := newGUI(context.Background(), openStore(t.TempDir()+"/gui.json"))
+	if err := g.react("1f602"); !errors.Is(err, errNoParty) {
+		t.Fatalf("with no party: %v", err)
 	}
 	react, chat := make(chan string, 1), make(chan string, 1)
 	g.cancel, g.reactTo, g.chatTo = func() {}, react, chat
-	if got := post(`{"code":"1f600"}`); got != http.StatusBadRequest || len(react) != 0 {
-		t.Fatalf("one not in the picker: %d, %d sent", got, len(react))
+	if err := g.react("1f600"); err == nil || len(react) != 0 {
+		t.Fatalf("one not in the picker: %v, %d sent", err, len(react))
 	}
-	if got := post(`{"code":"1f602"}`); got != http.StatusOK {
-		t.Fatalf("a reaction: %d", got)
+	if err := g.react("1f602"); err != nil {
+		t.Fatalf("a reaction: %v", err)
 	}
-	if got := post(`{"code":"1f62d"}`); got != http.StatusServiceUnavailable {
-		t.Fatalf("with the party's queue full: %d", got)
+	if err := g.react("1f62d"); !errors.Is(err, errBusy) {
+		t.Fatalf("with the party's queue full: %v", err)
 	}
 	if got := <-react; got != "1f602" || len(chat) != 0 {
 		t.Fatalf("sent %q, and %d as chat", got, len(chat))
 	}
 }
 
-// Chat is kept only for the page, beside the log and never in it, and only while its party
+// Chat is kept only for the window, beside the log and never in it, and only while its party
 // runs: one from an earlier party is dropped, and the end takes them all.
 func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	t.Parallel()
-	g := newGUI(context.Background(), "127.0.0.1:1", openStore(t.TempDir()+"/gui.json"))
+	g := newGUI(context.Background(), openStore(t.TempDir()+"/gui.json"))
 	type said struct {
 		Who, Text string
 		Ours      bool
 	}
 	poll := func(from int) (lines []string, chat []said) {
 		t.Helper()
-		r := httptest.NewRequest("GET", fmt.Sprintf("/log?run=%d&said=%d", g.run, from), nil)
-		r.Host = g.host
-		r.Header.Set("X-Token", g.token)
-		w := httptest.NewRecorder()
-		g.ServeHTTP(w, r)
-		res := struct {
-			Lines []string
-			Said  []said
-		}{}
-		if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
-			t.Fatal(err)
+		n := g.news(g.run, 0, from)
+		for _, m := range n.Said {
+			chat = append(chat, said{m.Who, m.Text, m.Ours})
 		}
-		return res.Lines, res.Said
+		return n.Lines, chat
 	}
 	g.run, g.cancel = 1, func() {}
 	earlier, heard := g.heard(0), g.heard(1)
@@ -446,7 +173,7 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	if _, chat := poll(0); len(chat) != 0 {
 		t.Fatalf("after the end: %v", chat)
 	}
-	// a member sending without end: only the last saidKept are kept, and a poll counts from
+	// a member sending without end: only the last saidKept are kept, and a read counts from
 	// the run's first message, dropped or not
 	g.run, g.cancel = 2, func() {}
 	heard = g.heard(2)
@@ -458,5 +185,41 @@ func TestChatIsKeptOnlyWhileThePartyRuns(t *testing.T) {
 	}
 	if _, chat := poll(saidKept + 1); fmt.Sprint(chat) != fmt.Sprintf("[{sam %d false} {sam %d false}]", saidKept+1, saidKept+2) {
 		t.Fatalf("from the %dth: %v", saidKept+1, chat)
+	}
+}
+
+// The window reads the log from where it stopped; a new party's lines start from its first, so
+// two runs never splice.
+func TestNewsNeverSplicesTwoRuns(t *testing.T) {
+	t.Parallel()
+	g := newGUI(context.Background(), openStore(t.TempDir()+"/gui.json"))
+	g.run = 1
+	fmt.Fprintln(g, "a\nb")
+	n := g.news(1, 0, 0)
+	if strings.Join(n.Lines, ",") != "a,b" || n.Run != 1 {
+		t.Fatalf("first read: %+v", n)
+	}
+	fmt.Fprintln(g, "c")
+	if n := g.news(1, 2, 0); strings.Join(n.Lines, ",") != "c" || n.From != 2 {
+		t.Fatalf("from 2: %+v", n)
+	}
+	g.run, g.lines = 2, []string{"x"}
+	if n := g.news(1, 3, 0); strings.Join(n.Lines, ",") != "x" || n.From != 0 || n.Run != 2 {
+		t.Fatalf("a read from the run before: %+v", n)
+	}
+}
+
+// Changes reach the window: a line, a message, the party's end each ask it for a frame.
+func TestTheWindowHearsOfEachChange(t *testing.T) {
+	t.Parallel()
+	g := newGUI(context.Background(), openStore(t.TempDir()+"/gui.json"))
+	asked := 0
+	g.changed = func() { asked++ }
+	fmt.Fprintln(g, "a line")
+	g.run, g.cancel = 1, func() {}
+	g.heard(1)(mpv.Said{Who: "sam", Text: "hi"})
+	g.ended(nil)
+	if asked != 3 {
+		t.Fatalf("asked for %d frames, want 3", asked)
 	}
 }

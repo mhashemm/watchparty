@@ -18,14 +18,6 @@ import (
 	"github.com/mhashemm/watchparty/mpv"
 )
 
-// settingsActions is what the Settings tab asks of the app.
-type settingsActions interface {
-	saveSettings(s settings) error
-	pick(field string) (string, error)
-	update() (string, error)
-	restart() error
-}
-
 // about is what About shows: this build, an update, and the tools it found.
 type about struct {
 	version string
@@ -45,7 +37,7 @@ type settingsTab struct {
 	saved                                            string
 	savedAt                                          time.Time
 	update, restart                                  widget.Clickable
-	updating                                         bool
+	updating, picking                                bool
 	// versionNote replaces the version line: an update's failure, a restart under way
 	versionNote string
 	steps       map[string]*widget.Bool
@@ -90,11 +82,18 @@ func (v *view) settingsTab(gtx C) D {
 		e     *widget.Editor
 		field string
 	}{{&t.browseMpv, &t.mpv, "mpv"}, {&t.browseCache, &t.cacheDir, "cacheDir"}} {
-		if b.c.Clicked(gtx) && v.setAct != nil {
-			if path, err := v.setAct.pick(b.field); err == nil && path != "" {
-				b.e.SetText(path)
-			}
-			gtx.Execute(focusCmd(b.e))
+		if b.c.Clicked(gtx) && v.app != nil && !t.picking {
+			t.picking = true
+			v.async(func() func(gtx C) {
+				path, err := v.app.pick(b.field)
+				return func(gtx C) {
+					t.picking = false
+					if err == nil && path != "" {
+						b.e.SetText(path)
+					}
+					gtx.Execute(focusCmd(b.e))
+				}
+			})
 		}
 	}
 	if t.saved != "" && gtx.Now.Sub(t.savedAt) >= savedFor {
@@ -103,14 +102,19 @@ func (v *view) settingsTab(gtx C) D {
 	if t.saved != "" {
 		gtx.Execute(op.InvalidateCmd{At: t.savedAt.Add(savedFor)})
 	}
-	if t.update.Clicked(gtx) && !running && v.setAct != nil {
+	if t.update.Clicked(gtx) && !running && v.app != nil && !t.updating {
 		t.updating = true
-		if tag, err := v.setAct.update(); err != nil {
-			t.versionNote = "Update failed: " + strings.TrimSpace(err.Error()) + "."
-		} else {
-			v.installed(tag)
-		}
-		t.updating = false
+		v.async(func() func(gtx C) {
+			tag, err := v.app.install()
+			return func(gtx C) {
+				t.updating = false
+				if err != nil {
+					t.versionNote = "Update failed: " + strings.TrimSpace(err.Error()) + "."
+				} else {
+					v.installed(tag)
+				}
+			}
+		})
 	}
 	if t.restart.Clicked(gtx) && !running {
 		v.restartNow()
@@ -182,8 +186,8 @@ func (v *view) saveSettings(gtx C) {
 	s.CreateKey, s.PPort, s.CacheDir = strings.TrimSpace(t.createKey.Text()), strings.TrimSpace(t.pport.Text()), strings.TrimSpace(t.cacheDir.Text())
 	s.MpvPicker = t.picker.Value
 	t.savedAt = gtx.Now
-	if v.setAct != nil {
-		if err := v.setAct.saveSettings(s); err != nil {
+	if v.app != nil {
+		if err := v.app.saveSettings(s); err != nil {
 			t.saved = "Couldn't save: " + strings.TrimSpace(err.Error())
 			return
 		}
@@ -195,7 +199,7 @@ func (v *view) saveSettings(gtx C) {
 	if v.party.relay.Text() == "" {
 		v.party.relay.SetText(s.Relay)
 	}
-	if mpvChanged && v.checkTools != nil {
+	if mpvChanged {
 		v.checkTools()
 	}
 }
@@ -209,10 +213,10 @@ func (v *view) installed(tag string) {
 }
 
 func (v *view) restartNow() {
-	if v.setAct == nil {
+	if v.app == nil {
 		return
 	}
-	if err := v.setAct.restart(); err != nil {
+	if err := v.app.restart(); err != nil {
 		v.prefs.versionNote = "Restart failed: " + strings.TrimSpace(err.Error()) + "."
 		return
 	}

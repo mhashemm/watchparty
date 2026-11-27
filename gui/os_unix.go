@@ -3,169 +3,19 @@
 package main
 
 import (
-	"cmp"
-	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
 	"runtime"
-	"slices"
 	"strings"
-	"syscall"
-	"time"
 
+	gioevent "gioui.org/io/event"
 	"github.com/godbus/dbus/v5"
 )
 
 const exeSuffix = ""
-
-var chromiumFamily = regexp.MustCompile(`(?i)chrom|edge|brave|vivaldi`)
-
-func browsers() []browser {
-	home, _ := os.UserHomeDir()
-	if runtime.GOOS == "darwin" {
-		return macBrowsers(home)
-	}
-	return desktopBrowsers(os.Getenv, home)
-}
-
-func macBrowsers(home string) []browser {
-	var found []browser
-	for _, app := range []string{"Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium", "Vivaldi"} {
-		for _, dir := range []string{"/Applications", filepath.Join(home, "Applications")} {
-			path := filepath.Join(dir, app+".app", "Contents", "MacOS", app)
-			found = append(found, browser{path, []string{path}, os.TempDir()})
-		}
-	}
-	return found
-}
-
-func desktopBrowsers(getenv func(string) string, home string) []browser {
-	dataHome := cmp.Or(getenv("XDG_DATA_HOME"), filepath.Join(home, ".local", "share"))
-	data := append([]string{dataHome}, filepath.SplitList(cmp.Or(getenv("XDG_DATA_DIRS"), "/usr/local/share:/usr/share"))...)
-	for _, d := range []string{filepath.Join(dataHome, "flatpak", "exports", "share"), "/var/lib/flatpak/exports/share", "/var/lib/snapd/desktop"} {
-		if !slices.Contains(data, d) {
-			data = append(data, d)
-		}
-	}
-	seen := map[string]bool{}
-	var found []browser
-	for _, d := range data {
-		dir := filepath.Join(d, "applications")
-		files, _ := os.ReadDir(dir)
-		for _, f := range files {
-			id := f.Name()
-			if !strings.HasSuffix(id, ".desktop") || seen[id] {
-				continue
-			}
-			seen[id] = true
-			e := keyFile(filepath.Join(dir, id), "[Desktop Entry]")
-			cmd := execArgs(e["Exec"])
-			if e["Hidden"] == "true" || len(cmd) == 0 || !chromiumFamily.MatchString(id) || !slices.Contains(strings.Split(e["MimeType"], ";"), "x-scheme-handler/https") {
-				continue
-			}
-			root := os.TempDir()
-			if app := e["X-Flatpak"]; app != "" {
-				root = filepath.Join(home, ".var", "app", app, "cache")
-			} else if name := e["X-SnapInstanceName"]; name != "" {
-				root = filepath.Join(home, "snap", name, "common")
-			}
-			found = append(found, browser{id, cmd, root})
-		}
-	}
-	def := defaultBrowser(getenv, home, data)
-	if i := slices.IndexFunc(found, func(b browser) bool { return b.name == def }); i > 0 {
-		b := found[i]
-		found = slices.Insert(slices.Delete(found, i, i+1), 0, b)
-	}
-	return found
-}
-
-func defaultBrowser(getenv func(string) string, home string, data []string) string {
-	dirs := append([]string{cmp.Or(getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config"))}, filepath.SplitList(cmp.Or(getenv("XDG_CONFIG_DIRS"), "/etc/xdg"))...)
-	for _, d := range data {
-		dirs = append(dirs, filepath.Join(d, "applications"))
-	}
-	var names []string
-	for desktop := range strings.SplitSeq(strings.ToLower(getenv("XDG_CURRENT_DESKTOP")), ":") {
-		if desktop != "" {
-			names = append(names, desktop+"-mimeapps.list")
-		}
-	}
-	names = append(names, "mimeapps.list")
-	for _, d := range dirs {
-		for _, name := range names {
-			if v := keyFile(filepath.Join(d, name), "[Default Applications]")["x-scheme-handler/https"]; v != "" {
-				return strings.Split(v, ";")[0]
-			}
-		}
-	}
-	return ""
-}
-
-func keyFile(path, group string) map[string]string {
-	data, _ := os.ReadFile(path)
-	keys := map[string]string{}
-	in := false
-	for line := range strings.Lines(string(data)) {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") {
-			in = line == group
-		} else if k, v, ok := strings.Cut(line, "="); in && ok {
-			keys[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
-	}
-	return keys
-}
-
-func execArgs(line string) []string {
-	var args []string
-	var arg strings.Builder
-	started, quoted, escaped := false, false, false
-	for _, r := range line {
-		switch {
-		case escaped:
-			arg.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case r == '"':
-			quoted = !quoted
-			started = true
-		case (r == ' ' || r == '\t') && !quoted:
-			if started {
-				args = append(args, arg.String())
-				arg.Reset()
-				started = false
-			}
-		default:
-			arg.WriteRune(r)
-			started = true
-		}
-	}
-	if started {
-		args = append(args, arg.String())
-	}
-	args = slices.DeleteFunc(args, func(a string) bool {
-		return a == "@@" || a == "@@u" || len(a) == 2 && a[0] == '%' && a != "%%"
-	})
-	for i := range args {
-		args[i] = strings.ReplaceAll(args[i], "%%", "%")
-	}
-	return args
-}
-
-func openURL(url string) *exec.Cmd {
-	if runtime.GOOS == "darwin" {
-		return exec.Command("open", url)
-	}
-	return exec.Command("xdg-open", url)
-}
 
 func pickFile() (string, error) {
 	if runtime.GOOS == "darwin" {
@@ -210,7 +60,21 @@ func videoFilter() portalFilter {
 	return f
 }
 
+// pickSave asks where to save a file, name suggested.
+func pickSave(name string) (string, error) {
+	if runtime.GOOS == "darwin" {
+		return dialog("osascript", "-e", `POSIX path of (choose file name default name "`+name+`")`)
+	}
+	return portalAsk("SaveFile", "Save the chart", map[string]dbus.Variant{"current_name": dbus.MakeVariant(name)})
+}
+
 func portalPick(title string, options map[string]dbus.Variant) (string, error) {
+	return portalAsk("OpenFile", title, options)
+}
+
+// portalAsk calls the portal's FileChooser method (OpenFile or SaveFile) and answers the path
+// chosen, or "" when the person cancelled.
+func portalAsk(method, title string, options map[string]dbus.Variant) (string, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return "", err
@@ -229,7 +93,7 @@ func portalPick(title string, options map[string]dbus.Variant) (string, error) {
 
 	options["handle_token"] = dbus.MakeVariant(token)
 	err = conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop").
-		Call("org.freedesktop.portal.FileChooser.OpenFile", 0, "", title, options).Err
+		Call("org.freedesktop.portal.FileChooser."+method, 0, "", title, options).Err
 	if err != nil {
 		return "", err
 	}
@@ -260,19 +124,7 @@ func fileURIPath(uri string) (string, error) {
 
 func hide(_ *exec.Cmd) {}
 
-// ownGroup starts the browser in a process group of its own, so killGroup reaches its
-// helpers too: Chrome's network service outlives the main process and writes into the
-// profile after it was deleted.
-func ownGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-}
-
-// killGroup kills the browser and whatever of its helpers are still running. Called
-// again after the browser exited, the group is its helpers alone, or gone.
-func killGroup(cmd *exec.Cmd) {
-	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-}
-
-func groupWindow(context.Context, string, string, time.Duration) {}
+// viewEvent is a window's handle once it has one: nothing to do with it here.
+func viewEvent(gioevent.Event, string) {}
 
 func recordVersion(string, string) {}

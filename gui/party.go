@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"strconv"
@@ -35,16 +36,6 @@ type partyNow struct {
 	lines   []string
 }
 
-// partyActions is what the Party tab asks of the app.
-type partyActions interface {
-	start(f form) error
-	stop()
-	chat(text string) error
-	react(code string) error
-	pick(field string) (string, error)
-	saveChart() (string, error)
-}
-
 // partyTab is the Party tab's widgets and what they remember between frames.
 type partyTab struct {
 	invite, hostname, file, relay, room, secret, addrs, psecret, port widget.Editor
@@ -72,6 +63,8 @@ type partyTab struct {
 	hint            string
 	reactedAt       time.Time
 	feed            map[*feedGroup]*widget.Clickable
+	// picking and saving: the OS's dialog is open, so the button waits for it
+	picking, saving bool
 }
 
 type emojiButton struct {
@@ -184,27 +177,34 @@ func (v *view) partyForm(gtx C, t *partyTab, running bool) D {
 	if t.goButton.Clicked(gtx) {
 		if running {
 			v.ask(confirm{title: "End the party?", text: "mpv closes for you, and everyone else keeps watching.", ok: "End the party", do: func() {
-				if v.act != nil {
-					v.act.stop()
+				if v.app != nil {
+					v.app.stop()
 				}
 			}})
-		} else if v.act != nil {
+		} else if v.app != nil {
 			t.err = ""
 			if strings.TrimSpace(t.file.Text()) == "" {
 				t.err = "Pick a video first."
 				gtx.Execute(focusCmd(&t.file))
-			} else if err := v.act.start(t.form(v.settings)); err != nil {
-				t.err = "Diagnosis: " + err.Error() + "."
+			} else {
+				v.startParty(t.form(v.settings))
 			}
 		}
 	}
-	if t.browse.Clicked(gtx) && v.act != nil {
-		if path, err := v.act.pick("file"); err != nil {
-			t.err = "No file picker found on this computer. Type or paste the full path instead."
-		} else if path != "" {
-			t.file.SetText(path)
-		}
-		gtx.Execute(focusCmd(&t.file))
+	if t.browse.Clicked(gtx) && v.app != nil && !t.picking {
+		t.picking = true
+		v.async(func() func(gtx C) {
+			path, err := v.app.pick("file")
+			return func(gtx C) {
+				t.picking = false
+				if err != nil {
+					t.err = "No file picker found on this computer. Type or paste the full path instead."
+				} else if path != "" {
+					t.file.SetText(path)
+				}
+				gtx.Execute(focusCmd(&t.file))
+			}
+		})
 	}
 	var kids []layout.FlexChild
 	if !running {
@@ -793,11 +793,18 @@ func (v *view) chatBox(gtx C, away bool, said []said) D {
 func (v *view) sendChat(gtx C) {
 	t := v.party
 	text := t.chat.Text()
-	if strings.TrimSpace(text) == "" || v.act == nil {
+	if strings.TrimSpace(text) == "" || v.app == nil {
 		return
 	}
-	if err := v.act.chat(text); err != nil {
-		t.hint = "Not sent: " + err.Error()
+	if err := v.app.chat(text); err != nil {
+		switch {
+		case errors.Is(err, errNoParty):
+			t.hint = "Not sent: the party has ended."
+		case errors.Is(err, errBusy):
+			t.hint = "Not sent: too many messages at once. Send it again in a moment."
+		default:
+			t.hint = "Not sent: " + err.Error() + "."
+		}
 		return
 	}
 	t.chat.SetText("")
@@ -850,11 +857,18 @@ func (v *view) timeCell(gtx C, at time.Time) D {
 func (v *view) reactRow(gtx C) D {
 	t := v.party
 	for i := range t.emoji {
-		if t.emoji[i].c.Clicked(gtx) && v.act != nil {
+		if t.emoji[i].c.Clicked(gtx) && v.app != nil {
 			t.reactedAt = gtx.Now
 			t.stripOpen = false
-			if err := v.act.react(t.emoji[i].code); err != nil {
-				t.hint = "Your reaction wasn't sent: " + err.Error()
+			if err := v.app.react(t.emoji[i].code); err != nil {
+				switch {
+				case errors.Is(err, errNoParty):
+					t.hint = "Your reaction wasn't sent: the party has ended."
+				case errors.Is(err, errBusy):
+					t.hint = "Your reaction wasn't sent: too many at once. Pick it again in a moment."
+				default:
+					t.hint = "Your reaction wasn't sent: " + err.Error() + "."
+				}
 			}
 		}
 	}
@@ -1042,12 +1056,19 @@ func (v *view) patientChart(gtx C, t *partyTab, open bool, lines []string) D {
 	if open && !t.chart.Value {
 		t.chart.Value = true
 	}
-	if t.save.Clicked(gtx) && v.act != nil {
-		if where, err := v.act.saveChart(); err != nil {
-			t.saved = "Couldn't save: " + err.Error()
-		} else if where != "" {
-			t.saved = "Saved as " + where + "."
-		}
+	if t.save.Clicked(gtx) && v.app != nil && !t.saving {
+		t.saving = true
+		v.async(func() func(gtx C) {
+			where, err := v.app.saveChart()
+			return func(gtx C) {
+				t.saving = false
+				if err != nil {
+					t.saved = "Couldn't save: " + err.Error() + "."
+				} else if where != "" {
+					t.saved = "Saved as " + where + "."
+				}
+			}
+		})
 	}
 	// its 6dp above folds into the feed's 18
 	return layout.Inset{Bottom: 16}.Layout(gtx, func(gtx C) D {

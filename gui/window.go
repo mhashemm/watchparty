@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"image"
 	"image/color"
 	"math"
@@ -39,7 +40,6 @@ type view struct {
 	card layout.Widget
 
 	party    *partyTab
-	act      partyActions
 	settings settings
 	// now is the latest party, as the app last saw it
 	now *partyNow
@@ -52,17 +52,45 @@ type view struct {
 	tips      tipsState
 
 	history historyTab
-	hist    historyActions
 	// parties is the saved history, oldest first
 	parties []session
 	// dialog is the one open, over everything
 	dialog *modal
 
-	prefs  *settingsTab
-	setAct settingsActions
-	about  about
-	// checkTools asks for About's tools again (after the mpv path changed)
-	checkTools func()
+	prefs *settingsTab
+	about about
+
+	// app is what the window drives; nil draws only (TestRender)
+	app backend
+	// wake asks for a frame from another goroutine
+	wake func()
+	// results are what async work leaves for the window's goroutine to apply
+	results chan func(gtx C)
+	// run, from and saidFrom are how far the window has read the app's news
+	run, from, saidFrom int
+	// started is the form the latest party started from: its plan for the steps
+	started form
+	// toolsAsked counts About's checks, so a slow earlier one doesn't overwrite a later one
+	toolsAsked int
+}
+
+// backend is the app as the window sees it. pick, saveChart, install, latest and tools wait
+// on the OS or the network, so the window calls them through async.
+type backend interface {
+	start(f form) error
+	stop()
+	chat(text string) error
+	react(code string) error
+	pick(field string) (string, error)
+	saveChart() (string, error)
+	saveSettings(s settings) error
+	clearHistory() error
+	install() (string, error)
+	restart() error
+	latest(ctx context.Context) (string, error)
+	tools(ctx context.Context) []tool
+	news(run, from, saidFrom int) news
+	state() appState
 }
 
 var tabNames = [3]string{"party", "history", "settings"}
@@ -72,6 +100,9 @@ func (v *view) body(gtx C) D {
 	for i := range v.tabs {
 		if v.tabs[i].Clicked(gtx) {
 			v.tab = tabNames[i]
+			if v.tab == "history" {
+				v.reload()
+			}
 		}
 	}
 	if v.tip.Clicked(gtx) {
@@ -154,7 +185,7 @@ type heart struct {
 }
 
 func newView(th *theme, now time.Time) *view {
-	v := &view{th: th, cat: art.Cat(), ground: art.Ground(), start: now, rnd: rand.New(rand.NewPCG(uint64(now.UnixNano()), 1)), party: newPartyTab(), prefs: newSettingsTab()}
+	v := &view{th: th, cat: art.Cat(), ground: art.Ground(), start: now, rnd: rand.New(rand.NewPCG(uint64(now.UnixNano()), 1)), party: newPartyTab(), prefs: newSettingsTab(), results: make(chan func(gtx C), 8), wake: func() {}}
 	v.list.Axis = layout.Vertical
 	return v
 }
@@ -164,6 +195,7 @@ func (v *view) t(gtx C) float64 { return gtx.Now.Sub(v.start).Seconds() }
 
 // frame lays out the whole window. It asks for the next frame: the cat and the turtles move.
 func (v *view) frame(gtx C) {
+	v.sync(gtx)
 	v.closeTips(gtx)
 	v.bg.paint(gtx)
 	v.list.Layout(gtx, 1, func(gtx C, _ int) D { return v.page(gtx) })
