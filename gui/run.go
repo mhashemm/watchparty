@@ -43,6 +43,7 @@ func (g *gui) window(w *app.Window) error {
 	if last.Maximized {
 		w.Option(app.Maximized.Option())
 	}
+	v.pace.cpu = processCPU
 	v.load()
 	if e2eHook != nil {
 		e2eHook(v)

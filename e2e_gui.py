@@ -54,6 +54,8 @@ def gui_suite():
         ok("on a bare display it opens unfocused, its scenes resting", not ui(H)["moving"], str(ui(H)["moving"]))
         x_focus(H)
         ok("focused, they move", until(lambda: ui(H)["moving"], 5))
+        # Xvfb's windows render on llvmpipe, ~80 ms of CPU a frame: well past 30 fps' 33 ms
+        ok("drawn on software, it spaces its frames by what one costs", until(lambda: ui(H)["paceMs"] > 100, 10), str(ui(H)["paceMs"]))
         x_unfocus(H)
         ok("unfocused again, they rest", until(lambda: not ui(H)["moving"], 5))
         part("[G1b] it reopens at the size it was left")

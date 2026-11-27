@@ -77,6 +77,8 @@ type view struct {
 	still bool
 	// dark: the OS's appearance is dark, so the window paints in darkPalette
 	dark bool
+	// pace spaces the scenes' frames by what one costs here
+	pace pacer
 	// values is every frame's gtx.Values: the palette and the path cache
 	values map[string]any
 	// focused: the window has the keyboard; frozen, when the scenes' time stopped (zero
@@ -221,6 +223,7 @@ func (v *view) clock(gtx C) {
 		v.frozen = time.Time{}
 	case !v.animating() && v.frozen.IsZero():
 		v.frozen = gtx.Now
+		v.pace.stop()
 	}
 }
 
@@ -235,8 +238,13 @@ func (v *view) frame(gtx C) {
 	v.paintGround(gtx)
 	v.paintDialog(gtx)
 	v.watchPresses(gtx)
-	if v.moving() {
+	switch {
+	case len(v.hearts) > 0: // they follow a click: smooth whatever it costs
+		v.pace.frame(gtx.Now)
 		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(frameGap)})
+	case v.animating():
+		v.pace.frame(gtx.Now)
+		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(v.pace.next())})
 	}
 	gtx.Values[pathsKey].(*pathCache).next()
 	for _, f := range v.after {

@@ -62,8 +62,10 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   to `status.go`'s `watch`. Anything that waits on the OS or the network (pickers, Save
   chart, the update check and install, About's tools) goes through `async`, whose result is
   applied in the next frame; a blocking call in a frame freezes the window.
-- **It draws at 30 fps while something moves** (`moving`), and only on changes while the
-  window isn't focused or the OS asks for reduced motion; the scenes' clock stops meanwhile.
+- **The scenes draw at most 30 fps, spaced to a tenth of a core** (`pace.go`), hearts at 30;
+  only on changes while the window isn't focused or the OS asks for reduced motion (their
+  clock stops meanwhile). Pacing reads the process's CPU time, never a frame's wall time:
+  presenting can wait for the display's refresh and make a fast machine look slow.
   So anything that changes with time (a label going back, the trail's half second) must ask
   for its own frame with `op.InvalidateCmd{At: …}`; nothing else will come.
 - **A frame redraws the whole window**: Gio has no partial redraw, and a patched Gio was

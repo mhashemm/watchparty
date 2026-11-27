@@ -1,11 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"image"
-	"os"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +37,7 @@ func BenchmarkFrame(b *testing.B) {
 			px := image.NewRGBA(image.Rect(0, 0, 1, 1))
 			var lay, draw time.Duration
 			now := t0.Add(s.at)
-			cpu0 := cpuTime()
+			cpu0 := processCPU()
 			b.ResetTimer()
 			for b.Loop() {
 				now = now.Add(frameGap)
@@ -59,26 +55,11 @@ func BenchmarkFrame(b *testing.B) {
 				draw += time.Since(t)
 			}
 			n := float64(b.N)
-			if cpu := cpuTime() - cpu0; cpu0 >= 0 {
+			if cpu := processCPU() - cpu0; cpu > 0 {
 				b.ReportMetric(float64(cpu.Microseconds())/n/1000, "cpu-ms/frame")
 			}
 			b.ReportMetric(float64(lay.Microseconds())/n/1000, "layout-ms/frame")
 			b.ReportMetric(float64(draw.Microseconds())/n/1000, "draw-ms/frame")
 		})
 	}
-}
-
-// cpuTime is the CPU time this process has used, every thread (Linux's /proc), or -1.
-func cpuTime() time.Duration {
-	b, err := os.ReadFile("/proc/self/stat")
-	if err != nil {
-		return -1
-	}
-	f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+2:]))
-	if len(f) < 13 {
-		return -1
-	}
-	u, _ := strconv.Atoi(f[11])
-	k, _ := strconv.Atoi(f[12])
-	return time.Duration(u+k) * time.Second / 100 // clock ticks, 100 a second on Linux
 }

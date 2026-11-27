@@ -401,6 +401,7 @@ func (v *view) ui() map[string]any {
 		"hearts": len(v.hearts),
 		"still":  v.still,
 		"moving": v.moving(),
+		"paceMs": v.pace.next().Milliseconds(),
 		"dark":   v.dark,
 	}
 }

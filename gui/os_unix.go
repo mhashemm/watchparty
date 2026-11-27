@@ -10,12 +10,23 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	gioevent "gioui.org/io/event"
 	"github.com/godbus/dbus/v5"
 )
 
 const exeSuffix = ""
+
+// processCPU is the CPU time this process has used, every thread, user and system.
+func processCPU() time.Duration {
+	var u syscall.Rusage
+	if syscall.Getrusage(syscall.RUSAGE_SELF, &u) != nil {
+		return 0
+	}
+	return time.Duration(u.Utime.Nano() + u.Stime.Nano())
+}
 
 func pickFile() (string, error) {
 	if runtime.GOOS == "darwin" {

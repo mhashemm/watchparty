@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"gioui.org/app"
@@ -153,6 +154,16 @@ func darkFrame(hwnd uintptr, dark bool) {
 	}
 	const flags = 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020 | 0x4000 // NOMOVE NOSIZE NOZORDER NOACTIVATE FRAMECHANGED ASYNCWINDOWPOS
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, flags)
+}
+
+// processCPU is the CPU time this process has used, every thread, user and system.
+func processCPU() time.Duration {
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(windows.CurrentProcess(), &created, &exited, &kernel, &user) != nil {
+		return 0
+	}
+	ticks := func(t windows.Filetime) int64 { return int64(t.HighDateTime)<<32 | int64(t.LowDateTime) }
+	return time.Duration(ticks(kernel)+ticks(user)) * 100 // 100 ns units
 }
 
 func recordVersion(exe, tag string) {
