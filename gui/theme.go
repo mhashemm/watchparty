@@ -89,6 +89,7 @@ func (s textStyle) with(c color.NRGBA) textStyle { s.color = c; return s }
 
 // colorOp is a recorded paint.ColorOp, the material text widgets take.
 func colorOp(gtx C, c color.NRGBA) op.CallOp {
+	c = shade(gtx, c)
 	m := op.Record(gtx.Ops)
 	paint.ColorOp{Color: c}.Add(gtx.Ops)
 	return m.Stop()
@@ -100,6 +101,7 @@ func colorOp(gtx C, c color.NRGBA) op.CallOp {
 // regular text, 9% in bold); a second full coat (an edge covering c covers 1-(1-c)², near
 // the 1-(1-c)^2.2 that blending in sRGB gives) overshot by 10-16%.
 func ink(gtx C, c color.NRGBA) op.CallOp {
+	c = shade(gtx, c)
 	m := op.Record(gtx.Ops)
 	paint.ColorOp{Color: c}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
@@ -290,7 +292,7 @@ func fill(gtx C, d D) D {
 // rrect fills a rounded rectangle.
 func rrect(gtx C, r image.Rectangle, radius int, c color.NRGBA) {
 	radius = min(radius, r.Dx()/2, r.Dy()/2)
-	paint.FillShape(gtx.Ops, c, clip.UniformRRect(r, max(radius, 0)).Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, shade(gtx, c), clip.UniformRRect(r, max(radius, 0)).Op(gtx.Ops))
 }
 
 // boxStyle is a bordered, rounded block: a card, a field, a button.
@@ -350,7 +352,7 @@ func (th *theme) box(gtx C, s boxStyle, w layout.Widget) D {
 		ring(gtx, image.Rectangle{Max: size}, r)
 	}
 	if sh > 0 {
-		rrect(gtx, image.Rect(0, sh, size.X, size.Y+sh), r, s.shadowColor)
+		rrect(gtx, image.Rect(0, sh, size.X, size.Y+sh), r, shadow(gtx, s.shadowColor))
 	}
 	if bw > 0 {
 		rrect(gtx, image.Rectangle{Max: size}, r, s.border)
@@ -445,7 +447,7 @@ func (th *theme) pressable(gtx C, c *widget.Clickable, s buttonStyle, disabled b
 func around(gtx C, s boxStyle, size image.Point, focused bool, call op.CallOp) {
 	r := gtx.Dp(s.radius)
 	if sh := gtx.Dp(s.shadow); sh > 0 {
-		rrect(gtx, image.Rect(0, sh, size.X, size.Y+sh), r, s.shadowColor)
+		rrect(gtx, image.Rect(0, sh, size.X, size.Y+sh), r, shadow(gtx, s.shadowColor))
 	}
 	call.Add(gtx.Ops)
 	if focused {
@@ -462,7 +464,15 @@ func icon(gtx C, svg string, st art.Style, size unit.Dp) D {
 func iconWith(gtx C, svg string, st art.Style, size, gap unit.Dp) D {
 	px := float64(gtx.Dp(size))
 	box := viewBox(svg)
-	paintArt(gtx.Ops, art.Icon(svg, st, art.Scale(px/box, px/box)))
+	items := art.Icon(svg, st, art.Scale(px/box, px/box))
+	// the palette paints the style's colour, CSS's currentColor; the SVG's own (an emoji's,
+	// a shell's) stay as drawn
+	for i, it := range items {
+		if sameRGB(it.Color, st.Fill) && st.HasFill || sameRGB(it.Color, st.Stroke) && st.HasStroke {
+			items[i].Color = shade(gtx, it.Color)
+		}
+	}
+	paintArt(asDrawn(gtx), items)
 	return D{Size: image.Pt(gtx.Dp(size+gap), gtx.Dp(size))}
 }
 
@@ -560,7 +570,7 @@ func (th *theme) check(gtx C, b *widget.Bool, label string) D {
 						{K: art.Line, P: [3]art.Pt{{X: 7.5 * px, Y: 13 * px}}},
 						{K: art.Line, P: [3]art.Pt{{X: 14 * px, Y: 5.5 * px}}},
 					}
-					paintArt(gtx.Ops, []art.Item{{Path: tick, Color: art.White, Width: 2.2 * px, Round: true}})
+					paintArt(gtx, []art.Item{{Path: tick, Color: art.White, Width: 2.2 * px, Round: true}})
 				} else {
 					rrect(gtx, r, gtx.Dp(3), checkEdge)
 					rrect(gtx, r.Inset(max(1, gtx.Dp(1))), gtx.Dp(2), art.White)
@@ -579,7 +589,7 @@ func ring(gtx C, r image.Rectangle, radius int) {
 	mid := r.Inset(-o - w/2)
 	radius = min(radius+o+w/2, mid.Dx()/2, mid.Dy()/2)
 	p := clip.UniformRRect(mid, radius).Path(gtx.Ops)
-	paint.FillShape(gtx.Ops, art.Ochre, clip.Stroke{Path: p, Width: float32(w)}.Op())
+	paint.FillShape(gtx.Ops, shade(gtx, art.Ochre), clip.Stroke{Path: p, Width: float32(w)}.Op())
 }
 
 // option is one card of a .seg choice: a bold title over a small grey line, moss when chosen.
@@ -654,7 +664,7 @@ func dashed(gtx C, width int) D {
 		Cap:    stroke.FlatCap,
 		Dashes: stroke.Dashes{Dashes: []float32{3 * h, 3 * h}},
 	}
-	paint.FillShape(gtx.Ops, art.Rule, s.Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), s.Op(gtx.Ops))
 	return D{Size: image.Pt(width, int(h))}
 }
 
@@ -667,7 +677,7 @@ func dashedDown(gtx C, height int) D {
 		Cap:    stroke.FlatCap,
 		Dashes: stroke.Dashes{Dashes: []float32{3 * w, 3 * w}},
 	}
-	paint.FillShape(gtx.Ops, art.Rule, s.Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), s.Op(gtx.Ops))
 	return D{Size: image.Pt(int(w), height)}
 }
 
@@ -689,7 +699,7 @@ var blocked int
 // rule is a 1dp solid line across the width (a list's divider).
 func rule(gtx C) D {
 	w, h := gtx.Constraints.Max.X, max(1, gtx.Dp(1))
-	paint.FillShape(gtx.Ops, art.Rule, clip.Rect{Max: image.Pt(w, h)}.Op())
+	paint.FillShape(gtx.Ops, shade(gtx, art.Rule), clip.Rect{Max: image.Pt(w, h)}.Op())
 	return D{Size: image.Pt(w, h)}
 }
 
@@ -726,6 +736,6 @@ func (th *theme) marker(gtx C, open bool, st textStyle) D {
 	if open {
 		p = art.Path{{K: art.Move, P: [3]art.Pt{pt(.07, .1)}}, {K: art.Line, P: [3]art.Pt{pt(.93, .1)}}, {K: art.Line, P: [3]art.Pt{pt(.5, .97)}}, {K: art.Close}}
 	}
-	paintArt(gtx.Ops, []art.Item{{Path: p, Fill: true, Color: st.color}})
+	paintArt(gtx, []art.Item{{Path: p, Fill: true, Color: st.color}})
 	return D{Size: image.Pt(int(math.Round(1.07*em)), int(math.Round(s)))}
 }

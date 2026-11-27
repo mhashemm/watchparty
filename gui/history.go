@@ -275,7 +275,7 @@ func (v *view) paintDialog(gtx C) {
 	// ::backdrop, rgba(35, 64, 43, .35), and it takes every click under it
 	backdrop := art.Forest
 	backdrop.A = 89
-	rrect(gtx, image.Rect(0, 0, W, H), 0, backdrop)
+	rrect(gtx, image.Rect(0, 0, W, H), 0, shadow(gtx, backdrop))
 	blockInput(gtx, image.Pt(W, H))
 	w := min(gtx.Dp(420), W-gtx.Dp(32))
 	g := gtx

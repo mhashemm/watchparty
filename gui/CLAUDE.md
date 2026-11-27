@@ -95,6 +95,10 @@ The look was matched to the old page row by row; these traps look like simplific
   fractional line height between lines. Long text stacks at fractional heights (`tipText`).
 - **`Clickable` and `Enum` clip what they draw:** shadows and focus rings go outside them
   (`around`). Flex's Baseline alignment undercounts heights: `baselineRow`.
+- **Every painted colour goes through `shade`** (`palette.go`), which swaps it for the
+  dark palette's by RGB; `rrect`, `ink`, `colorOp` and `paintArt` already do. Paint a
+  shadow with `shadow`, and a drawing with `asDrawn(gtx)`, or the palette repaints it. One
+  RGB can't take two dark colours, so a new role needs its own colour.
 - **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system Noto
   Color Emoji shadows the bundled one; system fonts stay on so any script renders.
 

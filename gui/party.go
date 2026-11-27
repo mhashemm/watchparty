@@ -416,9 +416,9 @@ func (v *view) ecg(gtx C, alive bool) D {
 		if v.still {
 			off = 0
 		}
-		paintArt(gtx.Ops, items, float32(90*px), float32(90*px), off*float32(px))
+		paintArt(gtx, items, float32(90*px), float32(90*px), off*float32(px))
 	} else {
-		paintArt(gtx.Ops, items)
+		paintArt(gtx, items)
 	}
 	return D{Size: image.Pt(gtx.Dp(64), gtx.Dp(20))}
 }
@@ -441,7 +441,7 @@ func (v *view) trail(gtx C, stops []trailStop) D {
 				y, from, to := gtx.Dp(15), cx+gtx.Dp(18), cx+w-gtx.Dp(18)
 				o := op.Offset(image.Pt(from, y)).Push(gtx.Ops)
 				if st.state == "done" {
-					paint.FillShape(gtx.Ops, art.Moss, clip.Rect{Max: image.Pt(to-from, gtx.Dp(2))}.Op())
+					paint.FillShape(gtx.Ops, shade(gtx, art.Moss), clip.Rect{Max: image.Pt(to-from, gtx.Dp(2))}.Op())
 				} else {
 					dashed(gtx, to-from)
 				}
@@ -520,10 +520,10 @@ func (v *view) boldText(gtx C, state *richtext.InteractiveText, parts []bold, si
 	var spans []richtext.SpanStyle
 	for _, p := range parts {
 		if p.b != "" {
-			spans = append(spans, richtext.SpanStyle{Font: boldFont, Size: size, Color: art.Forest, Content: p.b})
+			spans = append(spans, richtext.SpanStyle{Font: boldFont, Size: size, Color: shade(gtx, art.Forest), Content: p.b})
 		}
 		if p.plain != "" {
-			spans = append(spans, richtext.SpanStyle{Font: bodyFont, Size: size, Color: art.InkSoft, Content: p.plain})
+			spans = append(spans, richtext.SpanStyle{Font: bodyFont, Size: size, Color: shade(gtx, art.InkSoft), Content: p.plain})
 		}
 	}
 	gtx.Constraints.Min.X = 0
@@ -565,7 +565,7 @@ func bar(gtx C, w int, h unit.Dp, frac float64, a, b color.NRGBA) D {
 		return D{Size: image.Pt(w, H)}
 	}
 	defer clip.UniformRRect(fill, min(r, fill.Dx()/2)).Push(gtx.Ops).Pop()
-	paint.ColorOp{Color: a}.Add(gtx.Ops)
+	paint.ColorOp{Color: shade(gtx, a)}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	// repeating-linear-gradient(-45deg, a 0 8px, b 8px 16px): bands 8px across, at 45°
 	step := float32(gtx.Dp(8)) * 1.41421356
@@ -577,7 +577,7 @@ func bar(gtx C, w int, h unit.Dp, frac float64, a, b color.NRGBA) D {
 		p.LineTo(f32.Pt(x+step+float32(H), 0))
 		p.LineTo(f32.Pt(x+float32(H), 0))
 		p.Close()
-		paint.FillShape(gtx.Ops, b, clip.Outline{Path: p.End()}.Op())
+		paint.FillShape(gtx.Ops, shade(gtx, b), clip.Outline{Path: p.End()}.Op())
 	}
 	return D{Size: image.Pt(w, H)}
 }
@@ -943,7 +943,7 @@ func (v *view) stripEnds(gtx C, size image.Point, back, more bool) {
 			x0, x1, c0, c1 = size.X-fade, size.X, clear, stripBg
 		}
 		r := clip.Rect{Min: image.Pt(x0, gtx.Dp(2)), Max: image.Pt(x1, size.Y-gtx.Dp(2))}.Push(gtx.Ops)
-		paint.LinearGradientOp{Stop1: f32.Pt(float32(x0), 0), Color1: c0, Stop2: f32.Pt(float32(x1), 0), Color2: c1}.Add(gtx.Ops)
+		paint.LinearGradientOp{Stop1: f32.Pt(float32(x0), 0), Color1: shade(gtx, c0), Stop2: f32.Pt(float32(x1), 0), Color2: shade(gtx, c1)}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		r.Pop()
 		sz := gtx.Dp(26)
@@ -960,12 +960,12 @@ func (v *view) stripEnds(gtx C, size image.Point, back, more bool) {
 			if c.Hovered() {
 				bg = paleBg
 			}
-			rrect(gtx, image.Rect(0, gtx.Dp(1), sz, sz+gtx.Dp(1)), sz/2, color.NRGBA{0x4a, 0x32, 0x20, 0x22})
+			rrect(gtx, image.Rect(0, gtx.Dp(1), sz, sz+gtx.Dp(1)), sz/2, shadow(gtx, color.NRGBA{0x4a, 0x32, 0x20, 0x22}))
 			rrect(gtx, image.Rect(0, 0, sz, sz), sz/2, art.Rule)
 			rrect(gtx, image.Rect(0, 0, sz, sz).Inset(gtx.Dp(2)), sz/2, bg)
 			px := float64(gtx.Dp(16)) / 24
 			io := op.Offset(image.Pt(gtx.Dp(5), gtx.Dp(5))).Push(gtx.Ops)
-			paintArt(gtx.Ops, art.Icon(svg, art.StrokeStyle(art.Bark, 2.6, true), art.Scale(px, px)))
+			paintArt(gtx, art.Icon(svg, art.StrokeStyle(art.Bark, 2.6, true), art.Scale(px, px)))
 			io.Pop()
 			return D{Size: image.Pt(sz, sz)}
 		})

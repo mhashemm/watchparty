@@ -388,8 +388,8 @@ func (v *view) steps(gtx C, steps []string) D {
 // anywhere.
 func (v *view) hintWithCode(gtx C, state *richtext.InteractiveText, text, code string) D {
 	spans := []richtext.SpanStyle{
-		{Font: tHint.font, Size: tHint.size, Color: tHint.color, Content: text},
-		{Font: tCode.font, Size: tCode.size, Color: tCode.color, Content: code},
+		{Font: tHint.font, Size: tHint.size, Color: shade(gtx, tHint.color), Content: text},
+		{Font: tCode.font, Size: tCode.size, Color: shade(gtx, tCode.color), Content: code},
 	}
 	lb := v.th.lineBox(gtx, tHint)
 	d := lb.place(gtx, func(gtx C, size, lineHeight unit.Sp) D {

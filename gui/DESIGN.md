@@ -50,6 +50,13 @@ EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>
 | `Berry` | `#9a3a35` | errors, the End button, red caps, hearts |
 | `Ochre` | `#e0b452` | focus ring |
 
+**Dark** (`darkPalette` in `palette.go`, "soil at night", the user's pick of three): while
+the OS's appearance is dark, each colour above turns into a warm brown-black one: `Lichen`
+`#1c1712`, `Paper` `#28211a`, `Forest` `#efe6d4`, `Bark` `#e0b98a`, `Moss` `#93c06c`. Moss
+gets lighter and white darker, so text and ticks on moss turn dark. Shadows and the dialog
+backdrop turn black. Drawings keep their own colours: Fosdo2, the ground, the mushrooms,
+shells and emoji. Check a visual change in both (the `-dark` scenes).
+
 Fosdo2's colours are named in `page.go`'s rules too, so recolouring never means editing the SVG:
 
 | Name | Value | Use |

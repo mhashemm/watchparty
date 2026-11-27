@@ -75,6 +75,8 @@ type view struct {
 	// still: the OS asks for reduced motion, so the scenes rest and the window draws only on
 	// changes
 	still bool
+	// dark: the OS's appearance is dark, so the window paints in darkPalette
+	dark bool
 	// after runs once this frame is drawn (the e2e control socket's answers)
 	after []func()
 }
@@ -201,6 +203,7 @@ func (v *view) t(gtx C) float64 { return gtx.Now.Sub(v.start).Seconds() }
 // frame lays out the whole window. It asks for the next frame: the cat and the turtles move.
 func (v *view) frame(gtx C) {
 	v.sync(gtx)
+	gtx = v.painted(gtx)
 	v.closeTips(gtx)
 	v.bg.paint(gtx)
 	v.list.Layout(gtx, 1, func(gtx C, _ int) D { return v.page(gtx) })
@@ -272,7 +275,7 @@ func (v *view) paintCat(gtx C, W int) {
 	w := 180 * px
 	left, top := float64(W)/2-w/2, 9*px
 	base := art.Translate(left, top).Mul(art.Scale(w/200, w/200))
-	paintArt(gtx.Ops, v.cat.Frame(v.t(gtx), v.scene(), base))
+	paintArt(asDrawn(gtx), v.cat.Frame(v.t(gtx), v.scene(), base))
 	if !v.mood.Awake {
 		zs := art.Zzz(v.t(gtx))
 		if v.still {
@@ -337,13 +340,13 @@ func (v *view) paintGround(gtx C) {
 	clear := art.Lichen
 	clear.A = 0
 	r := clip.Rect{Min: image.Pt(0, H-fade), Max: image.Pt(W, H)}.Push(gtx.Ops)
-	paint.LinearGradientOp{Stop1: f32.Pt(0, float32(H-fade)), Color1: clear, Stop2: f32.Pt(0, float32(H-fade)+float32(fade)*.75), Color2: art.Lichen}.Add(gtx.Ops)
+	paint.LinearGradientOp{Stop1: f32.Pt(0, float32(H-fade)), Color1: shade(gtx, clear), Stop2: f32.Pt(0, float32(H-fade)+float32(fade)*.75), Color2: shade(gtx, art.Lichen)}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	r.Pop()
 	paint.FillShape(gtx.Ops, art.Soil, clip.Rect{Min: image.Pt(0, H-gtx.Dp(22)), Max: image.Pt(W, H)}.Op())
 	px := float64(gtx.Metric.PxPerDp)
 	base := art.Translate(float64(W)/2-280*px, float64(H)-130*px).Mul(art.Scale(px, px))
-	paintArt(gtx.Ops, v.ground.Frame(v.t(gtx), v.scene(), base))
+	paintArt(asDrawn(gtx), v.ground.Frame(v.t(gtx), v.scene(), base))
 }
 
 // background is body's: lichen under three soft glows (radial-gradients, fixed to the
@@ -351,13 +354,14 @@ func (v *view) paintGround(gtx C) {
 // changes size, at half resolution and scaled up smooth.
 type background struct {
 	size image.Point
+	pal  palette
 	img  paint.ImageOp
 }
 
 func (b *background) paint(gtx C) {
-	size := gtx.Constraints.Max
-	if size != b.size {
-		b.size, b.img = size, paint.NewImageOp(glows(size.X/2+1, size.Y/2+1))
+	size, pal := gtx.Constraints.Max, palOf(gtx)
+	if size != b.size || !samePalette(pal, b.pal) {
+		b.size, b.pal, b.img = size, pal, paint.NewImageOp(glows(gtx, size.X/2+1, size.Y/2+1))
 		b.img.Filter = paint.FilterLinear
 	}
 	s := float32(size.X) / float32(size.X/2+1)
@@ -368,21 +372,22 @@ func (b *background) paint(gtx C) {
 
 // glows paints body's background at w×h: each glow is an ellipse whose colour fades to
 // nothing at stop of its radius, the first listed on top, as CSS layers them.
-func glows(w, h int) *image.RGBA {
+func glows(gtx C, w, h int) *image.RGBA {
 	type glow struct {
 		cx, cy, rx, ry float64 // fractions of the window
 		c              color.NRGBA
 		alpha, stop    float64
 	}
 	layers := []glow{ // bottom first
-		{.5, 1, .8, .3, art.Moss, .22, .75},
-		{.92, .3, .45, .3, color.NRGBA{255, 255, 238, 255}, .4, .7},
-		{.12, .06, .6, .35, color.NRGBA{255, 255, 238, 255}, .6, .7},
+		{.5, 1, .8, .3, shade(gtx, art.Moss), .22, .75},
+		{.92, .3, .45, .3, shade(gtx, glowLight), .4, .7},
+		{.12, .06, .6, .35, shade(gtx, glowLight), .6, .7},
 	}
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := range h {
 		for x := range w {
-			r, g, b := float64(art.Lichen.R), float64(art.Lichen.G), float64(art.Lichen.B)
+			bg := shade(gtx, art.Lichen)
+			r, g, b := float64(bg.R), float64(bg.G), float64(bg.B)
 			for _, l := range layers {
 				dx := (float64(x)/float64(w) - l.cx) / l.rx
 				dy := (float64(y)/float64(h) - l.cy) / l.ry

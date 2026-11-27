@@ -47,15 +47,15 @@ func (g *gui) window(w *app.Window) error {
 	if e2eHook != nil {
 		e2eHook(v)
 	}
-	// the OS's reduced motion, followed while the window is open
+	// the OS's reduced motion and dark appearance, followed while the window is open
 	ctx, cancel := context.WithCancel(g.ctx)
 	defer cancel()
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
-		watchMotion(ctx, func(still bool) {
+		watchLook(ctx, func(l look) {
 			select {
-			case v.results <- func(gtx C) { v.still = still }:
+			case v.results <- func(gtx C) { v.still, v.dark = l.still, l.dark }:
 				v.wake()
 			case <-ctx.Done():
 			}

@@ -26,6 +26,7 @@ const titleBarHeight = 40
 var tBarTitle = textStyle{font: displayFont, size: 15, color: art.Forest}
 
 func (v *view) titleBar(gtx C, b *titleBar, title string) D {
+	gtx = v.painted(gtx)
 	h := gtx.Dp(titleBarHeight)
 	W := gtx.Constraints.Max.X
 	rrect(gtx, image.Rect(0, 0, W, h), 0, art.Paper)
@@ -92,7 +93,7 @@ func (v *view) barButton(gtx C, b *titleBar, a system.Action) D {
 				segs = []stroke.Segment{stroke.MoveTo(f32.Pt(m-r, m-r)), stroke.LineTo(f32.Pt(m+r, m+r)), stroke.MoveTo(f32.Pt(m+r, m-r)), stroke.LineTo(f32.Pt(m-r, m+r))}
 			}
 			s := stroke.Stroke{Path: stroke.Path{Segments: segs}, Width: float32(gtx.Dp(2)), Cap: stroke.RoundCap, Join: stroke.RoundJoin}
-			paint.FillShape(gtx.Ops, art.Bark, s.Op(gtx.Ops))
+			paint.FillShape(gtx.Ops, shade(gtx, art.Bark), s.Op(gtx.Ops))
 			return D{Size: image.Pt(sz, sz)}
 		})
 	})

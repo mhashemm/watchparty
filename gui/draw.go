@@ -2,7 +2,6 @@ package main
 
 import (
 	"gioui.org/f32"
-	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/x/stroke"
@@ -13,7 +12,8 @@ import (
 // paintArt paints art's items with Gio's own paths: fills as outlines, strokes with
 // gioui.org/x/stroke for round caps and joins. dash, when set, dashes every stroke
 // (dash on, dash off, starting offset into the pattern), as SVG's stroke-dasharray.
-func paintArt(ops *op.Ops, items []art.Item, dash ...float32) {
+func paintArt(gtx C, items []art.Item, dash ...float32) {
+	ops := gtx.Ops
 	pt := func(p art.Pt) f32.Point { return f32.Pt(float32(p.X), float32(p.Y)) }
 	for _, it := range items {
 		if it.Fill {
@@ -33,7 +33,7 @@ func paintArt(ops *op.Ops, items []art.Item, dash ...float32) {
 					p.Close()
 				}
 			}
-			paint.FillShape(ops, it.Color, clip.Outline{Path: p.End()}.Op())
+			paint.FillShape(ops, shade(gtx, it.Color), clip.Outline{Path: p.End()}.Op())
 			continue
 		}
 		var segs []stroke.Segment
@@ -60,6 +60,6 @@ func paintArt(ops *op.Ops, items []art.Item, dash ...float32) {
 		if len(dash) == 3 {
 			s.Dashes = stroke.Dashes{Phase: dash[2], Dashes: []float32{dash[0], dash[1]}}
 		}
-		paint.FillShape(ops, it.Color, s.Op(ops))
+		paint.FillShape(ops, shade(gtx, it.Color), s.Op(ops))
 	}
 }

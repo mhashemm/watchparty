@@ -226,7 +226,7 @@ func scenes() map[string]scene {
 		{Started: day(-2, 0), Ended: day(-1, 0), File: video, Mode: "relay", Relay: savedSettings.Relay, Room: "K7Q2M9", Secret: "4XJ8T2PLW3", People: []string{"Ana", "Sam"},
 			Videos: []played{{Name: "Big Buck Bunny.mkv", Started: day(-2, 0), Ended: day(-1, 0)}}},
 	}
-	return map[string]scene{
+	m := map[string]scene{
 		"settings": {height: 1500, at: 27 * time.Second, settings: savedSettings, js: `show("settings")`, setup: func(v *view) { v.tab = "settings" }},
 		"settings-update": {height: 1900, at: 27 * time.Second, settings: withKey,
 			update: map[string]any{"current": "v0.0.58", "latest": "v0.0.59", "available": true},
@@ -290,4 +290,16 @@ func scenes() map[string]scene {
 				return recorded(w, 0, `checking 1 of 1: "Big Buck Bunny.mkv"`, "file fingerprint: 9f2c4e")
 			}},
 	}
+	// in the dark palette, as with the OS's appearance dark
+	for _, name := range []string{"party-in", "settings", "confirm-stop", "title-bar"} {
+		d, setup := m[name], m[name].setup
+		d.setup = func(v *view) {
+			if setup != nil {
+				setup(v)
+			}
+			v.dark = true
+		}
+		m[name+"-dark"] = d
+	}
+	return m
 }

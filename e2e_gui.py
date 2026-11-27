@@ -703,7 +703,7 @@ def gui_suite():
         res = subprocess.run([exe, "-update"], capture_output=True, text=True, timeout=BOOT)
         ok("updating again says it's up to date, and isn't a failure", res.returncode == 0 and "already on the latest version" in res.stdout, res.stdout + res.stderr)
 
-    @case("[G37] the window follows the desktop's reduced motion as it changes", serial=True)
+    @case("[G37] the window follows the desktop's reduced motion and dark appearance as they change", serial=True)
     def _():
         H = gui("g37")
         ok("it animates with nothing set", not ui(H)["still"])
@@ -721,6 +721,14 @@ def gui_suite():
         ok("a window opened while it is set starts still", until(lambda: ui(G2)["still"] and ui(G)["still"], 5))
         portal_set("org.kde.kdeglobals.KDE", "AnimationDurationFactor", 1.0)
         ok("and moves once it's unset", until(lambda: not ui(G2)["still"], 5))
+        ok("it is light with no color scheme set", not ui(H)["dark"])
+        portal_set("org.freedesktop.appearance", "color-scheme", 1)
+        ok("prefer dark turns it dark", until(lambda: ui(H)["dark"], 5))
+        ok("and leaves its motion alone", not ui(H)["still"])
+        G3 = gui("g37Dark")
+        ok("a window opened while it is set starts dark", until(lambda: ui(G3)["dark"], 5))
+        portal_set("org.freedesktop.appearance", "color-scheme", 2)
+        ok("prefer light turns it light again", until(lambda: not ui(H)["dark"] and not ui(G3)["dark"], 5))
 
     @case("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
     def _():
