@@ -418,7 +418,8 @@ func (v *view) tipsUI() map[string]any {
 		}
 	}
 	a := v.tips.area.Sub(image.Pt(0, v.list.Position.Offset))
-	return map[string]any{"open": v.tipOpen, "titles": titles, "text": text.String(), "area": [4]int{a.Min.X, a.Min.Y, a.Max.X, a.Max.Y}}
+	return map[string]any{"open": v.tipOpen, "titles": titles, "text": text.String(), "area": [4]int{a.Min.X, a.Min.Y, a.Max.X, a.Max.Y},
+		"scrolled": v.tips.list.Position.First > 0 || v.tips.list.Position.Offset > 0, "pageScrolled": v.list.Position.Offset > 0}
 }
 
 func (v *view) reactionCodes() []string {

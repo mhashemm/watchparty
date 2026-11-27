@@ -104,6 +104,8 @@ def gui_suite():
         x0, y0, x1, y1 = tips()["area"]
         x_click(H, (x0 + x1) // 2, y0 + 20)
         ok("a real click inside keeps it open", not until(lambda: not tips()["open"], 1) and tips()["open"])
+        x_wheel(H, (x0 + x1) // 2, (y0 + y1) // 2)
+        ok("the real wheel scrolls it, and not the page under it", until(lambda: tips()["scrolled"], 5) and not tips()["pageScrolled"], str(tips()))
         click(H, "tip")
         ok("the button closes it", not tips()["open"])
         click(H, "tip")

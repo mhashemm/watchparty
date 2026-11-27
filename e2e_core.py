@@ -934,6 +934,11 @@ def x_click(n, x, y):
     xdo(n, "mousemove", "--window", x_window(n), x, y, "click", 1)
 
 
+def x_wheel(n, x, y, down=5):
+    """Real mouse-wheel steps down at x, y in n's window (X's button 5)."""
+    xdo(n, "mousemove", "--window", x_window(n), x, y, "click", "--repeat", down, "--delay", 30, 5)
+
+
 def x_key(n, key):
     """A real key press in n's window, focused first: Xvfb has no window manager to do it."""
     xdo(n, "windowfocus", "--sync", x_window(n), "key", key)

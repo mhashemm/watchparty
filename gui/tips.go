@@ -126,9 +126,10 @@ func (v *view) paintTips(gtx C, mainX, mainW int) {
 		})
 	})
 	call := m.Stop()
-	around(gtx, box, d.Size, false, call)
-	// it takes the clicks and the wheel over it, not the card under it
+	// it takes the clicks and the wheel over it, not the card under it: under the list, so
+	// the list scrolls first and only what it leaves is stopped
 	blockInput(gtx, d.Size)
+	around(gtx, box, d.Size, false, call)
 	o.Pop()
 	s.area = image.Rectangle{Max: d.Size}.Add(image.Pt(mainX+gtx.Dp(14), gtx.Dp(190+52)))
 }

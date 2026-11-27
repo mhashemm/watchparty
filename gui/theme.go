@@ -694,7 +694,9 @@ func blockInput(gtx C, size image.Point) {
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	gioevent.Op(gtx.Ops, &blocked)
 	for {
-		if _, ok := gtx.Event(pointer.Filter{Target: &blocked, Kinds: pointer.Press | pointer.Release | pointer.Scroll | pointer.Move}); !ok {
+		// a scroll range takes the wheel too: without one Gio passes it on to what's under
+		all := pointer.ScrollRange{Min: math.MinInt32, Max: math.MaxInt32}
+		if _, ok := gtx.Event(pointer.Filter{Target: &blocked, Kinds: pointer.Press | pointer.Release | pointer.Scroll | pointer.Move, ScrollX: all, ScrollY: all}); !ok {
 			break
 		}
 	}
