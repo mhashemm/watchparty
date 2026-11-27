@@ -146,7 +146,8 @@ what is asked, and show options before changing his face.**
     duration and no delay: change one, change all.
   - An animation replaces an element's own `transform` attribute, so anything animated must
     be a separate group from anything positioned by the attribute (hence `.head-move`).
-  - The lick runs only awake.
+  - The lick runs only awake. With the OS's reduced motion everything rests: eyes open
+    awake, closed asleep, the paw down, the `z`s still at .8.
 - **Moods** (`art.Mood`), from the watch's screen: asleep (idle or ended: closed
   eyes, `z`s, slow tail) and awake (running and on errors). **There is deliberately
   no worried or sad face;** errors are carried by the red "Diagnosis:" text.
@@ -162,7 +163,7 @@ what is asked, and show options before changing his face.**
   path's height at the SVG edges. Order: card < fade and soil < ground < Fosdo2 and hearts.
 - **Turtles:** a mother and a baby (same markup at `scale(.55)`, 40px behind), on one
   60s `stroll` loop. Walking (connecting) only speeds the legs and adds a `bob`; changing
-  the stroll duration mid-run makes them jump.
+  the stroll duration mid-run makes them jump. Reduced motion parks them mid-ground.
 - **Mushrooms:** `<g transform>` groups with `.cap`, `.cap.red`, `.cap.cream`, `.spot`,
   `.gill`. The small mushroom (`art.Mushroom`: the title, the feed's bullets, the title bar)
   is also `install.sh`'s app icon: change both.

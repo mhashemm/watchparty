@@ -56,7 +56,10 @@ log line), or from `history.json` after it ends.
   to `status.go`'s `watch`. Anything that waits on the OS or the network (pickers, Save
   chart, the update check and install, About's tools) goes through `async`, whose result is
   applied in the next frame; a blocking call in a frame freezes the window.
-- **It draws every frame** (Fosdo2 and the turtles move), so a frame must stay cheap.
+- **It draws at 30 fps while something moves** (`moving`), and only on changes when the OS
+  asks for reduced motion: on software rendering a frame costs ~75 ms of CPU. So anything that
+  changes with time (a label going back, the trail's half second) must ask for its own frame
+  with `op.InvalidateCmd{At: …}`; nothing else will come.
 - **Closing the window ends everything:** `DestroyEvent` → the party's context cancelled,
   `Run` waited for, exit. A signal or a restart cancels the app's context, which closes the
   window the same way. No goroutine outlives `wg.Wait()`.
