@@ -75,6 +75,8 @@ type scene struct {
 	// update and tools are what About shows: GET /update and GET /tools
 	update map[string]any
 	tools  []tool
+	// bar: the window's own title bar above it, as GNOME on Wayland needs
+	bar bool
 }
 
 // fixture is what the stand-in server feeds the page: /state, /log and the scene's script.
@@ -145,6 +147,9 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 	for range 3 {
 		ops.Reset()
 		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: router.Source()}
+		if s.bar {
+			gtx = withBar(gtx, v)
+		}
 		v.frame(gtx)
 		router.Frame(&ops)
 	}
@@ -153,6 +158,15 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 	}
 	img := image.NewRGBA(image.Rectangle{Max: size})
 	return img, win.Screenshot(img)
+}
+
+// withBar draws a title bar at the top and returns gtx for the window under it, as Gio
+// shrinks the window's content by its decorations' height.
+func withBar(gtx layout.Context, v *view) layout.Context {
+	d := v.titleBar(gtx, new(titleBar), "Hahas and Hehes Watch Party")
+	op.Offset(image.Pt(0, d.Size.Y)).Add(gtx.Ops)
+	gtx.Constraints = layout.Exact(gtx.Constraints.Max.Sub(image.Pt(0, d.Size.Y)))
+	return gtx
 }
 
 // recorded keeps the lines a watch reads, for the page to read the same ones.
@@ -232,6 +246,7 @@ func scenes() map[string]scene {
 			v.tipOpen = true
 			v.tips.list.Position.First, v.tips.list.Position.Offset = 1, 0
 		}},
+		"title-bar":     {settings: savedSettings, bar: true},
 		"history-empty": {at: 27 * time.Second, settings: savedSettings, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
 		"history":       {height: 1300, at: 27 * time.Second, settings: savedSettings, parties: parties, js: `show("history")`, setup: func(v *view) { v.tab = "history" }},
 		"dialog-restart": {at: 27 * time.Second, settings: savedSettings,
