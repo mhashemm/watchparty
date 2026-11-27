@@ -1,59 +1,38 @@
 # gui/CLAUDE.md
 
-The desktop app for people who don't want the CLI. A separate `package main` that
-calls `party.Run` in-process, so it needs only mpv. Its status display is driven
-entirely by the log lines `party`, `mpv` and `server` already print. For any visual
+The desktop app for people who don't want the CLI. A separate `package main` that opens a
+native window (Gio) and calls `party.Run` in-process, so it needs only mpv. Its status display
+is driven entirely by the log lines `party`, `mpv` and `server` already print. For any visual
 change read **`DESIGN.md`** first.
 
-Security: the `Host` + `X-Token` guard on every route but `GET /` is the whole defense
-against a web page or another local app driving the GUI (which launches mpv). Cross-cutting
-mindset, trust boundary and method: `SECURITY.md` (repo root).
-
-Dependencies: stdlib, `golang.org/x/sys/windows`, and `godbus` (pure Go, for the Linux
-file picker). No cgo, so it cross-compiles in the release matrix.
+Dependencies: Gio (`gioui.org`, `gioui.org/x`), `godbus` (the Linux pickers),
+`golang.org/x/sys/windows`. Gio needs cgo on Linux and macOS, so the GUI builds natively
+there; Windows needs none and cross-compiles. The CLI and relay stay `CGO_ENABLED=0`.
 
 ## Commands
 
 ```sh
-go build -o watchparty-gui ./gui                         # from the repo root; plain `go build ./gui` collides with the directory
-go test ./gui                                            # TestPageScriptParses needs node, or it skips
-go vet ./gui && GOOS=windows go vet ./gui                # the two build-tagged halves
-GOOS=windows go build -ldflags=-H=windowsgui -o /dev/null ./gui
+make gui                                   # fetches gui/fonts/NotoColorEmoji.ttf (pinned, SHA-256 checked) first
+go build -o watchparty-gui ./gui           # from the repo root, once the font is fetched; `go build ./gui` collides with the directory
+go vet ./gui && GOOS=windows go vet ./gui  # the two build-tagged halves
+EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>   # every scene as <dir>/<name>.png, no window
+go generate ./gui                          # icon.ico → rsrc_windows_amd64.syso (a test fails when they differ)
 ```
+
+Linux builds need the headers Gio links against (Wayland, X11, xkbcommon-x11, EGL, GLES,
+Vulkan); run the GUI's tests in a container that has them rather than installing them here.
+At run time the window needs `libEGL`, `libGLESv2` and `libxkbcommon-x11`.
 
 ## Running it headless
 
-`openWindow` launches a Chromium-family browser from its desktop entry, or `xdg-open`.
-To keep it off your screen, point `XDG_DATA_HOME` and `XDG_DATA_DIRS` at an empty
-folder and use a `PATH` with only an `mpv` symlink and a no-op `xdg-open`. `PATH`
-alone isn't enough, since entries name binaries absolutely. The Flatpak and snap
-folders under `/var/lib` are scanned regardless, so a system-wide one still opens.
+Xvfb, an isolated `HOME`/`XDG_*`/`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` at a dead path,
+mpv with `--vo=null --ao=null` in Settings' options. Drive it with `xdotool`: find the window
+by its title (`xdotool search --name "Watch Party"`), not `--pid`, which Gio never sets.
+`gui.json` holds the settings under `"settings"`. Read the party's progress from stderr (every
+log line), or from `history.json` after it ends.
 
-Drive a party with the token from the page:
+## The app (`main.go`)
 
-```sh
-T=$(curl -s $U/ | grep -o 'const TOKEN = "[^"]*"' | cut -d'"' -f2)
-curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mkv","relay":"ws://127.0.0.1:18080","mpvFlags":"--vo=null --ao=null"}'
-```
-
-- **Isolate the store:** `XDG_CONFIG_HOME=<tmp>/cN`, one folder per GUI. Restarting on
-  the same folder proves persistence, since the port changes every launch.
-- **Host and guest:** start the host with an empty room and secret, read them from
-  `/log` (`grep -o 'room [A-Z0-9]* -secret [A-Z0-9]*'`), start the guest with them.
-- **Drive mpv directly:** each party's socket is its mpv's `--input-ipc-server=`
-  argument (`pgrep -a mpv`). Write `set_property`/`quit` commands to it.
-- **`make e2e E2E="--mode gui"`** automates the window lifecycle (a real window on Xvfb
-  too), a browser handing the page off, and self-update (`E2E.md`). The recipe left
-  here is for what it doesn't run.
-- **A released binary:** `gh release download <tag> -p watchparty-gui_amd64`, run it
-  headless, and `GET /update` must report that tag as `current`.
-
-## Server (`main.go`)
-
-- Listens on `127.0.0.1:0`. **The guard is load-bearing, because `/start` launches mpv
-  with user-supplied flags:** `r.Host` must equal the exact `ip:port` (DNS rebinding),
-  and every path except `GET /` needs `X-Token`, the `rand.Text()` token templated into
-  the page as `{{TOKEN}}` and compared in constant time (CSRF).
 - **`form.config()`** trims every field; an empty port is `party.DefaultPort`. It
   refuses an empty file, and an empty relay in relay mode, which `party.Run` would
   otherwise treat as direct mode and try UPNP. It does **not** check the file's type,
@@ -61,24 +40,65 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 - **The log:** `log.SetOutput(io.MultiWriter(g, os.Stderr))`, with `g` first because
   stderr can be an invalid handle under `-H=windowsgui` and MultiWriter stops at the
   first error. `Write` takes `g.mu`, so **never `log` while holding `g.mu`**.
-- **`run`** goes up on every `/start`; a poll with an old `run` is answered from line 0,
-  so two runs never splice.
+- **`changed`** (the window's `Invalidate`) is called under `g.mu` on every line, message and
+  end: it must never block.
+- **`run`** goes up on every start; `news` asked with an old `run` answers from line 0, so two
+  runs never splice.
 - An empty mpv field becomes `mpv` on `PATH`, else the absolute path of a sibling `mpv(.exe)`
   or the installer's `mpv\mpv.exe` (`ownCopy`), so the installed mpv works even if its Path
   entry is missing. Absolute, because `exec.LookPath` won't resolve a bare name from the
   current directory.
+
+## The window (`run.go`, `window.go` and a file per tab)
+
+- **The view belongs to the window's goroutine.** It reads the app each frame through
+  `news` (lines and chat since it last looked, and how the party stands) and feeds the lines
+  to `status.go`'s `watch`. Anything that waits on the OS or the network (pickers, Save
+  chart, the update check and install, About's tools) goes through `async`, whose result is
+  applied in the next frame; a blocking call in a frame freezes the window.
+- **It draws every frame** (Fosdo2 and the turtles move), so a frame must stay cheap.
+- **Closing the window ends everything:** `DestroyEvent` → the party's context cancelled,
+  `Run` waited for, exit. A signal or a restart cancels the app's context, which closes the
+  window the same way. No goroutine outlives `wg.Wait()`.
+- **macOS:** `app.Main` must own the main thread, and the bundle must not set `LSUIElement`
+  (it hides the window's Dock icon).
+- **Title bar:** Linux asks for `Decorated(false)`, so the desktop draws the bar when it will
+  (KDE, COSMIC, any X11 window manager) and `ConfigEvent`'s `Decorated` is false only when
+  it won't (GNOME on Wayland); then `titlebar.go` draws the themed one. Never on Windows or
+  macOS, where `Decorated(false)` removes the native frame.
+- **`app.ID` is `watchparty`**, the desktop entry `install.sh` writes: Wayland's app id and
+  X11's class, which the desktop matches to the entry's name and icon.
+- **Windows:** `viewEvent` gives the window's handle the AppUserModelID `setup.nsi` puts on
+  the shortcuts, plus relaunch properties naming `watchparty-gui.exe`; without it a pinned
+  shortcut gets a second taskbar button. The icon is resource 1, which Gio loads.
+- **In-window dialogs** (`modal`): the first button has the focus when one opens, Escape
+  cancels, and the backdrop takes every click under it.
+
+## Drawing like the page (`theme.go`)
+
+The look was matched to the old page row by row; these traps look like simplifications:
+
+- **Gio blends in linear light:** text half covering a pixel comes out paler than a browser's.
+  `ink` paints the glyphs, then a second coat at `inkAgain` (.6); a full coat overshoots.
+- **Gio rounds font sizes to whole pixels:** `exact` lays text out 8× larger and scales it back.
+- **Line boxes are CSS's:** `lineBox` puts the baseline where Chromium would (normal line
+  height is the font's ascent plus descent, each rounded; buttons use normal), and keeps a
+  fractional line height between lines. Long text stacks at fractional heights (`tipText`).
+- **`Clickable` and `Enum` clip what they draw:** shadows and focus rings go outside them
+  (`around`). Flex's Baseline alignment undercounts heights: `baselineRow`.
+- **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system Noto
+  Color Emoji shadows the bundled one; system fonts stay on so any script renders.
 
 ## Saved settings and history (`store.go`)
 
 - **Two files in `os.UserConfigDir()/watchparty/`,** `gui.json` and `history.json`, written
   atomically, 0600 in a 0700 directory: they hold the create key and room secrets. Saving needs
   `store.mu`; lock order is always `g.mu` → `store.mu`.
-- **Not `localStorage`:** the random port makes the page a new origin every launch; it loads everything from `GET /state`.
 - **Settings:** name, and `local`/`port` from the last peer-to-peer party, are remembered automatically,
-  the rest by the Settings page's button. The first relay used becomes the default if none is set.
+  the rest by the Settings tab's button. The first relay used becomes the default if none is set.
 - **History**, up to 100 parties, filled in from log lines (`observe`): the *real* room and
   secret come from the invite line, not the form, which can leave them empty.
-- **Continue** posts the form plus `continue`, the party's `started`. Same room and secret, so
+- **Continue** starts the form plus `continue`, the party's `started`. Same room and secret, so
   the same party: `begin` moves its entry to the end, open again, and `Run` starts at `stopped`,
   which the node chose (with keep-open=always, the file after one it finished). So the slice
   order is the truth: never sort it. Hidden (`continuable`) for
@@ -88,38 +108,15 @@ curl -X POST -H "X-Token: $T" $U/start -d '{"mode":"relay","file":"/abs/video.mk
 ## Self-update (`update.go`)
 
 The download, SHA-256 check and binary swap live in the `update` package
-(`update/CLAUDE.md`); this file only wires them to the page. What's GUI-specific:
+(`update/CLAUDE.md`); this file only wires them to the window. What's GUI-specific:
 
 - `version` is `"dev"` unless the release stamps `-X main.version=<tag>`. A `dev` build
   offers no update, so a local build can't overwrite itself.
 - Update and Restart are refused during a party. `update.Install` swaps next to `g.exe`;
   `main` clears a leftover `g.exe + ".old"` (Windows) at startup.
-- **Don't restart on install.** The page asks, Restart later first. **Restart now**
+- **Don't restart on install.** The window asks, Restart later first. **Restart now**
   starts `g.exe` (resolved at startup, since the path can point at the replaced file
-  after the rename), and the page calls `window.close()`: killing a Flatpak browser's
-  process alone leaves its window open.
-
-## Lifetime and stopping
-
-- **Stop** cancels the party's context, like Ctrl-C in the CLI, on every OS. On
-  SIGINT/SIGTERM `main` cancels the party and waits for `Run`, so no UPNP mapping leaks.
-- **Closing the window shuts everything down,** the fallback tab too. The page holds
-  `GET /alive` open, an event stream read with `fetch` so it carries `X-Token`, with a
-  heartbeat every 15s. When none is connected `closeGrace` (3s) after the last one
-  dropped, `main` logs `gui: window closed` and cancels everything. The browser's process
-  can't say: macOS keeps it running without windows, and Edge's startup boost hands the
-  window to another process. The page reconnects the moment its stream is cut, never on a
-  timer, because a hidden window's timers run once a minute; so a browser cutting a long
-  request costs nothing. It stops when the request itself fails, the GUI being gone. New log
-  lines send it `data: lines`; the page then polls at once, one poll at a time, 1s as a fallback.
-- **The browser runs as its own instance** with a fresh temporary profile per launch; a
-  shared profile would hand a second GUI's window to the first. On exit the GUI kills it,
-  on Unix with its whole process group (`ownGroup`), and again after it exits on its own:
-  Chrome's network service outlives the main process and writes into the profile after it
-  was deleted (3 of 20 under load). Then it deletes the profile until it stays deleted.
-- **Idle exit**, for a page that never connects: no party and no `/log` poll for 2
-  minutes. Don't shorten it: Chrome throttles hidden windows' timers to about one per
-  minute. The first poll gets a minute's grace.
+  after the rename) and closes this one.
 
 ## OS helpers (`os_unix.go`, `os_windows.go`)
 
@@ -127,74 +124,25 @@ The download, SHA-256 check and binary swap live in the `update` package
   `party.VideoExts` (Go's sniffer misses `.mov` and `.ts`), which also decides what a
   playlist holds. Add an extension when a real video doesn't show up. mpv's picker has no
   filter: mpv has no extension on Linux, and a video filter hides it.
-- **Linux: only the XDG desktop portal** (`portalPick`), never a specific program;
-  hard-coded zenity/kdialog broke on desktops without them. Subscribe to `Response` on
-  the predicted request path *before* calling `FileChooser.OpenFile`. The filter type
-  is `a(sa(us))`, and a wrong type refuses the whole call
+- **Linux: only the XDG desktop portal** (`portalAsk`: `OpenFile`, and `SaveFile` for the
+  chart), never a specific program; hard-coded zenity/kdialog broke on desktops without them.
+  Subscribe to `Response` on the predicted request path *before* calling the method. The
+  filter type is `a(sa(us))`, and a wrong type refuses the whole call
   (`TestVideoFilterIsWhatThePortalExpects`). A folder is `OpenFile` with `directory`
   (portal version 3 and up) and no filter. Any portal error asks the user to type the
   path. Check a desktop with `busctl --user introspect org.freedesktop.portal.Desktop
   /org/freedesktop/portal/desktop org.freedesktop.portal.FileChooser` (`.OpenFile
   ssa{sv}`).
-- **Windows:** PowerShell `-STA` with a WinForms `OpenFileDialog`, UTF-8 output, owned
-  by an invisible form that is shown, activated, then made non-`TopMost`, which is
-  what brings the dialog to the front without pinning it there. `hide()` uses only
-  `CREATE_NO_WINDOW`; `HideWindow` can hide the dialog itself.
-- **macOS:** `osascript choose file of type {"public.movie", "mkv", …}`. A non-zero
-  exit means cancelled on macOS and Windows.
-- **Window:** each browser gets `--app=URL --window-size=560,940 --user-data-dir=<temp>
-  --no-first-run --no-default-browser-check`; then the default browser as a tab.
-  - Its environment sets the `GOOGLE_*` keys to `no`: a build with none (Void's) otherwise
-    shows a "keys are missing" bar, and this window uses no Google service. A distro's wrapper
-    that exports its own keys overrides them, which is fine.
-  - The page blocks DevTools' shortcuts, F5 and Ctrl/Cmd+R, and the right-click menu, except in a field, where
-    right-click paste matters. That is only a deterrent: Chromium has no switch for it, and
-    the policy that does it is system-wide.
-  - The profile is seeded to turn off the password manager and the download bubble: an
-    `--app` window has no toolbar to anchor it, so it shows as a blank box clipped at the
-    window's edge. Save chart says where the file went instead. Edge also gets
-    `--disable-features=msImplicitSignin` (a name from its binary, which may change),
-    or it signs every new profile into the Windows account.
-  - **Only Chromium-family browsers**, since only they have `--app`. Firefox only
-    appears as the fallback tab, whose closing can't be detected.
-  - **Linux finds browsers through desktop entries**, as `xdg-open` does, because a
-    Flatpak browser is never on `PATH`. It scans `applications/` under
-    `$XDG_DATA_HOME` and `$XDG_DATA_DIRS` (spec defaults when unset, plus the Flatpak
-    and snap export folders), keeps `x-scheme-handler/https` entries that aren't
-    `Hidden` and match `chrom|edge|brave|vivaldi`, and puts the `mimeapps.list` default
-    first. The command is the entry's `Exec`, minus field codes and Flatpak's `@@`.
-  - **A sandboxed browser gets its profile where it can see it:** `X-Flatpak=<id>` →
-    `~/.var/app/<id>/cache`, `X-SnapInstanceName` → `~/snap/<name>/common`, else
-    `os.TempDir()`. Not run against a snap or a system-wide Flatpak.
-  - **Windows taskbar:** `groupWindow` finds the window by its class and the page's `<title>`
-    and gives it the AppUserModelID `setup.nsi` puts on the shortcuts, plus relaunch
-    properties naming `watchparty-gui.exe`. Without it a pinned shortcut gets a second
-    button, and pinning the window pins the browser.
-  - Windows tries Chrome, then Edge, by absolute path; macOS Chrome, Edge, Brave, Chromium,
-    Vivaldi, in `/Applications` then `~/Applications`, the binary inside the `.app`.
-  - If everything fails, the log says `gui: no browser could be opened` with the URL.
-
-## Page script (`app.js`)
-
-- **`index.html`, `app.css`, `app.js` are served as one page** (`inline`): only `GET /` skips the token.
-- **One syntax error kills every button** while the server still answers.
-  `TestPageScriptParses` parses the script with Node's `vm.Script`.
-- `[hidden] { display: none !important; }` is required, or `.grid`'s `display:grid` shows hidden fields.
-- `render()` writes the button text to `#go-label`, not `#go`, which holds the paw icon.
-- **Save chart** re-fetches `/log?from=0`, since the `<pre>` is trimmed to 150k
-  characters. **Copy invite** uses `navigator.clipboard` (127.0.0.1 is a secure
-  context) and selects the text if that fails.
-- `-createKey` is never in an invite, so the paste box never fills it.
+- **Windows:** PowerShell `-STA` with a WinForms `OpenFileDialog` (`SaveFileDialog` for the
+  chart), UTF-8 output, owned by an invisible form that is shown, activated, then made
+  non-`TopMost`, which is what brings the dialog to the front without pinning it there.
+  `hide()` uses only `CREATE_NO_WINDOW`; `HideWindow` can hide the dialog itself.
+- **macOS:** `osascript choose file of type {"public.movie", "mkv", …}`, `choose file name`
+  for the chart. A non-zero exit means cancelled on macOS and Windows.
 
 ## Log lines
 
-`handle()` (`app.js`) and `observe` (`store.go`) read only log lines (root `CLAUDE.md`), **right after
-the 20-byte timestamp, never as a substring:** `refused <header>` and `upnp:` lines put a stranger's
-text mid-line, and it can spell any of them. Chat and reactions are never a line, nor on disk: `Heard` keeps it in
-memory (`/log`'s `said`) until the party ends; `/log` is `no-store`, or Chromium caches it (`[G13b]`).
-
-## On Windows
-
-CI's `windows` job runs `e2e_windows.py`: Chrome from Program Files (headless), a party
-from the page under `-H=windowsgui`, closing the window, a browser handing the page off,
-and the `.old` swap. Never run: mpv's video window under that parent, a Windows–Linux party.
+`status.go`'s `watch` and `observe` (`store.go`) read only log lines (root `CLAUDE.md`), **right
+after the 20-byte timestamp, never as a substring:** `refused <header>` and `upnp:` lines put a
+stranger's text mid-line, and it can spell any of them. Chat and reactions are never a line, nor
+on disk: `Heard` keeps them in memory (`news`' `Said`) until the party ends.

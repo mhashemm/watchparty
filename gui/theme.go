@@ -27,14 +27,14 @@ import (
 	"github.com/mhashemm/watchparty/gui/art"
 )
 
-// The window's look is app.css's: these blocks are its rules, named after them.
+// The window's look, as CSS rules once had it: each block is named after the rule it was.
 
 type (
 	C = layout.Context
 	D = layout.Dimensions
 )
 
-// Colors app.css names inline, beside art's palette.
+// Colours named only here, beside art's palette.
 var (
 	segOn       = art.Hex("#eef3df") // a chosen option, the open feed group
 	hoverBg     = art.Hex("#f3eedf") // a button under the mouse

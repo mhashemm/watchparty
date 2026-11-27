@@ -1,5 +1,5 @@
 // Package art is the GUI's drawings, Fosdo2, the ground and the icons, kept as the SVG they
-// were made in and animated as app.css animated them. It flattens them into filled and
+// were made in and animated as CSS once animated them. It flattens them into filled and
 // stroked paths for the window to draw; it knows nothing of the toolkit.
 package art
 

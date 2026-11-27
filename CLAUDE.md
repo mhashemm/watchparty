@@ -91,7 +91,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 
 - **Test a rule at the lowest layer that proves it, and only there:** one node's decisions
   through `mpv`'s driver, what nodes must agree on in the simulator (every order a seed
-  picks), each seam with real mpv, a transport or Chromium once in `e2e.py`. A test drives
+  picks), each seam with real mpv, a transport or the window once in `e2e.py`. A test drives
   edges, never private fields; e2e checks only end states the protocol guarantees.
 - Every Go test calls `t.Parallel()` (but `TestLimiterDoesNotAllocatePerIP`: `AllocsPerRun`)
   and finishes in milliseconds. A delay the code owns is a struct field the test shortens,
@@ -123,8 +123,8 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 - **Merge normally** (`gh pr merge N --merge`; rebase is not a convention), never force-push;
   delete merged branches with `git branch -D`.
 - **Release:** `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` on the last merged commit.
-  Verify by its files, not the Actions status: all 11 assets uploaded, the Linux GUI's
-  `GET /update` reports the tag, its page loads in headless Chromium and a tab click works.
+  Verify by its files, not the Actions status: all 11 assets uploaded, and the Linux GUI on
+  Xvfb opens, a tab click works and Settings' About shows the tag (`gui/CLAUDE.md`).
 
 ### Approach
 
@@ -141,7 +141,7 @@ or no party:** a joiner whose fingerprint differs is refused with 409. `-playlis
 ### Verifying without touching the user's machine
 
 - `make e2e` runs in a container, Windows code only in CI; say what wasn't verified. By hand:
-  `./relay` on a high port, mpv `--vo=null --ao=null`, GUIs by `curl` (`gui/CLAUDE.md`).
+  `./relay` on a high port, mpv `--vo=null --ao=null`, GUIs on Xvfb by `xdotool` (`gui/CLAUDE.md`).
 - Isolate a run by hand in a `mktemp -d` folder: `XDG_*` and `HOME` inside it, `PATH` with
   only `mpv` and a no-op `xdg-open`, `DBUS_SESSION_BUS_ADDRESS` at a dead path (godbus
   finds the desktop's bus by itself). Never pop UI on the user's screen; leave

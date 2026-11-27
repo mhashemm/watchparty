@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Style is how an element is painted once app.css's rules are applied.
+// Style is how an element is painted once the rules are applied.
 type Style struct {
 	Fill, Stroke       color.NRGBA
 	HasFill, HasStroke bool
@@ -99,7 +99,7 @@ func parse(src string) *elem {
 	return build(n)
 }
 
-// rule is one app.css rule: it applies to an element with all its classes.
+// rule is one style rule: it applies to an element with all its classes.
 type rule struct {
 	classes []string
 	set     func(*Style)
@@ -114,7 +114,7 @@ func (r rule) match(e *elem) bool {
 	return true
 }
 
-// Mood is the body's state in app.css: the cat sleeps when no party runs, and the turtles
+// Mood is the window's state: the cat sleeps when no party runs, and the turtles
 // hurry while the party starts or reconnects.
 type Mood struct{ Awake, Walking bool }
 
@@ -199,7 +199,7 @@ func fade(c color.NRGBA, op float64) color.NRGBA {
 	return c
 }
 
-// hazel is the eyes' gradient (index.html's #hazel), its stops by offset.
+// hazel is the eyes' gradient (cat.svg's #hazel), its stops by offset.
 var hazel = []struct {
 	at float64
 	c  color.NRGBA

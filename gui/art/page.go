@@ -6,7 +6,7 @@ import (
 	"math"
 )
 
-// The palette (app.css :root and the colors its rules name).
+// The palette: the theme's colours and the ones its style rules name.
 var (
 	Lichen   = Hex("#dfe6c8")
 	Paper    = Hex("#fbfaf1")
@@ -49,7 +49,7 @@ func useHazel(s *Style)               { s.hazel = true }
 
 const fur, furDark, furLight = "#8b7763", "#3d3229", "#d6c4a7"
 
-// catRules are app.css's .cat rules, in its order.
+// catRules style cat.svg by its classes, CSS-like: later rules win.
 var catRules = []rule{
 	r(fill(fur), "fur"),
 	r(all(stroke(furDark, 1), strokeOp(.35)), "ruff"),
@@ -76,7 +76,7 @@ var catRules = []rule{
 	r(fill("#b9c1c7"), "bell-in"),
 }
 
-// groundRules are app.css's .ground and .turtle rules, in its order.
+// groundRules style ground.svg (.ground, .turtle) the same way.
 var groundRules = []rule{
 	r(fill("#4a3220"), "soil"),
 	r(fill("#4f7a34"), "grass"),
