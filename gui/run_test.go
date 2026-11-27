@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/f32"
+	gioevent "gioui.org/io/event"
 	"gioui.org/io/input"
+	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -125,5 +129,43 @@ func TestTheWindowDrawsOnlyWhatChanges(t *testing.T) {
 	v.party.copyLabel, v.party.copiedAt = "Copied", now.Add(-time.Second)
 	if d, ok := wakeup(); !ok || d != time.Second {
 		t.Fatalf("copied a second ago: next frame in %v (%v), want 1s", d, ok)
+	}
+}
+
+// The first Escape, or press elsewhere, after the tips open closes them, with no frame between:
+// with reduced motion none comes, and Gio routes an event by what the frame before asked for.
+func TestTheFirstEscapeOrPressClosesTheTips(t *testing.T) {
+	t.Parallel()
+	sh, err := newShaper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, close := range []struct {
+		name string
+		ev   gioevent.Event
+	}{
+		{"Escape", key.Event{Name: key.NameEscape, State: key.Press}},
+		{"a press elsewhere", pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: f32.Pt(5, 5)}},
+	} {
+		v := newView(&theme{shaper: sh}, time.Unix(0, 0))
+		v.still = true
+		var router input.Router
+		frame := func() {
+			var ops op.Ops
+			gtx := layout.Context{Ops: &ops, Now: time.Unix(100, 0), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(560, 940)), Source: router.Source()}
+			v.frame(gtx)
+			router.Frame(&ops)
+		}
+		frame()
+		v.tip.Click()
+		frame()
+		if !v.tipOpen {
+			t.Fatal("the ? didn't open the tips")
+		}
+		router.Queue(close.ev)
+		frame()
+		if v.tipOpen {
+			t.Errorf("%s right after the tips opened left them open", close.name)
+		}
 	}
 }

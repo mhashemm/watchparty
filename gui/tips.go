@@ -231,9 +231,12 @@ func (v *view) richLine(gtx C, state *richtext.InteractiveText, st textStyle, te
 }
 
 // closeTips closes the tips on Escape, or on a press anywhere but on them or the "?": every
-// press passes through watchPresses' area on its way.
+// press passes through watchPresses' area on its way. It asks for both while the tips are
+// closed too: Gio routes an event by what the frame before asked for, and the frame that opens
+// the tips (in its layout, after this) must already have asked, or the first Escape or press
+// is lost; with reduced motion no other frame comes between. A dialog has its own Escape.
 func (v *view) closeTips(gtx C) {
-	if !v.tipOpen {
+	if v.dialog != nil {
 		return
 	}
 	for {
@@ -241,7 +244,7 @@ func (v *view) closeTips(gtx C) {
 		if !ok {
 			break
 		}
-		if e, ok := ev.(key.Event); ok && e.State == key.Press {
+		if e, ok := ev.(key.Event); ok && e.State == key.Press && v.tipOpen {
 			v.tipOpen = false
 		}
 	}
@@ -252,7 +255,7 @@ func (v *view) closeTips(gtx C) {
 		}
 		// the area is in the page's coordinates, which scroll under the window's
 		area := v.tips.area.Sub(image.Pt(0, v.list.Position.Offset))
-		if e, ok := ev.(pointer.Event); ok && !image.Pt(int(e.Position.X), int(e.Position.Y)).In(area) && !v.tip.Hovered() {
+		if e, ok := ev.(pointer.Event); ok && v.tipOpen && !image.Pt(int(e.Position.X), int(e.Position.Y)).In(area) && !v.tip.Hovered() {
 			v.tipOpen = false
 		}
 	}
