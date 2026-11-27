@@ -62,9 +62,11 @@ func (g *gui) window(w *app.Window) error {
 			}
 		})
 	}()
+	// the loop closes the window itself: Gio's X11 Perform runs on the caller's goroutine and
+	// queues the close in Xlib's buffer, which an idle window never flushes
 	go func() {
 		<-g.ctx.Done()
-		w.Perform(system.ActionClose)
+		w.Invalidate()
 	}()
 	var (
 		ops op.Ops
@@ -77,9 +79,15 @@ func (g *gui) window(w *app.Window) error {
 		hwnd      uintptr
 		framed    bool
 		frameDark bool
+		closing   bool
 	)
 	for {
-		switch e := w.Event().(type) {
+		e := w.Event()
+		if g.ctx.Err() != nil && !closing {
+			closing = true
+			w.Perform(system.ActionClose)
+		}
+		switch e := e.(type) {
 		case app.DestroyEvent:
 			if left.W > 0 {
 				if err := g.saveWindow(left); err != nil {

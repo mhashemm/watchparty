@@ -750,6 +750,10 @@ def gui_suite():
         fill(H, theme="system")
         ok("System follows the desktop again", until(lambda: ui(H)["dark"], 5))
         portal_set("org.freedesktop.appearance", "color-scheme", 2)
+        # an idle, unfocused window draws nothing, so nothing else carries its close (X11)
+        nodes[G3]["proc"].send_signal(signal.SIGTERM)
+        ok("SIGTERM ends a window that is idle, as a desktop logging out sends it", until(lambda: nodes[G3]["proc"].poll() is not None, 10))
+        ok("with exit code 0", nodes[G3]["proc"].returncode == 0, str(nodes[G3]["proc"].returncode))
 
     @case("[G33] install.sh: the right asset, the app menu entry, the macOS bundle, and no mess on a failure")
     def _():
