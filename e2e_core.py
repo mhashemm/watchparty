@@ -909,11 +909,24 @@ def xdo(n, *args):
 
 
 def x_window(n):
-    """n's X window, the only one on its display (launch_gui's display=xvfb())."""
+    """n's X window, the only one on its display (launch_gui's display=xvfb()); another there
+    would take what was meant for n's."""
     found = lambda: xdo(n, "search", "--onlyvisible", "--name", "Watch Party").split()
     if not until(found, BOOT):
-        sys.exit(f"{n}'s window never showed on {nodes[n]['display']}")
+        raise RuntimeError(f"{n}'s window never showed on {nodes[n]['display']}")
+    if len(found()) != 1:
+        raise RuntimeError(f"{n}'s display {nodes[n]['display']} has {len(found())} windows: {found()}")
     return found()[0]
+
+
+def exited(n, timeout=SETTLE):
+    """Whether n's GUI exits within timeout. One that doesn't is sent SIGQUIT, so its log
+    ends with every goroutine's stack."""
+    if until(lambda: nodes[n]["proc"].poll() is not None, timeout):
+        return True
+    os.kill(nodes[n]["proc"].pid, signal.SIGQUIT)
+    until(lambda: nodes[n]["proc"].poll() is not None, 5)
+    return False
 
 
 def x_click(n, x, y):

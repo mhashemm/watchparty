@@ -105,6 +105,8 @@ The look was matched to the old page row by row; these traps look like simplific
   `store.mu`; lock order is always `g.mu` → `store.mu`.
 - **Settings:** name, and `local`/`port` from the last peer-to-peer party, are remembered automatically,
   the rest by the Settings tab's button. The first relay used becomes the default if none is set.
+  The window's size is `gui.json`'s `window`, saved as it closes: beside the settings, not in
+  them, so the Settings tab's copy can't save a stale one over it.
 - **History**, up to 100 parties, filled in from log lines (`observe`): the *real* room and
   secret come from the invite line, not the form, which can leave them empty.
 - **Continue** starts the form plus `continue`, the party's `started`. Same room and secret, so

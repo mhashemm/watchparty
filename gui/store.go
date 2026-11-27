@@ -31,6 +31,14 @@ type settings struct {
 	MpvPicker string `json:"mpvPicker,omitempty"`
 }
 
+// windowSize is the window as it was left: its size in dp when not maximized, and whether it
+// was. Gio can't place a window (and Wayland won't let an app), so not where.
+type windowSize struct {
+	W         float32 `json:"w"`
+	H         float32 `json:"h"`
+	Maximized bool    `json:"maximized,omitempty"`
+}
+
 type session struct {
 	Started  time.Time `json:"started"`
 	Ended    time.Time `json:"ended,omitzero"`
@@ -79,8 +87,9 @@ type store struct {
 	historyPath string
 
 	mu       sync.Mutex
-	Settings settings  `json:"settings"`
-	History  []session `json:"-"`
+	Settings settings   `json:"settings"`
+	Window   windowSize `json:"window,omitzero"`
+	History  []session  `json:"-"`
 }
 
 func storePath() string {
@@ -110,10 +119,12 @@ func (s *store) trimHistory() {
 	}
 }
 
+// saveSettings writes gui.json: the settings and the window.
 func (s *store) saveSettings() error {
 	return writeJSON(s.path, struct {
-		Settings settings `json:"settings"`
-	}{s.Settings})
+		Settings settings   `json:"settings"`
+		Window   windowSize `json:"window,omitzero"`
+	}{s.Settings, s.Window})
 }
 
 func (s *store) saveHistory() error {

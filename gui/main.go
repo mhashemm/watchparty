@@ -300,6 +300,21 @@ func (g *gui) saveSettings(in settings) error {
 	return err
 }
 
+// lastWindow is the window as it was last left; zero the first time.
+func (g *gui) lastWindow() windowSize {
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	return g.store.Window
+}
+
+// saveWindow remembers the window as it is left, for the next start.
+func (g *gui) saveWindow(w windowSize) error {
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.Window = w
+	return g.store.saveSettings()
+}
+
 func (g *gui) clearHistory() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()

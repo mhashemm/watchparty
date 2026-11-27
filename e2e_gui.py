@@ -50,6 +50,18 @@ def gui_suite():
         about = ui(H)["about"]
         ok("a dev build says so and offers no update", about["version"] == "Development build" and about["button"] == "", str(about))
 
+        part("[G1b] it reopens at the size it was left")
+        xdo(H, "windowsize", x_window(H), 640, 820)
+        until(lambda: "Geometry: 640x820" in xdo(H, "getwindowgeometry", x_window(H)), 5)
+        hold(QUIET, "the window hears of its new size")
+        x_close(H)
+        must(f"{H} closed", exited(H))
+        H2 = launch_gui("g1", tag="g1again", display=xvfb())
+        on_end(lambda: kill_gui(H2))
+        geometry = xdo(H2, "getwindowgeometry", x_window(H2))
+        ok("at 640x820", "Geometry: 640x820" in geometry, geometry)
+        ok("saved beside the settings", state(H2)["settings"].get("mpvFlags") == MPVFLAGS, str(state(H2)["settings"]))
+
     @case("[G2] the tabs switch views")
     def _():
         H = gui("g2")
@@ -608,7 +620,7 @@ def gui_suite():
 
         part(f"[G24] closing {G}'s window, as a window manager does, ends its GUI")
         x_close(G)
-        ok(f"{G} exited", until(lambda: nodes[G]["proc"].poll() is not None))
+        ok(f"{G} exited", exited(G))
         ok("with exit code 0", nodes[G]["proc"].returncode == 0, str(nodes[G]["proc"].returncode))
         ok(f"{G} logged it", "gui: window closed" in log(G))
 
