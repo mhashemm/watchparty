@@ -1,5 +1,7 @@
 package main
 
+//go:generate go run ./winres icon.ico rsrc_windows_amd64.syso
+
 import (
 	"cmp"
 	"context"
