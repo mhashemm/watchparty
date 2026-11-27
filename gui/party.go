@@ -277,12 +277,20 @@ func (v *view) partyForm(gtx C, t *partyTab, running bool) D {
 		// its 6dp margin above shows under the fields; with them hidden it folds into vitals' 24
 		layout.Rigid(func(gtx C) D {
 			if running {
-				return v.th.button(gtx, &t.goButton, bStop, false, "End the party")
+				return v.th.button(gtx, &t.goButton, bStop, false, goLabel(running))
 			}
-			return layout.Inset{Top: 6}.Layout(gtx, func(gtx C) D { return v.th.button(gtx, &t.goButton, bGo, false, "Start the party") })
+			return layout.Inset{Top: 6}.Layout(gtx, func(gtx C) D { return v.th.button(gtx, &t.goButton, bGo, false, goLabel(running)) })
 		}),
 	)
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, kids...)
+}
+
+// goLabel is the big button's word.
+func goLabel(running bool) string {
+	if running {
+		return "End the party"
+	}
+	return "Start the party"
 }
 
 func (v *view) relayFields(gtx C, t *partyTab) D {
@@ -469,13 +477,7 @@ func (v *view) nowLine(gtx C, s screen) D {
 	if s.bad {
 		st.color = art.Berry
 	}
-	detail := s.detail
-	if s.refusal != nil && len(s.refusal.Detail) > 0 {
-		detail = nil
-		for _, b := range s.refusal.Detail {
-			detail = append(detail, bold{b[0], b[1]})
-		}
-	}
+	detail := s.shownDetail()
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return v.th.selectable(gtx, &t.status, st, s.text) }),
 		layout.Rigid(func(gtx C) D {
@@ -499,6 +501,18 @@ func (v *view) nowLine(gtx C, s screen) D {
 			return layout.Inset{Top: 10}.Layout(gtx, func(gtx C) D { return v.compare(gtx, s.refusal) })
 		}),
 	)
+}
+
+// shownDetail is the line under the status: a refusal's own, when it says what differs.
+func (s screen) shownDetail() []bold {
+	if s.refusal == nil || len(s.refusal.Detail) == 0 {
+		return s.detail
+	}
+	var d []bold
+	for _, b := range s.refusal.Detail {
+		d = append(d, bold{b[0], b[1]})
+	}
+	return d
 }
 
 // boldText is a line of ink-soft text whose bold parts are forest.
@@ -622,6 +636,14 @@ func (v *view) compare(gtx C, r *party.NotTheSameFile) D {
 	})
 }
 
+// since is when a member came: "since 9:41 PM", or "already here" for who was before us.
+func (v *view) since(m memberRow) string {
+	if m.since.IsZero() {
+		return "already here"
+	}
+	return "since " + v.th.clock.format(m.since)
+}
+
 // memberList is "In the party, N": a row per member, a slow one's seconds ready under it.
 func (v *view) memberList(gtx C, members []memberRow) D {
 	t := v.party
@@ -631,10 +653,7 @@ func (v *view) memberList(gtx C, members []memberRow) D {
 			return layout.Inset{Top: 10}.Layout(gtx, func(gtx C) D {
 				return v.rows(gtx, len(members), func(gtx C, i int) D {
 					m := members[i]
-					since := "already here"
-					if !m.since.IsZero() {
-						since = "since " + v.th.clock.format(m.since)
-					}
+					since := v.since(m)
 					return layout.Inset{Top: 9, Bottom: 9, Left: 12, Right: 12}.Layout(gtx, func(gtx C) D {
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 							layout.Rigid(func(gtx C) D {

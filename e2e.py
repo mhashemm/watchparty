@@ -21,11 +21,11 @@ own ports and in its own run directory:
   media  through a relay too: torrents, odd file names, and a folder as a playlist.
   caps   one fresh relay per case: every abuse cap, CREATE_KEY, and dropping a
          client that never answers pings.
-  gui    real GUIs, each opening its own page in headless Chromium, driven
-         through the page over CDP: every status, both modes, the invite, the
-         feed, Browse through a fake portal, Settings, history, persistence,
-         self-update against a local release, and the window's lifetime,
-         including a real window on Xvfb closing itself.
+  gui    real GUIs, each a native window on Xvfb, driven through the e2e
+         control socket a -tags e2e build has: every status, both modes, the
+         invite, the feed, Browse through a fake portal, Settings, history,
+         persistence, self-update against a local release, and the window's
+         lifetime; a few by real X clicks, keys and a window manager's close.
   upnp   a fake router on the LAN: CLI and GUI behind carrier NAT, and an mpv that
          hangs up. Slow by nature: each search waits out its 6.5s.
 
@@ -35,7 +35,8 @@ own ports and in its own run directory:
     ./e2e.py --nodes 3          # fewer nodes, faster
     ./e2e.py --jitter 7         # the phases it can delay, with seed 7's random delays
 
-Needs go, mpv, Chrome or Chromium, dbus-daemon and (unless --file is given) ffmpeg.
+Needs go, mpv, dbus-daemon and (unless --file is given) ffmpeg; the gui and upnp
+phases also Xvfb, xdotool, xclip and Gio's headers (e2e.Dockerfile has them all).
 All run headless.
 Exits non-zero if any assertion fails; the run directory with all node logs is
 printed at the end.

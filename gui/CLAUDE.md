@@ -31,6 +31,12 @@ by its title (`xdotool search --name "Watch Party"`), not `--pid`, which Gio nev
 `gui.json` holds the settings under `"settings"`. Read the party's progress from stderr (every
 log line), or from `history.json` after it ends.
 
+**`e2e.go`** (`-tags e2e`, `E2E.md`) is the control socket e2e drives the window by. Its
+snapshot reads every label through the helper the layout draws it with (`goLabel`,
+`versionText`, `aboutButton`, `historyButton`, `partyLine`, `since`, `shownDetail`), never
+a copy of its own, or the suite checks the copy. It refuses a button the window hides or
+disables: `Click` would pass a disabled one's `gtx.Disabled()`.
+
 ## The app (`main.go`)
 
 - **`form.config()`** trims every field; an empty port is `party.DefaultPort`. It

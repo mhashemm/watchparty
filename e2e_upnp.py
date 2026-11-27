@@ -6,7 +6,7 @@ import e2e_core
 def upnp_suite():
     print("\n=== upnp: a fake router on the LAN ===")
     e2e_core.BUS = private_bus()
-    if not os.environ.get("E2E_NO_SANDBOX"):
+    if not os.environ.get("E2E_CONTAINER"):
         print("\n[G34] skipped outside the container: a real router on this LAN would answer and map ports")
     else:
         # the LAN has one router, so the cases that ask it take turns (group "router"), and
@@ -59,13 +59,13 @@ def upnp_suite():
             gw.ip = "10.172.178.175"
             P = launch_gui("guiUpnp")
             try:
-                ok(f"{P} saved", save_settings(P, mpvFlags=MPVFLAGS) == "Saved.", js(P, '$("settings-saved").textContent'))
-                js(P, 'setMode("direct"); $("local").checked = false')
+                ok(f"{P} saved", save_settings(P, mpvFlags=MPVFLAGS) == "Saved.")
+                fill(P, mode="direct", local=False)
                 start(P, hostname=P, file=MEDIA, port=str(PORTS["upnpNode"]))
                 must("it starts", until(lambda: status(P).startswith("You're in"), BOOT), status(P))
                 ok("the status warns", status(P) == "You're in, but friends outside this network can't reach this invite: your connection has no public address. Use a relay for them.", status(P))
-                until(lambda: js(P, '$("share-text").textContent'))
-                ok("and the invite still shows", js(P, '$("share-text").textContent').startswith("-addrs 10.172.178.175:"), js(P, '$("share-text").textContent'))
+                until(lambda: ui(P)["invite"])
+                ok("and the invite still shows", ui(P)["invite"].startswith("-addrs 10.172.178.175:"), ui(P)["invite"])
                 end(P)
                 gw.ip = "203.0.113.7"
                 go(P)

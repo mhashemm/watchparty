@@ -1,7 +1,8 @@
-// Command fakeportal answers FileChooser.OpenFile on a private bus for e2e.py: it picks
+// Command fakeportal answers FileChooser on a private bus for e2e.py. OpenFile picks
 // os.Args[1], its folder when asked for one, or os.Args[1] + ".unfiltered" when asked with no
-// filter, so a page can tell which it got. It refuses a filter that isn't the portal's
+// filter, so a test can tell which it got. It refuses a filter that isn't the portal's
 // a(sa(us)), and a folder request with a filter or a directory option that isn't a bool.
+// SaveFile saves as the current_name it was given, in os.Args[1]'s folder.
 package main
 
 import (
@@ -42,6 +43,19 @@ func (c chooser) OpenFile(sender dbus.Sender, parent, title string, options map[
 			return "", dbus.MakeFailedError(fmt.Errorf("filters is not a(sa(us)): %v", err))
 		}
 	}
+	return c.answer(sender, options, picked, title)
+}
+
+func (c chooser) SaveFile(sender dbus.Sender, parent, title string, options map[string]dbus.Variant) (dbus.ObjectPath, *dbus.Error) {
+	name, ok := options["current_name"].Value().(string)
+	if !ok || name == "" || filepath.Base(name) != name {
+		return "", dbus.MakeFailedError(fmt.Errorf("current_name is not a file name: %v", options["current_name"]))
+	}
+	return c.answer(sender, options, filepath.Join(filepath.Dir(c.file), name), title)
+}
+
+// answer is the Response the portal sends on the request path the caller predicted.
+func (c chooser) answer(sender dbus.Sender, options map[string]dbus.Variant, picked, title string) (dbus.ObjectPath, *dbus.Error) {
 	token, _ := options["handle_token"].Value().(string)
 	name := []byte(string(sender)[1:])
 	for i, b := range name {

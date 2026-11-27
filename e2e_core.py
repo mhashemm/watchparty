@@ -2,9 +2,9 @@
 drive nodes, relays and GUIs, and the case runner. e2e.py imports it once, then the phase's
 module, which takes all of it with `from e2e_core import *`."""
 import argparse, ast, contextlib, functools, glob, http.client, http.server, itertools, json, os, re, shutil, signal, socket, subprocess
-import plistlib, queue, random, sys, tempfile, threading, time, traceback, urllib.error, urllib.parse, urllib.request
+import ctypes, plistlib, queue, random, sys, tempfile, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 import e2e_lib
-from e2e_lib import Gateway, Page, Release, find_page, sha
+from e2e_lib import Gateway, Release, Window, sha
 
 # the last three try to undo what party.Run pins; [2b] and [5d] check the pins win
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error --speed=2 --hr-seek=no --cache-pause=no --resume-playback=yes"
@@ -90,12 +90,22 @@ ENTRY = os.path.join(REPO, "e2e.py")
 
 
 def build(dest, gui):
-    """What every phase runs, and with gui what the gui and upnp phases add, in one go
-    build so its packages compile in parallel and once."""
-    pkgs = [".", "./relay", "./party/fakeseed"] + (["./gui", "./gui/fakeportal"] if gui else [])
-    subprocess.run(["go", "build", "-o", dest + "/"] + pkgs, cwd=REPO, check=True)
+    """What every phase runs, and with gui what the gui and upnp phases add: one go build
+    for the cgo-free binaries, so their packages compile in parallel and once, and the GUI
+    beside it."""
+    pkgs = [".", "./relay", "./party/fakeseed"] + (["./gui/fakeportal"] if gui else [])
+    builds = [subprocess.Popen(["go", "build", "-o", dest + "/"] + pkgs, cwd=REPO)]
     if gui:
-        os.rename(dest + "/gui", dest + "/watchparty-gui")
+        builds.append(gui_build(dest + "/watchparty-gui"))
+    if any(p.wait() for p in builds):
+        sys.exit("the build failed")
+
+
+def gui_build(out, ldflags=""):
+    """The GUI with its e2e control socket (gui/e2e.go), started; Gio needs cgo, which every
+    other binary is built without."""
+    return subprocess.Popen(["go", "build", "-tags", "e2e", "-ldflags", ldflags, "-o", out, "./gui"], cwd=REPO,
+                            env={**os.environ, "CGO_ENABLED": "1"})
 
 
 # relay-mode nodes open no ports, so the phases only need disjoint port bases
@@ -156,6 +166,7 @@ relays = []
 stubs = []
 # the private session bus the gui and upnp phases start (private_bus), read by launch_gui
 BUS = ""
+DISPLAY = ""
 
 
 def ok(name, cond, detail: object = ""):
@@ -726,45 +737,46 @@ def children(pid):
     return out
 
 
-def launch_gui(name, tag=None, exe=None, browser: str | None = "headless", portal=True):
-    """A real GUI in its own HOME, XDG folders and TMPDIR, with a PATH of only mpv and
-    an xdg-open that fails. browser="headless" gives it one browser, a desktop entry
-    for a wrapper that runs headless Chromium, so the GUI's own launch path opens the
-    page and nothing reaches the screen; "xvfb" runs it headed on a virtual display;
-    "handoff" is a browser that exits at once, None no browser. Every GUI talks to the private bus, never the desktop's: godbus
-    finds /run/user/<uid>/bus on its own and would open a real file chooser."""
+def launch_gui(name, tag=None, exe=None, portal=True, display=None):
+    """A real GUI in its own HOME, XDG folders and TMPDIR, with a PATH of only mpv and an
+    xdg-open that fails, its window on the phase's Xvfb (or display, one of the case's own
+    for xdotool), driven through its e2e control socket. Every GUI talks to the private bus,
+    never the desktop's: godbus finds /run/user/<uid>/bus on its own and would open a real
+    file chooser."""
     home, key = f"{RUN}/{name}", tag or name
     if not os.path.exists(home):
-        for d in ("bin", "config", "data/applications", "tmp", "downloads"):
+        for d in ("bin", "config", "data", "tmp"):
             os.makedirs(f"{home}/{d}")
         os.symlink(shutil.which("mpv") or sys.exit("e2e needs mpv on PATH"), f"{home}/bin/mpv")
         script(f"{home}/bin/xdg-open", f'echo "$@" >> {home}/xdg-open.args\nexit 1')
         script(f"{home}/slow-mpv", f'{shutil.which("sleep")} 3\nexec {shutil.which("mpv")} "$@"')
-        if browser:
-            # e2e.Dockerfile sets it: Docker's seccomp profile blocks the user namespaces the sandbox needs
-            flags = "--headless=new --remote-debugging-port=0" + (" --no-sandbox" if os.environ.get("E2E_NO_SANDBOX") else "")
-            if browser == "xvfb":
-                flags = flags.replace("--headless=new", "--ozone-platform=x11")
-            run = "exit 0" if browser == "handoff" else f'PATH=/usr/bin:/bin exec {"xvfb-run -a " if browser == "xvfb" else ""}{BROWSER} {flags} "$@"'
-            script(f"{home}/browser.sh", f'echo "$@" >> {home}/browser.args\necho "$GOOGLE_API_KEY" > {home}/browser.key\n{run}')
-            with open(f"{home}/data/applications/e2e-chromium.desktop", "w") as f:
-                f.write(f"[Desktop Entry]\nType=Application\nName=e2e\nExec={home}/browser.sh %U\nMimeType=x-scheme-handler/https;\n")
-            with open(f"{home}/config/mimeapps.list", "w") as f:
-                f.write("[Default Applications]\nx-scheme-handler/https=e2e-chromium.desktop\n")
+    ctl = f"{home}/control"
+    try:
+        os.remove(ctl)  # a restarted GUI writes its own
+    except OSError:
+        pass
     env = {"HOME": home, "PATH": f"{home}/bin", "TMPDIR": f"{home}/tmp", "XDG_CONFIG_HOME": f"{home}/config",
-           "XDG_DATA_HOME": f"{home}/data", "XDG_DATA_DIRS": f"{home}/data",
+           "XDG_DATA_HOME": f"{home}/data", "XDG_DATA_DIRS": f"{home}/data", "DISPLAY": display or DISPLAY, "WATCHPARTY_E2E": ctl,
            "DBUS_SESSION_BUS_ADDRESS": BUS if portal else f"unix:path={home}/no-bus"}
     path = f"{RUN}/{key}.log"
-    nodes[key] = {"home": home}
-    opened = len(launches(key))
-    # its own process group, so cleanup takes its browser, its mpv and any GUI it restarts into
+    # its own process group, so cleanup takes its mpv and any GUI it restarts into
     p = subprocess.Popen([exe or GUI_BIN], env=env, stdout=open(path, "wb"), stderr=subprocess.STDOUT, start_new_session=True)
-    nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None, "home": home, "gui": True}
-    until(lambda: "gui: http" in log(key), BOOT)
-    nodes[key]["url"] = log(key).split("gui: ", 1)[1].split("\n", 1)[0].strip()
-    if browser in ("headless", "xvfb"):
-        attach(key, opened + 1)
+    nodes[key] = {"proc": p, "log": path, "sock": None, "addr": None, "home": home, "gui": True, "ctl": ctl, "display": display or DISPLAY}
+    attach(key)
     return key
+
+
+def attach(n):
+    """Wait for the window's control socket: the GUI is up, its window open and loaded."""
+    w = Window(nodes[n]["ctl"])
+    def up():
+        try:
+            return w.ui() is not None
+        except (OSError, ValueError, RuntimeError):
+            return False
+    if not until(up, BOOT):
+        sys.exit(f"{n}'s window never answered; see {nodes[n]['log']}")
+    nodes[n]["window"] = w
 
 
 def pgid(p):
@@ -776,8 +788,7 @@ def pgid(p):
 
 def kill_gui(n):
     """A GUI and everything under it: its mpv and a GUI it restarted into share its process
-    group, but each browser has a group of its own (ownGroup), which only the GUI kills, on
-    a clean exit. Left running, the browsers of finished cases starved later ones' pages."""
+    group."""
     pid, groups = nodes[n]["proc"].pid, set()
     todo = [pid] + [int(d.rsplit("/", 1)[1]) for d in glob.glob("/proc/[0-9]*") if pgid(int(d.rsplit("/", 1)[1])) == pid]  # a restarted GUI too
     while todo:
@@ -798,61 +809,56 @@ def script(path, body):
     os.chmod(path, 0o755)
 
 
-def profile(n):
-    """The temporary browser profile of the last window this GUI's folder opened."""
-    return next(a.split("=", 1)[1] for a in launches(n)[-1].split() if a.startswith("--user-data-dir="))
-
-
-def launches(n):
-    try:
-        return open(f"{nodes[n]['home']}/browser.args").read().splitlines()
-    except OSError:
-        return []
-
-
-def attach(n, count):
-    """Connect to the page of the count-th window this GUI's folder has opened."""
-    def ws():
-        lines = launches(n)
-        return find_page(lines[count - 1]) if len(lines) >= count else None
-    until(ws, BOOT)
-    url = ws()
-    if not url:
-        sys.exit(f"{n} never opened its page; see {nodes[n]['log']}")
-    nodes[n]["page"] = Page(url)
-    nodes[n]["page"].ready(BOOT, downloads=f"{nodes[n]['home']}/downloads", jitter=(random.Random(f"{JITTERED}/{n}/{count}").getrandbits(32), JITTER) if JITTERED else None)
-
-
-def js(n, expr):
-    return nodes[n]["page"].js(expr)
+def ui(n):
+    return nodes[n]["window"].ui()
 
 
 def feed(n):
-    return nodes[n]["page"].feed()
+    return nodes[n]["window"].feed()
+
+
+def feed_groups(n):
+    return nodes[n]["window"].feed_groups()
 
 
 def status(n):
-    return nodes[n]["page"].status()
+    return nodes[n]["window"].status()
 
 
-def click(n, selector):
-    nodes[n]["page"].click(selector)
+def click(n, name):
+    nodes[n]["window"].click(name)
 
 
 def fill(n, **fields):
-    nodes[n]["page"].fill(**fields)
+    nodes[n]["window"].fill(**fields)
+
+
+def refused(n, name):
+    """Why n's window won't press name (hidden, disabled, under a dialog), or "" when it would:
+    then it has pressed it."""
+    try:
+        click(n, name)
+    except RuntimeError as e:
+        return str(e)
+    return ""
 
 
 def tab(n, view):
-    nodes[n]["page"].tab(view)
+    nodes[n]["window"].tab(view)
+
+
+def chart(n):
+    """The Patient chart's text: every line the party logged."""
+    return nodes[n]["window"].log()
 
 
 def state(n):
-    return nodes[n]["page"].state()
+    """What the GUI saved: its settings and history."""
+    return e2e_lib.store(f"{nodes[n]['home']}/config")
 
 
 def go(n):
-    nodes[n]["page"].go(BOOT)
+    nodes[n]["window"].go(BOOT)
 
 
 def start(n, **fields):
@@ -861,23 +867,97 @@ def start(n, **fields):
 
 
 def end(n):
-    js(n, "window.asked = null")
-    click(n, "#go")
+    """End the party by its button, through the window's confirm; returns what it asked."""
+    click(n, "go")
+    d = ui(n)["dialog"]
+    if not d:
+        raise RuntimeError(f"{n}'s End the party asked nothing: {ui(n)['status']!r}")
+    click(n, "dialog:ok")
     until(lambda: status(n) == "The party has ended.")
-    # seeing the party stop, the page reloads the saved settings without waiting; landing
-    # after the next case's fill, it put the saved mpv options back ([G19e] under --jitter)
-    until(lambda: js(n, "window.loading") == 0)
-    return js(n, "window.asked")
+    return " ".join(filter(None, (d["title"], d["text"])))
 
 
 def save_settings(n, **fields):
     tab(n, "settings")
     fill(n, **fields)
-    js(n, '$("settings-saved").hidden = true')
-    click(n, "#settings-form button[type=submit]")
-    until(lambda: js(n, '!$("settings-saved").hidden'))
+    click(n, "settings-save")
+    saved = ui(n)["settings"]["saved"]
     tab(n, "party")
-    return js(n, '$("settings-saved").textContent')
+    return saved
+
+
+def xvfb():
+    """A virtual display for this phase's windows, on a free number Xvfb picks; its DISPLAY."""
+    r, w = os.pipe()
+    relays.append(subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],
+                                   pass_fds=(w,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    os.close(w)
+    with os.fdopen(r) as f:
+        n = f.readline().strip()
+    if not n:
+        sys.exit("Xvfb did not start")
+    return ":" + n
+
+
+def xdo(n, *args):
+    """xdotool on n's display."""
+    r = subprocess.run(["xdotool", *map(str, args)], env={**os.environ, "DISPLAY": nodes[n]["display"]},
+                       capture_output=True, text=True, timeout=SETTLE)
+    if r.returncode or r.stderr:
+        print(f"  xdotool {' '.join(map(str, args))}: exit {r.returncode}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def x_window(n):
+    """n's X window, the only one on its display (launch_gui's display=xvfb())."""
+    found = lambda: xdo(n, "search", "--onlyvisible", "--name", "Watch Party").split()
+    if not until(found, BOOT):
+        sys.exit(f"{n}'s window never showed on {nodes[n]['display']}")
+    return found()[0]
+
+
+def x_click(n, x, y):
+    """A real left click at x, y in n's window."""
+    xdo(n, "mousemove", "--window", x_window(n), x, y, "click", 1)
+
+
+def x_key(n, key):
+    """A real key press in n's window, focused first: Xvfb has no window manager to do it."""
+    xdo(n, "windowfocus", "--sync", x_window(n), "key", key)
+
+
+def x_close(n):
+    """What a window manager's close button sends: WM_DELETE_WINDOW. This xdotool can't, so it
+    goes through libX11."""
+    x = ctypes.CDLL("libX11.so.6")
+    x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+    x.XInternAtom.restype, x.XInternAtom.argtypes = ctypes.c_ulong, [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
+    x.XFlush.argtypes = x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+    class Message(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong), ("format", ctypes.c_int), ("l", ctypes.c_long * 5)]
+
+    class Event(ctypes.Union):
+        _fields_ = [("message", Message), ("pad", ctypes.c_long * 24)]  # XEvent is 24 longs
+    win = int(x_window(n))
+    dpy = x.XOpenDisplay(nodes[n]["display"].encode())
+    if not dpy:
+        sys.exit(f"can't open {nodes[n]['display']}")
+    ev = Event()
+    ev.message.type, ev.message.window, ev.message.format = 33, win, 32  # ClientMessage
+    ev.message.message_type = x.XInternAtom(dpy, b"WM_PROTOCOLS", 0)
+    ev.message.l[0] = x.XInternAtom(dpy, b"WM_DELETE_WINDOW", 0)
+    x.XSendEvent(dpy, win, 0, 0, ctypes.byref(ev))
+    x.XFlush(dpy)
+    x.XCloseDisplay(dpy)
+
+
+def clipboard(n):
+    """What n's display has on its clipboard."""
+    return subprocess.run(["xclip", "-o", "-selection", "clipboard"], env={**os.environ, "DISPLAY": nodes[n]["display"]},
+                          capture_output=True, text=True, timeout=SETTLE).stdout
 
 
 def private_bus():
@@ -1049,18 +1129,16 @@ FAKESEED_BIN = BINS + "/fakeseed"
 GUI_BIN = BINS + "/watchparty-gui"
 PORTAL_BIN = BINS + "/fakeportal"
 if GUI:
-    BROWSER = next(filter(None, map(shutil.which, ("google-chrome", "chromium", "google-chrome-stable"))), None)
-    if not BROWSER:
-        sys.exit("the gui phase needs Chrome or Chromium on PATH")
     need("dbus-daemon")
-    need("xvfb-run")
+    need("Xvfb")
+    DISPLAY = xvfb()
 if args.mode == "gui":
     # the update cases' releases are on this phase's ports, so only it can build these
     print("building two stamped versions of the gui and the cli")
     release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{{}}/latest"
     builds = [(RUN + f"/gui-{v}", f"-X main.version={v} {release.format(PORTS['release'])}", "./gui") for v in ("v0.0.1", "v0.0.2")]
     builds += [(RUN + f"/cli-{v}", f"-X main.version={v} {release.format(PORTS['cliRelease'])}", ".") for v in ("v0.0.1", "v0.0.2")]
-    for p in [subprocess.Popen(["go", "build", "-ldflags", flags, "-o", out, pkg], cwd=REPO) for out, flags, pkg in builds]:
+    for p in [gui_build(out, flags) if pkg == "./gui" else subprocess.Popen(["go", "build", "-ldflags", flags, "-o", out, pkg], cwd=REPO) for out, flags, pkg in builds]:
         if p.wait():
             sys.exit("a stamped build failed")
     mark("gui build")

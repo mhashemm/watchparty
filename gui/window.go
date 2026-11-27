@@ -75,6 +75,8 @@ type view struct {
 	// still: the OS asks for reduced motion, so the scenes rest and the window draws only on
 	// changes
 	still bool
+	// after runs once this frame is drawn (the e2e control socket's answers)
+	after []func()
 }
 
 // backend is the app as the window sees it. pick, saveChart, install, latest and tools wait
@@ -208,6 +210,10 @@ func (v *view) frame(gtx C) {
 	if v.moving() {
 		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(frameGap)})
 	}
+	for _, f := range v.after {
+		f()
+	}
+	v.after = v.after[:0]
 }
 
 // frameGap is how often the window draws while something moves: 30 fps, half of what

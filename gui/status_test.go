@@ -230,6 +230,53 @@ func TestFeedFollowsTheFile(t *testing.T) {
 	}
 }
 
+// The notices of a move go with the file it moved to, in order, whichever came first; a later
+// move leaves them; a sync alone stays; a stop for someone else is one line of this node's own.
+func TestFeedAroundAMove(t *testing.T) {
+	t.Parallel()
+	w := newWatch(form{Mode: "relay", File: "/v/e2.mkv", Playlist: true})
+	same := func(s int, msgs ...string) {
+		for _, m := range msgs {
+			w.line(at(s).Format("2006/01/02 15:04:05 ") + m)
+		}
+	}
+	same(0, `now playing: "e2.mkv"`)
+	same(1, shown("paused by Sam"), shown("from e2\nsecond line.mkv to e1.mkv, by Sam"), shown("synced by Sam"), shown("paused for Sam: video changed"), `now playing: "e1.mkv"`)
+	if w.feed[0].name != "e1.mkv" || !slices.Equal(items(w.feed[0]), []string{"paused for Sam: video changed", "synced by Sam", "from e2\nsecond line.mkv to e1.mkv, by Sam"}) {
+		t.Fatalf("the move's notices: %q %v", w.feed[0].name, items(w.feed[0]))
+	}
+	if !slices.Contains(items(w.feed[1]), "paused by Sam") {
+		t.Fatalf("the rest stays behind: %v", items(w.feed[1]))
+	}
+	same(11, `now playing: "e3.mkv"`)
+	if w.feed[1].name != "e1.mkv" || len(w.feed[1].items) != 3 {
+		t.Fatalf("a later move took the notices: %q %v", w.feed[1].name, items(w.feed[1]))
+	}
+	same(21, shown("synced by Noor"), `now playing: "e2.mkv"`)
+	if w.feed[1].name != "e3.mkv" || !slices.Contains(items(w.feed[1]), "synced by Noor") {
+		t.Fatalf("a seek alone moved: %q %v", w.feed[1].name, items(w.feed[1]))
+	}
+	if it := w.feed[1].items[0]; !it.at.Equal(at(21)) {
+		t.Fatalf("a row's moment is its line's: %v, want %v", it.at, at(21))
+	}
+	stops := event("pause", "yes")
+	same(60, shown("paused for Sam: catching up"), stops)
+	if got := items(w.feed[0]); got[0] != "paused by you: catching up" || slices.Contains(got, "paused by you") || slices.Contains(got, "paused for Sam: catching up") {
+		t.Fatalf("stopping for someone behind: %v", got[:3])
+	}
+	same(70, shown("paused for Sam: catching up"))
+	same(80, shown("resumed by Sam"), stops)
+	if got := items(w.feed[0]); !slices.Equal(got[:3], []string{"paused by you", "resumed by Sam", "paused for Sam: catching up"}) {
+		t.Fatalf("a party already stopped keeps the notice: %v", got[:4])
+	}
+	for _, c := range [][2]string{{"joining", "paused for Sam: joining"}, {"out of sync", "paused: out of sync with Sam"}} {
+		same(90, shown(c[1]), stops)
+		if got := items(w.feed[0]); got[0] != "paused by you: "+c[0] || slices.Contains(got, c[1]) {
+			t.Fatalf("stopping for someone %s: %v", c[0], got[:3])
+		}
+	}
+}
+
 func TestDiagnoses(t *testing.T) {
 	t.Parallel()
 	w := newWatch(relayForm())
@@ -291,6 +338,8 @@ func TestHistoryWords(t *testing.T) {
 		{session{File: "/v/a.mkv"}, 1, "/v/a.mkv"},
 		{session{File: "/v/a.mkv", Playlist: true}, 3, "/v (3 videos)"},
 		{session{File: "a.mkv", Playlist: true}, 2, "2 videos"},
+		{session{File: `C:\v\trip\a.mkv`, Playlist: true}, 2, `C:\v\trip (2 videos)`},
+		{session{File: "magnet:?xt=urn:btih:x&dn=The.Pack", Playlist: true}, 2, "The.Pack (2 videos)"},
 		{session{File: "/v/x.torrent", Playlist: true}, 2, "/v/x.torrent (2 videos)"},
 		{session{File: "magnet:?dn=Film"}, 0, "Film"},
 	} {

@@ -77,21 +77,9 @@ func (v *view) historyTab(gtx C) D {
 // partyRow is one party: its file (or folder) in bold, when and with whom under it, Continue or
 // Watch again beside both, and the videos it played below, 12dp above and under, a rule last.
 func (v *view) partyRow(gtx C, p session, c *widget.Clickable, running bool) D {
-	when := p.Started.Local().Format("Jan 2, 2006") + ", " + v.th.clock.format(p.Started.Local())
-	who := "just you"
-	if len(p.People) > 0 {
-		who = "with " + names(p.People)
-	}
-	how := "over the internet"
-	if p.Mode == "direct" {
-		how = "peer-to-peer"
-	}
-	label, style := "", bSmall
-	switch {
-	case continuable(p, gtx.Now):
-		label, style = "Continue", bContinue
-	case p.Mode == "direct":
-		label = "Watch again"
+	label, style := historyButton(p, gtx.Now), bSmall
+	if label == "Continue" {
+		style = bContinue
 	}
 	hide := ""
 	if !p.Playlist {
@@ -110,7 +98,7 @@ func (v *view) partyRow(gtx C, p session, c *widget.Clickable, running bool) D {
 										return v.th.text(gtx, tBold, partyTitle(p, partyFiles(p)))
 									}),
 									layout.Rigid(layout.Spacer{Height: 2}.Layout),
-									layout.Rigid(func(gtx C) D { return v.th.text(gtx, tHint, when+", "+who+", "+how) }),
+									layout.Rigid(func(gtx C) D { return v.th.text(gtx, tHint, v.partyLine(p)) }),
 								))
 							}),
 							layout.Rigid(func(gtx C) D {
@@ -134,6 +122,14 @@ func (v *view) partyRow(gtx C, p session, c *widget.Clickable, running bool) D {
 	)
 }
 
+// videoWhen is when a video played: "9:41 PM to 10:02 PM", or "started 9:41 PM".
+func (v *view) videoWhen(x played) string {
+	if x.Ended.IsZero() {
+		return "started " + v.th.clock.format(x.Started.Local())
+	}
+	return v.th.clock.format(x.Started.Local()) + " to " + v.th.clock.format(x.Ended.Local())
+}
+
 // videoList is the videos a party played, each with when, behind a dashed line on the left.
 // hide is a name not to repeat: a single file's party has it as its title.
 func (v *view) videoList(gtx C, videos []played, hide string) D {
@@ -141,10 +137,7 @@ func (v *view) videoList(gtx C, videos []played, hide string) D {
 	d := layout.Inset{Left: 2 + 12}.Layout(gtx, func(gtx C) D {
 		var kids []layout.FlexChild
 		for _, x := range videos {
-			when := "started " + v.th.clock.format(x.Started.Local())
-			if !x.Ended.IsZero() {
-				when = v.th.clock.format(x.Started.Local()) + " to " + v.th.clock.format(x.Ended.Local())
-			}
+			when := v.videoWhen(x)
 			kids = append(kids, layout.Rigid(func(gtx C) D {
 				return layout.Inset{Top: 4, Bottom: 4}.Layout(gtx, func(gtx C) D {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -193,6 +186,30 @@ func (v *view) resume(p session) {
 	f.Continue = p.Started.Format(time.RFC3339Nano)
 	t.err = ""
 	v.startParty(f)
+}
+
+// partyLine is the line under a party's title: when, with whom, and how.
+func (v *view) partyLine(p session) string {
+	who := "just you"
+	if len(p.People) > 0 {
+		who = "with " + names(p.People)
+	}
+	how := "over the internet"
+	if p.Mode == "direct" {
+		how = "peer-to-peer"
+	}
+	return p.Started.Local().Format("Jan 2, 2006") + ", " + v.th.clock.format(p.Started.Local()) + ", " + who + ", " + how
+}
+
+// historyButton is a party's way back in: Continue, Watch again, or none.
+func historyButton(p session, now time.Time) string {
+	switch {
+	case continuable(p, now):
+		return "Continue"
+	case p.Mode == "direct":
+		return "Watch again"
+	}
+	return ""
 }
 
 // confirm is a question asked in the window before something that can't be undone.

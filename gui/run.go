@@ -35,6 +35,9 @@ func (g *gui) window(w *app.Window) error {
 	}
 	w.Option(opts...)
 	v.load()
+	if e2eHook != nil {
+		e2eHook(v)
+	}
 	v.async(func() func(gtx C) {
 		still := reduceMotion()
 		return func(gtx C) { v.still = v.still || still }
@@ -72,6 +75,9 @@ func (g *gui) window(w *app.Window) error {
 		}
 	}
 }
+
+// e2eHook starts e2e.go's control socket, in a build with -tags e2e
+var e2eHook func(v *view)
 
 // async runs work off the window's goroutine (a dialog, the network), and its result on it,
 // in the next frame.

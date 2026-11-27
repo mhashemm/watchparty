@@ -88,7 +88,7 @@ ifndef E2E_IMAGE_BUILT
 	docker build -q -t watchparty-e2e --build-arg UID="$$(id -u)" --build-arg GID="$$(id -g)" - < e2e.Dockerfile > /dev/null
 endif
 	rm -rf .e2e && mkdir .e2e
-	docker run --rm --init --shm-size=1g -v "$(CURDIR)":/src:ro -w /src \
+	docker run --rm --init -v "$(CURDIR)":/src:ro -w /src \
 		-v "$(CURDIR)/.e2e":"$(CURDIR)/.e2e" -e E2E_LOGS="$(CURDIR)/.e2e" \
 		-v "$$(go env GOCACHE)":/cache/go-build -v "$$(go env GOMODCACHE)":/cache/mod watchparty-e2e ./e2e.py $(E2E)
 

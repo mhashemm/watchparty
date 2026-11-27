@@ -223,20 +223,41 @@ func (v *view) restartNow() {
 	v.prefs.versionNote = "Restarting into " + v.about.installed + "."
 }
 
+// versionText is About's version line, or what replaced it.
+func (v *view) versionText() string {
+	t, a := v.prefs, v.about
+	switch {
+	case t.versionNote != "":
+		return t.versionNote
+	case a.installed != "":
+		return a.installed + " is installed. Restart the app to start using it."
+	case a.version == "dev":
+		return "Development build"
+	}
+	return "Version " + a.version
+}
+
+// aboutButton is About's button beside the version: Restart now, Update to …, or none.
+func (v *view) aboutButton() string {
+	t, a := v.prefs, v.about
+	switch {
+	case a.installed != "" && t.versionNote == "":
+		return "Restart now"
+	case a.latest != "" && a.installed == "":
+		if t.updating {
+			return "Updating…"
+		}
+		return "Update to " + a.latest
+	}
+	return ""
+}
+
 var tCode = textStyle{font: monoFont, size: 13.6, color: art.Soil, lineHeight: 1.5, anywhere: true}
 
 // aboutSection is About: the version and its update, the tools, and where things are kept.
 func (v *view) aboutSection(gtx C, running bool) D {
 	t, a := v.prefs, v.about
-	version := "Version " + a.version
-	switch {
-	case t.versionNote != "":
-		version = t.versionNote
-	case a.installed != "":
-		version = a.installed + " is installed. Restart the app to start using it."
-	case a.version == "dev":
-		version = "Development build"
-	}
+	version, button := v.versionText(), v.aboutButton()
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return dashed(gtx, gtx.Constraints.Max.X) }),
 		layout.Rigid(func(gtx C) D {
@@ -247,17 +268,13 @@ func (v *view) aboutSection(gtx C, running bool) D {
 				return baselineRow(gtx,
 					func(gtx C) D { return v.th.text(gtx, tBody, version+" ") },
 					func(gtx C) D {
-						switch {
-						case a.installed != "" && t.versionNote == "":
-							return layout.Inset{Left: 6}.Layout(gtx, func(gtx C) D { return v.th.button(gtx, &t.restart, bSmall, running, "Restart now") })
-						case a.latest != "" && a.installed == "":
-							label := "Update to " + a.latest
-							if t.updating {
-								label = "Updating…"
-							}
-							return layout.Inset{Left: 6}.Layout(gtx, func(gtx C) D { return v.th.button(gtx, &t.update, bSmall, running || t.updating, label) })
+						switch button {
+						case "":
+							return D{}
+						case "Restart now":
+							return layout.Inset{Left: 6}.Layout(gtx, func(gtx C) D { return v.th.button(gtx, &t.restart, bSmall, running, button) })
 						}
-						return D{}
+						return layout.Inset{Left: 6}.Layout(gtx, func(gtx C) D { return v.th.button(gtx, &t.update, bSmall, running || t.updating, button) })
 					})
 			})
 		}),
