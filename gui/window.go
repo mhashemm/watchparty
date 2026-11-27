@@ -77,6 +77,10 @@ type view struct {
 	still bool
 	// dark: the OS's appearance is dark, so the window paints in darkPalette
 	dark bool
+	// focused: the window has the keyboard; frozen, when the scenes' time stopped (zero
+	// while they move)
+	focused bool
+	frozen  time.Time
 	// after runs once this frame is drawn (the e2e control socket's answers)
 	after []func()
 }
@@ -198,11 +202,30 @@ func newView(th *theme, now time.Time) *view {
 }
 
 // t is the animations' clock, in seconds.
-func (v *view) t(gtx C) float64 { return gtx.Now.Sub(v.start).Seconds() }
+func (v *view) t(gtx C) float64 {
+	now := gtx.Now
+	if !v.frozen.IsZero() {
+		now = v.frozen
+	}
+	return now.Sub(v.start).Seconds()
+}
+
+// clock stops the scenes' time when they stop moving and starts it again where it stopped,
+// so a turtle carries on from where it was rather than jumping ahead.
+func (v *view) clock(gtx C) {
+	switch {
+	case v.animating() && !v.frozen.IsZero():
+		v.start = v.start.Add(gtx.Now.Sub(v.frozen))
+		v.frozen = time.Time{}
+	case !v.animating() && v.frozen.IsZero():
+		v.frozen = gtx.Now
+	}
+}
 
 // frame lays out the whole window. It asks for the next frame: the cat and the turtles move.
 func (v *view) frame(gtx C) {
 	v.sync(gtx)
+	v.clock(gtx)
 	gtx = v.painted(gtx)
 	v.closeTips(gtx)
 	v.bg.paint(gtx)
@@ -223,12 +246,15 @@ func (v *view) frame(gtx C) {
 // software rendering (no GPU) would otherwise spend
 const frameGap = time.Second / 30
 
-// moving is whether the next frame differs from this one by itself: the scenes animate unless
-// the OS asks for reduced motion, and hearts float up either way. Everything else that changes
-// with time asks for its own frame.
+// moving is whether the next frame differs from this one by itself: the scenes animate, or
+// hearts float up. Everything else that changes with time asks for its own frame.
 func (v *view) moving() bool {
-	return !v.still || len(v.hearts) > 0
+	return v.animating() || len(v.hearts) > 0
 }
+
+// animating is whether the scenes move: only while the window has the focus, as a frame costs
+// the whole window (gui/CLAUDE.md), and not when the OS asks for reduced motion.
+func (v *view) animating() bool { return v.focused && !v.still }
 
 // scene is the mood the scenes are drawn in this frame.
 func (v *view) scene() art.Mood {

@@ -400,6 +400,7 @@ func (v *view) ui() map[string]any {
 		"tips":   v.tipsUI(),
 		"hearts": len(v.hearts),
 		"still":  v.still,
+		"moving": v.moving(),
 		"dark":   v.dark,
 	}
 }

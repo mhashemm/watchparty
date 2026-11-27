@@ -50,6 +50,12 @@ def gui_suite():
         about = ui(H)["about"]
         ok("a dev build says so and offers no update", about["version"] == "Development build" and about["button"] == "", str(about))
 
+        part("[G1c] its scenes move only while it has the focus: a frame costs the whole window")
+        ok("on a bare display it opens unfocused, its scenes resting", not ui(H)["moving"], str(ui(H)["moving"]))
+        x_focus(H)
+        ok("focused, they move", until(lambda: ui(H)["moving"], 5))
+        x_unfocus(H)
+        ok("unfocused again, they rest", until(lambda: not ui(H)["moving"], 5))
         part("[G1b] it reopens at the size it was left")
         xdo(H, "windowsize", x_window(H), 640, 820)
         until(lambda: "Geometry: 640x820" in xdo(H, "getwindowgeometry", x_window(H)), 5)

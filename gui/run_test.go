@@ -95,7 +95,8 @@ func TestAsyncResultsWaitForAFrame(t *testing.T) {
 }
 
 // A still window asks for no frame by itself: only hearts floating up, and timed changes (the
-// copied label going back) wake it, each when due; moving scenes ask at 30 fps.
+// copied label going back) wake it, each when due; moving scenes ask at 30 fps, and move
+// only while the window has the focus.
 func TestTheWindowDrawsOnlyWhatChanges(t *testing.T) {
 	t.Parallel()
 	sh, err := newShaper()
@@ -103,6 +104,7 @@ func TestTheWindowDrawsOnlyWhatChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := newView(&theme{shaper: sh}, time.Unix(0, 0))
+	v.focused = true
 	now := time.Unix(100, 0)
 	wakeup := func() (time.Duration, bool) {
 		var router input.Router
@@ -116,6 +118,11 @@ func TestTheWindowDrawsOnlyWhatChanges(t *testing.T) {
 	if d, ok := wakeup(); !ok || d != frameGap {
 		t.Fatalf("moving: next frame in %v (%v), want %v", d, ok, frameGap)
 	}
+	v.focused = false
+	if d, ok := wakeup(); ok {
+		t.Fatalf("unfocused: asked for a frame in %v", d)
+	}
+	v.focused = true
 	v.still = true
 	if d, ok := wakeup(); ok {
 		t.Fatalf("still: asked for a frame in %v", d)
@@ -167,5 +174,38 @@ func TestTheFirstEscapeOrPressClosesTheTips(t *testing.T) {
 		if v.tipOpen {
 			t.Errorf("%s right after the tips opened left them open", close.name)
 		}
+	}
+}
+
+// The scenes' time stops while they rest and goes on from there: back in focus, the turtles
+// are where they were left, not where they would have walked to.
+func TestTheScenesCarryOnWhereTheyStopped(t *testing.T) {
+	t.Parallel()
+	v := newView(&theme{}, time.Unix(0, 0))
+	frame := func(at int64) float64 {
+		gtx := layout.Context{Ops: new(op.Ops), Now: time.Unix(at, 0)}
+		v.clock(gtx)
+		return v.t(gtx)
+	}
+	v.focused = true
+	if got := frame(10); got != 10 {
+		t.Fatalf("moving: at %v, want 10", got)
+	}
+	v.focused = false
+	frame(12)
+	if got := frame(500); got != 12 {
+		t.Fatalf("unfocused since 12s: at %v, want 12", got)
+	}
+	v.focused = true
+	if got := frame(600); got != 12 {
+		t.Fatalf("back in focus: at %v, want 12, where it stopped", got)
+	}
+	if got := frame(601); got != 13 {
+		t.Fatalf("a second later: at %v, want 13", got)
+	}
+	v.still = true
+	frame(700)
+	if got := frame(800); got != 112 {
+		t.Fatalf("reduced motion since 700s: at %v, want 112", got)
 	}
 }

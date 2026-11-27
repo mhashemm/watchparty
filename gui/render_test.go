@@ -113,6 +113,29 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 		return nil, err
 	}
 	defer win.Release()
+	v := s.view(th)
+	var ops op.Ops
+	// an input router, as a window has: focus and the like carry from frame to frame
+	var router input.Router
+	// three frames: the first lays out what the next ones measure, scroll, open and focus
+	for range 3 {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: router.Source()}
+		if s.bar {
+			gtx = withBar(gtx, v)
+		}
+		v.frame(gtx)
+		router.Frame(&ops)
+	}
+	if err := win.Frame(&ops); err != nil {
+		return nil, err
+	}
+	img := image.NewRGBA(image.Rectangle{Max: size})
+	return img, win.Screenshot(img)
+}
+
+// view is the view as the scene sets it up, before its first frame.
+func (s scene) view(th *theme) *view {
 	v := newView(th, t0)
 	v.mood, v.settings, v.parties = s.mood, s.settings, s.parties
 	v.prefs.load(s.settings)
@@ -145,24 +168,7 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 	if s.setup != nil {
 		s.setup(v)
 	}
-	var ops op.Ops
-	// an input router, as a window has: focus and the like carry from frame to frame
-	var router input.Router
-	// three frames: the first lays out what the next ones measure, scroll, open and focus
-	for range 3 {
-		ops.Reset()
-		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: router.Source()}
-		if s.bar {
-			gtx = withBar(gtx, v)
-		}
-		v.frame(gtx)
-		router.Frame(&ops)
-	}
-	if err := win.Frame(&ops); err != nil {
-		return nil, err
-	}
-	img := image.NewRGBA(image.Rectangle{Max: size})
-	return img, win.Screenshot(img)
+	return v
 }
 
 // withBar draws a title bar at the top and returns gtx for the window under it, as Gio

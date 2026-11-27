@@ -967,6 +967,23 @@ def x_close(n):
     x.XCloseDisplay(dpy)
 
 
+def x_focus(n):
+    """Give n's window the keyboard, as clicking it would."""
+    xdo(n, "windowfocus", "--sync", x_window(n))
+
+
+def x_unfocus(n):
+    """Take the keyboard from every window on n's display, as clicking another app would."""
+    x = ctypes.CDLL("libX11.so.6")
+    x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+    x.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    x.XFlush.argtypes = x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    dpy = x.XOpenDisplay(nodes[n]["display"].encode())
+    x.XSetInputFocus(dpy, 0, 0, 0)  # None, RevertToNone, CurrentTime
+    x.XFlush(dpy)
+    x.XCloseDisplay(dpy)
+
+
 def clipboard(n):
     """What n's display has on its clipboard."""
     return subprocess.run(["xclip", "-o", "-selection", "clipboard"], env={**os.environ, "DISPLAY": nodes[n]["display"]},

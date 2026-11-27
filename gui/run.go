@@ -87,6 +87,10 @@ func (g *gui) window(w *app.Window) error {
 			}
 			return e.Err
 		case app.ConfigEvent:
+			if e.Config.Focused != v.focused {
+				v.focused = e.Config.Focused
+				w.Invalidate() // the scenes start or stop moving
+			}
 			own = !e.Config.Decorated
 			bar.deco.Maximized = e.Config.Mode == app.Maximized
 			switch e.Config.Mode {

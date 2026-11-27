@@ -62,10 +62,14 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   to `status.go`'s `watch`. Anything that waits on the OS or the network (pickers, Save
   chart, the update check and install, About's tools) goes through `async`, whose result is
   applied in the next frame; a blocking call in a frame freezes the window.
-- **It draws at 30 fps while something moves** (`moving`), and only on changes when the OS
-  asks for reduced motion: on software rendering a frame costs ~75 ms of CPU. So anything that
-  changes with time (a label going back, the trail's half second) must ask for its own frame
-  with `op.InvalidateCmd{At: …}`; nothing else will come.
+- **It draws at 30 fps while something moves** (`moving`), and only on changes while the
+  window isn't focused or the OS asks for reduced motion; the scenes' clock stops meanwhile.
+  So anything that changes with time (a label going back, the trail's half second) must ask
+  for its own frame with `op.InvalidateCmd{At: …}`; nothing else will come.
+- **A frame redraws the whole window**: Gio has no partial redraw. `BenchmarkFrame` (llvmpipe):
+  ~1.5 ms layout, ~16 ms drawing, half of it the card that doesn't move. Gio's path cache
+  keys on the op list's version, which every frame's `Reset` bumps; ops recorded once and
+  replayed keep it, but that saved only ~13%: the cost is filling pixels. Cut frames instead.
 - **Closing the window ends everything:** `DestroyEvent` → the party's context cancelled,
   `Run` waited for, exit. A signal or a restart cancels the app's context, which closes the
   window the same way. No goroutine outlives `wg.Wait()`.
