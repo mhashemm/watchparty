@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"image"
+	"log"
 	"runtime"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/unit"
 
 	"github.com/mhashemm/watchparty/gui/art"
 )
@@ -27,39 +29,97 @@ func (g *gui) window(w *app.Window) error {
 	g.mu.Lock()
 	g.changed = w.Invalidate
 	g.mu.Unlock()
+	last := g.lastWindow()
 	opts := []app.Option{app.Title(windowTitle), app.Size(560, 940)}
+	if last.W > 0 && last.H > 0 {
+		opts[1] = app.Size(unit.Dp(max(last.W, minW)), unit.Dp(max(last.H, minH)))
+	}
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
 		// the desktop draws the title bar when it will (KDE, COSMIC, any X11 window manager),
 		// and ConfigEvent says when it won't (GNOME on Wayland): then the window draws its own
 		opts = append(opts, app.Decorated(false))
 	}
 	w.Option(opts...)
+	if last.Maximized {
+		w.Option(app.Maximized.Option())
+	}
+	v.pace.cpu = processCPU
 	v.load()
 	if e2eHook != nil {
 		e2eHook(v)
 	}
-	v.async(func() func(gtx C) {
-		still := reduceMotion()
-		return func(gtx C) { v.still = v.still || still }
-	})
+	// the OS's reduced motion and dark appearance, followed while the window is open
+	ctx, cancel := context.WithCancel(g.ctx)
+	defer cancel()
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		watchLook(ctx, func(l look) {
+			select {
+			case v.results <- func(gtx C) { v.still, v.osDark = l.still, l.dark; v.themed() }:
+				v.wake()
+			case <-ctx.Done():
+			}
+		})
+	}()
+	// the loop closes the window itself: Gio's X11 Perform runs on the caller's goroutine and
+	// queues the close in Xlib's buffer, which an idle window never flushes
 	go func() {
 		<-g.ctx.Done()
-		w.Perform(system.ActionClose)
+		w.Invalidate()
 	}()
 	var (
 		ops op.Ops
 		bar titleBar
 		own bool
+		// left is the window as it is now, saved when it closes; pxPerDp converts its size
+		left    windowSize
+		pxPerDp float32
+		// hwnd is the Windows window's handle; framed, whether its frame was told frameDark
+		hwnd      uintptr
+		framed    bool
+		frameDark bool
+		closing   bool
 	)
 	for {
-		switch e := w.Event().(type) {
+		e := w.Event()
+		if g.ctx.Err() != nil && !closing {
+			closing = true
+			w.Perform(system.ActionClose)
+		}
+		switch e := e.(type) {
 		case app.DestroyEvent:
+			if left.W > 0 {
+				if err := g.saveWindow(left); err != nil {
+					log.Printf("gui: saving the window's size: %v\n", err)
+				}
+			}
 			return e.Err
 		case app.ConfigEvent:
+			if e.Config.Focused != v.focused {
+				v.focused = e.Config.Focused
+				w.Invalidate() // the scenes start or stop moving
+			}
 			own = !e.Config.Decorated
 			bar.deco.Maximized = e.Config.Mode == app.Maximized
+			switch e.Config.Mode {
+			case app.Windowed:
+				// a maximized window's size is the screen's: keep the one it goes back to
+				if pxPerDp > 0 {
+					left.W, left.H = float32(e.Config.Size.X)/pxPerDp, float32(e.Config.Size.Y)/pxPerDp
+				}
+				left.Maximized = false
+			case app.Maximized:
+				left.Maximized = true
+			}
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
+			if pxPerDp == 0 && e.Metric.PxPerDp > 0 {
+				pxPerDp = e.Metric.PxPerDp
+				if left.W == 0 && !left.Maximized {
+					left.W, left.H = float32(e.Size.X)/pxPerDp, float32(e.Size.Y)/pxPerDp
+				}
+			}
 			if own {
 				if a := bar.deco.Update(gtx); a != 0 {
 					w.Perform(a)
@@ -69,12 +129,20 @@ func (g *gui) window(w *app.Window) error {
 				gtx.Constraints = layout.Exact(gtx.Constraints.Max.Sub(image.Pt(0, d.Size.Y)))
 			}
 			v.frame(gtx)
+			if hwnd != 0 && (!framed || frameDark != v.dark) {
+				darkFrame(hwnd, v.dark)
+				framed, frameDark = true, v.dark
+			}
 			e.Frame(gtx.Ops)
-		default:
+		case app.ViewEvent:
+			hwnd, framed = viewHandle(e), false
 			viewEvent(e, g.exe)
 		}
 	}
 }
+
+// minW and minH are the smallest a remembered size reopens at, in dp
+const minW, minH = 360, 480
 
 // e2eHook starts e2e.go's control socket, in a build with -tags e2e
 var e2eHook func(v *view)
@@ -157,6 +225,7 @@ func (v *view) load() {
 	t.port.SetText(st.settings.Port)
 	t.local.Value = st.settings.Local
 	v.prefs.load(st.settings)
+	v.themed()
 	v.about = about{version: version, storePath: st.path, defaultMpv: st.defaultMpv, defaultCacheDir: st.defaultCacheDir}
 	v.checkTools()
 	v.async(func() func(gtx C) {

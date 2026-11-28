@@ -248,19 +248,28 @@ func Zzz(t float64) [3]struct{ X, Y, O float64 } {
 }
 
 func groundAnim(e *elem, t float64, m Mood) (Mat, float64, bool) {
+	w := max(m.Width, 560)
+	soil, plants, turtle := e.has("soil"), e.has("grass") || e.has("mushroom"), e.has("turtle")
+	if m.Layer != AllOfIt && (soil && m.Layer != SoilLayer || plants && m.Layer != PlantLayer || turtle && m.Layer != TurtleLayer) {
+		return Identity, 1, false
+	}
+	if soil {
+		return Scale(w/560, 1), 1, true
+	}
 	if m.Still {
 		// parked mid-ground, legs still
 		switch {
 		case e.has("turtle") && e.has("baby"):
-			return Translate(196, 0), 1, true
+			return Translate(196+(w-560)/2, 0), 1, true
 		case e.has("turtle"):
-			return Translate(230, 0), 1, true
+			return Translate(230+(w-560)/2, 0), 1, true
 		}
 		return Identity, 1, true
 	}
 	switch {
 	case e.has("turtle"):
-		return Translate(key(t, 60, 0, false, linear, stop{0, -90}, stop{1, 620}), 0), 1, true
+		// across the whole width at the same pace: 710 units a minute
+		return Translate(key(t, 60*(w+150)/710, 0, false, linear, stop{0, -90}, stop{1, w + 60}), 0), 1, true
 	case e.has("body") && m.Walking:
 		return Translate(0, key(t, .3, 0, true, easeInOut, stop{0, 0}, stop{1, -1.5})), 1, true
 	case e.has("leg"):

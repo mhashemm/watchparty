@@ -126,9 +126,10 @@ func (v *view) paintTips(gtx C, mainX, mainW int) {
 		})
 	})
 	call := m.Stop()
-	around(gtx, box, d.Size, false, call)
-	// it takes the clicks and the wheel over it, not the card under it
+	// it takes the clicks and the wheel over it, not the card under it: under the list, so
+	// the list scrolls first and only what it leaves is stopped
 	blockInput(gtx, d.Size)
+	around(gtx, box, d.Size, false, call)
 	o.Pop()
 	s.area = image.Rectangle{Max: d.Size}.Add(image.Pt(mainX+gtx.Dp(14), gtx.Dp(190+52)))
 }
@@ -191,7 +192,7 @@ func (v *view) bullet(gtx C, text string) D {
 	r := float32(gtx.Sp(tTip.size)) * .17
 	cx, cy := float32(gtx.Dp(18))-float32(gtx.Sp(tTip.size))*.9, float32(lb.height-lb.below)-float32(gtx.Sp(tTip.size))*.27
 	disc := clip.Ellipse{Min: image.Pt(int(cx-r), int(cy-r)), Max: image.Pt(int(cx+r+.5), int(cy+r+.5))}
-	paint.FillShape(gtx.Ops, tTip.color, disc.Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, shade(gtx, tTip.color), disc.Op(gtx.Ops))
 	return d
 }
 
@@ -202,11 +203,11 @@ func (v *view) richLine(gtx C, state *richtext.InteractiveText, st textStyle, te
 		plain := part
 		if i > 0 {
 			b, rest, _ := strings.Cut(part, "</b>")
-			spans = append(spans, richtext.SpanStyle{Font: boldFont, Color: st.color, Content: b})
+			spans = append(spans, richtext.SpanStyle{Font: boldFont, Color: shade(gtx, st.color), Content: b})
 			plain = rest
 		}
 		if plain != "" {
-			spans = append(spans, richtext.SpanStyle{Font: st.font, Color: st.color, Content: plain})
+			spans = append(spans, richtext.SpanStyle{Font: st.font, Color: shade(gtx, st.color), Content: plain})
 		}
 	}
 	gtx.Constraints.Min.X = 0

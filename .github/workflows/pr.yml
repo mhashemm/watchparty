@@ -54,10 +54,8 @@ jobs:
         run: go mod download
 
       # the GUI's tests draw headless through Mesa (TestRender's path), and build with cgo
-      - name: Gio's headers and the emoji font
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
-          make fonts
+      - name: Gio's headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 
       - name: Unit tests
         timeout-minutes: 10
@@ -147,14 +145,6 @@ jobs:
 
       - name: Download
         run: go mod download
-
-      # what make fonts does, without make: the URL and its sum come from the Makefile
-      - name: The emoji font
-        shell: bash
-        run: |
-          url=$(sed -n 's/^NOTO_URL := //p' Makefile) sum=$(sed -n 's/^NOTO_SHA256 := //p' Makefile)
-          curl -fsSLo gui/fonts/NotoColorEmoji.ttf "$url"
-          echo "$sum  gui/fonts/NotoColorEmoji.ttf" | sha256sum -c -
 
       - name: Install mpv and ffmpeg
         # Chocolatey's mpv.exe on PATH is a shim that starts the real one, and killing

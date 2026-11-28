@@ -909,16 +909,34 @@ def xdo(n, *args):
 
 
 def x_window(n):
-    """n's X window, the only one on its display (launch_gui's display=xvfb())."""
+    """n's X window, the only one on its display (launch_gui's display=xvfb()); another there
+    would take what was meant for n's."""
     found = lambda: xdo(n, "search", "--onlyvisible", "--name", "Watch Party").split()
     if not until(found, BOOT):
-        sys.exit(f"{n}'s window never showed on {nodes[n]['display']}")
+        raise RuntimeError(f"{n}'s window never showed on {nodes[n]['display']}")
+    if len(found()) != 1:
+        raise RuntimeError(f"{n}'s display {nodes[n]['display']} has {len(found())} windows: {found()}")
     return found()[0]
+
+
+def exited(n, timeout=SETTLE):
+    """Whether n's GUI exits within timeout. One that doesn't is sent SIGQUIT, so its log
+    ends with every goroutine's stack."""
+    if until(lambda: nodes[n]["proc"].poll() is not None, timeout):
+        return True
+    os.kill(nodes[n]["proc"].pid, signal.SIGQUIT)
+    until(lambda: nodes[n]["proc"].poll() is not None, 5)
+    return False
 
 
 def x_click(n, x, y):
     """A real left click at x, y in n's window."""
     xdo(n, "mousemove", "--window", x_window(n), x, y, "click", 1)
+
+
+def x_wheel(n, x, y, down=5):
+    """Real mouse-wheel steps down at x, y in n's window (X's button 5)."""
+    xdo(n, "mousemove", "--window", x_window(n), x, y, "click", "--repeat", down, "--delay", 30, 5)
 
 
 def x_key(n, key):
@@ -954,6 +972,23 @@ def x_close(n):
     x.XCloseDisplay(dpy)
 
 
+def x_focus(n):
+    """Give n's window the keyboard, as clicking it would."""
+    xdo(n, "windowfocus", "--sync", x_window(n))
+
+
+def x_unfocus(n):
+    """Take the keyboard from every window on n's display, as clicking another app would."""
+    x = ctypes.CDLL("libX11.so.6")
+    x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+    x.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    x.XFlush.argtypes = x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    dpy = x.XOpenDisplay(nodes[n]["display"].encode())
+    x.XSetInputFocus(dpy, 0, 0, 0)  # None, RevertToNone, CurrentTime
+    x.XFlush(dpy)
+    x.XCloseDisplay(dpy)
+
+
 def clipboard(n):
     """What n's display has on its clipboard."""
     return subprocess.run(["xclip", "-o", "-selection", "clipboard"], env={**os.environ, "DISPLAY": nodes[n]["display"]},
@@ -970,12 +1005,27 @@ def private_bus():
                 '<allow own="*"/></policy></busconfig>')
     relays.append(subprocess.Popen(["dbus-daemon", f"--config-file={RUN}/bus.conf", "--nofork"]))
     until(lambda: os.path.exists(path))
-    p = subprocess.Popen([PORTAL_BIN, MEDIA], env={"DBUS_SESSION_BUS_ADDRESS": f"unix:path={path}"}, stdout=subprocess.PIPE, text=True)
+    p = subprocess.Popen([PORTAL_BIN, MEDIA], env={"DBUS_SESSION_BUS_ADDRESS": f"unix:path={path}"},
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     relays.append(p)
     assert p.stdout  # stdout=PIPE
     if p.stdout.readline() != "ready\n":
         sys.exit("the fake portal could not start")
+    portal.append(p)
     return f"unix:path={path}"
+
+
+portal = []  # the fake portal private_bus started
+
+
+def portal_set(namespace, key, value):
+    """Change one of the fake portal's Settings, which every GUI on the bus is told of. Only
+    a serial case may: the phase's GUIs all share it."""
+    p = portal[0]
+    p.stdin.write(f"set {namespace} {key} {json.dumps(value)}\n")
+    p.stdin.flush()
+    while (line := p.stdout.readline()) and not line.startswith(f"set {namespace} {key}"):
+        pass  # what it printed for pickers since
 
 
 marks = [("", time.time())]

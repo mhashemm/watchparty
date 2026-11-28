@@ -280,6 +280,8 @@ func (v *view) fill(name, val string) error {
 		t.mode.Value = val
 	case name == "picker":
 		p.picker.Value = val
+	case name == "theme":
+		p.theme.Value = val
 	default:
 		return fmt.Errorf("no field called %q", name)
 	}
@@ -392,7 +394,7 @@ func (v *view) ui() map[string]any {
 		"go":      goLabel(running),
 		"history": history,
 		"settings": map[string]any{"relay": p.relay.Text(), "mpv": p.mpv.Text(), "mpvFlags": p.mpvFlags.Text(),
-			"createKey": p.createKey.Text(), "pport": p.pport.Text(), "cacheDir": p.cacheDir.Text(), "picker": p.picker.Value,
+			"createKey": p.createKey.Text(), "pport": p.pport.Text(), "cacheDir": p.cacheDir.Text(), "picker": p.picker.Value, "theme": p.theme.Value,
 			"saved": p.saved, "mpvDefault": a.defaultMpv, "cacheDirDefault": a.defaultCacheDir, "picking": p.picking},
 		"about": map[string]any{"version": v.versionText(), "button": v.aboutButton(), "buttonOff": running || p.updating,
 			"dot": v.updateDot, "storePath": a.storePath, "tools": a.tools},
@@ -400,6 +402,9 @@ func (v *view) ui() map[string]any {
 		"tips":   v.tipsUI(),
 		"hearts": len(v.hearts),
 		"still":  v.still,
+		"moving": v.moving(),
+		"paceMs": v.pace.next().Milliseconds(),
+		"dark":   v.dark,
 	}
 }
 
@@ -415,7 +420,8 @@ func (v *view) tipsUI() map[string]any {
 		}
 	}
 	a := v.tips.area.Sub(image.Pt(0, v.list.Position.Offset))
-	return map[string]any{"open": v.tipOpen, "titles": titles, "text": text.String(), "area": [4]int{a.Min.X, a.Min.Y, a.Max.X, a.Max.Y}}
+	return map[string]any{"open": v.tipOpen, "titles": titles, "text": text.String(), "area": [4]int{a.Min.X, a.Min.Y, a.Max.X, a.Max.Y},
+		"scrolled": v.tips.list.Position.First > 0 || v.tips.list.Position.Offset > 0, "pageScrolled": v.list.Position.Offset > 0}
 }
 
 func (v *view) reactionCodes() []string {

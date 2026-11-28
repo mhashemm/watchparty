@@ -50,6 +50,14 @@ EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>
 | `Berry` | `#9a3a35` | errors, the End button, red caps, hearts |
 | `Ochre` | `#e0b452` | focus ring |
 
+**Dark** (`darkPalette` in `palette.go`, "soil at night", the user's pick of three): while
+the window is dark (Settings' Theme, or the OS's appearance under System), each colour above
+turns into a warm brown-black one: `Lichen` `#1c1712`, `Paper` `#28211a`, `Forest` `#d9cfbc`
+(dimmer than white text needs: brighter tired the user's eyes), `Bark` `#d0ab7e`, `Moss` `#93c06c`. Moss
+gets lighter and white darker, so text and ticks on moss turn dark. Shadows and the dialog
+backdrop turn black. Drawings keep their own colours: Fosdo2, the ground, the mushrooms,
+shells and emoji. Check a visual change in both: every scene has a `-dark` twin.
+
 Fosdo2's colours are named in `page.go`'s rules too, so recolouring never means editing the SVG:
 
 | Name | Value | Use |
@@ -63,8 +71,9 @@ Fosdo2's colours are named in `page.go`'s rules too, so recolouring never means 
 | `.nose` | `#c98a79` | nose |
 | `hazel` (`scene.go`) | `#4f8f34`, `#86b04a`, `#c8a245`, `#946330` | the `#hazel` radial gradient, green at the pupil to brown at the rim |
 
-**Fonts,** all bundled: Gluten for display, Atkinson Hyperlegible for body, Noto Color Emoji
-for emoji (fetched at build time). System fonts stay on, for scripts the bundled ones lack.
+**Fonts,** all bundled: Gluten for display, Atkinson Hyperlegible for body, and the reactions'
+Twemoji drawn as a font (`go generate`), so typed ones look as reactions do. System fonts stay
+on, for scripts and emoji the bundled ones lack.
 
 ## Layout and voice
 
@@ -159,6 +168,10 @@ what is asked, and show options before changing his face.**
 - Fixed at the bottom (`paintGround`), 560×130, centred, drawn after the card: content
   scrolls *under* it and **covering it is intended**; a separate non-overlapping strip was
   tried and reverted. The card ends 150dp above the window's bottom.
+- **A wider window** (the user's pick, the `party-wide` scene): the soil path stretches across
+  it, the mushrooms and grass repeat every 560 from the middle out, and the turtles stroll
+  the whole width at the same pace, so resizing mid-stroll moves them. Layers: soil, plants,
+  turtles, the SVG's own order.
 - Under it a 90dp lichen fade, and a 22dp soil strip for wide windows, matching the soil
   path's height at the SVG edges. Order: card < fade and soil < ground < Fosdo2 and hearts.
 - **Turtles:** a mother and a baby (same markup at `scale(.55)`, 40px behind), on one

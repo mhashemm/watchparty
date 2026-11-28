@@ -12,11 +12,11 @@ there; Windows needs none and cross-compiles. The CLI and relay stay `CGO_ENABLE
 ## Commands
 
 ```sh
-make gui                                   # fetches gui/fonts/NotoColorEmoji.ttf (pinned, SHA-256 checked) first
-go build -o watchparty-gui ./gui           # from the repo root, once the font is fetched; `go build ./gui` collides with the directory
+make gui
+go build -o watchparty-gui ./gui           # from the repo root; `go build ./gui` collides with the directory
 go vet ./gui && GOOS=windows go vet ./gui  # the two build-tagged halves
 EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>   # every scene as <dir>/<name>.png, no window
-go generate ./gui                          # icon.ico → rsrc_windows_amd64.syso (a test fails when they differ)
+go generate ./gui                          # icon.ico → rsrc_windows_amd64.syso, mpv/emoji.json → fonts/Twemoji-reactions.ttf (tests fail when they differ)
 ```
 
 Linux builds need the headers Gio links against (Wayland, X11, xkbcommon-x11, EGL, GLES,
@@ -62,10 +62,21 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   to `status.go`'s `watch`. Anything that waits on the OS or the network (pickers, Save
   chart, the update check and install, About's tools) goes through `async`, whose result is
   applied in the next frame; a blocking call in a frame freezes the window.
-- **It draws at 30 fps while something moves** (`moving`), and only on changes when the OS
-  asks for reduced motion: on software rendering a frame costs ~75 ms of CPU. So anything that
-  changes with time (a label going back, the trail's half second) must ask for its own frame
-  with `op.InvalidateCmd{At: …}`; nothing else will come.
+- **The scenes draw at most 30 fps, spaced to a tenth of a core** (`pace.go`), hearts at 30;
+  only on changes while the window isn't focused or the OS asks for reduced motion (their
+  clock stops meanwhile). Pacing reads the process's CPU time, never a frame's wall time:
+  presenting can wait for the display's refresh and make a fast machine look slow.
+  So anything that changes with time (a label going back, the trail's half second) must ask
+  for its own frame with `op.InvalidateCmd{At: …}`; nothing else will come.
+- **A frame redraws the whole window**: Gio has no partial redraw, and a patched Gio was
+  declined. `BenchmarkFrame`, mid-party, CPU per frame: ~3 ms on a GPU, ~80 ms on llvmpipe
+  (filling pixels, half of it the card that doesn't move).
+- **Draw shapes through `shape`** (`paths.go`): Gio caches a path's vertices by its op list
+  and that list's version, which every frame's `Reset` bumps, so a path built in the frame's
+  ops is outlined again each frame. `pathCache` keeps repeated ones in a list of its own
+  (−30% CPU on a GPU). It starts over only in `begin`: the frame refers to it until Gio
+  has drawn it and routed its input, after `frame` returns. An art item keeps its translation apart
+  (`At`), so a shape that only moves is the same shape and found again.
 - **Closing the window ends everything:** `DestroyEvent` → the party's context cancelled,
   `Run` waited for, exit. A signal or a restart cancels the app's context, which closes the
   window the same way. No goroutine outlives `wg.Wait()`.
@@ -79,7 +90,9 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   X11's class, which the desktop matches to the entry's name and icon.
 - **Windows:** `viewEvent` gives the window's handle the AppUserModelID `setup.nsi` puts on
   the shortcuts, plus relaunch properties naming `watchparty-gui.exe`; without it a pinned
-  shortcut gets a second taskbar button. The icon is resource 1, which Gio loads.
+  shortcut gets a second taskbar button. The icon is resource 1, which Gio loads. Windows
+  keeps an app's own title bar light in dark mode unless asked: `darkFrame` sets
+  `DWMWA_USE_IMMERSIVE_DARK_MODE` (20, or 19 before 20H1) whenever `dark` changes.
 - **In-window dialogs** (`modal`): the first button has the focus when one opens, Escape
   cancels, and the backdrop takes every click under it.
 
@@ -95,8 +108,16 @@ The look was matched to the old page row by row; these traps look like simplific
   fractional line height between lines. Long text stacks at fractional heights (`tipText`).
 - **`Clickable` and `Enum` clip what they draw:** shadows and focus rings go outside them
   (`around`). Flex's Baseline alignment undercounts heights: `baselineRow`.
-- **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system Noto
-  Color Emoji shadows the bundled one; system fonts stay on so any script renders.
+- **Every painted colour goes through `shade`** (`palette.go`), which swaps it for the
+  dark palette's by RGB; `rrect`, `ink`, `colorOp` and `paintArt` already do. Paint a
+  shadow with `shadow`, and a drawing with `asDrawn(gtx)`, or the palette repaints it. One
+  RGB can't take two dark colours, so a new role needs its own colour. A colour named in the
+  code without a dark one fails `TestEveryColourHasADarkOne`.
+- **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system font
+  of the same family shadows the bundled one; system fonts stay on so any script renders.
+- **The emoji font is the reactions only** (`emojifont`), so text draws them as reactions
+  look; others come from the system. It has a space glyph: a space by an emoji is shaped in
+  its run, and without one it has no width (`TestSpaceAfterEmoji`).
 
 ## Saved settings and history (`store.go`)
 
@@ -105,6 +126,9 @@ The look was matched to the old page row by row; these traps look like simplific
   `store.mu`; lock order is always `g.mu` → `store.mu`.
 - **Settings:** name, and `local`/`port` from the last peer-to-peer party, are remembered automatically,
   the rest by the Settings tab's button. The first relay used becomes the default if none is set.
+  The window's size is `gui.json`'s `window`, saved as it closes: beside the settings, not in
+  them, so the Settings tab's copy can't save a stale one over it. The theme is saved as it's
+  picked, by `saveTheme`, which Save leaves alone for the same reason.
 - **History**, up to 100 parties, filled in from log lines (`observe`): the *real* room and
   secret come from the invite line, not the form, which can leave them empty.
 - **Continue** starts the form plus `continue`, the party's `started`. Same room and secret, so

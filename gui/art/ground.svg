@@ -1,32 +1,32 @@
 <svg class="ground" viewBox="0 0 560 130" aria-hidden="true">
   <path class="soil" d="M0 110 Q90 98 180 106 T360 103 T560 108 V130 H0 Z"/>
   <path class="grass" d="M2 110 l6 -14 l4 14 l5 -10 l4 10 M150 106 l5 -12 l4 12 l6 -16 l3 16 M300 104 l4 -11 l5 11 l5 -14 l4 14 M386 104 l4 -10 l5 10 M520 107 l6 -14 l3 14 l5 -10 l4 10"/>
-  <g transform="translate(58 107)">
+  <g class="mushroom" transform="translate(58 107)">
     <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
     <path class="cap" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
     <path class="gill" d="M-26 -30 q26 4 52 0"/>
     <circle class="spot" cx="-13" cy="-46" r="3.5"/><circle class="spot" cx="10" cy="-50" r="3"/><circle class="spot" cx="-2" cy="-40" r="2"/>
   </g>
-  <g transform="translate(98 108) scale(.62)">
+  <g class="mushroom" transform="translate(98 108) scale(.62)">
     <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
     <path class="cap red" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
     <circle class="spot" cx="-15" cy="-42" r="5"/><circle class="spot" cx="7" cy="-52" r="4.5"/><circle class="spot" cx="22" cy="-38" r="3.5"/>
   </g>
-  <g transform="translate(26 110) scale(.42)">
+  <g class="mushroom" transform="translate(26 110) scale(.42)">
     <path class="stem" d="M-6 0 q-3 -26 2 -38 h8 q5 12 2 38 z"/>
     <path class="cap cream" d="M-22 -34 q22 -30 44 0 q-22 5 -44 0 z"/>
   </g>
-  <g transform="translate(470 106) scale(.95)">
+  <g class="mushroom" transform="translate(470 106) scale(.95)">
     <path class="stem" d="M-6 0 q-3 -30 2 -44 h8 q5 14 2 44 z"/>
     <path class="cap cream" d="M-24 -40 q24 -34 48 0 q-24 6 -48 0 z"/>
     <path class="gill" d="M-16 -38 q16 3 32 0"/>
   </g>
-  <g transform="translate(502 108) scale(.7)">
+  <g class="mushroom" transform="translate(502 108) scale(.7)">
     <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
     <path class="cap" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
     <circle class="spot" cx="-8" cy="-46" r="4"/><circle class="spot" cx="12" cy="-42" r="3"/>
   </g>
-  <g transform="translate(530 109) scale(.45)">
+  <g class="mushroom" transform="translate(530 109) scale(.45)">
     <path class="stem" d="M-8 0 q-3 -24 3 -36 h10 q6 12 3 36 z"/>
     <path class="cap red" d="M-36 -32 q36 -46 72 0 q-36 7 -72 0 z"/>
     <circle class="spot" cx="-10" cy="-44" r="6"/><circle class="spot" cx="12" cy="-40" r="5"/>

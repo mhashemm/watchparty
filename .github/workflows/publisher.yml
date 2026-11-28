@@ -52,9 +52,6 @@ jobs:
         if: matrix.goos == 'linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 
-      - name: The emoji font
-        run: make fonts
-
       - name: Build
         # the tag goes through env, never interpolated into the shell: a git tag may
         # legally contain backticks or $(), which would otherwise run in this step

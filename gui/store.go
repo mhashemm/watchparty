@@ -29,6 +29,20 @@ type settings struct {
 	// MpvPicker is when mpv's reaction picker shows (mpv.PickerModes, "" the default); the
 	// GUI's always does
 	MpvPicker string `json:"mpvPicker,omitempty"`
+	// Theme is the window's look (themes): "system" ("" until one is picked) follows the OS's
+	// appearance
+	Theme string `json:"theme,omitempty"`
+}
+
+// themes are the looks Settings offers
+var themes = []string{"system", "light", "dark"}
+
+// windowSize is the window as it was left: its size in dp when not maximized, and whether it
+// was. Gio can't place a window (and Wayland won't let an app), so not where.
+type windowSize struct {
+	W         float32 `json:"w"`
+	H         float32 `json:"h"`
+	Maximized bool    `json:"maximized,omitempty"`
 }
 
 type session struct {
@@ -79,8 +93,9 @@ type store struct {
 	historyPath string
 
 	mu       sync.Mutex
-	Settings settings  `json:"settings"`
-	History  []session `json:"-"`
+	Settings settings   `json:"settings"`
+	Window   windowSize `json:"window,omitzero"`
+	History  []session  `json:"-"`
 }
 
 func storePath() string {
@@ -110,10 +125,12 @@ func (s *store) trimHistory() {
 	}
 }
 
+// saveSettings writes gui.json: the settings and the window.
 func (s *store) saveSettings() error {
 	return writeJSON(s.path, struct {
-		Settings settings `json:"settings"`
-	}{s.Settings})
+		Settings settings   `json:"settings"`
+		Window   windowSize `json:"window,omitzero"`
+	}{s.Settings, s.Window})
 }
 
 func (s *store) saveHistory() error {

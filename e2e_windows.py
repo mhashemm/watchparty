@@ -288,10 +288,9 @@ def end(n):
     until(lambda: status(n) == "The party has ended.")
 
 
-def close_window(n):
-    """What the title bar's close button sends: WM_CLOSE, to each window of n's process."""
+def windows_of(n):
+    """n's process's visible windows."""
     user32 = ctypes.windll.user32
-    user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
     user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
     user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
     pid, found = nodes[n]["proc"].pid, []
@@ -304,9 +303,51 @@ def close_window(n):
             found.append(hwnd)
         return True
     user32.EnumWindows(each, None)
+    return found
+
+
+def close_window(n):
+    """What the title bar's close button sends: WM_CLOSE, to each window of n's process."""
+    user32 = ctypes.windll.user32
+    user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+    found = windows_of(n)
     for hwnd in found:
         user32.PostMessageW(hwnd, 0x0010, None, None)  # WM_CLOSE
     return len(found)
+
+
+def frame_dark(n):
+    """Whether n's window asked for a dark frame (DWMWA_USE_IMMERSIVE_DARK_MODE), or the
+    HRESULT of a refused read."""
+    dwm = ctypes.windll.dwmapi
+    dwm.DwmGetWindowAttribute.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    on = ctypes.c_int(0)
+    found = windows_of(n)
+    if not found:
+        return "no window"
+    hr = dwm.DwmGetWindowAttribute(found[0], 20, ctypes.byref(on), 4)
+    return bool(on.value) if hr == 0 else f"hr {hr & 0xffffffff:#x}"
+
+
+def app_mode(dark):
+    """Set Settings' "Choose your app mode"; returns the value it had (None: unset)."""
+    k = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", 0,
+                           winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE)
+    try:
+        try:
+            was = winreg.QueryValueEx(k, "AppsUseLightTheme")[0]
+        except FileNotFoundError:
+            was = None
+        if dark is None:
+            try:
+                winreg.DeleteValue(k, "AppsUseLightTheme")
+            except FileNotFoundError:
+                pass
+        else:
+            winreg.SetValueEx(k, "AppsUseLightTheme", 0, winreg.REG_DWORD, 0 if dark else 1)
+        return was
+    finally:
+        winreg.CloseKey(k)
 
 
 # ----------------------------------------------------------------- cases --
@@ -436,6 +477,17 @@ def gui_suite():
     until(lambda: get(H, "pause") is False and f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"])
     ok(f"{H} plays", get(H, "pause") is False)
     ok("the feeds", f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"], f"{feed(H)} / {feed(G)}")
+
+    print(f"\n[W17] {H} follows the app mode to dark and back, its own title bar and frame too")
+    was = app_mode(True)
+    try:
+        ok(f"{H} turned dark", until(lambda: ui(H)["dark"], 10))
+        ok("its native frame too", until(lambda: frame_dark(H) is True, 5), str(frame_dark(H)))
+        app_mode(False)
+        ok(f"{H} turned light again", until(lambda: not ui(H)["dark"], 10))
+        ok("its native frame too", until(lambda: frame_dark(H) is False, 5), str(frame_dark(H)))
+    finally:
+        app_mode(None if was is None else not was)
 
     print(f"\n[W12] {G} ends the party from its window")
     pipe = nodes[G]["pipe"]

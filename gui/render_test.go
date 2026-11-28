@@ -1,12 +1,15 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"flag"
 	"image"
 	"image/png"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -77,6 +80,8 @@ type scene struct {
 	tools  []tool
 	// bar: the window's own title bar above it, as GNOME on Wayland needs
 	bar bool
+	// width is the window's, 560 when unset
+	width int
 }
 
 // fixture is what the stand-in server feeds the page: /state, /log and the scene's script.
@@ -99,7 +104,7 @@ func (s scene) fixture() any {
 	}
 }
 
-func (s scene) size() image.Point { return image.Pt(560, max(s.height, 940)) }
+func (s scene) size() image.Point { return image.Pt(cmp.Or(s.width, 560), max(s.height, 940)) }
 
 func (s scene) draw(th *theme) (*image.RGBA, error) {
 	size := s.size()
@@ -108,6 +113,29 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 		return nil, err
 	}
 	defer win.Release()
+	v := s.view(th)
+	var ops op.Ops
+	// an input router, as a window has: focus and the like carry from frame to frame
+	var router input.Router
+	// three frames: the first lays out what the next ones measure, scroll, open and focus
+	for range 3 {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: router.Source()}
+		if s.bar {
+			gtx = withBar(gtx, v)
+		}
+		v.frame(gtx)
+		router.Frame(&ops)
+	}
+	if err := win.Frame(&ops); err != nil {
+		return nil, err
+	}
+	img := image.NewRGBA(image.Rectangle{Max: size})
+	return img, win.Screenshot(img)
+}
+
+// view is the view as the scene sets it up, before its first frame.
+func (s scene) view(th *theme) *view {
 	v := newView(th, t0)
 	v.mood, v.settings, v.parties = s.mood, s.settings, s.parties
 	v.prefs.load(s.settings)
@@ -140,24 +168,7 @@ func (s scene) draw(th *theme) (*image.RGBA, error) {
 	if s.setup != nil {
 		s.setup(v)
 	}
-	var ops op.Ops
-	// an input router, as a window has: focus and the like carry from frame to frame
-	var router input.Router
-	// three frames: the first lays out what the next ones measure, scroll, open and focus
-	for range 3 {
-		ops.Reset()
-		gtx := layout.Context{Ops: &ops, Now: t0.Add(s.at), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: router.Source()}
-		if s.bar {
-			gtx = withBar(gtx, v)
-		}
-		v.frame(gtx)
-		router.Frame(&ops)
-	}
-	if err := win.Frame(&ops); err != nil {
-		return nil, err
-	}
-	img := image.NewRGBA(image.Rectangle{Max: size})
-	return img, win.Screenshot(img)
+	return v
 }
 
 // withBar draws a title bar at the top and returns gtx for the window under it, as Gio
@@ -226,7 +237,7 @@ func scenes() map[string]scene {
 		{Started: day(-2, 0), Ended: day(-1, 0), File: video, Mode: "relay", Relay: savedSettings.Relay, Room: "K7Q2M9", Secret: "4XJ8T2PLW3", People: []string{"Ana", "Sam"},
 			Videos: []played{{Name: "Big Buck Bunny.mkv", Started: day(-2, 0), Ended: day(-1, 0)}}},
 	}
-	return map[string]scene{
+	m := map[string]scene{
 		"settings": {height: 1500, at: 27 * time.Second, settings: savedSettings, js: `show("settings")`, setup: func(v *view) { v.tab = "settings" }},
 		"settings-update": {height: 1900, at: 27 * time.Second, settings: withKey,
 			update: map[string]any{"current": "v0.0.58", "latest": "v0.0.59", "available": true},
@@ -290,4 +301,20 @@ func scenes() map[string]scene {
 				return recorded(w, 0, `checking 1 of 1: "Big Buck Bunny.mkv"`, "file fingerprint: 9f2c4e")
 			}},
 	}
+	// a wide window: the ground's plants repeated, the turtles strolling the whole width
+	wide := m["party-in"]
+	wide.width, wide.height = 1280, 0
+	m["party-wide"] = wide
+	// in the dark palette, as with the OS's appearance dark
+	for _, name := range slices.Collect(maps.Keys(m)) {
+		d, setup := m[name], m[name].setup
+		d.setup = func(v *view) {
+			if setup != nil {
+				setup(v)
+			}
+			v.dark = true
+		}
+		m[name+"-dark"] = d
+	}
+	return m
 }

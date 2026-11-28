@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -300,6 +301,33 @@ func (g *gui) saveSettings(in settings) error {
 	return err
 }
 
+// lastWindow is the window as it was last left; zero the first time.
+func (g *gui) lastWindow() windowSize {
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	return g.store.Window
+}
+
+// saveTheme remembers the theme as it is picked. The Settings tab's Save leaves it alone, so
+// that tab's copy of the settings can't put an older one back.
+func (g *gui) saveTheme(theme string) error {
+	if !slices.Contains(themes, theme) {
+		return errors.New("no such theme")
+	}
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.Settings.Theme = theme
+	return g.store.saveSettings()
+}
+
+// saveWindow remembers the window as it is left, for the next start.
+func (g *gui) saveWindow(w windowSize) error {
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.Window = w
+	return g.store.saveSettings()
+}
+
 func (g *gui) clearHistory() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -418,6 +446,9 @@ func dialog(name string, args ...string) (string, error) {
 const windowTitle = "Hahas and Hehes Watch Party"
 
 func main() {
+	// the heap may grow half its live size before a collection, not Go's default whole:
+	// a frame's garbage is small enough that BenchmarkFrame's CPU doesn't change (25 cost 5%)
+	debug.SetGCPercent(50)
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	g := newGUI(c, openStore(storePath()))

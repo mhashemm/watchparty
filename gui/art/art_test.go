@@ -111,7 +111,7 @@ func TestCascade(t *testing.T) {
 		t.Fatalf("fills %v", f)
 	}
 	// currentColor is the icon's color, whatever fill its parent has
-	items := Icon(`<svg><g fill="#000"><path fill="currentColor" d="M0 0h1v1z"/></g></svg>`, FillStyle(Berry), Identity)
+	items := ParseIcon(`<svg><g fill="#000"><path fill="currentColor" d="M0 0h1v1z"/></g></svg>`).Items(FillStyle(Berry), Identity)
 	if len(items) != 1 || items[0].Color != Berry {
 		t.Fatalf("currentColor painted %+v", items)
 	}
@@ -120,12 +120,12 @@ func TestCascade(t *testing.T) {
 func TestEverythingDraws(t *testing.T) {
 	t.Parallel()
 	for name, svg := range map[string]string{"Paw": Paw, "Smiley": Smiley, "Back": Back, "Forward": Forward, "ECG": ECG, "Mushroom": Mushroom, "TrailMushroom": TrailMushroom, "Shell": Shell(5)} {
-		if len(Icon(svg, StrokeStyle(Forest, 2, true), Identity)) == 0 && len(Icon(svg, FillStyle(Forest), Identity)) == 0 {
+		if len(ParseIcon(svg).Items(StrokeStyle(Forest, 2, true), Identity)) == 0 && len(ParseIcon(svg).Items(FillStyle(Forest), Identity)) == 0 {
 			t.Errorf("%s draws nothing", name)
 		}
 	}
 	for _, code := range mpv.Reactions() {
-		if len(Icon(mpv.EmojiSVG(code), FillStyle(Forest), Identity)) == 0 {
+		if len(ParseIcon(mpv.EmojiSVG(code)).Items(FillStyle(Forest), Identity)) == 0 {
 			t.Errorf("reaction %s draws nothing", code)
 		}
 	}
@@ -239,5 +239,57 @@ func TestStillScenesDoNotMove(t *testing.T) {
 	moving := Ground()
 	if fmt.Sprint(moving.Frame(1, Mood{}, Identity)) == fmt.Sprint(moving.Frame(13.6, Mood{}, Identity)) {
 		t.Error("without Still the turtles don't move: the test proves nothing")
+	}
+}
+
+// In a wide window the turtles stroll from beyond its left edge to beyond its right one, at
+// the pace they keep in a 560 wide one; parked, they wait in its middle.
+func TestTurtlesStrollTheWholeWidth(t *testing.T) {
+	t.Parallel()
+	turtle := &elem{class: []string{"turtle"}}
+	x := func(at float64, m Mood) float64 {
+		mat, _, shown := groundAnim(turtle, at, m)
+		if !shown {
+			t.Fatalf("hidden at %v in %+v", at, m)
+		}
+		return mat.E
+	}
+	for _, w := range []float64{0, 560, 1280, 2560} {
+		m := Mood{Width: w}
+		span := max(w, 560) + 150
+		if got := x(0, m); got != -90 {
+			t.Errorf("width %v: starts at %v", w, got)
+		}
+		period := 60 * span / 710
+		if got := x(period*.999, m); got < max(w, 560) {
+			t.Errorf("width %v: at the end of its walk it is at %v, still inside", w, got)
+		}
+		if pace := (x(10, m) - x(0, m)) / 10; math.Abs(pace-710.0/60) > 1e-9 {
+			t.Errorf("width %v: %v units a second, not %v", w, pace, 710.0/60)
+		}
+		m.Still = true
+		if got := x(5, m); got != 230+(max(w, 560)-560)/2 {
+			t.Errorf("width %v: parked at %v", w, got)
+		}
+	}
+	if _, _, shown := groundAnim(turtle, 0, Mood{Layer: PlantLayer}); shown {
+		t.Error("a turtle in the plants' layer")
+	}
+}
+
+// A scene drawn frame after frame keeps its placed paths while they stay put: it must draw
+// exactly what a fresh one draws, at every moment, however it moves.
+func TestAKeptSceneDrawsAsAFreshOne(t *testing.T) {
+	t.Parallel()
+	for name, scene := range map[string]func() *Scene{"cat": Cat, "ground": Ground} {
+		kept := scene()
+		for i := range 90 {
+			at, mood := float64(i)*.37, Mood{Awake: i%3 > 0, Walking: i%2 == 0, Width: 560 + float64(i%4)*200}
+			base := Scale(1+float64(i%2), 1)
+			got, want := kept.Frame(at, mood, base), scene().Frame(at, mood, base)
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("%s at %.2fs (%+v): a kept scene drew differently from a fresh one", name, at, mood)
+			}
+		}
 	}
 }
