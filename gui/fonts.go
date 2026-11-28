@@ -56,6 +56,9 @@ func newShaper() (*text.Shaper, error) {
 		}
 		faces = append(faces, f...)
 	}
+	// the emoji font is in the heap now, parsed; its 10 MB in the binary, read to get there,
+	// needn't stay in memory
+	forget(notoEmoji)
 	return text.NewShaper(text.WithCollection(faces)), nil
 }
 

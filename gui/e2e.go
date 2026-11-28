@@ -399,14 +399,15 @@ func (v *view) ui() map[string]any {
 			"saved": p.saved, "mpvDefault": a.defaultMpv, "cacheDirDefault": a.defaultCacheDir, "picking": p.picking},
 		"about": map[string]any{"version": v.versionText(), "button": v.aboutButton(), "buttonOff": running || p.updating,
 			"dot": v.updateDot, "storePath": a.storePath, "tools": a.tools},
-		"dialog":     dialog,
-		"tips":       v.tipsUI(),
-		"hearts":     len(v.hearts),
-		"still":      v.still,
-		"moving":     v.moving(),
-		"keptFreeMB": keptFreeMB(),
-		"paceMs":     v.pace.next().Milliseconds(),
-		"dark":       v.dark,
+		"dialog":      dialog,
+		"tips":        v.tipsUI(),
+		"hearts":      len(v.hearts),
+		"still":       v.still,
+		"moving":      v.moving(),
+		"keptFreeMB":  keptFreeMB(),
+		"emojiFontMB": residentMB(notoEmoji),
+		"paceMs":      v.pace.next().Milliseconds(),
+		"dark":        v.dark,
 	}
 }
 

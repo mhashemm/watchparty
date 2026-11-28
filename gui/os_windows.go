@@ -156,6 +156,9 @@ func darkFrame(hwnd uintptr, dark bool) {
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, flags)
 }
 
+// forget is a no-op: Windows trims a process's unused pages on its own when memory is short.
+func forget([]byte) {}
+
 // processCPU is the CPU time this process has used, every thread, user and system.
 func processCPU() time.Duration {
 	var created, exited, kernel, user windows.Filetime

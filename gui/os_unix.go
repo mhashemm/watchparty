@@ -6,18 +6,32 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	gioevent "gioui.org/io/event"
 	"github.com/godbus/dbus/v5"
 )
 
 const exeSuffix = ""
+
+// forget tells the OS that the pages wholly inside b, which must be the binary's own and
+// never written, aren't needed: it drops them, and would read them from the file again.
+func forget(b []byte) {
+	page := uintptr(os.Getpagesize())
+	start := uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	from, to := (start+page-1)&^(page-1), (start+uintptr(len(b)))&^(page-1)
+	if to > from {
+		unix.Madvise(b[from-start:to-start], unix.MADV_DONTNEED)
+	}
+}
 
 // processCPU is the CPU time this process has used, every thread, user and system.
 func processCPU() time.Duration {
