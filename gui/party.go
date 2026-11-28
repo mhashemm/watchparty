@@ -409,7 +409,7 @@ func (v *view) vitals(gtx C, p *partyNow) D {
 func (v *view) ecg(gtx C, alive bool) D {
 	px := float64(gtx.Dp(1))
 	st := art.StrokeStyle(art.Porcini, 2, true)
-	items := art.Icon(art.ECG, st, art.Scale(px, px))
+	items := parsedIcon(gtx, art.ECG).Items(st, art.Scale(px, px))
 	if alive {
 		// stroke-dasharray 90, its offset from 180 to 0 every 1.6s; at rest with reduced motion
 		off := 180 * (1 - float32(mod(v.t(gtx), 1.6)/1.6))
@@ -965,7 +965,7 @@ func (v *view) stripEnds(gtx C, size image.Point, back, more bool) {
 			rrect(gtx, image.Rect(0, 0, sz, sz).Inset(gtx.Dp(2)), sz/2, bg)
 			px := float64(gtx.Dp(16)) / 24
 			io := op.Offset(image.Pt(gtx.Dp(5), gtx.Dp(5))).Push(gtx.Ops)
-			paintArt(gtx, art.Icon(svg, art.StrokeStyle(art.Bark, 2.6, true), art.Scale(px, px)))
+			paintArt(gtx, parsedIcon(gtx, svg).Items(art.StrokeStyle(art.Bark, 2.6, true), art.Scale(px, px)))
 			io.Pop()
 			return D{Size: image.Pt(sz, sz)}
 		})

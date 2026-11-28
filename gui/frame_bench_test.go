@@ -38,6 +38,7 @@ func BenchmarkFrame(b *testing.B) {
 			var lay, draw time.Duration
 			now := t0.Add(s.at)
 			cpu0 := processCPU()
+			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
 				now = now.Add(frameGap)

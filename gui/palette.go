@@ -54,9 +54,9 @@ var darkPalette = palette{
 // painted is gtx in the palette the OS's appearance asks for, with the window's path cache.
 func (v *view) painted(gtx C) C {
 	if v.values == nil {
-		c := newPathCache()
-		v.values = map[string]any{pathsKey: c}
-		v.values[drawnKey] = map[string]any{pathsKey: c}
+		c, icons := newPathCache(), map[string]*art.Icon{}
+		v.values = map[string]any{pathsKey: c, iconsKey: icons}
+		v.values[drawnKey] = map[string]any{pathsKey: c, iconsKey: icons}
 	}
 	v.values[pathsKey].(*pathCache).begin()
 	if v.dark {

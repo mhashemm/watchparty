@@ -469,7 +469,7 @@ func icon(gtx C, svg string, st art.Style, size unit.Dp) D {
 func iconWith(gtx C, svg string, st art.Style, size, gap unit.Dp) D {
 	px := float64(gtx.Dp(size))
 	box := viewBox(svg)
-	items := art.Icon(svg, st, art.Scale(px/box, px/box))
+	items := parsedIcon(gtx, svg).Items(st, art.Scale(px/box, px/box))
 	// the palette paints the style's colour, CSS's currentColor; the SVG's own (an emoji's,
 	// a shell's) stay as drawn
 	for i, it := range items {

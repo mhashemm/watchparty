@@ -75,7 +75,8 @@ disables: `Click` would pass a disabled one's `gtx.Disabled()`.
   and that list's version, which every frame's `Reset` bumps, so a path built in the frame's
   ops is outlined again each frame. `pathCache` keeps repeated ones in a list of its own
   (−30% CPU on a GPU). It starts over only in `begin`: the frame refers to it until Gio
-  has drawn it and routed its input, after `frame` returns.
+  has drawn it and routed its input, after `frame` returns. An art item keeps its translation apart
+  (`At`), so a shape that only moves is the same shape and found again.
 - **Closing the window ends everything:** `DestroyEvent` → the party's context cancelled,
   `Run` waited for, exit. A signal or a restart cancels the app's context, which closes the
   window the same way. No goroutine outlives `wg.Wait()`.

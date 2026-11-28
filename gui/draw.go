@@ -15,27 +15,46 @@ import (
 // (dash on, dash off, starting offset into the pattern), as SVG's stroke-dasharray.
 func paintArt(gtx C, items []art.Item, dash ...float32) {
 	for _, it := range items {
+		at := op.Affine(f32.AffineId().Offset(f32.Pt(float32(it.At.X), float32(it.At.Y)))).Push(gtx.Ops)
 		paint.FillShape(gtx.Ops, shade(gtx, it.Color), shape(gtx, itemKey(it, dash), func(ops *op.Ops) clip.Op { return itemShape(ops, it, dash) }))
+		at.Pop()
 	}
+}
+
+// iconsKey is gtx.Values' icons parsed, by their SVG: parsing one is XML, too dear for
+// every frame
+const iconsKey = "icons"
+
+func parsedIcon(gtx C, svg string) *art.Icon {
+	m, _ := gtx.Values[iconsKey].(map[string]*art.Icon)
+	if m == nil {
+		return art.ParseIcon(svg)
+	}
+	ic := m[svg]
+	if ic == nil {
+		ic = art.ParseIcon(svg)
+		m[svg] = ic
+	}
+	return ic
 }
 
 // itemKey hashes everything itemShape draws an item from.
 func itemKey(it art.Item, dash []float32) uint64 {
 	k := newShapeKey('a')
 	if it.Fill {
-		k.i(1)
+		k = k.i(1)
 	}
 	if it.Round {
-		k.i(2)
+		k = k.i(2)
 	}
-	k.f(it.Width)
+	k = k.f(it.Width)
 	for _, d := range dash {
-		k.f(float64(d))
+		k = k.f(float64(d))
 	}
 	for _, o := range it.Path {
-		k.i(int(o.K))
+		k = k.i(int(o.K))
 		for _, p := range o.P {
-			k.f(p.X).f(p.Y)
+			k = k.f(p.X).f(p.Y)
 		}
 	}
 	return k.sum()

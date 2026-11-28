@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
-	"hash/maphash"
 	"math"
 
 	"gioui.org/op"
@@ -81,27 +79,23 @@ func (c *pathCache) begin() {
 	}
 }
 
-// shapeKey hashes what a shape is drawn from.
-type shapeKey struct {
-	h   maphash.Hash
-	buf [8]byte
-}
+// shapeKey hashes what a shape is drawn from: 64-bit FNV-1a, a value, so making one
+// allocates nothing (a maphash.Hash did, every shape every frame).
+type shapeKey uint64
 
-var shapeSeed = maphash.MakeSeed()
+func newShapeKey(kind byte) shapeKey { return shapeKey(14695981039346656037).mix(uint64(kind)) }
 
-func newShapeKey(kind byte) *shapeKey {
-	k := new(shapeKey)
-	k.h.SetSeed(shapeSeed)
-	k.h.WriteByte(kind)
+func (k shapeKey) mix(v uint64) shapeKey {
+	for range 8 {
+		k ^= shapeKey(v & 0xff)
+		k *= 1099511628211
+		v >>= 8
+	}
 	return k
 }
 
-func (k *shapeKey) f(v float64) *shapeKey {
-	binary.LittleEndian.PutUint64(k.buf[:], math.Float64bits(v))
-	k.h.Write(k.buf[:])
-	return k
-}
+func (k shapeKey) f(v float64) shapeKey { return k.mix(math.Float64bits(v)) }
 
-func (k *shapeKey) i(v int) *shapeKey { return k.f(float64(v)) }
+func (k shapeKey) i(v int) shapeKey { return k.f(float64(v)) }
 
-func (k *shapeKey) sum() uint64 { return k.h.Sum64() }
+func (k shapeKey) sum() uint64 { return uint64(k) }

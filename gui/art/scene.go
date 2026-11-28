@@ -33,7 +33,10 @@ func StrokeStyle(c color.NRGBA, width float64, round bool) Style {
 
 // Item is one shape to paint, in the coordinates the caller's matrix maps to.
 type Item struct {
+	// Path is in place but for its translation, At: a shape that only moves stays the same
+	// shape, which the window's caches find again
 	Path  Path
+	At    Pt
 	Fill  bool // or a stroke
 	Color color.NRGBA
 	Width float64
@@ -48,6 +51,33 @@ type elem struct {
 	path  Path
 	xf    Mat
 	shown bool
+	// placed is path under placedBy, and bands a hazel eye's rings: kept while the element
+	// stays put, as most of a scene does from frame to frame. Items share them: read only.
+	placedBy Mat
+	placed   Path
+	bands    []Path
+}
+
+// place is the element's path, and a hazel eye's rings, under m.
+func (e *elem) place(m Mat, hazel bool) {
+	if e.placed != nil && e.placedBy == m {
+		return
+	}
+	e.placedBy, e.placed, e.bands = m, e.path.Transform(m), nil
+	if !hazel {
+		return
+	}
+	cx, cy, rx, ry := e.num("cx"), e.num("cy"), e.num("rx"), e.num("ry")
+	edge := 1 / 1.2
+	for i := hazelBands; i >= 1; i-- {
+		o := edge * float64(i) / hazelBands
+		// the gradient's centre sits a tenth of the eye's height low
+		band := ellipse(cx, cy+.1*ry, 1.2*rx*o, 1.2*ry*o)
+		if o > .7 { // keep the outer rings inside the eye
+			band = ellipse(cx, cy+.1*ry*(1-(o-.7)/(edge-.7)), 1.2*rx*o, 1.2*ry*o)
+		}
+		e.bands = append(e.bands, band.Transform(m))
+	}
 }
 
 func (e *elem) has(c string) bool { return slices.Contains(e.class, c) }
@@ -239,28 +269,25 @@ func hazelAt(o float64) color.NRGBA {
 const hazelBands = 24
 
 func emit(e *elem, st Style, m Mat, op float64, out *[]Item) {
-	p := e.path.Transform(m)
+	at := Pt{m.E, m.F}
+	m.E, m.F = 0, 0
+	e.place(m, st.hazel)
+	p := e.placed
 	switch {
 	case st.hazel:
 		// a radial gradient (cx .5, cy .55, r .6 of the eye's box) as rings, outermost first;
 		// the ring at the eye's edge is offset 1/1.2 of the way out
-		cx, cy, rx, ry := e.num("cx"), e.num("cy"), e.num("rx"), e.num("ry")
 		edge := 1 / 1.2
-		*out = append(*out, Item{Path: p, Fill: true, Color: fade(hazelAt(edge), op*st.FillOp)})
-		for i := hazelBands; i >= 1; i-- {
-			o := edge * float64(i) / hazelBands
-			// the gradient's centre sits a tenth of the eye's height low
-			band := ellipse(cx, cy+.1*ry, 1.2*rx*o, 1.2*ry*o)
-			if o > .7 { // keep the outer rings inside the eye
-				band = ellipse(cx, cy+.1*ry*(1-(o-.7)/(edge-.7)), 1.2*rx*o, 1.2*ry*o)
-			}
-			*out = append(*out, Item{Path: band.Transform(m), Fill: true, Color: fade(hazelAt(o), op*st.FillOp)})
+		*out = append(*out, Item{Path: p, At: at, Fill: true, Color: fade(hazelAt(edge), op*st.FillOp)})
+		for i, band := range e.bands {
+			o := edge * float64(hazelBands-i) / hazelBands
+			*out = append(*out, Item{Path: band, At: at, Fill: true, Color: fade(hazelAt(o), op*st.FillOp)})
 		}
 	case st.HasFill:
-		*out = append(*out, Item{Path: p, Fill: true, Color: fade(st.Fill, op*st.FillOp)})
+		*out = append(*out, Item{Path: p, At: at, Fill: true, Color: fade(st.Fill, op*st.FillOp)})
 	}
 	if st.HasStroke && st.Width > 0 {
-		*out = append(*out, Item{Path: p, Color: fade(st.Stroke, op*st.StrokeOp), Width: st.Width * m.Scale(), Round: st.Round})
+		*out = append(*out, Item{Path: p, At: at, Color: fade(st.Stroke, op*st.StrokeOp), Width: st.Width * m.Scale(), Round: st.Round})
 	}
 }
 
@@ -274,11 +301,15 @@ func Hex(s string) color.NRGBA {
 	return color.NRGBA{uint8(v >> 16), uint8(v >> 8), uint8(v), 255}
 }
 
-// Icon draws a small SVG with no classes, the root painted as st (an icon's currentColor
-// is st's fill), its viewBox mapped by base.
-func Icon(svg string, st Style, base Mat) []Item {
-	s := &Scene{root: parse(svg)}
+// An Icon is a small SVG with no classes, parsed.
+type Icon struct{ s Scene }
+
+func ParseIcon(svg string) *Icon { return &Icon{Scene{root: parse(svg)}} }
+
+// Items draws it, the root painted as st (an icon's currentColor is st's fill), its viewBox
+// mapped by base.
+func (ic *Icon) Items(st Style, base Mat) []Item {
 	var out []Item
-	s.walk(s.root, st, base, 1, 0, Mood{}, &out)
+	ic.s.walk(ic.s.root, st, base, 1, 0, Mood{}, &out)
 	return out
 }
