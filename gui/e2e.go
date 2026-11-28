@@ -9,7 +9,6 @@ import (
 	"image"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -399,15 +398,13 @@ func (v *view) ui() map[string]any {
 			"saved": p.saved, "mpvDefault": a.defaultMpv, "cacheDirDefault": a.defaultCacheDir, "picking": p.picking},
 		"about": map[string]any{"version": v.versionText(), "button": v.aboutButton(), "buttonOff": running || p.updating,
 			"dot": v.updateDot, "storePath": a.storePath, "tools": a.tools},
-		"dialog":      dialog,
-		"tips":        v.tipsUI(),
-		"hearts":      len(v.hearts),
-		"still":       v.still,
-		"moving":      v.moving(),
-		"keptFreeMB":  keptFreeMB(),
-		"emojiFontMB": residentMB(notoEmoji),
-		"paceMs":      v.pace.next().Milliseconds(),
-		"dark":        v.dark,
+		"dialog": dialog,
+		"tips":   v.tipsUI(),
+		"hearts": len(v.hearts),
+		"still":  v.still,
+		"moving": v.moving(),
+		"paceMs": v.pace.next().Milliseconds(),
+		"dark":   v.dark,
 	}
 }
 
@@ -433,11 +430,4 @@ func (v *view) reactionCodes() []string {
 		codes = append(codes, e.code)
 	}
 	return codes
-}
-
-// keptFreeMB is the heap Go has freed but still keeps from the OS.
-func keptFreeMB() float64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return float64(m.HeapIdle-m.HeapReleased) / 1e6
 }
