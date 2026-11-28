@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,28 +11,13 @@ import (
 	"time"
 	"unsafe"
 
+	"gioui.org/app"
+	gioevent "gioui.org/io/event"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
 const exeSuffix = ".exe"
-
-func browsers() []browser {
-	var found []browser
-	for _, path := range []string{
-		filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
-		filepath.Join(os.Getenv("LocalAppData"), `Google\Chrome\Application\chrome.exe`),
-		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
-		filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
-	} {
-		found = append(found, browser{path, []string{path}, os.TempDir()})
-	}
-	return found
-}
-
-func openURL(url string) *exec.Cmd {
-	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-}
 
 const pickOwner = `[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
@@ -59,15 +43,15 @@ func pickFolder() (string, error) {
 if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }`)
 }
 
+// pickSave asks where to save a file, name suggested.
+func pickSave(name string) (string, error) {
+	return dialog("powershell", "-NoProfile", "-STA", "-Command", pickOwner+`$d = New-Object System.Windows.Forms.SaveFileDialog -Property @{FileName = '`+strings.ReplaceAll(name, "'", "''")+`'}
+if ($d.ShowDialog($owner) -eq 'OK') { $d.FileName }`)
+}
+
 func hide(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 }
-
-// ownGroup and killGroup: Windows has no process group to kill, so only the browser
-// itself is killed, and removeProfile waits out a helper still holding a file.
-func ownGroup(*exec.Cmd) {}
-
-func killGroup(cmd *exec.Cmd) { cmd.Process.Kill() }
 
 const (
 	appID        = "mhashemm.watchparty"
@@ -75,7 +59,6 @@ const (
 )
 
 var (
-	findWindowEx         = windows.NewLazySystemDLL("user32.dll").NewProc("FindWindowExW")
 	propertyStoreForHwnd = windows.NewLazySystemDLL("shell32.dll").NewProc("SHGetPropertyStoreForWindow")
 	iidPropertyStore     = windows.GUID{Data1: 0x886D8EEB, Data2: 0x8CF2, Data3: 0x4446, Data4: [8]byte{0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99}}
 	appUserModel         = windows.GUID{Data1: 0x9F4C2855, Data2: 0x9F79, Data3: 0x4B39, Data4: [8]byte{0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}
@@ -94,37 +77,6 @@ type propVariant struct {
 }
 
 type propertyStore struct{ vtbl *[8]uintptr }
-
-func groupWindow(c context.Context, exe, title string, every time.Duration) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
-	defer windows.CoUninitialize()
-	class, _ := windows.UTF16PtrFromString("Chrome_WidgetWin_1")
-	name, _ := windows.UTF16PtrFromString(title)
-	tick := time.NewTicker(every)
-	defer tick.Stop()
-	timeout := time.After(30 * time.Second)
-	done := map[uintptr]bool{}
-	for {
-		select {
-		case <-c.Done():
-			return
-		case <-timeout:
-			return
-		case <-tick.C:
-		}
-		for hwnd := uintptr(0); ; {
-			hwnd, _, _ = findWindowEx.Call(0, hwnd, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(name)))
-			if hwnd == 0 {
-				break
-			}
-			if !done[hwnd] && setAppID(hwnd, exe) == nil {
-				done[hwnd] = true
-			}
-		}
-	}
-}
 
 func setAppID(hwnd uintptr, exe string) error {
 	var store *propertyStore
@@ -155,6 +107,63 @@ func setAppID(hwnd uintptr, exe string) error {
 		}
 	}
 	return nil
+}
+
+// viewEvent gives the window, once it has a handle, the id setup.nsi puts on the shortcuts,
+// so a pinned shortcut and the window share one taskbar button.
+func viewEvent(e gioevent.Event, exe string) {
+	v, ok := e.(app.Win32ViewEvent)
+	if !ok || v.HWND == 0 {
+		return
+	}
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
+		defer windows.CoUninitialize()
+		setAppID(v.HWND, exe)
+	}()
+}
+
+// viewHandle is the window's HWND once Gio has one, 0 before and after.
+func viewHandle(e gioevent.Event) uintptr {
+	if v, ok := e.(app.Win32ViewEvent); ok {
+		return v.HWND
+	}
+	return 0
+}
+
+var (
+	dwmSetWindowAttribute = windows.NewLazySystemDLL("dwmapi.dll").NewProc("DwmSetWindowAttribute")
+	setWindowPos          = windows.NewLazySystemDLL("user32.dll").NewProc("SetWindowPos")
+)
+
+// DWMWA_USE_IMMERSIVE_DARK_MODE: 20 since Windows 10 20H1, 19 on the builds before it
+const dwmDarkMode, dwmDarkModeBefore20H1 = 20, 19
+
+// darkFrame turns the native title bar and frame dark or light: Windows leaves an app's in
+// light unless the app asks. The frame repaints at once (SWP_FRAMECHANGED), posted to the
+// window's thread rather than waited for (SWP_ASYNCWINDOWPOS).
+func darkFrame(hwnd uintptr, dark bool) {
+	var on int32 // a BOOL
+	if dark {
+		on = 1
+	}
+	if r, _, _ := dwmSetWindowAttribute.Call(hwnd, dwmDarkMode, uintptr(unsafe.Pointer(&on)), 4); r != 0 {
+		dwmSetWindowAttribute.Call(hwnd, dwmDarkModeBefore20H1, uintptr(unsafe.Pointer(&on)), 4)
+	}
+	const flags = 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020 | 0x4000 // NOMOVE NOSIZE NOZORDER NOACTIVATE FRAMECHANGED ASYNCWINDOWPOS
+	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, flags)
+}
+
+// processCPU is the CPU time this process has used, every thread, user and system.
+func processCPU() time.Duration {
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(windows.CurrentProcess(), &created, &exited, &kernel, &user) != nil {
+		return 0
+	}
+	ticks := func(t windows.Filetime) int64 { return int64(t.HighDateTime)<<32 | int64(t.LowDateTime) }
+	return time.Duration(ticks(kernel)+ticks(user)) * 100 // 100 ns units
 }
 
 func recordVersion(exe, tag string) {

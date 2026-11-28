@@ -4,7 +4,7 @@ Keep security in mind on every change. Two surfaces face the network, both guard
 the party secret: the relay (`relay/`, always public) and the P2P server (`server/`, on the
 LAN and, under UPNP, the public internet). Their package docs hold the concrete, enforced
 rules; this file holds the mindset, trust model and method that shape them. Read it before
-any change to either, to the relay client, the mpv event handling, the GUI server, or
+any change to either, to the relay client, the mpv event handling, or
 anything else that parses network input.
 
 ## Mindset

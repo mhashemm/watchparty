@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -139,6 +140,50 @@ func TestStoreKeepsHistoryOutOfTheSettingsFile(t *testing.T) {
 	}
 }
 
+// The window is kept beside the settings: saving them keeps it, and the next start reads both.
+func TestStoreKeepsTheWindow(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "gui.json")
+	g := newGUI(context.Background(), openStore(path))
+	if w := g.lastWindow(); w != (windowSize{}) {
+		t.Fatalf("a first start has a window: %+v", w)
+	}
+	want := windowSize{W: 700, H: 1000.5, Maximized: true}
+	if err := g.saveWindow(want); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.saveSettings(settings{Relay: "ws://r"}); err != nil {
+		t.Fatal(err)
+	}
+	again := newGUI(context.Background(), openStore(path))
+	if w := again.lastWindow(); w != want {
+		t.Fatalf("window after a restart: %+v, want %+v", w, want)
+	}
+	if again.store.Settings.Relay != "ws://r" {
+		t.Fatalf("settings lost: %+v", again.store.Settings)
+	}
+}
+
+// The theme is saved as it's picked, and the Settings tab's Save, whose copy of the settings
+// was taken before, doesn't put the old one back.
+func TestTheThemeOutlivesSaveAndARestart(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "gui.json")
+	g := newGUI(context.Background(), openStore(path))
+	if err := g.saveTheme("dusk"); err == nil {
+		t.Fatal("a theme that isn't one was saved")
+	}
+	if err := g.saveTheme("dark"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.saveSettings(settings{Relay: "ws://r", Theme: "light"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := openStore(path).Settings.Theme; got != "dark" {
+		t.Fatalf("theme after Save and a restart: %q, want dark", got)
+	}
+}
+
 func TestStoreOpensABrokenHistoryEmpty(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -250,12 +295,12 @@ func TestStoreKeepsWhereToContinue(t *testing.T) {
 	}
 }
 
-// Write notes a line under g.mu and saves once it has let go, so no page request waits
-// on the disk. Dropping that save would keep the history in memory until the party ends.
+// Write notes a line under g.mu and saves once it has let go, so the window's frames don't
+// wait on the disk. Dropping that save would keep the history in memory until the party ends.
 func TestALoggedLineReachesTheHistoryFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "gui.json")
-	g := &gui{store: openStore(path)}
+	g := newGUI(t.Context(), openStore(path))
 	g.session = g.store.begin(form{Mode: "relay", File: "/m/a.mkv", Relay: "ws://r"})
 	g.Write([]byte("2026/10/30 18:00:00 your address to share is -relay ws://r -room ROOM1 -secret SEC1\n"))
 	if got := openStore(path).History; len(got) != 1 || got[0].Room != "ROOM1" {

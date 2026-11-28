@@ -10,10 +10,14 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # the GUI builds only on its own OS (cgo), so macOS on a Mac
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        goos: [linux, darwin, windows]
+        include:
+          - { runner: ubuntu-latest, goos: linux }
+          - { runner: macos-latest, goos: darwin }
+          - { runner: ubuntu-latest, goos: windows }
     steps:
       - uses: actions/checkout@v7
 
@@ -24,6 +28,10 @@ jobs:
 
       - name: Download
         run: go mod download
+
+      - name: Gio's headers
+        if: matrix.goos == 'linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 
       - name: Build
         run: make -j4 ${{ matrix.goos }}
@@ -44,6 +52,10 @@ jobs:
 
       - name: Download
         run: go mod download
+
+      # the GUI's tests draw headless through Mesa (TestRender's path), and build with cgo
+      - name: Gio's headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 
       - name: Unit tests
         timeout-minutes: 10

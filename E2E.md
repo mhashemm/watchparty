@@ -7,8 +7,8 @@ cases.
 
 - **A phase takes the core with `from e2e_core import *`**, which copies each name once, at
   import. A phase that sets a core global sets it on the module (`e2e_core.BUS = …`), or
-  the core's helpers never see it. Needs `mpv`, `ffmpeg`, `dbus-daemon`
-and Chrome or Chromium on PATH and a `-local`-reachable interface.
+  the core's helpers never see it. Needs `mpv`, `ffmpeg`, `dbus-daemon`, for `gui` and
+`upnp` also `Xvfb`, `xdotool`, `xclip` and Gio's headers, and a `-local`-reachable interface.
 
 ## Phases
 
@@ -23,20 +23,26 @@ real 30s ping, the 10s pong timeout and the 10s grace.
 - **`relay`**: every case ends nodes with a signal except `[R15b]`, which quits mpv.
   Keep it: the mpv-quit bug passed every other case.
 - **`gui`**: each GUI gets its own HOME, XDG folders, TMPDIR and a `PATH` with only
-  `mpv` and a failing `xdg-open`. Its one browser is a desktop entry, made the
-  `mimeapps.list` default, for a wrapper that adds `--headless=new
-  --remote-debugging-port=0`; `attach()` reads the port from the profile's
-  `DevToolsActivePort`, so a GUI restarted by self-update is found too.
+  `mpv` and a failing `xdg-open`, and its window on the phase's Xvfb. It is built with
+  `-tags e2e` (and cgo, which the other binaries go without), which adds `gui/e2e.go`'s
+  control socket: its address is in the file `WATCHPARTY_E2E` names, so a GUI restarted
+  by self-update is found by `attach()` too.
   - **Every GUI gets `DBUS_SESSION_BUS_ADDRESS`**, our private `dbus-daemon` or a dead
     path. Without it godbus finds `/run/user/<uid>/bus` by itself and Browse opens a
-    real file chooser on the desktop. `gui/fakeportal` answers `OpenFile` there.
+    real file chooser on the desktop. `gui/fakeportal` answers `OpenFile` and `SaveFile` there.
   - The update cases stamp `update.ReleaseURL` to `Release`, a local stand-in.
-  - Drive a page with `js(n, expr)` and `click()`, read it with `feed()`/`status()`.
-    `go()` waits for the new run, or a check reads the last party's status.
-    `confirm()` is replaced on attach; `window.asked` holds the question.
+  - Drive a window with `click(n, name)` and `fill(n, field=…)`, by the names in
+    `e2e.go`; read it with `ui(n)`, `feed()`, `status()`, the chart with `chart()`, the
+    saved files with `state()`. Each answers after the frame that handled it, so what
+    a click did synchronously is there; what it started (a picker, the network) is
+    waited for. The socket refuses a button the window hides or disables (`refused()`),
+    as a person couldn't press it, and a click queued on it would land later.
+  - **What only real input shows** (focus, Escape, a press outside, the window
+    manager's close) goes through `x_click`, `x_key` and `x_close` on a display of the
+    case's own (`launch_gui(display=xvfb())`), where its window is the only one.
   - A case's GUIs come from `gui(name, key=)`: a folder of its own, relay, mpv flags
     and the create key saved, killed when the case ends. Name them after the case.
-  - Cleanup kills each GUI's process group: its browser, its mpv, a restarted GUI.
+  - Cleanup kills each GUI's process group: its mpv and a restarted GUI.
 - URL cases share one HTTP server (`Quiet`). Slow only your own client, by its user
   agent: `Quiet.held[agent]` seconds per request or `Quiet.rate[agent]` bytes/s, and
   launch it with `--user-agent=<agent>`. A delay for every client made `[R11d2]` flaky,
@@ -87,8 +93,7 @@ real 30s ping, the 10s pong timeout and the 10s grace.
 A flake is a bug until shown otherwise; several were real ones. Reproduce it with an
 injected delay before fixing it. No retries in CI, and raising a ceiling is not a fix.
 
-`--jitter SEED` holds each direction of each relay connection, and each page's `/state`
-and `/log` answers, for a random time. CI runs every phase with it, and a new seed, on every PR. A seed fixes
+`--jitter SEED` holds each direction of each relay connection for a random time. CI runs every phase with it, and a new seed, on every PR. A seed fixes
 the delays, not the run: threads still race, so a failure may not repeat on replay.
 A case with its own proxy, like `[R12]`, skips it unless pointed at it. It
 can't reorder what stays in order on one connection or happens inside one process, so
@@ -102,8 +107,8 @@ natively (the runner is thrown away). Facts it rests on:
 
 - **Override an environment variable by its upper-cased name** (`environ()`): Python
   keeps `os.environ` upper-cased, and a mixed-case key sits next to the real one.
-- **A 64-bit process's `ProgramFiles` is rebuilt from `ProgramW6432`**, so the GUI's
-  stand-in Chrome (`gui/fakebrowser` as `chrome.exe`) needs both overridden.
+- The GUI is driven through the same control socket; its window is closed with
+  `WM_CLOSE`, as the title bar's button sends.
 - Chocolatey's `mpv.exe` on PATH is a shim that starts the real one; killing a shim
   leaves mpv running, so the job puts the real `mpv.exe`'s folder first.
 - Nodes run in their own process group, so `CTRL_BREAK_EVENT` reaches them, which Go
@@ -115,9 +120,8 @@ natively (the runner is thrown away). Facts it rests on:
   machine's desktop, session bus or display. CI runs the same image. It runs as a user
   with your uid (dbus-daemon refuses one missing from `/etc/passwd`), and the last run's
   logs, only logs, are copied to `.e2e/<phase>` even when it crashes.
-  - Chromium gets `--no-sandbox` there (`E2E_NO_SANDBOX`): Docker's seccomp profile
-    blocks the user namespaces its sandbox needs, and the setuid `chromium-sandbox`
-    fails too. Loosening the container for it would trade its isolation for the browser's.
+  - `E2E_CONTAINER` says it is the container: only there does `upnp` run its router
+    cases, which a real router on the LAN would answer.
   - `./e2e.py` on the host still works, isolated only by each GUI's environment, with
     its run folder left in `/tmp`.
 - **One `upnp` container at a time on a machine:** they share docker's bridge, so a node's SSDP

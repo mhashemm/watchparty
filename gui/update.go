@@ -3,9 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -18,77 +16,57 @@ import (
 
 var version = "dev"
 
-func (g *gui) checkUpdate(w http.ResponseWriter, r *http.Request) {
-	res := struct {
-		Current   string `json:"current"`
-		Latest    string `json:"latest"`
-		Available bool   `json:"available"`
-		Installed string `json:"installed,omitempty"`
-		Error     string `json:"error,omitempty"`
-	}{Current: version}
-	g.mu.Lock()
-	res.Installed = g.installed
-	g.mu.Unlock()
-	if version != "dev" {
-		latest, err := update.Latest(r.Context())
-		if err != nil {
-			res.Error = err.Error()
-		} else {
-			res.Latest = latest
-			res.Available = update.Newer(latest, version)
-		}
+// latest is a release newer than this build, or "" when there is none (or this is a dev
+// build, which never updates itself).
+func (g *gui) latest(ctx context.Context) (string, error) {
+	if version == "dev" {
+		return "", nil
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	tag, err := update.Latest(ctx)
+	if err != nil || !update.Newer(tag, version) {
+		return "", err
+	}
+	return tag, nil
 }
 
-func (g *gui) update(w http.ResponseWriter, r *http.Request) {
+// install downloads the latest release over this binary; it runs after a restart.
+func (g *gui) install() (string, error) {
 	g.mu.Lock()
 	running := g.cancel != nil
 	g.mu.Unlock()
 	if running {
-		http.Error(w, "end the party before updating", http.StatusConflict)
-		return
+		return "", errors.New("end the party before updating")
 	}
 	if version == "dev" {
-		http.Error(w, "development builds do not update themselves", http.StatusBadRequest)
-		return
+		return "", errors.New("development builds do not update themselves")
 	}
-	tag, err := update.Install(r.Context(), g.exe, version, "watchparty-gui")
+	tag, err := update.Install(g.ctx, g.exe, version, "watchparty-gui")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return "", err
 	}
 	recordVersion(g.exe, tag)
 	g.mu.Lock()
 	g.installed = tag
 	g.mu.Unlock()
-	io.WriteString(w, tag)
+	return tag, nil
 }
 
-func (g *gui) restart(w http.ResponseWriter, r *http.Request) {
+// restart starts the installed update and closes this app.
+func (g *gui) restart() error {
 	g.mu.Lock()
 	running, installed := g.cancel != nil, g.installed
 	g.mu.Unlock()
 	if running {
-		http.Error(w, "end the party before restarting", http.StatusConflict)
-		return
+		return errors.New("end the party before restarting")
 	}
 	if installed == "" {
-		http.Error(w, "no update is waiting for a restart", http.StatusBadRequest)
-		return
+		return errors.New("no update is waiting for a restart")
 	}
-	err := exec.Command(g.exe).Start()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if err := exec.Command(g.exe).Start(); err != nil {
+		return err
 	}
-	io.WriteString(w, installed)
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		g.closeWindow()
-		g.quit()
-	}()
+	g.quit()
+	return nil
 }
 
 type tool struct {
@@ -108,7 +86,7 @@ var versionFlags = map[string]struct {
 
 // tools answers About's rows: each tool's version and path, how to update the installer's
 // yt-dlp (it breaks as sites change), and for a missing tool how to install it by hand.
-func (g *gui) tools(w http.ResponseWriter, r *http.Request) {
+func (g *gui) tools(ctx context.Context) []tool {
 	list := []tool{}
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		mpv := defaultMpv()
@@ -120,7 +98,7 @@ func (g *gui) tools(w http.ResponseWriter, r *http.Request) {
 		for i := range list {
 			wg.Go(func() {
 				t := &list[i]
-				t.Path, t.Version = probe(r.Context(), t.Name, cmp.Or(t.Path, t.Name))
+				t.Path, t.Version = probe(ctx, t.Name, cmp.Or(t.Path, t.Name))
 				switch {
 				case t.Path == "":
 					t.Update = "Not found."
@@ -132,8 +110,7 @@ func (g *gui) tools(w http.ResponseWriter, r *http.Request) {
 		}
 		wg.Wait()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(list)
+	return list
 }
 
 // probe finds a tool and its version: cmd on PATH, else for ffmpeg and yt-dlp the

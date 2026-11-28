@@ -1,7 +1,8 @@
 # gui/DESIGN.md
 
-The look of the page (`index.html`, `app.css`). Read it before any visual change; `gui/CLAUDE.md` has the
-code. The visual identity is part of the product, so keep it:
+The window's look: the drawings in `art/` (`cat.svg`, `ground.svg`, the icons in `page.go`)
+and the layout in `theme.go`, `window.go` and a file per tab. Read it before any visual change;
+`gui/CLAUDE.md` has the code and the drawing traps. The visual identity is part of the product, so keep it:
 
 - a forest-floor palette of greens and browns
 - mushrooms and a family of turtles along the bottom
@@ -12,70 +13,71 @@ code. The visual identity is part of the product, so keep it:
 
 Visual taste is the user's call, and guessing has repeatedly gone wrong.
 
-1. Make the change in a **sandbox copy** of `index.html` with `app.css` and `app.js` beside it (or a standalone SVG) outside
-   the repo.
+1. Make each option a scene in `render_test.go` (a state, and a `setup` that sets it), or a
+   standalone SVG for a drawing.
 2. Render it (below). For a face change, render it next to the current version and any
    reference the user gave.
 3. Show **two or three options** side by side, plus a GIF if it moves, and ask which.
-4. Apply only the chosen one, then check it in the real app during a live party.
+4. Apply only the chosen one, drop the others' scenes, then check it in the real app during
+   a live party.
 
 From a reference, take *what makes it work* (proportions, eye construction, outline),
 not the whole drawing.
 
 ### Rendering without a window
 
-Run the GUI headless (`gui/CLAUDE.md`), then:
-
 ```sh
-chromium --headless --disable-gpu --hide-scrollbars --force-prefers-reduced-motion \
-  --window-size=560,940 --virtual-time-budget=4000 --screenshot=out.png http://127.0.0.1:<port>/
+EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>
 ```
 
-- **`--force-prefers-reduced-motion`** freezes the turtles and Fosdo2 at their static
-  pose; without it the turtles are offscreen at t≈0.
-- **`--virtual-time-budget` does not advance CSS animation time.** To capture a moment,
-  inject `* { animation-play-state: paused !important; animation-delay: -<s>s
-  !important; }` into a copy of the page (strip the `<script>`, set `<body
-  data-mood="awake">`). -13.6s is mid-lick. A GIF is those frames joined by `ffmpeg`.
-- **`--force-device-scale-factor=2`** or 3 with a short window gives a close-up of
-  Fosdo2.
-- **560×940** is the real app window. Check every visual change there, and at
-  1280×800 for the browser-tab fallback.
+- Every scene in `scenes()` becomes `<dir>/<name>.png` at 560 wide (the real window) and its
+  `height`, drawn by Gio's headless GPU path (Mesa's llvmpipe in a container), so what it
+  shows is what the window draws. `at` is the moment: the cat and the turtles move with it.
+- A GIF is a scene drawn at several `at`s, joined by `ffmpeg`.
+- **560×940** is the real window. Check every visual change there; a GNOME-on-Wayland
+  window is 40dp shorter under the title bar (the `title-bar` scene).
 
-## Theme tokens (`:root`)
+## Palette (`art/page.go`)
 
-| Token | Value | Use |
+| Name | Value | Use |
 |---|---|---|
-| `--lichen` | `#dfe6c8` | page background. Deliberately not cream |
-| `--paper` | `#fbfaf1` | the card |
-| `--forest` | `#23402b` | text |
-| `--moss`, `--moss-deep` | `#4f7a34`, `#3d6128` | primary button, selection, stethoscope tube |
-| `--bark`, `--soil` | `#6e4b30`, `#4a3220` | card border and shadow, headings, ground |
-| `--porcini` | `#a8642a` | heartbeat line, mushroom caps |
-| `--berry` | `#9a3a35` | errors, the End button, red caps, hearts |
-| `--ochre` | `#e0b452` | focus ring |
+| `Lichen` | `#dfe6c8` | window background. Deliberately not cream |
+| `Paper` | `#fbfaf1` | the card |
+| `Forest` | `#23402b` | text |
+| `Moss`, `MossDeep` | `#4f7a34`, `#3d6128` | primary button, selection, stethoscope tube |
+| `Bark`, `Soil` | `#6e4b30`, `#4a3220` | card border and shadow, headings, ground |
+| `Porcini` | `#a8642a` | heartbeat line, mushroom caps |
+| `Berry` | `#9a3a35` | errors, the End button, red caps, hearts |
+| `Ochre` | `#e0b452` | focus ring |
 
-Fosdo2's colours are tokens too, so recolouring never means editing the SVG:
+**Dark** (`darkPalette` in `palette.go`, "soil at night", the user's pick of three): while
+the window is dark (Settings' Theme, or the OS's appearance under System), each colour above
+turns into a warm brown-black one: `Lichen` `#1c1712`, `Paper` `#28211a`, `Forest` `#d9cfbc`
+(dimmer than white text needs: brighter tired the user's eyes), `Bark` `#d0ab7e`, `Moss` `#93c06c`. Moss
+gets lighter and white darker, so text and ticks on moss turn dark. Shadows and the dialog
+backdrop turn black. Drawings keep their own colours: Fosdo2, the ground, the mushrooms,
+shells and emoji. Check a visual change in both: every scene has a `-dark` twin.
 
-| Token | Value | Use |
+Fosdo2's colours are named in `page.go`'s rules too, so recolouring never means editing the SVG:
+
+| Name | Value | Use |
 |---|---|---|
-| `--fur` | `#8b7763` | head, body, tail |
-| `--fur-dark` | `#3d3229` | tabby stripes, the faint body and ruff outline |
-| `--fur-light` | `#d6c4a7` | muzzle, chin, chest bib, inner-ear wisps |
-| `--paw` | `#f7f2e8` | white paws |
-| `--ear` | `#e4b4a0` | inner ears |
-| `--blush` | `#ee9f98` | cheeks |
-| `--nose` | `#c98a79` | nose |
-| `--eye-in`, `--eye-mid`, `--eye-gold`, `--eye-out` | `#4f8f34`, `#86b04a`, `#c8a245`, `#946330` | the `#hazel` radial gradient, green at the pupil to brown at the rim |
+| `fur` | `#8b7763` | head, body, tail |
+| `furDark` | `#3d3229` | tabby stripes, the faint body and ruff outline |
+| `furLight` | `#d6c4a7` | muzzle, chin, chest bib, inner-ear wisps |
+| `.paw` | `#f7f2e8` | white paws |
+| `.ear` | `#e4b4a0` | inner ears |
+| `.cheek` | `#ee9f98` | cheeks |
+| `.nose` | `#c98a79` | nose |
+| `hazel` (`scene.go`) | `#4f8f34`, `#86b04a`, `#c8a245`, `#946330` | the `#hazel` radial gradient, green at the pupil to brown at the rim |
 
-**Fonts:** Gluten for display, Atkinson Hyperlegible for body, from Google Fonts.
-Offline they fall back to Comic Sans / system-ui; embedding the woff2 files would fix
-that.
+**Fonts,** all bundled: Gluten for display, Atkinson Hyperlegible for body, and the reactions'
+Twemoji drawn as a font (`go generate`), so typed ones look as reactions do. System fonts stay
+on, for scripts and emoji the bundled ones lack.
 
 ## Layout and voice
 
-- One centred card, `min(520px, 100% - 32px)`, with three views switched by pill tabs
-  and mirrored in the URL hash (`#history`, `#settings`):
+- One centred card, `min(520dp, 100% - 32dp)`, with three views switched by pill tabs:
   - **Party**: Vitals and the form
   - **History**: recent parties, newest first, each titled by its file's full path (a
     playlist by its folder's), and **Continue** (filled moss) on a party over the internet,
@@ -83,10 +85,10 @@ that.
   - **Settings**: the defaults, then **About** (version, Update button; on Windows and macOS
     one row each for mpv, ffmpeg and yt-dlp: version and path, how to update yt-dlp, and for
     a missing one an `i` that unfolds how to install it by hand; saved-files folder). A red dot on the tab means an update is available.
-- **The `?`** in the card's corner opens the help over the page, on every view and during
+- **The `?`** in the card's corner opens the help over the card, on every view and during
   a party. One topic per section, named for what it is, never for one kind of video.
-- **Vitals** is hidden until the first `/start`. While a party runs the form fieldset
-  is `hidden`, so Vitals and End sit under the title.
+- **Vitals** is hidden until the first party starts. While one runs the form is hidden, so
+  Vitals and End sit under the title.
   - **Starting, a mushroom trail** (chosen over a checklist and a step counter): one
     mushroom per step, labelled Torrent or File(s), Relay or Router, mpv, Video. Done ones
     are porcini on a solid moss path, the current one berry and larger, the rest pale on a
@@ -130,9 +132,9 @@ that.
 **Chosen by the user after many rejected attempts. Don't redesign him; change only
 what is asked, and show options before changing his face.**
 
-- **Placement:** `viewBox 0 0 200 220` at `width:180px`, `top:-181px`, so his paws
-  (y≈201) sit on the card's top border; `main` has a 190px top margin. Resizing means
-  recomputing `top` as `201/220 × renderedHeight`.
+- **Placement** (`paintCat`): `viewBox 0 0 200 220` drawn 180dp wide, 9dp down, so his paws
+  (y≈201) sit on the card's top border at 190dp. Resizing means recomputing the top as
+  `190 - 201/220 × drawnHeight`.
 - **Back to front:** `defs` (hazel gradient), `.tail`, body with stripes and bib, left
   paw then `.paw-rest`, stethoscope, `.head-move` > the head group (`translate(100 86)
   scale(1.05) translate(-80 -72)`, since it was drawn in a 160×142 space), `.paw-lick`
@@ -143,37 +145,38 @@ what is asked, and show options before changing his face.**
 - **Eyes:** a hazel iris (9×9.5), a vertical oval pupil (3.4×6.2) and two glints.
   Rejected before: a pale ring around a huge pupil (startled), half-closed lids
   (high), small ring-and-dot eyes (a dummy), a full kawaii redraw (not him).
-- **Motion**, CSS only:
-  - Tail swishes −5° → 7° around `136px 186px` (`transform-box: view-box`) every
+- **Motion** (`art/scene.go`):
+  - Tail swishes −5° → 7° around (136, 186) in the viewBox every
     3.2s, 7s asleep.
   - `blink` on `.eyes-open` every 6s.
   - **Lick:** one 16s cycle shared by five elements; from 79% to 99% `.head-move`
     tilts 5°, the eyes swap to closed, `.paw-rest` hides while `.paw-lick` and the
     tongue show, and the paw bobs three times. They stay in sync only through the same
     duration and no delay: change one, change all.
-  - CSS `transform` replaces an SVG `transform` attribute, so anything animated must
+  - An animation replaces an element's own `transform` attribute, so anything animated must
     be a separate group from anything positioned by the attribute (hence `.head-move`).
-  - The lick runs only awake. Reduced motion stops tail, blink, lick and `z`s, leaving
-    paw down and eyes open.
-- **Moods** from `body[data-mood]`, set in `render()`: `sleep` (idle or ended: closed
-  eyes, `z`s, slow tail) and `awake` (running and on errors). **There is deliberately
+  - The lick runs only awake. With the OS's reduced motion everything rests: eyes open
+    awake, closed asleep, the paw down, the `z`s still at .8.
+- **Moods** (`art.Mood`), from the watch's screen: asleep (idle or ended: closed
+  eyes, `z`s, slow tail) and awake (running and on errors). **There is deliberately
   no worried or sad face;** errors are carried by the red "Diagnosis:" text.
-- Clicking him spawns a `.heart` in `main` that removes itself on `animationend`. Text can't be
-  selected, or petting him fast selects the hearts; only `code` and `.status` can, to copy them.
+- Clicking him sends up a heart that fades as it rises. Text can't be selected, so petting
+  him fast selects nothing; only the invite, the status and the chart can, to copy them.
 
 ## Ground, mushrooms and turtles (`svg.ground`)
 
-- `position: fixed` at the bottom, 560×130, centred. Content scrolls *under* it and
-  **covering it is intended**; a separate non-overlapping strip was tried and
-  reverted. `main` has a 150px bottom margin.
-- `body::before` is a fixed 90px lichen fade; `body::after` a fixed 22px soil strip
-  for wide tabs, matching the soil path's height at the SVG edges. z-order: card (1) <
-  fade and soil (2) < ground (3) < Fosdo2 and hearts.
+- Fixed at the bottom (`paintGround`), 560×130, centred, drawn after the card: content
+  scrolls *under* it and **covering it is intended**; a separate non-overlapping strip was
+  tried and reverted. The card ends 150dp above the window's bottom.
+- **A wider window** (the user's pick, the `party-wide` scene): the soil path stretches across
+  it, the mushrooms and grass repeat every 560 from the middle out, and the turtles stroll
+  the whole width at the same pace, so resizing mid-stroll moves them. Layers: soil, plants,
+  turtles, the SVG's own order.
+- Under it a 90dp lichen fade, and a 22dp soil strip for wide windows, matching the soil
+  path's height at the SVG edges. Order: card < fade and soil < ground < Fosdo2 and hearts.
 - **Turtles:** a mother and a baby (same markup at `scale(.55)`, 40px behind), on one
-  60s `stroll` loop. `body.walking` (connecting) only speeds the legs and adds a
-  `bob`; changing the stroll duration mid-run makes them jump.
+  60s `stroll` loop. Walking (connecting) only speeds the legs and adds a `bob`; changing
+  the stroll duration mid-run makes them jump. Reduced motion parks them mid-ground.
 - **Mushrooms:** `<g transform>` groups with `.cap`, `.cap.red`, `.cap.cream`, `.spot`,
-  `.gill`. The same mushroom is a data-URI SVG for the favicon and feed bullets: change
-  both.
-- Reduced motion parks the turtles mid-ground. Hearts still play, since they answer a
-  click.
+  `.gill`. The small mushroom (`art.Mushroom`: the title, the feed's bullets, the title bar)
+  is also `install.sh`'s app icon: change both.

@@ -1,23 +1,19 @@
 package main
 
+//go:generate go run ./winres icon.ico rsrc_windows_amd64.syso
+
 import (
-	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
-	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,31 +21,12 @@ import (
 	"syscall"
 	"time"
 
+	"gioui.org/app"
+
 	"github.com/mhashemm/watchparty/mpv"
 	"github.com/mhashemm/watchparty/party"
 	"github.com/mhashemm/watchparty/update"
 )
-
-// The page's sources are three files an editor understands on its own; the browser gets one
-// page, as only GET / is open without the token (CLAUDE.md).
-var (
-	//go:embed index.html
-	pageHTML string
-	//go:embed app.css
-	pageCSS string
-	//go:embed app.js
-	pageJS string
-
-	page = inline(pageHTML, pageCSS, pageJS)
-)
-
-// inline puts css and js into html in place of the tags that load them. The tags are
-// matched without their line ending, which a Windows checkout turns into CRLF.
-func inline(html, css, js string) []byte {
-	html = strings.Replace(html, `<link rel="stylesheet" href="app.css">`, "<style>\n"+css+"</style>", 1)
-	html = strings.Replace(html, `<script src="app.js"></script>`, "<script>\n"+js+"</script>", 1)
-	return []byte(html)
-}
 
 type form struct {
 	Mode      string `json:"mode"`
@@ -114,17 +91,17 @@ func (f form) config() (party.Config, error) {
 	return cfg, err
 }
 
+// gui is the app behind the window: the party, its log and chat, the store. The window's loop
+// calls it; the party's goroutines write to it, and changed asks the window for a frame.
 type gui struct {
-	token, host string
-	page        []byte
-	mux         *http.ServeMux
-	ctx         context.Context
-	quit        func()
-	closeWindow func()
-	exe         string
-	wg          sync.WaitGroup
+	ctx  context.Context
+	quit func()
+	exe  string
+	wg   sync.WaitGroup
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// changed asks the window to draw again: new lines, a message, the party's end
+	changed   func()
 	cancel    context.CancelFunc
 	store     *store
 	session   int
@@ -140,83 +117,30 @@ type gui struct {
 	chatTo  chan<- string
 	reactTo chan<- string
 	// pickerTo is the running party's Config.Picker: Settings changing when mpv's picker shows
-	pickerTo  chan string
-	said      []said
-	saidGone  int
-	lastPoll  time.Time
-	idleAfter time.Duration
-	pages     int
-	// news has one channel per page holding /alive open: Write nudges each without
-	// blocking, and the page then reads the new lines at once instead of on its next poll
-	news       map[chan struct{}]struct{}
-	heartbeat  time.Duration
-	closeGrace time.Duration
+	pickerTo chan string
+	said     []said
+	saidGone int
 }
 
-func newGUI(ctx context.Context, host string, st *store) *gui {
-	g := &gui{ctx: ctx, token: rand.Text(), host: host, lastPoll: time.Now().Add(time.Minute), idleAfter: 2 * time.Minute, heartbeat: 15 * time.Second, closeGrace: 3 * time.Second, mux: http.NewServeMux(), store: st, session: -1, closeWindow: func() {}}
-	g.page = bytes.ReplaceAll(page, []byte("{{TOKEN}}"), []byte(g.token))
-	g.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(g.page)
-	})
-	g.mux.HandleFunc("POST /pick", pick(pickFile))
-	g.mux.HandleFunc("POST /pick-mpv", pick(pickMpv))
-	g.mux.HandleFunc("POST /pick-folder", pick(pickFolder))
-	g.mux.HandleFunc("POST /start", g.start)
-	g.mux.HandleFunc("POST /stop", g.stop)
-	g.mux.HandleFunc("POST /chat", g.chat)
-	g.mux.HandleFunc("POST /react", g.react)
-	g.mux.HandleFunc("GET /emoji", g.emoji)
-	g.mux.HandleFunc("GET /log", g.log)
-	g.mux.HandleFunc("GET /alive", g.alive)
-	g.mux.HandleFunc("GET /update", g.checkUpdate)
-	g.mux.HandleFunc("GET /tools", g.tools)
-	g.mux.HandleFunc("POST /update", g.update)
-	g.mux.HandleFunc("POST /restart", g.restart)
-	g.mux.HandleFunc("GET /state", g.state)
-	g.mux.HandleFunc("POST /settings", g.saveSettings)
-	g.mux.HandleFunc("POST /history/clear", g.clearHistory)
-	return g
+func newGUI(ctx context.Context, st *store) *gui {
+	return &gui{ctx: ctx, quit: func() {}, store: st, session: -1, changed: func() {}}
 }
 
-func (g *gui) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Host != g.host || (r.URL.Path != "/" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Token")), []byte(g.token)) != 1) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	g.mux.ServeHTTP(w, r)
-}
+// Errors chat and react give for a message the party didn't take.
+var (
+	errNoParty = errors.New("the party has ended")
+	errBusy    = errors.New("too many at once")
+)
 
-func pick(picker func() (string, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		path, err := picker()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		io.WriteString(w, path)
-	}
-}
-
-func (g *gui) start(w http.ResponseWriter, r *http.Request) {
-	f := form{}
-	err := json.NewDecoder(r.Body).Decode(&f)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+func (g *gui) start(f form) error {
 	cfg, err := f.config()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return err
 	}
-
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cancel != nil {
-		http.Error(w, "a party is already running", http.StatusConflict)
-		return
+		return errors.New("a party is already running")
 	}
 	c, cancel := context.WithCancel(g.ctx)
 	g.cancel, g.lines, g.exitErr, g.refusal = cancel, nil, "", nil
@@ -240,6 +164,8 @@ func (g *gui) start(w http.ResponseWriter, r *http.Request) {
 		cancel()
 		g.ended(err)
 	})
+	g.changed()
+	return nil
 }
 
 // heard keeps a chat message mpv showed in run, while that party runs: the last saidKept,
@@ -253,12 +179,12 @@ func (g *gui) heard(run int) func(mpv.Said) {
 			if over := len(g.said) - saidKept; over > 0 {
 				g.said, g.saidGone = slices.Clone(g.said[over:]), g.saidGone+over
 			}
-			g.nudge()
+			g.changed()
 		}
 	}
 }
 
-// saidKept is the most chat messages kept, and so the most the page lists (SAID_KEPT).
+// saidKept is the most chat messages kept, and so the most the window lists.
 const saidKept = 500
 
 // ended is the party gone, Run having returned err. Its chat goes with it.
@@ -271,6 +197,7 @@ func (g *gui) ended(err error) {
 		g.exitErr = err.Error()
 	}
 	errors.As(err, &g.refusal)
+	g.changed()
 }
 
 func (g *gui) Write(p []byte) (int, error) {
@@ -282,25 +209,14 @@ func (g *gui) Write(p []byte) (int, error) {
 			dirty = true
 		}
 	}
-	g.nudge()
+	g.changed()
 	g.mu.Unlock()
-	// the disk write waits until g.mu is free, which every page request needs. What it
+	// the disk write waits until g.mu is free, which the window needs every frame. What it
 	// writes is the store as it is by then, so a party ending in between loses nothing.
 	if dirty {
 		g.store.save()
 	}
 	return len(p), nil
-}
-
-// nudge tells each page holding /alive open that there is something new; g.mu is held.
-func (g *gui) nudge() {
-	for news := range g.news {
-		// one nudge waiting is enough: the page reads everything since its last poll
-		select {
-		case news <- struct{}{}:
-		default:
-		}
-	}
 }
 
 // said is a chat message or reaction mpv showed: who, the text or the reaction's code, when
@@ -313,37 +229,53 @@ type said struct {
 	Ours  bool   `json:"ours"`
 }
 
-func (g *gui) state(w http.ResponseWriter, r *http.Request) {
-	mpv := defaultMpv()
-	cache, _ := party.DefaultCacheDir()
-	g.store.mu.Lock()
-	b, err := json.Marshal(struct {
-		Settings        settings  `json:"settings"`
-		History         []session `json:"history"`
-		Path            string    `json:"path"`
-		Version         string    `json:"version"`
-		DefaultMpv      string    `json:"defaultMpv"`
-		DefaultCacheDir string    `json:"defaultCacheDir"`
-	}{g.store.Settings, g.store.History, filepath.Dir(g.store.path), version, mpv, cache})
-	g.store.mu.Unlock()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+// news is what changed since the window last looked: the lines from From, the messages from
+// SaidFrom (counted from the run's first, dropped or not), and how the party stands.
+type news struct {
+	Run      int
+	From     int
+	Lines    []string
+	SaidFrom int
+	Said     []said
+	Running  bool
+	ExitErr  string
+	Refusal  *party.NotTheSameFile
 }
 
-func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
-	in := settings{}
-	err := json.NewDecoder(r.Body).Decode(&in)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+// news answers what is new since from and saidFrom in run; a different run starts from 0, so
+// two runs never splice.
+func (g *gui) news(run, from, saidFrom int) news {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if run != g.run {
+		from, saidFrom = 0, 0
 	}
+	from = min(max(from, 0), len(g.lines))
+	saidFrom = min(max(saidFrom, g.saidGone), g.saidGone+len(g.said))
+	return news{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom-g.saidGone:]), g.cancel != nil, g.exitErr, g.refusal}
+}
+
+// appState is what the window shows from the store, and the defaults it shows as hints.
+type appState struct {
+	settings        settings
+	history         []session
+	path            string
+	defaultMpv      string
+	defaultCacheDir string
+}
+
+func (g *gui) state() appState {
+	cache, _ := party.DefaultCacheDir()
+	s := appState{defaultMpv: defaultMpv(), defaultCacheDir: cache}
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	s.settings, s.history, s.path = g.store.Settings, slices.Clone(g.store.History), filepath.Dir(g.store.path)
+	return s
+}
+
+func (g *gui) saveSettings(in settings) error {
 	if in.MpvPicker != "" && !slices.Contains(mpv.PickerModes, in.MpvPicker) {
-		http.Error(w, "no such picker mode", http.StatusBadRequest)
-		return
+		return errors.New("no such picker mode")
 	}
 	g.store.mu.Lock()
 	s := &g.store.Settings
@@ -351,11 +283,8 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s.CreateKey, s.PPort = strings.TrimSpace(in.CreateKey), strings.TrimSpace(in.PPort)
 	s.CacheDir = strings.TrimSpace(in.CacheDir)
 	s.MpvPicker = in.MpvPicker
-	err = g.store.saveSettings()
+	err := g.store.saveSettings()
 	g.store.mu.Unlock()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
 	// the running party's mpv follows at once; an earlier change it hasn't taken yet gives way
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -369,84 +298,46 @@ func (g *gui) saveSettings(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 	}
+	return err
 }
 
-func (g *gui) clearHistory(w http.ResponseWriter, r *http.Request) {
+// lastWindow is the window as it was last left; zero the first time.
+func (g *gui) lastWindow() windowSize {
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	return g.store.Window
+}
+
+// saveTheme remembers the theme as it is picked. The Settings tab's Save leaves it alone, so
+// that tab's copy of the settings can't put an older one back.
+func (g *gui) saveTheme(theme string) error {
+	if !slices.Contains(themes, theme) {
+		return errors.New("no such theme")
+	}
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.Settings.Theme = theme
+	return g.store.saveSettings()
+}
+
+// saveWindow remembers the window as it is left, for the next start.
+func (g *gui) saveWindow(w windowSize) error {
+	g.store.mu.Lock()
+	defer g.store.mu.Unlock()
+	g.store.Window = w
+	return g.store.saveSettings()
+}
+
+func (g *gui) clearHistory() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.store.mu.Lock()
 	defer g.store.mu.Unlock()
 	g.store.History, g.session = nil, -1
-	err := g.store.saveHistory()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	return g.store.saveHistory()
 }
 
-func (g *gui) stop(w http.ResponseWriter, r *http.Request) {
-	g.stopParty()
-}
-
-// chat hands the running party a message the person typed.
-func (g *gui) chat(w http.ResponseWriter, r *http.Request) {
-	in := struct {
-		Text string `json:"text"`
-	}{}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(in.Text) == "" {
-		return
-	}
-	g.toParty(w, func() chan<- string { return g.chatTo }, in.Text)
-}
-
-// react hands the running party a reaction the person picked, one of mpv.Reactions.
-func (g *gui) react(w http.ResponseWriter, r *http.Request) {
-	in := struct {
-		Code string `json:"code"`
-	}{}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !slices.Contains(mpv.Reactions(), in.Code) {
-		http.Error(w, "no such reaction", http.StatusBadRequest)
-		return
-	}
-	g.toParty(w, func() chan<- string { return g.reactTo }, in.Code)
-}
-
-// toParty hands the running party v on its channel, to (read under g.mu).
-func (g *gui) toParty(w http.ResponseWriter, to func() chan<- string, v string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.cancel == nil {
-		http.Error(w, "no party is running", http.StatusConflict)
-		return
-	}
-	select {
-	case to() <- v:
-	default:
-		http.Error(w, "too many messages at once", http.StatusServiceUnavailable)
-	}
-}
-
-// emoji is the reactions in the picker's order, each drawn as mpv draws it.
-func (g *gui) emoji(w http.ResponseWriter, r *http.Request) {
-	res := struct {
-		Order []string          `json:"order"`
-		SVG   map[string]string `json:"svg"`
-	}{mpv.Reactions(), map[string]string{}}
-	for _, code := range res.Order {
-		res.SVG[code] = mpv.EmojiSVG(code)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-func (g *gui) stopParty() {
+func (g *gui) stop() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cancel != nil {
@@ -454,102 +345,62 @@ func (g *gui) stopParty() {
 	}
 }
 
-func (g *gui) log(w http.ResponseWriter, r *http.Request) {
-	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
-	saidFrom, _ := strconv.Atoi(r.URL.Query().Get("said"))
-	run, _ := strconv.Atoi(r.URL.Query().Get("run"))
-	g.mu.Lock()
-	g.lastPoll = time.Now()
-	if run != g.run {
-		from, saidFrom = 0, 0
+// chat hands the running party a message the person typed; nothing typed goes nowhere.
+func (g *gui) chat(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
 	}
-	from = min(max(from, 0), len(g.lines))
-	// saidFrom counts every message of the run, those dropped too
-	saidFrom = min(max(saidFrom, g.saidGone), g.saidGone+len(g.said))
-	res := struct {
-		Run      int                   `json:"run"`
-		From     int                   `json:"from"`
-		Lines    []string              `json:"lines"`
-		SaidFrom int                   `json:"saidFrom"`
-		Said     []said                `json:"said"`
-		Running  bool                  `json:"running"`
-		ExitErr  string                `json:"exitErr"`
-		Refusal  *party.NotTheSameFile `json:"refusal,omitempty"`
-	}{g.run, from, slices.Clone(g.lines[from:]), saidFrom, slices.Clone(g.said[saidFrom-g.saidGone:]), g.cancel != nil, g.exitErr, g.refusal}
-	g.mu.Unlock()
-	// it carries chat, which nothing may keep: without this, Chromium writes it to its disk cache
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	return g.toParty(func() chan<- string { return g.chatTo }, text)
 }
 
-func (g *gui) alive(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	rc := http.NewResponseController(w)
-	news := make(chan struct{}, 1)
-	g.mu.Lock()
-	g.pages++
-	if g.news == nil {
-		g.news = map[chan struct{}]struct{}{}
+// react hands the running party a reaction the person picked, one of mpv.Reactions.
+func (g *gui) react(code string) error {
+	if !slices.Contains(mpv.Reactions(), code) {
+		return errors.New("no such reaction")
 	}
-	g.news[news] = struct{}{}
-	g.mu.Unlock()
-	defer func() {
-		g.mu.Lock()
-		delete(g.news, news)
-		g.mu.Unlock()
-		g.pageGone()
-	}()
-	tick := time.NewTicker(g.heartbeat)
-	defer tick.Stop()
-	// a heartbeat is a comment; new lines are an event, which the page answers with a poll
-	beat := ":\n\n"
-	for {
-		_, err := io.WriteString(w, beat)
-		if err == nil {
-			err = rc.Flush()
-		}
-		if err != nil {
-			return
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-g.ctx.Done():
-			return
-		case <-tick.C:
-			beat = ":\n\n"
-		case <-news:
-			beat = "data: lines\n\n"
-		}
-	}
+	return g.toParty(func() chan<- string { return g.reactTo }, code)
 }
 
-func (g *gui) pageGone() {
-	g.mu.Lock()
-	g.pages--
-	none := g.pages == 0
-	g.mu.Unlock()
-	if none {
-		time.AfterFunc(g.closeGrace, g.checkPages)
-	}
-}
-
-func (g *gui) checkPages() {
-	g.mu.Lock()
-	none := g.pages == 0
-	g.mu.Unlock()
-	if none && g.ctx.Err() == nil {
-		log.Println("gui: window closed")
-		g.quit()
-	}
-}
-
-func (g *gui) idle() bool {
+// toParty hands the running party v on its channel, to (read under g.mu).
+func (g *gui) toParty(to func() chan<- string, v string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.cancel == nil && g.pages == 0 && time.Since(g.lastPoll) > g.idleAfter
+	if g.cancel == nil {
+		return errNoParty
+	}
+	select {
+	case to() <- v:
+		return nil
+	default:
+		return errBusy
+	}
+}
+
+// pick asks the OS for a path: the video, mpv, or the cache folder.
+func (g *gui) pick(field string) (string, error) {
+	switch field {
+	case "mpv":
+		return pickMpv()
+	case "cacheDir":
+		return pickFolder()
+	}
+	return pickFile()
+}
+
+// saveChart saves the whole log, not the window's trimmed copy, where the OS's Save dialog
+// says; it answers the file's name, or "" when the person cancelled.
+func (g *gui) saveChart() (string, error) {
+	g.mu.Lock()
+	text := strings.Join(g.lines, "\n") + "\n"
+	g.mu.Unlock()
+	path, err := pickSave("watchparty-" + time.Now().Format("2006-01-02-15-04") + ".log")
+	if err != nil || path == "" {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func defaultMpv() string {
@@ -580,6 +431,7 @@ func sibling(name string) string {
 	return path
 }
 
+// dialog runs a picker and answers what it printed; a non-zero exit is a cancel.
 func dialog(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	hide(cmd)
@@ -590,121 +442,35 @@ func dialog(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-func browserArgs(browser, url, profile string) []string {
-	args := []string{"--app=" + url, "--window-size=560,940", "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check"}
-	if strings.Contains(strings.ToLower(filepath.Base(browser)), "edge") {
-		args = append(args, "--disable-features=msImplicitSignin")
-	}
-	return args
-}
-
-type browser struct {
-	name string
-	cmd  []string
-	root string
-}
-
-// profilePrefs seeds each window's profile: no password manager, and no download bubble.
-// An --app window has no toolbar button to anchor the bubble to, so Chromium draws it as a
-// blank box clipped at the window's edge; the page says where Save chart put the file.
-const profilePrefs = `{"credentials_enable_service":false,"profile":{"password_manager_enabled":false},"download_bubble":{"partial_view_enabled":false}}`
-
-func newProfile(root string) (string, error) {
-	err := os.MkdirAll(root, 0o700)
-	if err != nil {
-		return "", err
-	}
-	profile, err := os.MkdirTemp(root, "watchparty-gui-browser-")
-	if err != nil {
-		return "", err
-	}
-	os.MkdirAll(filepath.Join(profile, "Default"), 0o700)
-	os.WriteFile(filepath.Join(profile, "Default", "Preferences"), []byte(profilePrefs), 0o600)
-	return profile, nil
-}
-
-func openWindow(url string) func() {
-	for _, b := range browsers() {
-		profile, err := newProfile(b.root)
-		if err != nil {
-			continue
-		}
-		cmd := exec.Command(b.cmd[0], append(b.cmd[1:], browserArgs(b.name, url, profile)...)...)
-		cmd.Env = append(os.Environ(), "GOOGLE_API_KEY=no", "GOOGLE_DEFAULT_CLIENT_ID=no", "GOOGLE_DEFAULT_CLIENT_SECRET=no")
-		ownGroup(cmd)
-		if cmd.Start() != nil {
-			os.RemoveAll(profile)
-			continue
-		}
-		gone := make(chan struct{})
-		go func() {
-			cmd.Wait()
-			// its helpers would write into the profile after it was deleted
-			killGroup(cmd)
-			removeProfile(profile)
-			close(gone)
-		}()
-		return func() {
-			killGroup(cmd)
-			<-gone
-		}
-	}
-	cmd := openURL(url)
-	go func() {
-		err := cmd.Start()
-		if err == nil {
-			err = cmd.Wait()
-		}
-		if err != nil {
-			log.Printf("gui: no browser could be opened (%v), open %s yourself\n", err, url)
-		}
-	}()
-	return func() {}
-}
-
-func removeProfile(dir string) {
-	for range 20 {
-		os.RemoveAll(dir)
-		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
+// windowTitle is the window's, the page's <title> before
+const windowTitle = "Hahas and Hehes Watch Party"
 
 func main() {
+	// the heap may grow half its live size before a collection, not Go's default whole:
+	// a frame's garbage is small enough that BenchmarkFrame's CPU doesn't change (25 cost 5%)
+	debug.SetGCPercent(50)
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		panic(err)
-	}
-	g := newGUI(c, ln.Addr().String(), openStore(storePath()))
+	g := newGUI(c, openStore(storePath()))
 	g.quit = stop
+	var err error
 	g.exe, err = update.Executable()
 	if err == nil {
 		os.Remove(g.exe + ".old")
 	}
 	log.SetOutput(io.MultiWriter(g, os.Stderr))
-	url := "http://" + g.host + "/"
-	log.Printf("gui: %s\n", url)
-	g.closeWindow = openWindow(url)
-	_, title, _ := bytes.Cut(page, []byte("<title>"))
-	if title, _, ok := bytes.Cut(title, []byte("</title>")); ok {
-		go groupWindow(c, g.exe, string(title), 200*time.Millisecond)
-	}
-
-	go http.Serve(ln, g)
+	// the desktop entry install.sh writes: Wayland and X11 match the window to it by this
+	app.ID = "watchparty"
 	go func() {
-		for range time.Tick(5 * time.Second) {
-			if g.idle() {
-				stop()
-			}
+		if err := g.window(new(app.Window)); err != nil {
+			log.Printf("gui: %v\n", err)
 		}
+		log.Println("gui: window closed")
+		// the party ends with the window, and Run's defers finish before the process does
+		stop()
+		g.stop()
+		g.wg.Wait()
+		os.Exit(0)
 	}()
-	<-c.Done()
-	g.stopParty()
-	g.wg.Wait()
-	g.closeWindow()
+	app.Main()
 }

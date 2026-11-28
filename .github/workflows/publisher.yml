@@ -23,17 +23,20 @@ jobs:
     needs: release
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    # the GUI needs cgo on Linux and macOS (Gio), so each builds on its own OS and arch; a
+    # Mac builds both arches. Linux on 22.04: the GUI links glibc, and an older one runs on
+    # more distros. Windows needs no cgo and cross-compiles.
+    runs-on: ${{ matrix.runner }}
     strategy:
       # one failed upload must not cancel the others mid-upload
       fail-fast: false
       matrix:
         include:
-          - { goos: linux, goarch: amd64, out: watchparty_amd64, gui: watchparty-gui_amd64 }
-          - { goos: linux, goarch: arm64, out: watchparty_arm64, gui: watchparty-gui_arm64 }
-          - { goos: windows, goarch: amd64, out: watchparty.exe, gui: watchparty-gui.exe }
-          - { goos: darwin, goarch: amd64, out: watchparty_mac_amd64, gui: watchparty-gui_mac_amd64 }
-          - { goos: darwin, goarch: arm64, out: watchparty_mac_arm64, gui: watchparty-gui_mac_arm64 }
+          - { runner: ubuntu-22.04, goos: linux, goarch: amd64, out: watchparty_amd64, gui: watchparty-gui_amd64 }
+          - { runner: ubuntu-22.04-arm, goos: linux, goarch: arm64, out: watchparty_arm64, gui: watchparty-gui_arm64 }
+          - { runner: ubuntu-latest, goos: windows, goarch: amd64, out: watchparty.exe, gui: watchparty-gui.exe }
+          - { runner: macos-latest, goos: darwin, goarch: amd64, out: watchparty_mac_amd64, gui: watchparty-gui_mac_amd64 }
+          - { runner: macos-latest, goos: darwin, goarch: arm64, out: watchparty_mac_arm64, gui: watchparty-gui_mac_arm64 }
     steps:
       - uses: actions/checkout@v7
 
@@ -44,6 +47,10 @@ jobs:
 
       - name: Download
         run: go mod download
+
+      - name: Gio's headers
+        if: matrix.goos == 'linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 
       - name: Build
         # the tag goes through env, never interpolated into the shell: a git tag may
@@ -58,7 +65,7 @@ jobs:
         # legally contain backticks or $(), which would otherwise run in this step
         env:
           REF: ${{ github.ref_name }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: ${{ matrix.goos == 'windows' && '0' || '1' }}
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-s -w -X main.version=$REF ${{ matrix.goos == 'windows' && '-H=windowsgui' || '' }}" -o ${{ matrix.gui }} ./gui
 
       - name: Build the Windows installer

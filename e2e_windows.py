@@ -3,17 +3,16 @@
 
 e2e.py covers the behaviour; this covers the Windows half of it: mpv's named pipe,
 mpv in its own console and process group, Ctrl-Break, the mpv.com wrapper, the
-GUI built with -H=windowsgui (as released) starting mpv and Chrome by absolute path,
-closing its window, a browser handing the page off, and the self-update's .old swap.
+GUI built with -H=windowsgui (as released) starting mpv by absolute path, closing
+its window, the self-update's .old swap, and the installer.
 
     python e2e_windows.py
 
-Needs go, mpv, ffmpeg and Chrome. The GUI finds Chrome at %ProgramFiles%; each GUI
-gets a ProgramFiles of its own holding gui/fakebrowser as chrome.exe, which runs the
-real Chrome headless with a debugging port. Exits non-zero if any assertion fails;
-the run directory with every log is printed at the end.
+Needs go, mpv, ffmpeg and makensis. The GUI is built with -tags e2e and driven through
+its control socket (gui/e2e.go). Exits non-zero if any assertion fails; the run
+directory with every log is printed at the end.
 """
-import argparse, json, os, re, shutil, signal, subprocess
+import argparse, ctypes, json, os, re, shutil, signal, subprocess
 import sys, tempfile, threading, time
 
 assert sys.platform == "win32", "e2e_windows.py runs on Windows; elsewhere, make e2e"
@@ -21,7 +20,7 @@ import winreg
 
 sys.dont_write_bytecode = True
 import e2e_lib
-from e2e_lib import Page, Release, find_page, sha
+from e2e_lib import Release, Window, sha
 
 if os.name != "nt":
     sys.exit("e2e_windows.py runs on Windows; on Linux, use make e2e")
@@ -31,12 +30,11 @@ ap.add_argument("--port-base", type=int, default=7969)
 args = ap.parse_args()
 
 MPVFLAGS = "--vo=null --ao=null --msg-level=all=error"
-BOOT, SETTLE, QUIET = 30, 15, 1.0
+BOOT, SETTLE = 30, 15
 PORTS = {"relay": args.port_base, "release": args.port_base + 1, "p1": args.port_base + 2, "p2": args.port_base + 3, "cliRelease": args.port_base + 4}
 RELAY_URL = f"ws://127.0.0.1:{PORTS['relay']}"
 REPO = os.path.dirname(os.path.abspath(__file__))
 RUN = tempfile.mkdtemp(prefix="watchparty-e2e-")
-CHROME = os.path.join(os.environ.get("ProgramFiles", ""), r"Google\Chrome\Application\chrome.exe")
 
 fails, nodes, others_procs = [], {}, []
 
@@ -68,7 +66,9 @@ def need(tool):
 
 
 def build(out, pkg, ldflags=""):
-    subprocess.run(["go", "build", "-ldflags", ldflags, "-o", os.path.join(RUN, out), pkg], cwd=REPO, check=True)
+    """A binary into the run directory; the GUI with its e2e control socket."""
+    tags = ["-tags", "e2e"] if pkg == "./gui" else []
+    subprocess.run(["go", "build", *tags, "-ldflags", ldflags, "-o", os.path.join(RUN, out), pkg], cwd=REPO, check=True)
     return os.path.join(RUN, out)
 
 
@@ -212,81 +212,142 @@ def environ(**over):
     return {**os.environ, **{k.upper(): v for k, v in over.items()}}
 
 
-def launch_gui(name, exe=None, browser=True):
+def gui_env(home):
+    return environ(APPDATA=os.path.join(home, "appdata"), LOCALAPPDATA=os.path.join(home, "local"),
+                   TMP=os.path.join(home, "tmp"), TEMP=os.path.join(home, "tmp"), WATCHPARTY_E2E=os.path.join(home, "control"))
+
+
+def launch_gui(name, exe=None):
+    """A GUI with its own APPDATA and TMP, its window driven through its e2e control socket."""
     home = os.path.join(RUN, name)
-    pf = os.path.join(home, "pf", r"Google\Chrome\Application")
-    if not os.path.exists(home):
-        for d in ("appdata", "local", "tmp", "pf86", "pf"):
-            os.makedirs(os.path.join(home, d))
-        os.makedirs(pf)
-        shutil.copy(FAKEBROWSER, os.path.join(pf, "chrome.exe"))
-    env = environ(APPDATA=os.path.join(home, "appdata"), LOCALAPPDATA=os.path.join(home, "local"),
-                  TMP=os.path.join(home, "tmp"), TEMP=os.path.join(home, "tmp"),
-                  # a 64-bit process gets ProgramFiles rebuilt from ProgramW6432, so set both
-                  ProgramFiles=os.path.join(home, "pf"), ProgramW6432=os.path.join(home, "pf"),
-                  **{"ProgramFiles(x86)": os.path.join(home, "pf86")},
-                  E2E_BROWSER=CHROME if browser else "", E2E_BROWSER_LOG=os.path.join(home, "browser.args"))
+    for d in ("appdata", "local", "tmp"):
+        os.makedirs(os.path.join(home, d), exist_ok=True)
     path = os.path.join(RUN, name + ".log")
-    nodes[name] = {"home": home}
-    opened = len(launches(name))
-    p = subprocess.Popen([exe or GUI_BIN], env=env, stdout=open(path, "wb"), stderr=subprocess.STDOUT)
-    nodes[name].update(proc=p, log=path, pipe=None, gui=True)
-    until(lambda: "gui: http" in log(name), BOOT)
-    nodes[name]["url"] = log(name).split("gui: ", 1)[1].split("\n", 1)[0].strip()
-    if browser:
-        attach(name, opened + 1)
+    p = subprocess.Popen([exe or GUI_BIN], env=gui_env(home), stdout=open(path, "wb"), stderr=subprocess.STDOUT)
+    nodes[name] = {"home": home, "proc": p, "log": path, "pipe": None, "gui": True}
+    attach(name)
     return name
 
 
-def launches(n):
-    try:
-        with open(os.path.join(nodes[n]["home"], "browser.args")) as f:
-            return f.read().splitlines()
-    except OSError:
-        return []
-
-
-def attach(n, count):
-    def ws():
-        lines = launches(n)
-        return find_page(lines[count - 1]) if len(lines) >= count else None
-    until(ws, BOOT)
-    url = ws()
-    if not url:
+def attach(n):
+    """Wait for the window's control socket: the GUI is up, its window open and loaded."""
+    w = Window(os.path.join(nodes[n]["home"], "control"))
+    def up():
+        try:
+            return w.ui() is not None
+        except (OSError, ValueError, RuntimeError):
+            return False
+    if not until(up, BOOT):
         tree = [(p["Name"], p["CommandLine"]) for p in processes() if p["ParentProcessId"] == nodes[n]["proc"].pid]
-        files = [os.path.join(d, f) for d, _, fs in os.walk(nodes[n]["home"]) for f in fs][:40]
-        print(f"--- {n}'s log:\n{log(n)}--- its browser launches: {launches(n)}\n--- its children: {tree}\n--- its files: {files}")
-        sys.exit(f"{n} never opened its page")
-    nodes[n]["page"] = Page(url)
-    nodes[n]["page"].ready(BOOT)
+        print(f"--- {n}'s log:\n{log(n)}--- its children: {tree}")
+        sys.exit(f"{n}'s window never answered")
+    nodes[n]["window"] = w
 
 
-def js(n, expr):
-    return nodes[n]["page"].js(expr)
+def ui(n):
+    return nodes[n]["window"].ui()
 
 
 def status(n):
-    return nodes[n]["page"].status()
+    return nodes[n]["window"].status()
 
 
 def feed(n):
-    return nodes[n]["page"].feed()
+    return nodes[n]["window"].feed()
 
 
-def click(n, selector):
-    nodes[n]["page"].click(selector)
+def click(n, name):
+    nodes[n]["window"].click(name)
 
 
 def fill(n, **fields):
-    nodes[n]["page"].fill(**fields)
+    nodes[n]["window"].fill(**fields)
+
+
+def tab(n, view):
+    nodes[n]["window"].tab(view)
 
 
 def go(n):
-    nodes[n]["page"].go(BOOT)
+    nodes[n]["window"].go(BOOT)
 
 
-def browser_of(n):
-    return next((p["ProcessId"] for p in children(nodes[n]["proc"].pid, "chrome.exe")), None)
+def save_settings(n, **fields):
+    tab(n, "settings")
+    fill(n, **fields)
+    click(n, "settings-save")
+    saved = ui(n)["settings"]["saved"]
+    tab(n, "party")
+    return saved
+
+
+def end(n):
+    """End the party by its button, through the window's confirm."""
+    click(n, "go")
+    click(n, "dialog:ok")
+    until(lambda: status(n) == "The party has ended.")
+
+
+def windows_of(n):
+    """n's process's visible windows."""
+    user32 = ctypes.windll.user32
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    pid, found = nodes[n]["proc"].pid, []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def each(hwnd, _):
+        owner = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+    user32.EnumWindows(each, None)
+    return found
+
+
+def close_window(n):
+    """What the title bar's close button sends: WM_CLOSE, to each window of n's process."""
+    user32 = ctypes.windll.user32
+    user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+    found = windows_of(n)
+    for hwnd in found:
+        user32.PostMessageW(hwnd, 0x0010, None, None)  # WM_CLOSE
+    return len(found)
+
+
+def frame_dark(n):
+    """Whether n's window asked for a dark frame (DWMWA_USE_IMMERSIVE_DARK_MODE), or the
+    HRESULT of a refused read."""
+    dwm = ctypes.windll.dwmapi
+    dwm.DwmGetWindowAttribute.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    on = ctypes.c_int(0)
+    found = windows_of(n)
+    if not found:
+        return "no window"
+    hr = dwm.DwmGetWindowAttribute(found[0], 20, ctypes.byref(on), 4)
+    return bool(on.value) if hr == 0 else f"hr {hr & 0xffffffff:#x}"
+
+
+def app_mode(dark):
+    """Set Settings' "Choose your app mode"; returns the value it had (None: unset)."""
+    k = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", 0,
+                           winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE)
+    try:
+        try:
+            was = winreg.QueryValueEx(k, "AppsUseLightTheme")[0]
+        except FileNotFoundError:
+            was = None
+        if dark is None:
+            try:
+                winreg.DeleteValue(k, "AppsUseLightTheme")
+            except FileNotFoundError:
+                pass
+        else:
+            winreg.SetValueEx(k, "AppsUseLightTheme", 0, winreg.REG_DWORD, 0 if dark else 1)
+        return was
+    finally:
+        winreg.CloseKey(k)
 
 
 # ----------------------------------------------------------------- cases --
@@ -380,40 +441,33 @@ def cli_suite():
 
 def gui_suite():
     H, G = "winHost", "winGuest"
-    print("\n=== gui: two GUIs built -H=windowsgui, each in headless Chrome ===")
+    print("\n=== gui: two GUIs built -H=windowsgui, each a real window ===")
     relay = subprocess.Popen([RELAY_BIN], env=environ(ADDR=f"127.0.0.1:{PORTS['relay']}", CREATE_KEY="k", DB=os.path.join(RUN, "relay-gui.db")),
                              stdout=open(os.path.join(RUN, "relay-gui.log"), "wb"), stderr=subprocess.STDOUT)
     others_procs.append(relay)
     for n in (H, G):
         launch_gui(n)
 
-    print("\n[W9] the GUI opens Chrome from Program Files as an app window")
-    for n in (H, G):
-        argv = launches(n)[0]
-        ok(f"{n} opened {nodes[n]['url']} at 560x940", f"--app={nodes[n]['url']}" in argv and "--window-size=560,940" in argv, argv)
-
     print("\n[W9b] About lists mpv, ffmpeg and yt-dlp, each run for its version under the windowsgui parent")
-    nodes[H]["page"].tab("settings")
-    ok("a row each", until(lambda: js(H, '$("tools").children.length') == 3), js(H, '$("tools").innerText'))
-    tools = {t["name"]: t for t in js(H, 'api("/tools").then(r => r.json())')}
+    ok("a row each", until(lambda: len(ui(H)["about"]["tools"] or []) == 3), str(ui(H)["about"]["tools"]))
+    tools = {t["name"]: t for t in ui(H)["about"]["tools"]}
     ok("mpv and ffmpeg from PATH, with a version", all(tools[n].get("version") and os.path.isabs(tools[n].get("path", "")) for n in ("mpv", "ffmpeg")), tools)
     ok("they show only that: no note, no steps", not any(tools[n].get(k) for n in ("mpv", "ffmpeg") for k in ("update", "steps")), tools)
     y = tools["yt-dlp"]
     ok("yt-dlp from elsewhere shows no update line; missing, how to install it", not y.get("update") if y.get("path") else
-       y.get("update") == "Not found." and y.get("steps", [""])[-1].startswith("Restart Watchparty") and js(H, 'document.querySelectorAll("#tools .info").length') == 1, y)
+       y.get("update") == "Not found." and y.get("steps", [""])[-1].startswith("Restart Watchparty"), y)
 
-    nodes[H]["page"].tab("party")
-
-    print("\n[W10] a relay party from the page: mpv starts under the windowsgui parent")
-    fill(H, hostname=H, file=MEDIA, relay=RELAY_URL, createKey="k", mpvFlags=MPVFLAGS)
+    print("\n[W10] a relay party from the window: mpv starts under the windowsgui parent")
+    for n in (H, G):
+        must(f"{n} saved its settings", save_settings(n, mpvFlags=MPVFLAGS, **({"createKey": "k"} if n == H else {})) == "Saved.", ui(n)["settings"]["saved"])
+    fill(H, hostname=H, file=MEDIA, relay=RELAY_URL)
     go(H)
     must(f"{H} is in", until(lambda: status(H).startswith("You're in"), BOOT), status(H))
     nodes[H]["pipe"] = mpv_pipe(nodes[H]["proc"].pid)
     ok(f"{H}'s mpv.exe answers", bool(nodes[H]["pipe"]) and get(H, "pause") is True)
-    until(lambda: js(H, '$("share-text").textContent') != "")
-    invite = js(H, '$("share-text").textContent')
-    js(G, f'$("invite").value = {json.dumps(invite)}; $("invite").dispatchEvent(new Event("input"))')
-    fill(G, hostname=G, file=MEDIA, mpvFlags=MPVFLAGS)
+    until(lambda: ui(H)["invite"] != "")
+    fill(G, invite=ui(H)["invite"])
+    fill(G, hostname=G, file=MEDIA)
     go(G)
     must(f"{G} is in", until(lambda: status(G).startswith("You're in"), BOOT), status(G))
     nodes[G]["pipe"] = mpv_pipe(nodes[G]["proc"].pid)
@@ -424,28 +478,31 @@ def gui_suite():
     ok(f"{H} plays", get(H, "pause") is False)
     ok("the feeds", f"resumed by {G}" in feed(H) and feed(G)[:1] == ["resumed by you"], f"{feed(H)} / {feed(G)}")
 
-    print(f"\n[W12] {G} ends the party from the page")
+    print(f"\n[W17] {H} follows the app mode to dark and back, its own title bar and frame too")
+    was = app_mode(True)
+    try:
+        ok(f"{H} turned dark", until(lambda: ui(H)["dark"], 10))
+        ok("its native frame too", until(lambda: frame_dark(H) is True, 5), str(frame_dark(H)))
+        app_mode(False)
+        ok(f"{H} turned light again", until(lambda: not ui(H)["dark"], 10))
+        ok("its native frame too", until(lambda: frame_dark(H) is False, 5), str(frame_dark(H)))
+    finally:
+        app_mode(None if was is None else not was)
+
+    print(f"\n[W12] {G} ends the party from its window")
     pipe = nodes[G]["pipe"]
-    click(G, "#go")
-    until(lambda: status(G) == "The party has ended.")
+    end(G)
     ok(f"{G} says it ended", status(G) == "The party has ended.", status(G))
     ok(f"{G}'s mpv.exe is gone", until(lambda: not exists(pipe)))
     ok(f"{H} was told", until(lambda: f"{G} has left" in feed(H)), str(feed(H)))
 
     print(f"\n[W13] closing {H}'s window ends its GUI and its mpv")
     pipe = nodes[H]["pipe"]
-    kill_tree(browser_of(H))
+    must(f"{H} has a window to close", close_window(H) > 0)
     ok(f"{H} exited", until(lambda: nodes[H]["proc"].poll() is not None))
     ok("on a closed window", "gui: window closed" in log(H))
     ok(f"{H}'s mpv.exe is gone", until(lambda: not exists(pipe)))
     kill_tree(nodes[G]["proc"].pid)
-
-    print("\n[W14] a browser that hands the page off doesn't count as closing the window")
-    O = launch_gui("winHandoff", browser=False)
-    until(lambda: launches(O))
-    time.sleep(QUIET)
-    ok("the GUI is still up", nodes[O]["proc"].poll() is None and "gui: window closed" not in log(O))
-    kill_tree(nodes[O]["proc"].pid)
 
     print("\n[W15] self-update: the running .exe becomes .old, Restart runs v0.0.2, the next start removes .old")
     rel = Release(PORTS["release"], GUI_NEW, "watchparty-gui.exe", good=True)
@@ -453,26 +510,23 @@ def gui_suite():
     exe = os.path.join(RUN, "upd", "watchparty-gui.exe")
     shutil.copy(GUI_OLD, exe)
     U = launch_gui("winUpdate", exe=exe)
-    nodes[U]["page"].tab("settings")
-    until(lambda: js(U, '!$("update").hidden'))
-    ok("it offers v0.0.2", js(U, '$("update").textContent') == "Update to v0.0.2", js(U, '$("version-text").textContent'))
-    click(U, "#update")
-    until(lambda: js(U, '$("restart-dialog").open') or js(U, '$("version-text").textContent').startswith("Update failed"), 60)
-    ok("installed", js(U, '$("restart-dialog").open') and sha(exe) == rel.sha, js(U, '$("version-text").textContent'))
+    about = lambda: ui(U)["about"]
+    until(lambda: about()["button"])
+    ok("it offers v0.0.2", about()["button"] == "Update to v0.0.2", str(about()))
+    tab(U, "settings")
+    click(U, "update")
+    until(lambda: ui(U)["dialog"] or about()["version"].startswith("Update failed"), 60)
+    ok("installed", ui(U)["dialog"] and sha(exe) == rel.sha, about()["version"])
     ok("the running binary was moved to .old", os.path.exists(exe + ".old") and sha(exe + ".old") == sha(GUI_OLD))
     old_pid = nodes[U]["proc"].pid
-    click(U, "#restart-now")
+    click(U, "dialog:ok")
     ok("the old one exited", until(lambda: nodes[U]["proc"].poll() is not None))
-    attach(U, 2)
-    until(lambda: js(U, '$("version-text").textContent') != "Checking the version…")
-    ok("the new window runs v0.0.2", js(U, '$("version-text").textContent') == "Version v0.0.2", js(U, '$("version-text").textContent'))
+    attach(U)
+    ok("the new window runs v0.0.2", until(lambda: about()["version"] == "Version v0.0.2"), about()["version"])
     new = [p for p in processes() if (p["CommandLine"] or "").strip('" ').lower().startswith(exe.lower()) and p["ProcessId"] != old_pid]
     for p in new:
         kill_tree(p["ProcessId"])
-    nodes[U]["proc"] = subprocess.Popen([exe], env=environ(APPDATA=os.path.join(RUN, "winUpdate", "appdata"),
-                                                           ProgramFiles=os.path.join(RUN, "winUpdate", "pf"),
-                                                           ProgramW6432=os.path.join(RUN, "winUpdate", "pf"), E2E_BROWSER="",
-                                                           E2E_BROWSER_LOG=os.path.join(RUN, "winUpdate", "browser.args")))
+    nodes[U]["proc"] = subprocess.Popen([exe], env=gui_env(nodes[U]["home"]))
     ok("the next start removes .old", until(lambda: not os.path.exists(exe + ".old")))
     kill_tree(nodes[U]["proc"].pid)
     relay.kill()
@@ -570,8 +624,6 @@ need("ffmpeg")
 MAKENSIS = shutil.which("makensis") or os.path.join(os.environ.get("ProgramFiles(x86)", ""), r"NSIS\makensis.exe")
 if not os.path.exists(MAKENSIS):
     sys.exit(f"makensis is required, looked at {MAKENSIS}")
-if not os.path.exists(CHROME):
-    sys.exit(f"Chrome is required at {CHROME}")
 print(f"run directory: {RUN}")
 BIN = build("watchparty.exe", ".")
 RELAY_BIN = build("relay.exe", "./relay")
@@ -582,7 +634,6 @@ GUI_NEW = build("gui-v0.0.2.exe", "./gui", f"-H=windowsgui -X main.version=v0.0.
 release = f"-X github.com/mhashemm/watchparty/update.ReleaseURL=http://127.0.0.1:{PORTS['cliRelease']}/latest"
 CLI_OLD = build("cli-v0.0.1.exe", ".", f"-X main.version=v0.0.1 {release}")
 CLI_NEW = build("cli-v0.0.2.exe", ".", f"-X main.version=v0.0.2 {release}")
-FAKEBROWSER = build("fakebrowser.exe", "./gui/fakebrowser")
 MEDIA = os.path.join(RUN, "test.mkv")
 subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10", "-t", "120",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", MEDIA], check=True)
@@ -599,7 +650,7 @@ finally:
     for p in others_procs:
         if p.poll() is None:
             p.kill()
-    # anything left that was started from the run directory: a restarted GUI, its Chrome, an mpv
+    # anything left that was started from the run directory: a restarted GUI, an mpv
     for p in processes():
         if RUN.lower() in (p["CommandLine"] or "").lower() and p["ProcessId"] != os.getpid():
             kill_tree(p["ProcessId"])

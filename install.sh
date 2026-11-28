@@ -87,7 +87,6 @@ else
 	<key>CFBundleIdentifier</key><string>io.github.mhashemm.watchparty</string>
 	<key>CFBundleName</key><string>Watchparty</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>LSUIElement</key><true/>
 	<key>LSEnvironment</key>
 	<dict>
 		<key>PATH</key><string>$apppath</string>
