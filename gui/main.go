@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -445,6 +446,9 @@ func dialog(name string, args ...string) (string, error) {
 const windowTitle = "Hahas and Hehes Watch Party"
 
 func main() {
+	// the heap may grow half its live size before a collection, not Go's default whole:
+	// a frame's garbage is small enough that BenchmarkFrame's CPU doesn't change (25 cost 5%)
+	debug.SetGCPercent(50)
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	g := newGUI(c, openStore(storePath()))
