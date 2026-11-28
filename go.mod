@@ -8,9 +8,11 @@ require (
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/anacrolix/torrent v1.63.0
 	github.com/coder/websocket v1.8.15
+	github.com/go-text/typesetting v0.3.5
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/mhashemm/upnp v0.6.0
 	github.com/yuin/gopher-lua v1.1.2
+	golang.org/x/image v0.26.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.62.0
@@ -49,7 +51,6 @@ require (
 	github.com/go-llsqlite/crawshaw v0.5.6-0.20250312230104-194977a03421 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -95,7 +96,6 @@ require (
 	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 // indirect
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
-	golang.org/x/image v0.26.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect

@@ -12,11 +12,11 @@ there; Windows needs none and cross-compiles. The CLI and relay stay `CGO_ENABLE
 ## Commands
 
 ```sh
-make gui                                   # fetches gui/fonts/NotoColorEmoji.ttf (pinned, SHA-256 checked) first
-go build -o watchparty-gui ./gui           # from the repo root, once the font is fetched; `go build ./gui` collides with the directory
+make gui
+go build -o watchparty-gui ./gui           # from the repo root; `go build ./gui` collides with the directory
 go vet ./gui && GOOS=windows go vet ./gui  # the two build-tagged halves
 EGL_PLATFORM=surfaceless go test ./gui -run TestRender -render <dir>   # every scene as <dir>/<name>.png, no window
-go generate ./gui                          # icon.ico → rsrc_windows_amd64.syso (a test fails when they differ)
+go generate ./gui                          # icon.ico → rsrc_windows_amd64.syso, mpv/emoji.json → fonts/Twemoji-reactions.ttf (tests fail when they differ)
 ```
 
 Linux builds need the headers Gio links against (Wayland, X11, xkbcommon-x11, EGL, GLES,
@@ -113,8 +113,11 @@ The look was matched to the old page row by row; these traps look like simplific
   shadow with `shadow`, and a drawing with `asDrawn(gtx)`, or the palette repaints it. One
   RGB can't take two dark colours, so a new role needs its own colour. A colour named in the
   code without a dark one fails `TestEveryColourHasADarkOne`.
-- **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system Noto
-  Color Emoji shadows the bundled one; system fonts stay on so any script renders.
+- **Bundled fonts are renamed** ("wp Atkinson", "wp Gluten", "wp Emoji"), or a system font
+  of the same family shadows the bundled one; system fonts stay on so any script renders.
+- **The emoji font is the reactions only** (`emojifont`), so text draws them as reactions
+  look; others come from the system. It has a space glyph: a space by an emoji is shaped in
+  its run, and without one it has no width (`TestSpaceAfterEmoji`).
 
 ## Saved settings and history (`store.go`)
 

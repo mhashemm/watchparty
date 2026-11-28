@@ -71,8 +71,9 @@ Fosdo2's colours are named in `page.go`'s rules too, so recolouring never means 
 | `.nose` | `#c98a79` | nose |
 | `hazel` (`scene.go`) | `#4f8f34`, `#86b04a`, `#c8a245`, `#946330` | the `#hazel` radial gradient, green at the pupil to brown at the rim |
 
-**Fonts,** all bundled: Gluten for display, Atkinson Hyperlegible for body, Noto Color Emoji
-for emoji (fetched at build time). System fonts stay on, for scripts the bundled ones lack.
+**Fonts,** all bundled: Gluten for display, Atkinson Hyperlegible for body, and the reactions'
+Twemoji drawn as a font (`go generate`), so typed ones look as reactions do. System fonts stay
+on, for scripts and emoji the bundled ones lack.
 
 ## Layout and voice
 

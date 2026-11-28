@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"image"
 	"testing"
 	"time"
@@ -13,46 +12,9 @@ import (
 	"gioui.org/widget"
 )
 
-// advance reads glyph r's advance in font units, as withAdvance finds it.
-func advance(t *testing.T, ttf []byte, r rune) (int, int) {
-	t.Helper()
-	tables := map[string][]byte{}
-	for i := range int(binary.BigEndian.Uint16(ttf[4:])) {
-		rec := 12 + 16*i
-		off, size := binary.BigEndian.Uint32(ttf[rec+8:]), binary.BigEndian.Uint32(ttf[rec+12:])
-		tables[string(ttf[rec:rec+4])] = ttf[off : off+size]
-	}
-	gid, ok := glyphOf(tables["cmap"], r)
-	if !ok {
-		t.Fatalf("no glyph for %q", r)
-	}
-	return int(binary.BigEndian.Uint16(tables["hmtx"][4*int(gid):])), int(binary.BigEndian.Uint16(tables["head"][18:]))
-}
-
-func TestEmojiSpaceIsNarrowed(t *testing.T) {
-	t.Parallel()
-	before, upm := advance(t, notoEmoji, ' ')
-	if before != 2550 || upm != 2048 {
-		t.Fatalf("Noto's space was %d/%d: did the font change? (narrowSpace)", before, upm)
-	}
-	narrow := narrowSpace(notoEmoji, .28)
-	if got, _ := advance(t, narrow, ' '); got != 573 {
-		t.Fatalf("space after narrowing: %d, want 573 (.28 em)", got)
-	}
-	if got, _ := advance(t, notoEmoji, ' '); got != 2550 {
-		t.Fatal("narrowSpace changed the embedded font itself")
-	}
-	if a, _ := advance(t, narrow, '#'); a != 2550 {
-		t.Fatalf("another glyph changed: %d", a)
-	}
-	// what isn't a font comes back as it was
-	if got := narrowSpace([]byte("nope"), .28); string(got) != "nope" {
-		t.Fatal("narrowSpace changed a non-font")
-	}
-}
-
-// TestSpaceAfterEmoji measures it as the window shapes it: a system Noto Color Emoji, if the
-// computer has one, must not stand in for the bundled one, whose space is narrowed.
+// TestSpaceAfterEmoji measures it as the window shapes it: a space by a reaction is shaped in
+// the emoji font's run, and must be as wide as the text's (Noto Color Emoji's was 1.25 em; a
+// font without one gives none).
 func TestSpaceAfterEmoji(t *testing.T) {
 	t.Parallel()
 	sh, err := newShaper()
@@ -64,14 +26,16 @@ func TestSpaceAfterEmoji(t *testing.T) {
 	width := func(s string) int {
 		return widget.Label{MaxLines: 1}.Layout(gtx, sh, bodyFont, 16, s, op.CallOp{}).Size.X
 	}
-	if gap := width("😂 b") - width("😂b"); gap > 6 {
-		t.Fatalf("a space after an emoji is %dpx at 16px, want Atkinson's 4.5", gap)
+	for _, pair := range [][2]string{{"😂 b", "😂b"}, {"😂 😭", "😂😭"}, {"a 😂", "a😂"}} {
+		if gap := width(pair[0]) - width(pair[1]); gap < 3 || gap > 6 {
+			t.Errorf("%q: a space by an emoji is %dpx at 16px, want Atkinson's 4.5", pair[0], gap)
+		}
 	}
 }
 
 func TestFontsAreTheFamiliesNamed(t *testing.T) {
 	t.Parallel()
-	for ttf, want := range map[*[]byte]string{&atkinsonRegular: "Atkinson Hyperlegible", &atkinsonBold: "Atkinson Hyperlegible", &glutenBold: "Gluten", &notoEmoji: "Noto Color Emoji"} {
+	for ttf, want := range map[*[]byte]string{&atkinsonRegular: "Atkinson Hyperlegible", &atkinsonBold: "Atkinson Hyperlegible", &glutenBold: "Gluten"} {
 		faces, err := opentype.ParseCollection(*ttf)
 		if err != nil || len(faces) != 1 || string(faces[0].Font.Typeface) != want {
 			t.Errorf("want %q, got %v %v", want, faces, err)
