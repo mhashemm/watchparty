@@ -58,6 +58,7 @@ def gui_suite():
         ok("drawn on software, it spaces its frames by what one costs", until(lambda: ui(H)["paceMs"] > 100, 10), str(ui(H)["paceMs"]))
         x_unfocus(H)
         ok("unfocused again, they rest", until(lambda: not ui(H)["moving"], 5))
+        ok("and the heap its frames left goes back to the OS", until(lambda: ui(H)["keptFreeMB"] < 1, 5), str(ui(H)["keptFreeMB"]))
         part("[G1b] it reopens at the size it was left")
         xdo(H, "windowsize", x_window(H), 640, 820)
         until(lambda: "Geometry: 640x820" in xdo(H, "getwindowgeometry", x_window(H)), 5)

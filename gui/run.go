@@ -5,6 +5,7 @@ import (
 	"image"
 	"log"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -80,6 +81,7 @@ func (g *gui) window(w *app.Window) error {
 		framed    bool
 		frameDark bool
 		closing   bool
+		rested    bool
 	)
 	for {
 		e := w.Event()
@@ -134,6 +136,13 @@ func (g *gui) window(w *app.Window) error {
 				framed, frameDark = true, v.dark
 			}
 			e.Frame(gtx.Ops)
+			// at rest the window draws only on changes, most of a party: hand the OS back
+			// the heap its frames left, which Go would keep for the frames to come
+			moving := v.moving()
+			if !moving && !rested {
+				debug.FreeOSMemory()
+			}
+			rested = !moving
 		case app.ViewEvent:
 			hwnd, framed = viewHandle(e), false
 			viewEvent(e, g.exe)
