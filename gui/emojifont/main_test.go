@@ -55,6 +55,36 @@ func TestTheEmojiFontIsCurrent(t *testing.T) {
 		if d := differs(got, want); d > 2 {
 			t.Fatalf("%s's picture is off by up to %d/255 from emoji.json's art: go generate ./gui", code, d)
 		}
+		// where it stands, read back as the window reads it, in font units
+		px := func(v int) float32 { return float32(v * upem / ppem) }
+		if a := face.HorizontalAdvance(gid); a != px(advance) {
+			t.Fatalf("%s advances %v, want %v", code, a, px(advance))
+		}
+		e, ok := face.GlyphExtents(gid)
+		near := func(a, b float32) bool { return a-b < 1 && b-a < 1 }
+		if !ok || !near(e.XBearing, px(side)) || !near(e.YBearing, px(top)) || !near(e.Width, px(size)) || !near(-e.Height, px(size)) {
+			t.Fatalf("%s stands at %+v, want x %v, y %v, %v square", code, e, px(side), px(top), px(size))
+		}
+	}
+	sp, ok := face.NominalGlyph(' ')
+	if !ok || face.HorizontalAdvance(sp) != space {
+		t.Fatalf("the space is %v wide (%v), want %d: a space by an emoji is shaped in its run", face.HorizontalAdvance(sp), ok, space)
+	}
+	if bad := face.HorizontalAdvance(0); bad != 0 {
+		t.Fatalf(".notdef advances %v", bad)
+	}
+}
+
+// A value its field can't hold stops the build, rather than wrapping.
+func TestValuesOutOfRangeStopTheBuild(t *testing.T) {
+	t.Parallel()
+	if err := inRange(field{"top", 117, -128, 127}, field{"size", 147, 1, 255}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []field{{"top", 200, -128, 127}, {"size", 256, 1, 255}, {"descender", -129, -128, 127}} {
+		if inRange(f) == nil {
+			t.Errorf("%s %d passed", f.name, f.v)
+		}
 	}
 }
 

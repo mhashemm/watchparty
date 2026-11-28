@@ -94,8 +94,34 @@ func Glyph(code string) (*image.RGBA, error) {
 	return img, nil
 }
 
+// field is a value the font stores in a field of limited range: a byte, signed or not.
+type field struct {
+	name    string
+	v, l, h int
+}
+
+// inRange refuses any value its field can't hold: written anyway, it would wrap and put the
+// emoji somewhere else.
+func inRange(fs ...field) error {
+	for _, f := range fs {
+		if f.v < f.l || f.v > f.h {
+			return fmt.Errorf("%s is %d, outside %d..%d its field holds", f.name, f.v, f.l, f.h)
+		}
+	}
+	return nil
+}
+
 // build is the whole font file.
 func build() ([]byte, error) {
+	const i8, u8, i16, u16 = 127, 255, 1<<15 - 1, 1<<16 - 1
+	if err := inRange(
+		field{"ppem", ppem, 1, u8}, field{"size", size, 1, u8}, field{"advance", advance, 0, u8},
+		field{"side", side, -128, i8}, field{"top", top, -128, i8}, field{"top-size", top - size, -128, i8},
+		field{"units advance", advance * upem / ppem, 0, i16}, field{"space", space, 0, u16},
+		field{"ascent", ascent, 0, i16}, field{"descent", descent, 0, i16},
+	); err != nil {
+		return nil, err
+	}
 	codes := mpv.Reactions()
 	if len(codes) == 0 || len(codes) > 255 {
 		return nil, errors.New("no reactions, or too many for one byte")
