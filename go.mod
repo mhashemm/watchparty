@@ -12,7 +12,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/mhashemm/upnp v0.6.0
 	github.com/yuin/gopher-lua v1.1.2
-	golang.org/x/image v0.26.0
+	golang.org/x/image v0.41.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.62.0
